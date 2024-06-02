@@ -1,0 +1,36 @@
+[project]
+name = "little-sister"
+version = "0.1.0"
+description = "This is a web application that shows the status of various systems."
+authors = [
+    { name = "Michael Meyling", email = "splint.wackos_0k@icloud.com" }
+]
+readme = {file = "README.md", content-type = "text/markdown"}
+license = {file = "LICENSE", content-type = "text/plain"}
+keywords = ["example", "flask", "gunicorn", "pyyaml"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Environment :: Web Environment",
+    "Framework :: Flask",
+]
+requires-python = ">=3.10"
+dependencies = [
+    "flask",
+    "gunicorn",
+    "PyYAML"
+]
+
+[project.urls]
+homepage = "https://github/m-31/little-sister"
+repository = "https://github/m-31/little-sister"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+test = ["tests"]
+
+[build-system]
+requires = ["setuptools>45", "wheel"]
+build-backend = "setuptools.build_meta"
+
