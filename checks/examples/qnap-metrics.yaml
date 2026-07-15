@@ -1,0 +1,34 @@
+# QNAP hardware-health check — TEMPLATE.
+#
+# Copy to checks/<node>_qnap_metrics.yaml and edit. Files under checks/examples/ are not
+# loaded by the engine (sub-folders are ignored), so this is safe to keep here.
+#
+# QNAP temperatures + per-drive SMART over SSH (QTS `getsysinfo`): a `temperature`
+# branch (system, cpu where the model exposes it, one drive<bay> per populated
+# bay, in °C) and a `smart` branch (GOOD→OK, Warning→WARN, else ERROR). It shares
+# the SSH transport with the `host-metrics` check and usually targets the SAME host node —
+# give it NO description so it doesn't overwrite the host's. The script is always
+# piped to `bash` (it's POSIX, so a busybox `bash` also works); there is no
+# `profile`. See checks/README.md.
+
+type: qnap-metrics
+path: /mynas                # absolute node path (ADR-0016)
+# description:               # leave unset when sharing a host node with the `host-metrics` check
+frequency: 5m                # how often to run
+timeout: 30s                 # per-run timeout
+
+# --- connection (same fields as the ssh check) -----------------------------
+host: mynas-ssh-alias        # SSH target — ~/.ssh/config alias or hostname/FQDN
+# user: monitor              # SSH user (default: your local SSH user)
+# port: 22                   # SSH port (default: 22 / your ssh_config)
+# identity_file: ~/.ssh/id_ed25519
+# sudo: false                # getsysinfo needs no root
+# debug: false               # add raw ssh stderr + getsysinfo diagnostics to the branches
+# script: my-qnap-health.sh               # override the bundled script
+# options: ["-o", "WarnWeakCrypto=no-pq-kex"]  # extra `ssh -o` args (see the ssh template)
+
+# --- grading ---------------------------------------------------------------
+# Temperature thresholds (°C), applied to system / cpu / each drive: at/above
+# `warn` → WARN, at/above `error` → ERROR. Defaults shown.
+# thresholds:
+#   temperature: {warn: 50, error: 60}

@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+#
+# little-sister pre-commit hook: run lint and tests before a commit is allowed.
+#
+# This hook is version-controlled in hooks/ rather than .git/hooks/ so it can
+# be shared. Enable it once per clone with:
+#
+#     git config core.hooksPath hooks
+#
+# It mirrors the quality gate documented in AGENTS.md.
+
+set -euo pipefail
+
+echo "pre-commit: ruff check"
+uv run ruff check
+
+echo "pre-commit: mypy"
+uv run mypy
+
+echo "pre-commit: pytest"
+uv run pytest -q
+
+echo "pre-commit: all checks passed"

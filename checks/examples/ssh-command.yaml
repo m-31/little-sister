@@ -1,0 +1,24 @@
+# ssh-command check — TEMPLATE.
+#
+# Copy to checks/<node>_command.yaml and edit. Files under checks/examples/ are
+# not loaded by the engine (sub-folders are ignored), so this is safe to keep here.
+#
+# Run a command on a host over SSH (the over-SSH twin of the local `command`
+# check): OK on exit 0, ERROR otherwise, the reason taken from the captured output.
+# A successful run still WARNs on an ssh advisory such as a non-post-quantum key
+# exchange. Auth must be non-interactive (BatchMode). See checks/README.md.
+
+type: ssh-command
+path: /myhost-disk          # absolute node path (ADR-0016)
+frequency: 5m                # how often to run
+timeout: 30s                 # per-run timeout
+
+# --- connection (same fields as ssh-connect) -------------------------------
+host: my-ssh-alias           # SSH target — a ~/.ssh/config alias or hostname/FQDN
+# user / port / identity_file / sudo / options — as for ssh-connect
+
+# --- what to run -----------------------------------------------------------
+command: df -h /             # the host's shell runs this string
+capture: both                # stdout | stderr | both
+max_chars: 1000              # shorten captured output…
+keep: tail                   # …from the tail (default) or head

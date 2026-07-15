@@ -1,0 +1,15 @@
+{# Header breadcrumb (clickable path): the `status` root link plus a link per
+   ancestor segment; the current node (last crumb) is plain text. One flex item,
+   so the trail stays together and the node title sits beside it. Expects `branch`
+   in context (the node's url-branch path). #}
+<span class="text-nowrap flex-shrink-0">
+    <a href="{{ url_for('status') }}" class="text-decoration-none text-reset crumb">status</a>
+    {%- for name, path in branch | breadcrumbs -%}
+        <span class="text-muted"> / </span>
+        {%- if loop.last -%}
+            <span class="text-muted">{{ name }}</span>
+        {%- else -%}
+            <a href="{{ url_for('status', branch=path) }}" class="text-decoration-none text-reset crumb">{{ name }}</a>
+        {%- endif -%}
+    {%- endfor -%}
+</span>

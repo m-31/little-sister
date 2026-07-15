@@ -1,0 +1,20 @@
+# File-freshness (heartbeat) check — TEMPLATE.
+#
+# Copy to checks/<node>_file.yaml and edit. Files under checks/examples/ are not
+# loaded by the engine (sub-folders are ignored), so this is safe to keep here.
+#
+# OK while a file keeps being updated (modified within `max_age`); once it goes
+# stale it takes `stale_code`. Use it as a heartbeat for a job that writes or
+# touches a file. A relative `file` path resolves under the runner's $HOME.
+# See checks/README.md.
+
+type: file
+path: /nightly-export       # absolute node path (ADR-0016)
+description: Heartbeat — the file stays fresh
+frequency: 5m                # how often to run
+timeout: 30s                 # per-run timeout
+
+# --- freshness -------------------------------------------------------------
+file: logs/app.done          # file to watch; absolute, ~/…, or relative to $HOME (required)
+max_age: 20m                 # OK if modified within this window (default: 20m)
+# stale_code: ERROR          # status when stale: OK | WARN | ERROR (default: ERROR)

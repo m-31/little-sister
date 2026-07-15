@@ -1,0 +1,23 @@
+# ssh-connect check — TEMPLATE.
+#
+# Copy to checks/<node>_connect.yaml and edit. Files under checks/examples/ are
+# not loaded by the engine (sub-folders are ignored), so this is safe to keep here.
+#
+# Reachability: connect to a host over SSH (BatchMode, key auth) and report OK if
+# reachable, ERROR if not — and WARN if ssh flags an advisory such as a
+# non-post-quantum key exchange. Auth must be non-interactive: set up key auth and
+# a known host key first. See checks/README.md.
+
+type: ssh-connect
+path: /myhost               # absolute node path (ADR-0016)
+frequency: 1m                # how often to run
+timeout: 10s                 # per-run timeout
+
+# --- connection ------------------------------------------------------------
+host: my-ssh-alias           # SSH target — a ~/.ssh/config alias or hostname/FQDN
+# user: monitor              # SSH user (default: your local SSH user)
+# port: 22                   # SSH port (default: 22 / your ssh_config)
+# identity_file: ~/.ssh/id_ed25519
+# sudo: false                # run the probe under `sudo -n` (not needed to connect)
+# debug: false               # add raw ssh stderr to the reason (handy for KEX checks)
+# options: ["-o", "StrictHostKeyChecking=accept-new"]   # extra `ssh -o` args

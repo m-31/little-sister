@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>History</title>
+    {% include '_header.html' %}
+
+    <div class="container-fluid mt-3 px-4" style="max-width: 980px">
+        <h1 class="h4 mb-3">
+            <a href="{{ url_for('status') }}" class="text-decoration-none text-reset">status</a>
+            <span class="text-muted">/ {{ branch }}</span>
+            <span class="text-muted">— history</span>
+        </h1>
+        <p class="mb-3"><a href="{{ url_for('status', branch=branch) }}">&larr; back to check</a></p>
+
+        <table class="table table-sm align-middle">
+            <thead>
+                <tr><th>Status</th><th>Since</th><th>Until</th><th>Reason</th></tr>
+            </thead>
+            <tbody>
+                {% for p in periods %}
+                    <tr class="row-{{ p.code | status_slug }}">
+                        <td>{{ p.code.name.lower() }}</td>
+                        <td class="text-nowrap">{{ p.since | localtime }}</td>
+                        <td class="text-nowrap">{{ p.until | localtime }}</td>
+                        <td class="md-body">{{ p.reason | join('; ') | markdown_inline }}</td>
+                    </tr>
+                {% else %}
+                    <tr><td colspan="4" class="text-muted">No status changes recorded.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

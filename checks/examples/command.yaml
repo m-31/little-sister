@@ -1,0 +1,20 @@
+# Command / script check — TEMPLATE.
+#
+# Copy to checks/<node>_command.yaml and edit. Files under checks/examples/ are
+# not loaded by the engine (sub-folders are ignored), so this is safe to keep here.
+#
+# Runs a command (a shell string) or argv (a list); OK on exit code 0, ERROR
+# otherwise. The reason is the captured output. See checks/README.md.
+
+type: command
+path: /disk-space           # absolute node path (ADR-0016)
+description: Command exits 0
+frequency: 15m               # how often to run
+timeout: 30s                 # per-run timeout
+
+# --- command ---------------------------------------------------------------
+command: bash check-disk-space.sh   # a shell string, or a list (argv) e.g. ["df", "-h", "/"] (required)
+# working_dir: .             # where to run it (default: the checks/ directory)
+# capture: stdout            # which stream becomes the reason: stdout | stderr | both (default: stdout)
+# max_chars: 1000            # shorten the captured output to this many chars (default: 1000)
+# keep: tail                 # when shortening, keep the tail (default) or the head

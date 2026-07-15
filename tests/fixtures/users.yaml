@@ -1,0 +1,7 @@
+# Test fixture user list (see tests/conftest.py). Matches the login used across
+# the web/api tests. Not a real deployment file.
+pan:
+  firstname: "Peter"
+  lastname: "Pan"
+  password: "12345678"
+  admin: true

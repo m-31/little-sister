@@ -1,0 +1,17 @@
+# HTTP(S) check — TEMPLATE.
+#
+# Copy to checks/<node>_http.yaml and edit. Files under checks/examples/ are not
+# loaded by the engine (sub-folders are ignored), so this is safe to keep here.
+#
+# GETs a URL and is OK when the response status is one of `expected_status`; any
+# other status, or a transport failure, is ERROR. See checks/README.md.
+
+type: http
+path: /website              # absolute node path (ADR-0016)
+description: HTTP endpoint returns an expected status
+frequency: 5m                # how often to run
+timeout: 10s                 # per-run timeout
+
+# --- request ---------------------------------------------------------------
+url: https://example.com     # the URL to GET (required)
+# expected_status: 200       # an int, or a list e.g. [200, 204] (default: 200)

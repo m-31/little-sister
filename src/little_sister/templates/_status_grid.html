@@ -1,0 +1,75 @@
+{% if node is none %}
+    <div class="alert alert-warning">
+        No such branch: <code>{{ branch }}</code>.
+        <a href="{{ url_for('status') }}" class="alert-link">Back to status</a>.
+    </div>
+{% elif not node.children %}
+    <p class="text-muted">
+        No checks{% if not branch %} reporting yet{% endif %}{% if hide_ok or hide_idle %} match the current filters{% endif %}.
+    </p>
+{% else %}
+    <div class="status-grid">
+        {% if max_depth < 1 %}
+            {# depth 0 — a single card for the viewed node: its rolled-up "overall" light #}
+            <div class="status-card s-{{ node.code | status_slug }}{% if node.code.name == 'OK' %} dim{% endif %}">
+                <div class="status-card__head" data-path="{{ node.path }}">
+                    <span class="status-card__name">{{ node.name }}</span>
+                    {% if node.title %}<span class="node-title">{{ node.title | markdown_inline }}</span>{% endif %}
+                    <span class="status-card__state">
+                        {% if node.stale %}<span class="status-stale">stale</span>{% endif %}
+                        {{ node.code.name.lower() }}
+                    </span>
+                </div>
+                {% if node.reason %}
+                    <div class="status-panel">
+                        {% for r in node.reason %}
+                            <div class="status-node__reason md-body">{{ r | shorten(400) | markdown }}</div>
+                        {% endfor %}
+                    </div>
+                {% endif %}
+            </div>
+        {% else %}
+        {% for system in node.children %}
+            {# a card's children render only from depth 2 on (depth 1 is cards only) #}
+            {% set card_has_kids = system.children and max_depth > 1 %}
+            {% set card_dim = system.code.name == 'OK' or (system.own_code != system.code and card_has_kids) %}
+            <div class="status-card s-{{ system.code | status_slug }}{% if card_dim %} dim{% endif %}">
+                <div class="status-card__head" data-path="{{ system.path }}">
+                    <a class="status-card__name"
+                       href="{{ url_for('status', branch=system.path | url_branch) }}">{{ system.name }}</a>
+                    {% if system.title %}<span class="node-title">{{ system.title | markdown_inline }}</span>{% endif %}
+                    <span class="status-card__state">
+                        {% if system.stale %}<span class="status-stale">stale</span>{% endif %}
+                        {{ system.code.name.lower() }}
+                    </span>
+                </div>
+                <div class="status-panel">
+                    {% for r in system.reason %}
+                        <div class="status-node__reason md-body">{{ r | shorten(400) | markdown }}</div>
+                    {% endfor %}
+                    {% if card_has_kids %}
+                    {% for child in system.children recursive %}
+                        {% set has_kids = child.children and loop.depth0 < max_depth - 2 %}
+                        {% set node_dim = child.code.name == 'OK' or (child.own_code != child.code and has_kids) %}
+                        <div class="status-node s-{{ child.code | status_slug }}{% if node_dim %} dim{% endif %}">
+                            <div class="status-node__self" data-path="{{ child.path }}">
+                                <a class="status-node__name"
+                                   href="{{ url_for('status', branch=child.path | url_branch) }}">{{ child.name }}</a>
+                                {% if child.title %}<span class="node-title">{{ child.title | markdown_inline }}</span>{% endif %}
+                                {% if child.stale %}<span class="status-stale">stale{% if not child.children %} · {{ child.age_seconds | round | int | duration }} ago{% endif %}</span>{% endif %}
+                                {% for r in child.reason %}
+                                    <div class="status-node__reason md-body">{{ r | shorten(400) | markdown }}</div>
+                                {% endfor %}
+                            </div>
+                            {% if has_kids %}
+                                <div class="status-node__children">{{ loop(child.children) }}</div>
+                            {% endif %}
+                        </div>
+                    {% endfor %}
+                    {% endif %}
+                </div>
+            </div>
+        {% endfor %}
+        {% endif %}
+    </div>
+{% endif %}

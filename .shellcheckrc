@@ -1,0 +1,4 @@
+# ShellCheck configuration.
+# start.sh and stop.sh `source ./lib.sh`; let ShellCheck follow it so the shared
+# variables and functions resolve (otherwise: SC1091 + SC2154 false positives).
+external-sources=true

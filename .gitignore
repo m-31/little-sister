@@ -16,5 +16,16 @@ dist/
 .idea/
 # Ignore virtual environment
 venv/
-# Ignore user data
-/users.json
+.venv/
+# Ignore the deployment's real user list (the package ships users.example.yaml)
+/users.yaml
+# Ignore runtime artifacts (logs, pidfile)
+/var/
+# Ignore coverage reports
+.coverage
+
+# Xcode
+DerivedData/
+*.xcuserstate
+xcuserdata/
+*.xcworkspace/xcuserdata/

@@ -1,0 +1,13 @@
+# little-sister general configuration.
+# Loaded from this file (override the path with LITTLE_SISTER_CONFIG).
+# Any missing option falls back to its default.
+
+# Timezone for displayed timestamps (an IANA name, e.g. Europe/Berlin, UTC).
+timezone: Europe/Berlin
+
+# strftime format for displayed timestamps.
+time_format: "%Y-%m-%d %H:%M:%S"
+
+# Default maintenance window when an admin sets maintenance without an explicit
+# duration (e.g. 12h, 7d). Maintenance always expires — there is no indefinite pin.
+maintenance_default_expiry: 7d

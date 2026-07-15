@@ -1,0 +1,25 @@
+# ssh-script check — TEMPLATE.
+#
+# Copy to checks/<node>_script.yaml and edit. Files under checks/examples/ are
+# not loaded by the engine (sub-folders are ignored), so this is safe to keep here.
+#
+# Pipe a local script to a host's shell over SSH and report its output, like
+# ssh-command: OK on exit 0, ERROR otherwise, the reason from the captured output;
+# WARN on an ssh advisory such as a non-post-quantum key exchange. (host-metrics and
+# qnap-metrics are parsing specialisations of this.) See checks/README.md.
+
+type: ssh-script
+path: /myhost-check         # absolute node path (ADR-0016)
+frequency: 5m                # how often to run
+timeout: 30s                 # per-run timeout
+
+# --- connection (same fields as ssh-connect) -------------------------------
+host: my-ssh-alias           # SSH target — a ~/.ssh/config alias or hostname/FQDN
+# user / port / identity_file / sudo / options — as for ssh-connect
+
+# --- what to run -----------------------------------------------------------
+script: my-check.sh  # local script, piped to the host (relative to this config)
+interpreter: bash            # remote interpreter it's piped to (default bash; sh for busybox)
+capture: stdout              # stdout | stderr | both
+max_chars: 1000              # shorten captured output…
+keep: tail                   # …from the tail (default) or head

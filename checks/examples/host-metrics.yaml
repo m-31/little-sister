@@ -1,0 +1,58 @@
+# Host-metrics check — TEMPLATE.
+#
+# Copy to checks/<node>_host_metrics.yaml and edit. Files under checks/examples/ are not
+# loaded by the engine (sub-folders are ignored), so this is safe to keep here.
+#
+# Reads basic system resources from a host over SSH and reports them under the
+# host's node: an `ssh` transport leaf (OK; WARN on an ssh advisory such as the
+# post-quantum key-exchange notice; ERROR on a failed connection) plus one leaf
+# per metric — disk / memory / cpu / load — as siblings, each graded by
+# `thresholds`. Auth must be non-interactive (BatchMode): set up key auth and a
+# known host key first; the metrics need no root. See checks/README.md and
+# docs/adr/0009-per-profile-metrics-scripts.md.
+
+type: host-metrics
+path: /myhost               # absolute node path (ADR-0016)
+description: System resources (disk, memory, CPU, load) over SSH
+frequency: 2m                # how often to run
+timeout: 30s                 # per-run timeout
+
+# --- connection ------------------------------------------------------------
+host: my-ssh-alias           # SSH target: a ~/.ssh/config alias or a hostname/FQDN
+                             #   (often the same as `name`; e.g. node "nexus" → host "nexus62")
+profile: linux               # host OS / userland — selects the metrics script + interpreter:
+                             #   linux   (default) /proc + GNU awk + df -P, piped to bash
+                             #   macos             BSD sysctl/vm_stat/top, piped to bash (3.2-safe)
+                             #   busybox           QNAP / ASUS-ash, piped to sh, paranoid df parsing
+# user: monitor              # SSH user (default: your local SSH user)
+# port: 22                   # SSH port (default: 22 / your ssh_config)
+# identity_file: ~/.ssh/id_ed25519
+# sudo: false                # run the script under `sudo -n` (these metrics don't need root)
+# debug: false               # add raw ssh stderr + df diagnostics to the `ssh` leaf
+# script: my-host-metrics.sh    # override the profile's default script
+
+# Extra `ssh -o` arguments, as one list, applied *before* little-sister's own
+# defaults (so a host can override them). Useful ones:
+#   "-o", "WarnWeakCrypto=no-pq-kex"           silence the post-quantum KEX warning on a
+#                                              legacy host that can't offer a PQ key exchange
+#   "-o", "PubkeyAcceptedAlgorithms=+ssh-rsa"  re-enable legacy SHA-1 RSA for an old server
+#   "-o", "StrictHostKeyChecking=accept-new"   trust a new host key on first connect
+# options: ["-o", "WarnWeakCrypto=no-pq-kex"]
+
+# --- what to measure -------------------------------------------------------
+# disk_path: /               # filesystem to measure; default is / (linux/busybox)
+#                            #   or /System/Volumes/Data (macos)
+# disk_path: all             # → a `disk` branch with one graded child per real filesystem
+# disk_path:                 # → a `disk` branch with just these volumes (e.g. a NAS's data)
+#   - /share/HDA_DATA
+#   - /share/MD0_DATA
+
+# --- grading ---------------------------------------------------------------
+# Per-aspect thresholds: value at/above `warn` → WARN, at/above `error` → ERROR.
+# These are the built-in defaults — set only the aspects a host needs to differ
+# (e.g. a NAS that idles at a high load average).
+# thresholds:
+#   disk:   {warn: 80, error: 90}     # percent used
+#   memory: {warn: 85, error: 95}     # percent used
+#   cpu:    {warn: 85, error: 95}     # percent busy
+#   load:   {warn: 0.8, error: 1.0}   # 1-min load average per CPU core

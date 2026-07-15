@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Status</title>
+    {% include '_header.html' %}
+
+    <div class="container-fluid mt-3 px-4" style="max-width: 820px">
+        <h1 class="h4 mb-3 d-flex align-items-baseline" style="column-gap: .4rem; min-width: 0">
+            {% include '_breadcrumb.html' %}
+            {% if node.title %}<span class="node-title node-title--header">{{ node.title | markdown_inline }}</span>{% endif %}
+        </h1>
+
+        <div class="card mb-3">
+            <div class="card-body">
+                <h2 class="h5 mb-1">{{ node.name }}</h2>
+                {% if node.description %}
+                    <p class="text-muted mb-2">{{ node.description | markdown_inline }}</p>
+                {% endif %}
+                {% if node.about %}
+                    <div class="md-body mb-2"><span class="text-muted">About:</span> {{ node.about | markdown }}</div>
+                {% endif %}
+                <div class="alert {{ node.code | status_alert }} mb-0">
+                    Status: <strong>{{ node.code.name.lower() }}</strong>
+                    {% for r in node.reason %}
+                        <div class="md-body small">{{ r | markdown }}</div>
+                    {% endfor %}
+                    {% if node.stale %}
+                        <div><small>Stale — last checked {{ node.age_seconds | round | int | duration }} ago.</small></div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <div class="card mb-3">
+            <div class="card-body">
+                <h3 class="h6 text-muted text-uppercase">Time</h3>
+                <p class="mb-1">
+                    Status <strong>{{ node.code.name.lower() }}</strong>
+                    from {{ since | localtime }} until {{ node.timestamp | localtime }}
+                </p>
+                {% if node.frequency_seconds %}
+                    <p class="mb-2 text-muted">Checked every {{ node.frequency_seconds | duration }}</p>
+                {% endif %}
+                <a class="btn btn-info text-white" href="{{ url_for('history', path=branch) }}">History</a>
+            </div>
+        </div>
+
+        {% if node.config %}
+        <div class="card mb-3">
+            <div class="card-body">
+                <h3 class="h6 text-muted text-uppercase">Configuration</h3>
+                <div class="text-muted" style="white-space: pre-wrap">{{ node.config }}</div>
+            </div>
+        </div>
+        {% endif %}
+
+        {% if is_admin %}
+        <div class="card mb-3">
+            <div class="card-body">
+                <h3 class="h6 text-muted text-uppercase">Maintenance</h3>
+                {% if node.maintenance %}
+                    <p class="text-muted mb-2">
+                        This check is in maintenance.
+                        {% if node.maintenance_entry %}
+                            {% if node.maintenance_entry.set_by %}Set by <strong>{{ node.maintenance_entry.set_by }}</strong>.{% endif %}
+                            Expires {{ node.maintenance_entry.expires_at | localtime }}.
+                        {% endif %}
+                    </p>
+                    <form method="post" action="{{ url_for('maintenance') }}">
+                        <input type="hidden" name="path" value="{{ branch }}">
+                        <input type="hidden" name="action" value="clear">
+                        <button class="btn btn-outline-secondary" type="submit">Clear maintenance</button>
+                    </form>
+                {% else %}
+                    <form method="post" action="{{ url_for('maintenance') }}">
+                        <input type="hidden" name="path" value="{{ branch }}">
+                        <input type="hidden" name="action" value="set">
+                        <div class="mb-2">
+                            <label class="form-label" for="reason">Reason</label>
+                            <input class="form-control" id="reason" name="reason" placeholder="why?">
+                        </div>
+                        <div class="mb-2">
+                            <label class="form-label" for="duration">Duration</label>
+                            <input class="form-control" id="duration" name="duration" placeholder="e.g. 2h, 3d — default applies if blank">
+                        </div>
+                        <button class="btn btn-primary" type="submit">Set maintenance</button>
+                    </form>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

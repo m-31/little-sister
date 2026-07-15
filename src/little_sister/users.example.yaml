@@ -1,0 +1,18 @@
+# Example user list for little-sister (ADR-0020).
+#
+# Copy this to `users.yaml` in your deployment's working directory — or point
+# LITTLE_SISTER_USERS at a file elsewhere — and edit it. The real `users.yaml`
+# is git-ignored; this example is the shipped template.
+#
+# Each top-level key is a login name. `admin: true` grants the admin-only
+# actions (e.g. setting maintenance); omit it for a viewer. Passwords are
+# plaintext for now (hashing is a later phase).
+jdoe:
+  firstname: "Jane"
+  lastname: "Doe"
+  password: "change-me"
+  admin: true
+amorgan:
+  firstname: "Alex"
+  lastname: "Morgan"
+  password: "change-me-too"

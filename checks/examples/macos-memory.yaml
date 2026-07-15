@@ -1,0 +1,57 @@
+# macOS memory-health check — TEMPLATE.
+#
+# Copy to checks/<node>_memory.yaml and edit. Files under checks/examples/ are
+# not loaded by the engine (sub-folders are ignored), so this is safe to keep here.
+#
+# Early-warning memory signals over SSH, beyond the host-metrics memory
+# percentage: `pressure` (kernel VM memory-pressure level: normal→OK,
+# warning→WARN, critical→ERROR), `swap` (MB in use), `compressor` (memory
+# occupied by the compressor as % of RAM — compressor exhaustion is the
+# kernel-panic signature on a small-RAM Mac) and optional `processes` leaves
+# (RSS per watched command-line pattern; a slow leak shows as monotonic
+# growth). A watched process that isn't running is OK — this check watches
+# memory, not liveness. It shares the SSH transport with the `host-metrics`
+# check and usually targets the SAME host node — give it NO description so it
+# doesn't overwrite the host's. The script guards on Darwin and reports a
+# clear config error elsewhere. See checks/README.md.
+
+type: macos-memory
+path: /mymac/system          # absolute node path (ADR-0016)
+# description:               # leave unset when sharing a host node with host-metrics
+frequency: 2m                # how often to run
+timeout: 30s                 # per-run timeout
+
+# --- connection (same fields as the ssh checks) -----------------------------
+host: mymac-ssh-alias        # SSH target — ~/.ssh/config alias or hostname/FQDN
+# user: monitor              # SSH user (default: your local SSH user)
+# port: 22                   # SSH port (default: 22 / your ssh_config)
+# identity_file: ~/.ssh/id_ed25519
+# sudo: false                # these metrics need no root
+# debug: false               # add raw ssh stderr + script diagnostics to the branches
+# script: my-memory.sh              # override the bundled script
+# options: ["-o", "WarnWeakCrypto=no-pq-kex"]  # extra `ssh -o` args (see the ssh template)
+
+# --- what to watch -----------------------------------------------------------
+# One leaf per entry under a `processes` branch. `pattern` is a case-sensitive
+# substring of the full command line (`ps axo command`); RSS is summed over all
+# matching processes (an app's helpers count toward the app) and the leaf also
+# reports the oldest match's uptime. Omit the whole block to skip the
+# `processes` branch.
+# processes:
+#   - name: findmy           # leaf name
+#     pattern: FindMy.app    # command-line substring
+#     warn_mb: 1024          # per-process override (default: thresholds.process)
+#     error_mb: 2048
+
+# --- grading -----------------------------------------------------------------
+# At/above `warn` → WARN, at/above `error` → ERROR (defaults shown). `pressure`
+# has no thresholds — it is graded by the kernel's own level.
+# thresholds:
+#   swap:       {warn: 4096, error: 8192}   # MB in use
+#   compressor: {warn: 35, error: 50}       # percent of physical RAM
+#   process:    {warn: 1024, error: 2048}   # default RSS MB for watched processes
+
+# --- presentation ------------------------------------------------------------
+# descriptions:              # per-leaf description (Markdown), keyed by leaf name
+#   compressor: Compressed-memory occupancy (panic precursor)
+#   processes: RSS of the app processes this Mac exists to run

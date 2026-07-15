@@ -1,0 +1,344 @@
+openapi: 3.1.0
+
+# Little Sister — JSON output (backend mode).
+# Normative contract for ADR-0008. Aligned with the Zalando RESTful API Guidelines
+# (https://opensource.zalando.com/restful-api-guidelines/): content negotiation, no
+# URL versioning (#115), Problem JSON errors (#176), snake_case properties (#118),
+# UPPER_SNAKE_CASE enums (#240), RFC 3339 UTC date-times (#238), required meta (#218).
+#
+# Field provenance (maintainers — ADRs in docs/adr/): node addressing ADR-0016;
+# about + leaf description ADR-0012; title ADR-0017; config ADR-0013; Markdown text
+# fields ADR-0018; maintenance + maintenance_details ADR-0014; roll-up & staleness
+# ADR-0004 / ADR-0005; bearer token ADR-0003. Consumer-facing `description:` text is
+# kept self-contained; rationale lives in those ADRs and docs/api/README.md.
+
+info:
+  title: Little Sister Status API
+  description: |-
+    Read-only JSON view of the aggregated status tree.
+
+    Each node carries its rolled-up status plus metadata the client renders as
+    Markdown — `about` (what it is), `title`, a leaf `description` (what its check
+    does), and the check's `config` — together with maintenance details when pinned.
+    Children are returned in natural, case-insensitive name order.
+
+    The same resources back the HTML dashboard; the representation is chosen by
+    `Accept` (content negotiation). `Accept: application/json` returns the JSON
+    documented here and requires a bearer token; a browser receives HTML (session
+    cookie), which is not part of this contract.
+
+    A request returns the whole (sub)tree in one response — there is no pagination.
+    An optional `X-Flow-Id` request header is echoed in the response, to correlate a
+    request across logs.
+
+    Versioning: compatible changes are additive (minor `info.version`); a breaking
+    change bumps `info.version` (major) and `schema_version`, and is offered through a
+    versioned media type — never a versioned URL. v1.1 added the node-metadata fields
+    (`about`, `title`, `config`) and `maintenance_details`, additively
+    (`schema_version` unchanged).
+
+    See `docs/api/README.md` (linked below) for auth, `curl` examples and how tokens
+    are provisioned.
+  version: 1.1.0
+  contact:
+    name: little-sister
+    url: https://github.com/m-31/little-sister
+  license:
+    name: MIT
+    identifier: MIT
+  x-api-id: 4374ef53-62ad-4e1d-9022-7df6f331bfc1
+  x-audience: component-internal
+
+externalDocs:
+  description: Source, the usage guide (docs/api/README.md) and design decisions (docs/adr).
+  url: https://github.com/m-31/little-sister
+
+servers:
+  - url: http://localhost:8000
+    description: A single instance on the internal network (host/port are per deployment).
+
+tags:
+  - name: status
+    description: The aggregated status tree and its branches.
+
+security:
+  - bearerAuth: []
+
+paths:
+  /status:
+    get:
+      tags: [status]
+      operationId: getStatusTree
+      summary: The whole status tree
+      description: >-
+        Returns the root of the status tree, with every branch nested under it — one
+        response, no pagination. Send `Accept: application/json` for the JSON
+        representation documented here.
+      parameters:
+        - $ref: "#/components/parameters/FlowId"
+      responses:
+        "200":
+          description: The status tree, wrapped in a versioned envelope.
+          headers:
+            X-Flow-Id:
+              $ref: "#/components/headers/FlowId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /status/{node_path}:
+    get:
+      tags: [status]
+      operationId: getStatusBranch
+      summary: A branch of the status tree
+      description: >-
+        Returns the subtree rooted at `node_path`, with its descendants nested under
+        it — one response, no pagination. The root itself is addressed by
+        `GET /status`.
+      parameters:
+        - $ref: "#/components/parameters/NodePath"
+        - $ref: "#/components/parameters/FlowId"
+      responses:
+        "200":
+          description: The requested subtree, wrapped in a versioned envelope.
+          headers:
+            X-Flow-Id:
+              $ref: "#/components/headers/FlowId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+components:
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque
+      description: >-
+        An opaque bearer token issued by the application's operator, sent as
+        `Authorization: Bearer <token>`. There is no self-service flow — request one
+        from an operator/admin.
+
+  parameters:
+    NodePath:
+      name: node_path
+      in: path
+      required: true
+      description: >-
+        Absolute, slash-separated path to a node, e.g. `system/db`. It may span
+        several URL segments — node names are separated by `/`, and a name may itself
+        contain `.` (an FQDN). The leading `/` is implied by the route.
+      schema:
+        type: string
+        pattern: "^.+$"
+        examples: ["system/db"]
+    FlowId:
+      name: X-Flow-Id
+      in: header
+      required: false
+      description: >-
+        Optional correlation id. When supplied it is echoed in the response
+        `X-Flow-Id` header, so a request can be traced across logs.
+      schema:
+        type: string
+        examples: ["abc-123"]
+
+  headers:
+    FlowId:
+      description: Echo of the request's `X-Flow-Id`, present only when one was sent.
+      schema:
+        type: string
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid bearer token.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    NotFound:
+      description: No node exists at the given path.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+
+  schemas:
+
+    StatusCode:
+      type: string
+      description: A node's status code.
+      enum: [OK, WARN, ERROR, MAINTENANCE, UNDEFINED]
+
+    Status:
+      type: object
+      description: |-
+        A node in the status tree.
+
+        `own_code` is the code the node itself reported; `code` is the serving
+        instance's rolled-up, stale-degraded effective status. A display client reads
+        `code`; a federating parent grafts `own_code` + `children` and re-rolls
+        locally to avoid double aggregation.
+      properties:
+        path:
+          type: string
+          description: Absolute, slash-separated location of the node; `/` for the tree root.
+          examples: ["/system/db"]
+        name:
+          type: string
+          description: The node's own name — the last path segment.
+          examples: ["db"]
+        own_code:
+          $ref: "#/components/schemas/StatusCode"
+        code:
+          $ref: "#/components/schemas/StatusCode"
+        reasons:
+          type: array
+          description: >-
+            Human-readable explanations; required when not OK. Each is raw Markdown
+            the client renders — a check may fence captured command or log output as a
+            code block.
+          items:
+            type: string
+          examples: [["HTTP 503 from /health"]]
+        timestamp:
+          type: string
+          format: date-time
+          description: When the node was last observed (RFC 3339, UTC).
+          examples: ["2026-06-25T18:04:55Z"]
+        description:
+          type: string
+          description: >-
+            What the node's check does — its purpose — kept separate from `about`
+            (what the node *is*). For a branch check each leaf gets its own. Raw
+            Markdown the client renders; empty when unset.
+        frequency_seconds:
+          type: [integer, "null"]
+          minimum: 1
+          description: The check's interval; null when not set by a check.
+        about:
+          type: string
+          description: >-
+            What the node *is* — host, location, kind, context. Raw Markdown the
+            client renders; empty when unset.
+        title:
+          type: string
+          description: A short display label for the node. Raw Markdown; empty when unset.
+        config:
+          type: string
+          description: >-
+            The owning check's parameters, as raw Markdown; empty for container nodes
+            and nodes without a single owning check.
+        maintenance:
+          type: boolean
+          description: Whether an admin has pinned the node to MAINTENANCE.
+        maintenance_details:
+          description: >-
+            The maintenance override's details (who/why/when), or null when the node
+            is not under maintenance. The `maintenance` bool is the quick flag.
+          oneOf:
+            - $ref: "#/components/schemas/MaintenanceDetails"
+            - type: "null"
+        stale:
+          type: boolean
+          description: True when the node (or a descendant) was not observed within ~2x its interval.
+        children:
+          type: array
+          description: >-
+            Child nodes, ordered by name — natural and case-insensitive, so `node2`
+            precedes `node10`.
+          items:
+            $ref: "#/components/schemas/Status"
+      required:
+        - path
+        - name
+        - own_code
+        - code
+        - reasons
+        - timestamp
+        - maintenance
+        - stale
+        - children
+
+    MaintenanceDetails:
+      type: object
+      description: >-
+        Why a node was pinned to MAINTENANCE, by whom, and when it auto-expires.
+        Present only while `maintenance` is true; bounded — every entry has an expiry.
+      properties:
+        reason:
+          type: string
+          description: Why the node was put under maintenance.
+          examples: ["disk swap"]
+        set_by:
+          type: string
+          description: The admin who set it.
+          examples: ["ada"]
+        set_at:
+          type: string
+          format: date-time
+          description: When it was set (RFC 3339, UTC).
+          examples: ["2026-06-25T18:00:00Z"]
+        expires_at:
+          type: string
+          format: date-time
+          description: When it auto-expires (RFC 3339, UTC).
+          examples: ["2026-07-02T18:00:00Z"]
+      required:
+        - reason
+        - set_by
+        - set_at
+        - expires_at
+
+    StatusResponse:
+      type: object
+      description: Versioned envelope around a status subtree.
+      properties:
+        schema_version:
+          type: integer
+          description: Major version of this JSON / federation schema.
+          examples: [1]
+        generated_at:
+          type: string
+          format: date-time
+          description: The serving instance's clock when the snapshot was taken (RFC 3339, UTC).
+          examples: ["2026-06-25T18:05:00Z"]
+        status:
+          $ref: "#/components/schemas/Status"
+      required:
+        - schema_version
+        - generated_at
+        - status
+
+    Problem:
+      type: object
+      description: A problem detail object (RFC 9457).
+      properties:
+        type:
+          type: string
+          format: uri
+          default: "about:blank"
+          description: A URI identifying the problem type.
+        title:
+          type: string
+          description: A short, human-readable summary of the problem type.
+        status:
+          type: integer
+          minimum: 100
+          maximum: 599
+          description: The HTTP status code.
+        detail:
+          type: string
+          description: A human-readable explanation specific to this occurrence.
+        instance:
+          type: string
+          description: A URI identifying this specific occurrence.
