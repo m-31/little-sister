@@ -2,6 +2,9 @@
 
 Each `*.yaml` / `*.yml` file in a checks directory defines one check. The
 monitoring engine loads them and schedules each at its own `frequency`.
+(This page is about *authoring* checks in YAML; implementing a new check **type** —
+the Python class behind `type:` — is
+[`../docs/implementing-checks.md`](../docs/implementing-checks.md).)
 
 - Put your check configs directly in `checks/`.
 - The built-in SSH / metrics checks ship their scripts **inside the package**

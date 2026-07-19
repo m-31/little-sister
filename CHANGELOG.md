@@ -8,6 +8,47 @@ contract versions **separately** — see `docs/api/openapi.yaml` `info.version`.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-07-19
+
+### Added
+
+- **Secret references** ([ADR-0023](docs/adr/0023-secret-references.md)): a check
+  credential in YAML names its source — a bare environment-variable name (the
+  unchanged default, fed by `.env`) or a `scheme://address` reference resolved by
+  a resolver the deployment registers in code
+  (`little_sister.secrets.register_resolver`). Secrets resolve **once, at check
+  construction**, never during runs; a reference that cannot be resolved pins
+  just that check to a visible ERROR ("secret unresolvable: …") instead of
+  stopping the engine.
+- The application settings `SECRET_KEY` and `LITTLE_SISTER_API_TOKENS` may now
+  themselves be **secret references** (`scheme://address`), resolved once at
+  startup through the deployment's registered resolvers — one step closer to
+  running without any `.env` file. An unresolvable reference degrades safely
+  (random session key / no API tokens, loudly logged); a malformed one fails
+  startup.
+- A developer guide for building custom check types,
+  [`docs/implementing-checks.md`](docs/implementing-checks.md) — the `Check`
+  contract, branch results, registration and startup wiring, secret references,
+  testing.
+
+### Fixed
+
+- The dashboard's live-refresh line ("updated …" / "could not refresh — last
+  ok …") now renders its timestamp with the configured `time_format` and
+  timezone (`config.yaml`), matching every other displayed time. It previously
+  used the browser's locale, so a 24-hour deployment saw a 12-hour "AM/PM"
+  clock in that one spot.
+- Distribute a `py.typed` marker (PEP 561) so downstream projects can
+  type-check against little-sister. Without it, type checkers treated the
+  installed package as untyped and reported missing type information for
+  `little_sister` imports.
+
+### Security
+
+- Without `SECRET_KEY`, little-sister now generates a **random session key at
+  each start** instead of falling back to a fixed, insecure development key.
+  Sessions (logins) reset on a restart unless an explicit key is configured.
+
 ## [0.2.0] - 2026-07-15
 
 First release. little-sister is a small, self-hosted status dashboard:

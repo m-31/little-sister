@@ -5,6 +5,13 @@
 - **Related:** [ADR-0001 — In-process threaded engine](0001-in-process-threaded-engine.md)
 - **Register:** [`../decisions.md`](../decisions.md)
 
+> **Update (2026-07-18):** the phase-2 note below has been taken up:
+> [ADR-0023](0023-secret-references.md) extends this decision's reference-by-name rule
+> into a general **secret reference** — a bare environment-variable name (this ADR's
+> behaviour, still the default) or a `scheme://address` reference resolved by a
+> deployment-registered resolver (e.g. AWS Secrets Manager). The `.env` mechanics
+> here are unchanged.
+
 ## Context
 little-sister needs a Flask **`secret_key`** (today hardcoded as `"TODO"` — see
 [`../architecture.md`](../architecture.md) §5.2) and, increasingly, **credentials

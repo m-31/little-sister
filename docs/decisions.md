@@ -340,3 +340,36 @@ independently; contact runs through GitHub issues, no personal email in
 metadata.
 
 → Full record: [`adr/0022-generated-release-branch.md`](adr/0022-generated-release-branch.md)
+
+### ADR-0023 — Secret references with deployment-registered resolvers
+**Q:** How does a check get a credential from somewhere other than `.env` — AWS Secrets
+Manager, Parameter Store, possibly both in one deployment — without the core growing
+cloud dependencies or a global "secret provider" switch?
+
+**A:** The **reference names its source**. A bare name stays an env-var lookup
+([ADR-0003](adr/0003-config-and-secrets-via-env-file.md)); a `scheme://address`
+reference selects a **resolver the application registered in code**
+(`little_sister.secrets`, the same import-before-app slot as check types). Only
+addresses appear in config — never values. Secrets resolve **once, at check
+instantiation**, never during runs (cloud reads cost money); rotation = restart. A
+malformed reference (unknown scheme) fails loudly at load like any config error; a
+failed **resolution** pins the check to a visible ERROR instead of aborting the
+engine. `SECRET_KEY` and the API-token setting may themselves be references
+(`resolve_setting` — see the ADR's update note), and `SECRET_KEY` unset now means
+a **random per-start key**.
+
+→ Full record: [`adr/0023-secret-references.md`](adr/0023-secret-references.md)
+
+### The core stays service-free; deployments extend through the seams (no ADR)
+**Q:** Must little-sister stay pure-Python/Flask, add no extra services, and remain
+deployable as one `gunicorn` command — with Keycloak and cloud secret stores on the
+horizon?
+
+**A:** **Confirmed for the core.** External services — an IdP, a secret store, cloud
+storage — enter only **deployment-side**, wired by the application through the
+provider seams ([ADR-0023](adr/0023-secret-references.md); the auth seam follows the
+same philosophy): the core gains no SDK, no service, no extra deploy step, and a plain
+local install keeps working with none of it. Deliberately still open is whether the
+Phase-7 durable store can hold this same line — that belongs to the store choice
+itself.
+

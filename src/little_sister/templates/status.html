@@ -57,16 +57,22 @@
         }
         function refresh() {
             fetch(fragmentUrl(), {headers: {'X-Requested-With': 'fetch'}, cache: 'no-store'})
-                .then(function (r) { if (!r.ok) { throw new Error(r.status); } return r.text(); })
+                .then(function (r) {
+                    if (!r.ok) { throw new Error(r.status); }
+                    // The server formats this stamp with config.yaml's time_format
+                    // and timezone (ADR-0006), so it matches every other displayed
+                    // time instead of the browser's 12-hour locale.
+                    lastOk = r.headers.get('X-Rendered-At') || lastOk;
+                    return r.text();
+                })
                 .then(function (html) {
                     grid.innerHTML = html;
-                    lastOk = new Date();
-                    stamp.textContent = 'updated ' + lastOk.toLocaleTimeString();
+                    stamp.textContent = 'updated' + (lastOk ? ' ' + lastOk : '');
                     stamp.classList.remove('text-danger');
                 })
                 .catch(function () {
                     stamp.textContent = 'could not refresh — last ok ' +
-                        (lastOk ? lastOk.toLocaleTimeString() : 'never');
+                        (lastOk || 'never');
                     stamp.classList.add('text-danger');
                 });
         }

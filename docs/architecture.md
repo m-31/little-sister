@@ -44,6 +44,7 @@ little-sister/
 │   ├── checks/          # Check base + http/file/command + ssh/ family + loader
 │   ├── engine.py        # scheduler + thread pool: runs checks → upserts the tree
 │   ├── config.py        # general config (config.yaml) → Config
+│   ├── secrets.py       # secret references → values; resolver registry (ADR-0023)
 │   ├── maintenance.py   # maintenance side-table persistence (var/maintenance.json)
 │   ├── nodes.py         # nodes.yaml `about` metadata + startup consistency pass
 │   ├── render.py        # safe server-side Markdown → HTML (markdown-it-py)
@@ -320,6 +321,21 @@ Disjoint owners share a host node freely: `host-metrics` + `qnap-metrics`,
 `/macmini/findmy` beside the metric leaves), but **not** a leaf placed on the
 container itself ([ADR-0015](adr/0015-check-discovery-union.md)).
 
+**Secret references** (`secrets.py`, [ADR-0023](adr/0023-secret-references.md)): a
+check config field that carries a credential is a **reference**, resolved through
+`little_sister.secrets` **once, in the check's constructor**
+(`Check.resolve_secret`) and held for the process lifetime — never re-read during
+runs. A bare name (`GITHUB_TOKEN`) is an environment-variable lookup (fed by
+`.env`, ADR-0003); a `scheme://address` reference is resolved by the resolver the
+**application registered** via `register_resolver(scheme, …)` before importing
+`little_sister.app` — the same import slot that registers deployment check types;
+the library ships no store client. An unknown scheme raises `CheckError`, so the
+load fails loudly like any config typo; a well-formed reference that fails to
+resolve (store unreachable, secret absent) is recorded on the check's
+`secret_errors`, and the engine **pins** such a check (§4.6). None of the built-in
+check types takes a credential; the seam serves deployment checks (and later
+satellites).
+
 **Node metadata** (`nodes.py`, [ADR-0012](adr/0012-node-metadata.md) /
 [ADR-0017](adr/0017-node-title.md)): a node's `about` (subject metadata, what it *is*)
 and `title` (a short display label) are seeded onto the tree **once at startup** via
@@ -353,7 +369,9 @@ its leaves, and its own `about` carries the node-level "what is this box" (ADR-0
   result at **INFO** (`check <path>: <code> (<ms>) — <reason>`), and **stores** it
   via `_store`, which **upserts** the root at `check.path` and walks any
   `children` into nodes beneath it (`<parent path>/<child name>`), each inheriting the
-  check's frequency (ADR-0007).
+  check's frequency (ADR-0007). A check with recorded `secret_errors` (§4.5) is
+  **pinned**: `_execute` stores that `ERROR` ("secret unresolvable: …") without
+  calling `run()` — no retry until restart ([ADR-0023](adr/0023-secret-references.md)).
 - `start()` / `stop()` are idempotent; threads are daemons. `run_once()` runs every
   check synchronously (for tests). `create_engine(dir)` loads checks into a new
   engine bound to `status_tree`. `info()` returns runtime state (uptime, pool size,
@@ -430,12 +448,16 @@ filter logic is `_filter_snapshot` (drops nodes whose effective code is hidden).
 - **viewer / admin roles** — `login` stores an `admin` flag; admin-only actions
   (set/clear maintenance, the system page) are gated on it.
 - **Passwords are plaintext** (compared directly); hashing is planned.
-- `secret_key` is loaded from a git-ignored **`.env`** file via the environment
-  (a dependency-free loader; [ADR-0003](adr/0003-config-and-secrets-via-env-file.md)),
-  with an insecure dev fallback + warning if unset.
+- `secret_key` comes from **`SECRET_KEY`** — a literal value, or itself a secret
+  reference resolved once at startup; **unset means a random per-start key**
+  (sessions reset on restart)
+  ([ADR-0003](adr/0003-config-and-secrets-via-env-file.md),
+  [ADR-0023](adr/0023-secret-references.md) update note). `.env` feeds the
+  environment via a dependency-free loader.
 - **JSON backend mode** — `GET /status[/<path:branch>]` with `Accept: application/json`
-  is gated by a **bearer token** (named per-client tokens from `.env`'s
-  `LITTLE_SISTER_API_TOKENS`, compared with `secrets.compare_digest`); the session
+  is gated by a **bearer token** (named per-client tokens from the
+  `LITTLE_SISTER_API_TOKENS` setting — a literal, or itself a secret reference —
+  compared with `secrets.compare_digest`); the session
   cookie isn't accepted there. Errors are **Problem JSON** (RFC 9457), and an inbound
   `X-Flow-Id` is echoed. Read-only; the contract is
   [`api/openapi.yaml`](api/openapi.yaml) ([ADR-0008](adr/0008-json-output-api.md)).
@@ -470,7 +492,10 @@ raises rather than rendering blank):
   (ellipsed, `.node-title`) on a card and the breadcrumb in the page header; and a
   branch view shows the viewed node's `about` under its heading. The grid is the
   `_status_grid.html` partial; the page **polls** it (`?fragment=1`) every ~10s, swaps
-  it in, and flags refresh failures (so it never silently shows old content).
+  it in, and flags refresh failures (so it never silently shows old content); the
+  poll stamp shows the **server-formatted** render time — the fragment's
+  `X-Rendered-At` header, in `config.yaml`'s timezone and `time_format` (ADR-0006) —
+  not the browser clock.
 - **Inspection popover** ([ADR-0019](adr/0019-inspection-popover.md)) — a node's static
   `title` / `about` (rendered Markdown) show in a custom **hover card**, not the native
   `title=` tooltip (the leaf `description` stays on its detail page). The page preloads a path-keyed map of the rendered
@@ -500,10 +525,16 @@ raises rather than rendering blank):
 
 - **Users** — `users.yaml` inside the package, a flat map keyed by username with
   `firstname`, `lastname`, `password` and an optional `admin: true`. Git-ignored.
-- **Secrets** — a git-ignored `.env` file supplies `SECRET_KEY` (and any check
-  credentials) via the environment ([ADR-0003](adr/0003-config-and-secrets-via-env-file.md)).
-- **API tokens** — `LITTLE_SISTER_API_TOKENS` in `.env` holds named per-client
-  bearer tokens (`name=token,name2=token2`) for the JSON backend (ADR-0008).
+- **Secrets** — a git-ignored `.env` file may supply `SECRET_KEY` (optional —
+  unset means a random per-start key) and any check credentials via the
+  environment ([ADR-0003](adr/0003-config-and-secrets-via-env-file.md)).
+  A check's credential field is a **secret reference** — a bare env-var name (the
+  default), or `scheme://address` resolved by a deployment-registered resolver,
+  once at check construction (§4.5, [ADR-0023](adr/0023-secret-references.md)).
+- **API tokens** — the `LITTLE_SISTER_API_TOKENS` setting holds named per-client
+  bearer tokens (`name=token,name2=token2`) for the JSON backend (ADR-0008); its
+  value may itself be a `scheme://` secret reference, resolved once at startup
+  ([ADR-0023](adr/0023-secret-references.md) update note).
 - **What to monitor** — YAML files across one or more `checks/` directories, a
   path-list union selected by `LITTLE_SISTER_CHECKS_DIR` (§4.5).
 - **Node metadata** — an optional `nodes.yaml` per checks directory declares each
@@ -555,10 +586,44 @@ Test suites: `test_status.py` (the `Status` model + ADR-0004 roll-up),
 `test_checks.py` (the http/file/command checks + loader), the SSH family —
 `test_ssh.py` (transport, connect/command/script), `test_host_metrics.py`,
 `test_qnap_metrics.py` and `test_metrics_scripts.py` (the bundled shell scripts),
-`test_config.py` (general config), `test_maintenance.py` (the maintenance side-table
-store), `test_nodes.py` (nodes.yaml loading, `about` precedence, the consistency
+`test_config.py` (general config), `test_secrets.py` (secret references: resolution,
+the resolver registry, the engine's pinned-ERROR path), `test_maintenance.py` (the
+maintenance side-table store), `test_nodes.py` (nodes.yaml loading, `about` precedence, the consistency
 pass), `test_engine.py` (scheduling, concurrency, `info()`),
 `test_web.py` (the routes via the Flask test client), `test_api.py` (the JSON
 backend: serialization, content negotiation, token auth), and `test_docs_links.py`
 (every relative Markdown link resolves). The suite passes under
 Python 3.14 with ruff and mypy clean.
+
+---
+
+## 11. Public API surface — the version contract
+
+A deployment pins little-sister to a semver tag
+([ADR-0022](adr/0022-generated-release-branch.md)), so a library upgrade is a
+deliberate version bump rather than silent drift — which only works if the
+surface it depends on is explicit. A tag promises to keep these stable:
+
+- **WSGI application** — `little_sister.app:app` (the Flask app of §5), the object
+  a deployment runs under `gunicorn`.
+- **Check-type registry** — `CHECK_TYPES` in `little_sister.checks` (§4.5). A
+  deployment adds its own check *types* in-source by importing them before
+  `little_sister.app:app`; packaging them as installable plugins later is an
+  evolution of this, not a rewrite. The developer how-to is
+  [`implementing-checks.md`](implementing-checks.md).
+- **Secret references** — `little_sister.secrets`: `resolve(reference)` /
+  `register_resolver(scheme, resolver)` / `resolve_setting(value)` (an app setting
+  whose value may be a reference), the reference syntax itself (a bare env-var
+  name, or `scheme://address`), and `Check.resolve_secret` (resolve at construction,
+  pin on failure — [ADR-0023](adr/0023-secret-references.md)). A deployment registers
+  its resolvers in the same import-before-app slot as its check types.
+- **Environment contract** — how a deployment points the library at its own config
+  in the working directory: `LITTLE_SISTER_CHECKS_DIR` (checks + `nodes.yaml`),
+  `LITTLE_SISTER_USERS` (the user list, [ADR-0020](adr/0020-user-list-location.md)),
+  `LITTLE_SISTER_SCRIPTS_DIR` (metrics-script overrides,
+  [ADR-0021](adr/0021-script-resolution.md)), `LITTLE_SISTER_CONFIG` (`config.yaml`),
+  `LITTLE_SISTER_API_TOKENS` (JSON-API bearer tokens), and `LITTLE_SISTER_ENGINE`
+  (disable the engine, e.g. in tests). Defaults and formats are in §7.
+
+A version bump is *for* changes to these; everything else — internal modules,
+template markup, exact HTML — may move between releases.

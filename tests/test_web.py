@@ -1,12 +1,12 @@
 import os
 import unittest
-from unittest import TestCase
+from unittest import TestCase, mock
 
 # Import the app with the background engine disabled (no threads/network).
 os.environ.setdefault("LITTLE_SISTER_ENGINE", "0")
 os.environ.setdefault("SECRET_KEY", "test-key")
 
-from little_sister import __version__
+from little_sister import __version__, secrets
 from little_sister import app as app_module
 from little_sister.status import StatusCode
 from little_sister.tree import StatusTree
@@ -338,6 +338,89 @@ class WebTests(TestCase):
                          "2026-06-19 12:00:00")
         self.assertEqual(app_module._localtime(""), "—")
         self.assertEqual(app_module._localtime("not-a-time"), "not-a-time")
+
+    def test_format_local_uses_configured_tz_and_format(self):
+        # _format_local backs both the localtime filter and the poll stamp: it
+        # renders config.time_format in config.timezone (default Europe/Berlin,
+        # CEST/UTC+2 in June), so the dashboard clock never falls back to the
+        # browser's locale (ADR-0006).
+        from datetime import datetime
+        moment = datetime.fromisoformat("2026-06-19T10:00:00+00:00")
+        self.assertEqual(app_module._format_local(moment), "2026-06-19 12:00:00")
+
+    def test_status_fragment_carries_rendered_at_header(self):
+        # the poll fragment hands the client a server-formatted timestamp so
+        # "updated …" honours config.time_format rather than toLocaleTimeString
+        self._login()
+        self.tree.upsert("/svc/web", StatusCode.OK)
+        stamp = self.client.get("/status?fragment=1").headers.get("X-Rendered-At")
+        self.assertIsNotNone(stamp)
+        # configured format is "%Y-%m-%d %H:%M:%S": 24-hour, no AM/PM
+        self.assertRegex(stamp, r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
+        self.assertNotIn("AM", stamp)
+        self.assertNotIn("PM", stamp)
+
+    def test_poller_shows_server_stamp_not_client_clock(self):
+        # the page's poll loop displays the server header, not a local Date
+        self._login()
+        body = self.client.get("/status").get_data(as_text=True)
+        self.assertIn("X-Rendered-At", body)
+        self.assertNotIn("toLocaleTimeString", body)
+
+
+class SettingResolutionTests(TestCase):
+    """SECRET_KEY / LITTLE_SISTER_API_TOKENS at startup (ADR-0023 update)."""
+
+    def setUp(self):
+        for patcher in (mock.patch.dict(os.environ),
+                        mock.patch.dict(secrets._resolvers)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_unset_secret_key_gets_a_random_per_start_key(self):
+        os.environ.pop("SECRET_KEY", None)
+        key = app_module._session_key()
+        self.assertEqual(len(key), 64)                      # token_hex(32)
+        self.assertNotEqual(key, "dev-insecure-key-change-me")
+        self.assertNotEqual(key, app_module._session_key())  # random each time
+
+    def test_explicit_secret_key_wins(self):
+        os.environ["SECRET_KEY"] = "keep-my-sessions"
+        self.assertEqual(app_module._session_key(), "keep-my-sessions")
+
+    def test_secret_key_may_be_a_reference(self):
+        secrets.register_resolver("fake", lambda address: f"key:{address}")
+        os.environ["SECRET_KEY"] = "fake://app/session-key"
+        self.assertEqual(app_module._session_key(), "key:app/session-key")
+
+    def test_failing_secret_key_reference_degrades_to_random(self):
+        def failing(address: str) -> str:
+            raise RuntimeError("store unreachable")
+        secrets.register_resolver("fake", failing)
+        os.environ["SECRET_KEY"] = "fake://app/session-key"
+        key = app_module._session_key()
+        self.assertEqual(len(key), 64)
+
+    def test_malformed_secret_key_reference_fails_loudly(self):
+        os.environ["SECRET_KEY"] = "nope://app/session-key"
+        with self.assertRaises(secrets.UnknownSchemeError):
+            app_module._session_key()
+
+    def test_api_tokens_literal_passes_through(self):
+        os.environ["LITTLE_SISTER_API_TOKENS"] = "app=s3cret"
+        self.assertEqual(app_module._api_token_setting(), "app=s3cret")
+
+    def test_api_tokens_may_be_a_reference(self):
+        secrets.register_resolver("fake", lambda address: "app=fr0m-store")
+        os.environ["LITTLE_SISTER_API_TOKENS"] = "fake://app/tokens"
+        self.assertEqual(app_module._api_token_setting(), "app=fr0m-store")
+
+    def test_failing_api_token_reference_fails_closed(self):
+        def failing(address: str) -> str:
+            raise RuntimeError("store unreachable")
+        secrets.register_resolver("fake", failing)
+        os.environ["LITTLE_SISTER_API_TOKENS"] = "fake://app/tokens"
+        self.assertEqual(app_module._api_token_setting(), "")
 
 
 if __name__ == "__main__":

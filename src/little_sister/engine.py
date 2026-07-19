@@ -3,7 +3,9 @@
 One process runs one engine (ADR-0001). A scheduler thread submits *due* checks
 to a bounded thread pool; each run produces a result that is upserted into the
 shared status tree. A check that raises or times out becomes ``ERROR``
-(ADR-0004). Threads are daemons; ``start``/``stop`` are idempotent.
+(ADR-0004); one whose secret references failed to resolve at construction is
+**pinned** to ERROR without running (ADR-0023). Threads are daemons;
+``start``/``stop`` are idempotent.
 """
 from __future__ import annotations
 
@@ -14,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
 
-from little_sister.checks import Check, CheckResult, load_checks
+from little_sister.checks import Check, CheckResult, load_checks, plain
 from little_sister.logger import logger
 from little_sister.status import StatusCode, join_path
 from little_sister.tree import StatusTree, status_tree
@@ -178,10 +180,17 @@ class Engine:
         check = item.check
         started = time.monotonic()
         try:
-            result = check.run()
-            if not isinstance(result, CheckResult):
-                result = CheckResult(
-                    StatusCode.ERROR, ["check returned no result"])
+            if check.secret_errors:
+                # Pinned (ADR-0023): a secret reference failed to resolve at
+                # construction — report it, never call run(), never retry.
+                result = CheckResult(StatusCode.ERROR, [
+                    plain(f"secret unresolvable: {error}")
+                    for error in check.secret_errors])
+            else:
+                result = check.run()
+                if not isinstance(result, CheckResult):
+                    result = CheckResult(
+                        StatusCode.ERROR, ["check returned no result"])
         except Exception as error:  # any failure becomes an ERROR (ADR-0004)
             logger.exception("engine: check %s raised", check.path)
             result = CheckResult(StatusCode.ERROR, [f"check error: {error}"])

@@ -2,6 +2,7 @@ import atexit
 import os
 from dataclasses import replace
 from datetime import datetime, timedelta
+from secrets import token_hex
 
 import yaml
 from flask import (
@@ -29,6 +30,7 @@ from little_sister.logger import logger
 from little_sister.maintenance import MaintenanceStore
 from little_sister.nodes import load_nodes, resolve_metadata, run_consistency_pass
 from little_sister.render import render_markdown, render_markdown_inline
+from little_sister.secrets import SecretError, resolve_setting
 from little_sister.status import StatusCode
 from little_sister.tree import StatusSnapshot, status_tree
 
@@ -154,6 +156,19 @@ def _duration(seconds: int | None) -> str:
     return f"{seconds}s"
 
 
+def _format_local(moment: datetime) -> str:
+    """Format a datetime in the configured timezone and ``time_format``
+    (config.yaml). A naive value is taken to be the server's local time.
+
+    The one place display timestamps are formatted, so the dashboard's poll
+    stamp (served in the ``X-Rendered-At`` response header) matches every
+    server-rendered time (ADR-0006) rather than the browser's locale.
+    """
+    if moment.tzinfo is None:
+        moment = moment.astimezone()
+    return moment.astimezone(config.tzinfo).strftime(config.time_format)
+
+
 @app.template_filter("localtime")
 def _localtime(value: object) -> str:
     """Render an ISO-8601 timestamp in the configured timezone (config.yaml).
@@ -166,9 +181,7 @@ def _localtime(value: object) -> str:
         moment = datetime.fromisoformat(str(value))
     except ValueError:
         return str(value)
-    if moment.tzinfo is None:
-        moment = moment.astimezone()
-    return moment.astimezone(config.tzinfo).strftime(config.time_format)
+    return _format_local(moment)
 
 
 def _filter_snapshot(node: StatusSnapshot,
@@ -204,12 +217,30 @@ def _node_meta_map(node: StatusSnapshot | None) -> dict[str, dict[str, str]]:
         stack.extend(current.children)
     return out
 
-# Session signing key — loaded from the environment / .env (ADR-0003).
-_secret_key = os.environ.get("SECRET_KEY")
-if not _secret_key:
-    logger.warning("SECRET_KEY not set; using an insecure development key.")
-    _secret_key = "dev-insecure-key-change-me"
-app.secret_key = _secret_key
+# Session signing key (ADR-0003): an explicit SECRET_KEY wins — its value may
+# itself be a secret reference (`scheme://address`, ADR-0023 update note) —
+# otherwise a random per-start key: secure by default, at the price of sessions
+# resetting on restart (one worker, ADR-0001, so no cross-worker key skew). A
+# malformed reference (unknown scheme) raises and fails startup loudly; an
+# unresolvable one degrades to the random key with a warning — the dashboard
+# must come up even while the secret store is down.
+def _session_key() -> str:
+    raw = os.environ.get("SECRET_KEY", "")
+    try:
+        key = resolve_setting(raw)
+    except SecretError as error:
+        logger.warning(
+            "SECRET_KEY reference failed (%s); using a random per-start key — "
+            "sessions reset on restart.", error)
+        return token_hex(32)
+    if key:
+        return key
+    logger.info("SECRET_KEY not set; using a random per-start key — "
+                "sessions reset on restart.")
+    return token_hex(32)
+
+
+app.secret_key = _session_key()
 
 # Load the allowed users from a deployment-controlled location (ADR-0020):
 # LITTLE_SISTER_USERS if set, else `users.yaml` in the working directory.
@@ -225,8 +256,21 @@ except FileNotFoundError as exc:
 
 logger.info("little-sister started with %d configured user(s).", len(users or {}))
 
-# API tokens for the JSON backend (ADR-0008): "name=token,name2=token2" in .env.
-api_tokens = parse_api_tokens(os.environ.get("LITTLE_SISTER_API_TOKENS", ""))
+# API tokens for the JSON backend (ADR-0008): "name=token,name2=token2" — set
+# directly, or as a value that is itself a secret reference (ADR-0023 update
+# note). Unresolvable ⇒ no tokens (the API rejects all requests until restart)
+# rather than a crash-loop; a malformed reference still fails startup loudly.
+def _api_token_setting() -> str:
+    try:
+        return resolve_setting(os.environ.get("LITTLE_SISTER_API_TOKENS", ""))
+    except SecretError as error:
+        logger.warning(
+            "LITTLE_SISTER_API_TOKENS reference failed (%s); the JSON API "
+            "will reject all requests until restart.", error)
+        return ""
+
+
+api_tokens = parse_api_tokens(_api_token_setting())
 
 
 # Start the monitoring engine once, in this (post-fork) process. Disable with
@@ -377,6 +421,10 @@ def status(branch: str = "") -> ResponseReturnValue:
                                hide_idle=hide_idle,
                                node_meta=_node_meta_map(node))
     response = make_response(body)
+    # The dashboard's poll stamp reads this server-formatted time instead of
+    # formatting client-side, so "updated …" / "could not refresh — last ok …"
+    # honour config.yaml's time_format and timezone (ADR-0006), not the browser.
+    response.headers['X-Rendered-At'] = _format_local(datetime.now())
     # Persist the choice only when the viewer set it explicitly.
     if 'depth' in request.args:
         response.set_cookie('depth', str(depth), max_age=DEPTH_COOKIE_MAX_AGE,

@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar
 
+from little_sister import secrets
 from little_sister.status import StatusCode, join_path, leaf_name, split_path
 
 DEFAULT_FREQUENCY_SECONDS = 900   # 15 minutes — most checks run infrequently
@@ -87,6 +88,9 @@ class Check(abc.ABC):
         self.title = title
         self.frequency_seconds = frequency_seconds
         self.timeout_seconds = timeout_seconds
+        # Failures from resolve-at-construction secret references (ADR-0023):
+        # non-empty ⇒ the engine pins this check to ERROR and never calls run().
+        self.secret_errors: list[str] = []
 
     @property
     def name(self) -> str:
@@ -111,6 +115,30 @@ class Check(abc.ABC):
         this empty (its container node is shared) and tags each child result's
         ``config`` instead."""
         return ""
+
+    def resolve_secret(self, reference: str) -> str:
+        """Resolve a secret reference **at construction time** (ADR-0023).
+
+        A bare name reads that environment variable (``.env``, ADR-0003); a
+        ``scheme://address`` reference goes through the resolver the
+        application registered (``little_sister.secrets``). Call this from
+        ``__init__`` / ``_extra_from_config`` and keep the value — never
+        resolve during :meth:`run` (cloud stores bill per read; rotation is a
+        restart).
+
+        A **malformed** reference (unknown scheme) raises :class:`CheckError`,
+        so the load fails loudly like any config typo. A well-formed reference
+        that **fails to resolve** (store unreachable, secret absent) is
+        recorded in ``secret_errors`` and returns ``""`` — the engine then pins
+        this check to a visible ERROR without ever calling :meth:`run`.
+        """
+        try:
+            return secrets.resolve(reference)
+        except secrets.UnknownSchemeError as error:
+            raise CheckError(str(error)) from error
+        except secrets.SecretError as error:
+            self.secret_errors.append(str(error))
+            return ""
 
     @abc.abstractmethod
     def run(self) -> CheckResult:
