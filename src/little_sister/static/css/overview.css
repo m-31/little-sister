@@ -28,6 +28,11 @@
     border-radius: 8px;
     padding: 8px 10px;
     color: #fff;
+    /* Bound card heights (#24): the shipped reason caps (#9) bound growth from
+       above; this floors a sparse card (a bare heartbeat-less leaf, or an
+       all-green host that shrank to a chip row) so the everyday grid keeps a
+       steady rhythm and holes stay shallow. Height ∈ [min, cap]. */
+    min-height: 4.75rem;
 }
 
 .status-card__head {
@@ -138,7 +143,8 @@
    `inspect-trigger` class is applied by inspect.js to nodes that have a card
    (ADR-0019), and re-applied after each polled grid swap */
 .status-card__head.inspect-trigger,
-.status-node__self.inspect-trigger {
+.status-node__self.inspect-trigger,
+.ls-strip.inspect-trigger {
     cursor: help;
 }
 
@@ -150,9 +156,123 @@
     margin-left: 0.5rem;
 }
 
+/* Reason overflow (#9). A dashboard card caps how many reason entries it shows
+   (cap K in _status_grid.html) and clamps a tall block's height (~8 reason
+   lines); a per-node "show all (N)" toggles both. Entries past the cap and the
+   clipped remainder stay in the DOM — hidden by CSS, never cut mid-HTML
+   (ADR-0018). reasons.js sets .is-open / .is-clipped and re-applies the open
+   state after each ~10s fragment swap; the detail page always shows everything. */
+.reason-block { position: relative; }
+.reason-block:not(.is-open) {
+    max-height: 8.5rem;                 /* ~8 lines at 0.8rem × 1.35 line-height */
+    overflow: hidden;
+}
+.reason-block:not(.is-open) .reason-extra { display: none; }
+/* Fade the clipped edge to the card colour — a mask is background-agnostic, so
+   the one rule works on every status tint. Only when the content truly overflows
+   the clamp (.is-clipped), so a short capped list never gets a misleading fade. */
+.reason-block.is-clipped:not(.is-open) {
+    -webkit-mask-image: linear-gradient(to bottom, #000 72%, transparent);
+            mask-image: linear-gradient(to bottom, #000 72%, transparent);
+}
+.reason-toggle {
+    display: inline-block;
+    margin: 0.15rem 0 0 0.5rem;         /* align under .status-node__reason */
+    padding: 0;
+    background: none;
+    border: 0;
+    -webkit-appearance: none;
+            appearance: none;
+    color: inherit;
+    font-size: 0.8rem;
+    line-height: 1.35;
+    text-decoration: underline;
+    opacity: 0.85;
+    cursor: pointer;
+}
+.reason-toggle:hover { opacity: 1; }
+
 /* nested boxes sit below the parent's label, inside its box */
 .status-node__children {
     margin-top: 6px;
+}
+
+/* Leaf density (#24): a card's quiet (not warn/error) descendant leaves render
+   as compact name+colour chips instead of stacked boxes, so an all-green host
+   converges toward a wrapping chip row and holds a steadier height. A chip flows
+   inline; a problem leaf or a branch stays a full-width box that breaks the line,
+   so alphabetical sibling order survives the mix. A chip's reason (if any) is one
+   click away on its leaf page — the hover card still shows title/about. */
+.leaf-chip {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.3em;
+    max-width: 100%;
+    margin: 0 0.3rem 0.35rem 0;
+    padding: 1px 9px;
+    border: 1px solid transparent;
+    border-radius: 999px;
+    color: inherit;
+    font-size: 0.8rem;
+    font-weight: 600;
+    line-height: 1.5;
+    text-decoration: none;
+    vertical-align: top;
+    overflow: hidden;
+    white-space: nowrap;
+}
+/* the name is its own flex item so it can shrink and ellipse — `text-overflow`
+   on the chip itself would sit on a flex container and never apply */
+.leaf-chip__name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.leaf-chip:hover { text-decoration: underline; }
+.leaf-chip.inspect-trigger { cursor: help; }
+.leaf-chip .node-title { max-width: 16ch; margin-left: 0; }
+.leaf-chip.s-ok          { background: var(--tint-ok);          color: #2c6a3f; border-color: rgba(44, 106, 63, 0.28); }
+.leaf-chip.s-undefined   { background: var(--tint-undefined);   color: #54585c; border-color: rgba(84, 88, 92, 0.28); }
+.leaf-chip.s-maintenance { background: var(--tint-maintenance); color: #244a77; border-color: rgba(36, 74, 119, 0.28); }
+
+/* Status strip (#24): the engine self-heartbeat (ADR-0005), lifted out of the
+   grid into a compact caption pill directly under the "updated …" freshness
+   line — a side note, not a summary banner (fit-content width keeps it from
+   reading as a page-wide roll-up; judged on harness screenshots 2026-07-20).
+   Healthy it reads pale (tint green); a stalled scheduler degrades it to
+   warn/error (vivid), the self-monitor's alarm. Living inside #status-grid, it
+   refreshes with the ~10s poll and dims under the sustained-outage banner with
+   the rest of the content. */
+.ls-strip {
+    display: flex;
+    width: fit-content;
+    max-width: 100%;
+    align-items: baseline;
+    gap: 0.45rem;
+    margin-bottom: 0.6rem;
+    padding: 2px 10px;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    font-size: 0.8rem;
+}
+.ls-strip__pulse {
+    flex: 0 0 auto;
+    align-self: center;
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 50%;
+    background: currentColor;
+    opacity: 0.85;
+}
+.ls-strip__name { font-weight: 600; color: inherit; text-decoration: none; }
+.ls-strip__name:hover { text-decoration: underline; }
+.ls-strip__state { margin-left: 0.15rem; opacity: 0.8; }
+.ls-strip.s-error       { background: #f0635a; color: #fff; }
+.ls-strip.s-warn        { background: #e0a836; color: #fff; }
+.ls-strip.s-maintenance { background: #5a8fd6; color: #fff; }
+.ls-strip.s-undefined   { background: #9aa0a6; color: #fff; }
+.ls-strip.s-ok {
+    background: var(--tint-ok); color: #2c6a3f; border-color: rgba(44, 106, 63, 0.22);
 }
 
 /* status colours.
@@ -242,3 +362,7 @@
 
 /* keep an embedded image from overflowing the card */
 .inspect-card img { max-width: 100%; height: auto; }
+
+/* Sustained poll failure (ADR-0005 update note): poll.js dims the frozen
+   content under its banner — still readable, no longer mistakable for live. */
+.poll-stale { opacity: 0.45; transition: opacity 0.3s ease; }

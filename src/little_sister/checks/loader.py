@@ -7,7 +7,7 @@ from pathlib import Path
 import yaml
 
 from little_sister.checks.base import CHECK_TYPES, Check, CheckError
-from little_sister.status import on_same_line
+from little_sister.status import HEARTBEAT_PATH, on_same_line
 
 DEFAULT_CHECKS_DIR = os.environ.get("LITTLE_SISTER_CHECKS_DIR", "checks")
 
@@ -30,7 +30,8 @@ def load_checks(directory: str | Path | None = None) -> list[Check]:
     file's own directory. Sub-directories (e.g. ``scripts/``) are ignored. Two
     checks that own **overlapping** nodes (:meth:`Check.owned_nodes`) are a hard
     error — no override, no merge, no precedence. Raises :class:`CheckError` on a
-    bad or unknown config, a missing directory, or an ownership conflict.
+    bad or unknown config, a missing directory, an ownership conflict, or a check
+    owning nodes on the reserved ``/little-sister`` line (ADR-0005).
     """
     loaded: list[tuple[Check, Path]] = []
     for base in resolve_dirs(directory):
@@ -40,6 +41,7 @@ def load_checks(directory: str | Path | None = None) -> list[Check]:
             if config_path.name == NODES_FILENAME:
                 continue   # node metadata, loaded by `nodes`, not a check
             loaded.append((_load_one(config_path), config_path))
+    _reject_reserved_paths(loaded)
     _reject_overlapping_owners(loaded)
     return [check for check, _ in loaded]
 
@@ -79,6 +81,24 @@ def _load_one(config_path: Path) -> Check:
         return check_cls.from_config(config, config_path.parent)
     except CheckError as error:
         raise CheckError(f"{config_path.name}: {error}") from error
+
+
+def _reject_reserved_paths(loaded: list[tuple[Check, Path]]) -> None:
+    """Reject a check that owns nodes on the engine's own line (ADR-0005).
+
+    ``HEARTBEAT_PATH`` is reserved: the engine heartbeats that node itself, and
+    the dashboard lifts it out of the card grid into the one-line status strip
+    (#24), which must never have a subtree hiding behind it. Keeping deployment
+    checks off the whole line also leaves it free for future engine-owned
+    children (connected satellite engines, say).
+    """
+    for check, source in loaded:
+        for node in sorted(check.owned_nodes()):
+            if on_same_line(node, HEARTBEAT_PATH):
+                raise CheckError(
+                    f"{source.name}: node {node!r} is on the reserved "
+                    f"{HEARTBEAT_PATH!r} line — the engine's own heartbeat "
+                    f"lives there (ADR-0005)")
 
 
 def _reject_overlapping_owners(loaded: list[tuple[Check, Path]]) -> None:

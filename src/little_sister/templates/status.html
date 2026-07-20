@@ -36,7 +36,13 @@
         {% if node and node.about %}
             <div class="md-body text-muted mb-2">{{ node.about | markdown }}</div>
         {% endif %}
-        <div class="text-muted small mb-3" id="status-updated">live</div>
+        {# Server-seeded (ADR-0005): the page dates its data from the first
+           paint, so a dashboard that never reaches the server again still says
+           when its grid was true instead of claiming to be "live". Sits as the
+           caption directly above the heartbeat status strip (#24), which is the
+           first thing #status-grid renders. #}
+        <div class="text-muted small mb-1" id="status-updated"
+             data-rendered-at="{{ rendered_at }}">updated {{ rendered_at }}</div>
 
         <div id="status-grid">
             {% include '_status_grid.html' %}
@@ -44,41 +50,15 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
-    <script>
-    (function () {
-        var grid = document.getElementById('status-grid');
-        var stamp = document.getElementById('status-updated');
-        if (!grid || !stamp) { return; }
-        var lastOk = null;
-        function fragmentUrl() {
-            var u = new URL(window.location.href);
-            u.searchParams.set('fragment', '1');
-            return u.toString();
-        }
-        function refresh() {
-            fetch(fragmentUrl(), {headers: {'X-Requested-With': 'fetch'}, cache: 'no-store'})
-                .then(function (r) {
-                    if (!r.ok) { throw new Error(r.status); }
-                    // The server formats this stamp with config.yaml's time_format
-                    // and timezone (ADR-0006), so it matches every other displayed
-                    // time instead of the browser's 12-hour locale.
-                    lastOk = r.headers.get('X-Rendered-At') || lastOk;
-                    return r.text();
-                })
-                .then(function (html) {
-                    grid.innerHTML = html;
-                    stamp.textContent = 'updated' + (lastOk ? ' ' + lastOk : '');
-                    stamp.classList.remove('text-danger');
-                })
-                .catch(function () {
-                    stamp.textContent = 'could not refresh — last ok ' +
-                        (lastOk || 'never');
-                    stamp.classList.add('text-danger');
-                });
-        }
-        setInterval(refresh, 10000);
-    })();
-    </script>
+    {# The ~10s fragment poll, shared with /system (poll.js swaps data-target
+       and keeps the #status-updated stamp truthful, ADR-0005). #}
+    <script src="{{ url_for('static', filename='js/poll.js') }}"
+            data-target="status-grid"></script>
+
+    {# Reason overflow (#9): caps/clamps each card's reason block with an in-place
+       "show all (N)" that survives the ~10s fragment swap (event-delegated on
+       #status-grid, the ADR-0019 pattern). #}
+    <script src="{{ url_for('static', filename='js/reasons.js') }}"></script>
 
     {# Inspection popover (ADR-0019): static node metadata preloaded with the page
        (not the polled fragment), rendered into a hover card client-side. #}

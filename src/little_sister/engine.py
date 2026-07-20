@@ -11,23 +11,50 @@ from __future__ import annotations
 
 import threading
 import time
+import zlib
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from little_sister.checks import Check, CheckResult, load_checks, plain
 from little_sister.logger import logger
-from little_sister.status import StatusCode, join_path
+from little_sister.status import HEARTBEAT_PATH, StatusCode, join_path
 from little_sister.tree import StatusTree, status_tree
 
 DEFAULT_MAX_WORKERS = 8
 DEFAULT_POLL_INTERVAL = 1.0
+# The spread window for check start times: every check still runs in the first
+# sweep, but its schedule is phase-shifted once, at the first re-arm, by a
+# stable per-check offset within min(frequency, this) — so equal-frequency
+# checks don't fire in one tick forever (all SSH sessions at once, every LCM
+# beat), and a fast check never waits longer than its own period.
+STAGGER_WINDOW_SECONDS = 60.0
 
-# The engine's self-monitoring tile: it heartbeats this node every scheduler tick,
-# so a dead scheduler shows up as a stale (red) tile (ADR-0005).
-HEARTBEAT_PATH = "/little-sister"
+# The engine's self-monitoring node: it heartbeats HEARTBEAT_PATH (reserved —
+# see status.py; the dashboard renders it as the status strip, #24) every
+# scheduler tick, so a dead scheduler shows up stale and degraded (ADR-0005).
 HEARTBEAT_DESCRIPTION = "little-sister monitoring engine — beats every scheduler tick"
+# Default `about` for the heartbeat, so the dashboard strip explains itself in
+# the hover card (ADR-0019) out of the box. Seeded at engine construction —
+# before the startup nodes.yaml pass, whose declaration simply overwrites it
+# (ADR-0012 precedence).
+HEARTBEAT_ABOUT = (
+    "The engine's own heartbeat — re-asserted every scheduler tick. "
+    "**Stale** here means the scheduler itself has stalled (ADR-0005)."
+)
+
+
+def _stagger(check: Check) -> float:
+    """The check's personal schedule phase within
+    ``min(frequency, STAGGER_WINDOW_SECONDS)``, applied once at the first
+    re-arm. Derived from a digest of path *and* type — two checks may share a
+    root node (e.g. host-metrics + macos-memory on one host) and those want
+    separating most — and deterministic across restarts (crc32, not the
+    per-process-salted ``hash``), so the relative spread is reproducible."""
+    window = min(float(check.frequency_seconds), STAGGER_WINDOW_SECONDS)
+    digest = zlib.crc32(f"{check.path}\0{check.type_name}".encode())
+    return (digest % 1000) / 1000.0 * window
 
 
 @dataclass
@@ -35,15 +62,40 @@ class _Scheduled:
     check: Check
     next_due: float
     running: bool = False
+    # One-time schedule offset (see _stagger), spent at the first re-arm.
+    stagger: float = 0.0
+    # The in-flight run: its wall-clock start and the monotonic mate, set when
+    # execution begins (queue wait excluded), cleared when it finishes.
+    run_started_at: str | None = None
+    run_started_mono: float | None = None
+    # The last completed run() attempt: when it started and how long it took —
+    # a raising (or timed-out) run records its full wait; a secret-pinned check
+    # never runs, so both stay None. Read under the engine lock.
+    last_run_at: str | None = None
+    elapsed_seconds: float | None = None
 
 
 @dataclass(frozen=True)
 class CheckInfo:
-    """A check's scheduling state, for the system page."""
+    """A check's scheduling state, for the system page.
+
+    ``running_since`` / ``running_seconds`` describe the in-flight run (``None``
+    while idle, and while a submitted run still waits for a pool worker);
+    ``next_run_at`` / ``next_in_seconds`` the armed next slot (a running check's
+    next slot is already scheduled); ``last_run_at`` / ``elapsed_seconds`` the
+    last completed run — ``None`` until one finishes, and always for a
+    secret-pinned check (it never runs).
+    """
     path: str
+    type_name: str
     frequency_seconds: int
     running: bool
+    running_since: str | None
+    running_seconds: float | None
+    next_run_at: str
     next_in_seconds: float
+    last_run_at: str | None
+    elapsed_seconds: float | None
 
 
 @dataclass(frozen=True)
@@ -65,12 +117,19 @@ class Engine:
                  poll_interval: float = DEFAULT_POLL_INTERVAL,
                  clock: Callable[[], float] = time.monotonic) -> None:
         self._tree = tree
+        # Make the self-monitor legible before it ever beats: the strip's
+        # hover card can always say what /little-sister is (the nodes.yaml
+        # pass runs later at startup and overrides this default).
+        tree.set_about(HEARTBEAT_PATH, HEARTBEAT_ABOUT)
         self._clock = clock
         self._poll_interval = poll_interval
         self._max_workers = max(1, min(max_workers, max(1, len(checks))))
         now = clock()
-        # Every check is due immediately, so the first sweep populates the tree.
-        self._scheduled = [_Scheduled(check, now) for check in checks]
+        # Every check is due immediately, so the first sweep populates the
+        # tree; the stagger then phase-shifts each schedule once so the
+        # lockstep doesn't outlive the start.
+        self._scheduled = [_Scheduled(check, now, stagger=_stagger(check))
+                           for check in checks]
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._executor: ThreadPoolExecutor | None = None
@@ -95,12 +154,25 @@ class Engine:
     def info(self) -> EngineInfo:
         """A snapshot of the engine's runtime state (for the system page)."""
         now = self._clock()
+        # The schedule runs on the monotonic clock; project each next-due onto
+        # the wall clock once, here, so the system page can show a time of day.
+        wall = datetime.now()
         with self._lock:
             checks = tuple(
                 CheckInfo(path=item.check.path,
+                          type_name=item.check.type_name,
                           frequency_seconds=item.check.frequency_seconds,
                           running=item.running,
-                          next_in_seconds=max(0.0, item.next_due - now))
+                          running_since=item.run_started_at,
+                          running_seconds=(now - item.run_started_mono
+                                           if item.run_started_mono is not None
+                                           else None),
+                          next_run_at=(wall + timedelta(
+                              seconds=max(0.0, item.next_due - now))
+                          ).isoformat(),
+                          next_in_seconds=max(0.0, item.next_due - now),
+                          last_run_at=item.last_run_at,
+                          elapsed_seconds=item.elapsed_seconds)
                 for item in self._scheduled)
             running = sum(1 for item in self._scheduled if item.running)
         uptime = (now - self._started_monotonic
@@ -165,10 +237,13 @@ class Engine:
                 if item.running or item.next_due > now:
                     continue
                 item.running = True
-                item.next_due = now + item.check.frequency_seconds
+                item.next_due = (now + item.check.frequency_seconds
+                                 + item.stagger)
+                item.stagger = 0.0
                 executor.submit(self._execute, item)
-        # The engine reports its own liveness as a tile; if the scheduler stalls
-        # this node goes stale and turns red (ADR-0005).
+        # The engine reports its own liveness as the heartbeat node (the
+        # dashboard's status strip); if the scheduler stalls it goes stale and
+        # degrades to at least WARN (ADR-0005).
         self._tree.upsert(HEARTBEAT_PATH, StatusCode.OK,
                           description=HEARTBEAT_DESCRIPTION,
                           frequency_seconds=max(1, round(self._poll_interval)))
@@ -178,9 +253,13 @@ class Engine:
 
     def _execute(self, item: _Scheduled) -> None:
         check = item.check
+        ran = not check.secret_errors
         started = time.monotonic()
+        with self._lock:
+            item.run_started_at = datetime.now().isoformat()
+            item.run_started_mono = started
         try:
-            if check.secret_errors:
+            if not ran:
                 # Pinned (ADR-0023): a secret reference failed to resolve at
                 # construction — report it, never call run(), never retry.
                 result = CheckResult(StatusCode.ERROR, [
@@ -195,9 +274,17 @@ class Engine:
             logger.exception("engine: check %s raised", check.path)
             result = CheckResult(StatusCode.ERROR, [f"check error: {error}"])
         finally:
+            elapsed = time.monotonic() - started
             with self._lock:
                 item.running = False
-        elapsed_ms = (time.monotonic() - started) * 1000
+                if ran:
+                    # Keep the runtime even when run() raised — a hanging check
+                    # that hit its timeout should show the full wait.
+                    item.last_run_at = item.run_started_at
+                    item.elapsed_seconds = elapsed
+                item.run_started_at = None
+                item.run_started_mono = None
+        elapsed_ms = elapsed * 1000
         detail = ""
         if result.reason:
             detail = " — " + result.reason[0].replace("\n", " ")[:120]

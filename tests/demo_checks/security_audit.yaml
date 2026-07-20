@@ -1,0 +1,10 @@
+# Live-demo check (Mode 2) — see tests/demo_check.py and docs/testing-the-gui.md.
+type: demo
+path: /security/audit
+title: Security audit
+about: |
+  A wiz-style audit leaf: stays **OK** while its findings list swells to
+  ~150 long lines, then clears — the growing-skyscraper layout case.
+scenario: audit
+frequency: 5s
+period: 120s

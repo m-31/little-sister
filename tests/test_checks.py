@@ -241,6 +241,18 @@ class LoaderTests(TestCase):
                 load_checks(f"{base}{os.pathsep}{host}")
             self.assertIn("web", str(caught.exception))
 
+    def test_reserved_heartbeat_line_is_rejected(self):
+        # /little-sister is the engine's own line (ADR-0005): the dashboard
+        # lifts it into the status strip, so no custom check may own nodes on it.
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            (base / "sneaky.yaml").write_text(
+                "type: command\npath: /little-sister/backups\ncommand: 'true'\n")
+            with self.assertRaises(CheckError) as caught:
+                load_checks(base)
+            self.assertIn("reserved", str(caught.exception))
+            self.assertIn("little-sister", str(caught.exception))
+
     def test_leaf_owning_a_parent_node_is_rejected(self):
         # A leaf owns its subtree, so a check on `db` collides with one on `db.replica`.
         with tempfile.TemporaryDirectory() as directory:

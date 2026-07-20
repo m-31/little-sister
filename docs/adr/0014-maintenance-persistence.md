@@ -15,7 +15,7 @@ Maintenance (`project.md` §2.6) is a sticky admin override held **only in memor
 (`Status.maintenance` plus the tree's state). A restart loses it — the node reverts
 to `UNDEFINED` and the next check can redden a system that is still intentionally
 down. And maintenance currently **never ends**, so a forgotten or orphaned pin
-lingers. Full durable persistence is deferred to Phase 7; maintenance needs a
+lingers. Full durable persistence is deferred to Phase 8; maintenance needs a
 restart-survival answer **sooner**, without pulling that decision forward.
 
 ## Decision
@@ -71,13 +71,13 @@ entry with an expiry.
   optional duration; the detail page shows "set by X, expires …".
 - Crash-safe: write-through at mutation time means a `kill -9` never loses a just-set
   pin.
-- The persisted record is a small contract; Phase 7's durable store subsumes this
+- The persisted record is a small contract; Phase 8's durable store subsumes this
   file — the side-table is the seam.
 - The JSON envelope ([ADR-0008](0008-json-output-api.md)) is **not** changed here;
   whether `maintenance_expires_at` joins it is the Phase 2 API item.
 
 ## Alternatives considered
-- **Wait for the Phase 7 store.** Rejected: restart-survival and an expiry are wanted
+- **Wait for the Phase 8 store.** Rejected: restart-survival and an expiry are wanted
   now and don't need the store's open choices settled.
 - **Expire at render / snapshot time** (compute "expired" like staleness). Rejected:
   it desyncs the in-memory flag from the file and emits no transition event; a read

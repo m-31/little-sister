@@ -190,7 +190,117 @@ class EngineTests(TestCase):
         # child inherits the check's frequency, so freshness applies (ADR-0005)
         self.assertEqual(disk.frequency_seconds, 120)
 
-    def test_engine_heartbeats_self_tile(self):
+    def test_elapsed_none_before_first_run(self):
+        engine = Engine([_FakeCheck(path="/a")], StatusTree())
+        self.assertIsNone(engine.info().checks[0].elapsed_seconds)
+
+    def test_run_records_elapsed(self):
+        engine = Engine([_FakeCheck(path="/a")], StatusTree())
+        engine.run_once()
+        elapsed = engine.info().checks[0].elapsed_seconds
+        assert elapsed is not None
+        self.assertGreaterEqual(elapsed, 0.0)
+
+    def test_raising_run_records_elapsed(self):
+        # A run that blows up (or times out) still shows how long it took.
+        engine = Engine([_FakeCheck(path="/boom", raises=RuntimeError("nope"))],
+                        StatusTree())
+        engine.run_once()
+        self.assertIsNotNone(engine.info().checks[0].elapsed_seconds)
+
+    def test_pinned_check_records_no_elapsed(self):
+        # A secret-pinned check never runs (ADR-0023), so it has no runtime.
+        check = _FakeCheck(path="/pinned")
+        check.secret_errors.append("db-password: store unreachable")
+        engine = Engine([check], StatusTree())
+        engine.run_once()
+        info = engine.info().checks[0]
+        self.assertIsNone(info.elapsed_seconds)
+        self.assertIsNone(info.last_run_at)
+
+    def test_run_records_last_run_start(self):
+        engine = Engine([_FakeCheck(path="/a")], StatusTree())
+        engine.run_once()
+        info = engine.info().checks[0]
+        assert info.last_run_at is not None
+        datetime.fromisoformat(info.last_run_at)      # a real timestamp
+        # the finished run is no longer reported as in flight
+        self.assertIsNone(info.running_since)
+        self.assertIsNone(info.running_seconds)
+
+    def test_next_run_at_is_a_timestamp(self):
+        engine = Engine([_FakeCheck(path="/a")], StatusTree())
+        info = engine.info().checks[0]
+        datetime.fromisoformat(info.next_run_at)      # parseable, wall clock
+
+    def test_info_carries_type_name(self):
+        class _TypedCheck(_FakeCheck):
+            type_name = "fake"
+        engine = Engine([_TypedCheck(path="/t")], StatusTree())
+        self.assertEqual(engine.info().checks[0].type_name, "fake")
+
+    def test_running_check_reports_its_start(self):
+        tree = StatusTree()
+        block = threading.Event()
+        slow = _FakeCheck(path="/slow", block=block)
+        engine = Engine([slow], tree)
+        engine.start()
+        try:
+            self.assertTrue(_wait_for(
+                lambda: engine.info().checks[0].running_since is not None))
+            info = engine.info().checks[0]
+            self.assertTrue(info.running)
+            self.assertIsNotNone(info.running_seconds)
+            self.assertIsNone(info.last_run_at)       # first run still in flight
+        finally:
+            block.set()
+            engine.stop()
+
+    def test_stagger_is_stable_and_capped(self):
+        from little_sister.engine import STAGGER_WINDOW_SECONDS, _stagger
+        check = _FakeCheck(path="/svc/a", frequency_seconds=120)
+        first = _stagger(check)
+        self.assertEqual(first, _stagger(check))       # deterministic
+        self.assertGreaterEqual(first, 0.0)
+        self.assertLess(first, STAGGER_WINDOW_SECONDS)
+        fast = _FakeCheck(path="/svc/a", frequency_seconds=30)
+        self.assertLess(_stagger(fast), 30.0)          # capped by the period
+
+    def test_same_root_different_type_get_distinct_phases(self):
+        # two checks may share a root node (host-metrics + macos-memory on one
+        # host) — the pair hitting one host must separate most of all
+        from little_sister.engine import _stagger
+
+        class _Metrics(_FakeCheck):
+            type_name = "host-metrics"
+
+        class _Memory(_FakeCheck):
+            type_name = "macos-memory"
+
+        self.assertNotEqual(
+            _stagger(_Metrics(path="/host", frequency_seconds=120)),
+            _stagger(_Memory(path="/host", frequency_seconds=120)))
+
+    def test_start_lockstep_dissolves_after_first_rearm(self):
+        # both checks run in the immediate first sweep, but re-arm onto
+        # distinct personal phases (frequency + stagger, once)
+        from little_sister.engine import _stagger
+        a = _FakeCheck(path="/a", frequency_seconds=120)
+        b = _FakeCheck(path="/b", frequency_seconds=120)
+        expected = abs(_stagger(a) - _stagger(b))
+        self.assertGreater(expected, 0.5)   # these paths do differ clearly
+        engine = Engine([a, b], StatusTree())
+        engine.start()
+        try:
+            self.assertTrue(_wait_for(
+                lambda: all(c.last_run_at for c in engine.info().checks)))
+            nexts = {c.path: c.next_in_seconds for c in engine.info().checks}
+            self.assertAlmostEqual(
+                abs(nexts["/a"] - nexts["/b"]), expected, delta=1.0)
+        finally:
+            engine.stop()
+
+    def test_engine_heartbeats_self_node(self):
         from little_sister.engine import HEARTBEAT_PATH
         tree = StatusTree()
         engine = Engine([_FakeCheck(path="/x")], tree)
@@ -200,6 +310,19 @@ class EngineTests(TestCase):
                 lambda: tree.snapshot(HEARTBEAT_PATH) is not None))
         finally:
             engine.stop()
+
+    def test_heartbeat_carries_a_default_about(self):
+        # The dashboard strip's hover card explains the self-monitor out of
+        # the box (#24); a later seed (the startup nodes.yaml pass) overrides.
+        from little_sister.engine import HEARTBEAT_ABOUT, HEARTBEAT_PATH
+        tree = StatusTree()
+        Engine([_FakeCheck(path="/x")], tree)
+        snap = tree.snapshot(HEARTBEAT_PATH)
+        self.assertIsNotNone(snap)
+        self.assertEqual(snap.about, HEARTBEAT_ABOUT)
+        self.assertIn("scheduler", snap.about)
+        tree.set_about(HEARTBEAT_PATH, "custom note")
+        self.assertEqual(tree.snapshot(HEARTBEAT_PATH).about, "custom note")
 
 
 if __name__ == '__main__':

@@ -1,0 +1,67 @@
+{# The system page's engine-info block — cards + per-check table. A partial so
+   the page's ~10s poll (?fragment=1, shared poll.js) can re-fetch and swap it
+   without re-sending the header (mirrors _status_grid.html). #}
+{% if info is none %}
+    <p class="text-muted">The engine is not running.</p>
+{% else %}
+    <div class="row g-3 mb-3">
+        <div class="col-auto">
+            <div class="card"><div class="card-body">
+                <div class="text-muted small">Started</div>
+                <div>{{ info.started_at | localtime }}</div>
+                <div class="text-muted small mt-2">Uptime</div>
+                <div>{{ (info.uptime_seconds | round | int) }}s</div>
+            </div></div>
+        </div>
+        <div class="col-auto">
+            <div class="card"><div class="card-body">
+                <div class="text-muted small">Worker threads</div>
+                <div>{{ info.max_workers }}</div>
+                <div class="text-muted small mt-2">Checks</div>
+                <div>{{ info.check_count }}</div>
+                <div class="text-muted small mt-2">Currently running</div>
+                <div>{{ info.running }}</div>
+            </div></div>
+        </div>
+    </div>
+
+    {# The three schedule columns share one shape: a time of day (the
+       configured timezone; the Started card anchors the date) plus a
+       muted interval. #}
+    <table class="table table-sm align-middle">
+        <thead>
+            <tr><th>Check</th><th>Type</th><th>Frequency</th><th>Running</th><th>Next run</th><th>Last run</th></tr>
+        </thead>
+        <tbody>
+            {% for c in info.checks %}
+                <tr>
+                    <td><a href="{{ url_for('status', branch=c.path | url_branch) }}">{{ c.path }}</a></td>
+                    <td class="text-muted">{{ c.type_name }}</td>
+                    <td>{{ c.frequency_seconds | duration }}</td>
+                    <td>
+                        {% if c.running_since %}
+                            {{ c.running_since | localtime("%H:%M:%S") }}
+                            <span class="text-muted">· {{ c.running_seconds | elapsed }}</span>
+                        {% elif c.running %}
+                            <span class="text-muted">queued</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {{ c.next_run_at | localtime("%H:%M:%S") }}
+                        <span class="text-muted">· in {{ (c.next_in_seconds | round | int) }}s</span>
+                    </td>
+                    <td>
+                        {% if c.last_run_at %}
+                            {{ c.last_run_at | localtime("%H:%M:%S") }}
+                            <span class="text-muted">· {{ c.elapsed_seconds | elapsed }}</span>
+                        {% else %}
+                            —
+                        {% endif %}
+                    </td>
+                </tr>
+            {% else %}
+                <tr><td colspan="6" class="text-muted">No checks.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+{% endif %}

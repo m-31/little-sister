@@ -170,15 +170,15 @@ leaf detail pages to all viewers, and **not** added to the JSON envelope here. R
 
 ### ADR-0014 — Persist maintenance to a file, with auto-expiry
 **Q:** How does admin maintenance survive a restart, and how do we stop a pin
-lingering forever — without pulling the Phase 7 store forward?
+lingering forever — without pulling the general store question forward?
 
 **A:** A maintenance **side-table** in the tree, written through to a small
 **`var/maintenance.json`** (atomic, fixed path) and **restored on startup** before the
 engine runs. Every entry has an **auto-expiry** — default **one week** (`config.yaml`),
 overridable, no indefinite — swept by the scheduler; and a **startup reap** drops
 entries no configured check **covers** (segment-wise on the same root-to-leaf line, so
-subsystem and unreachable-branch-leaf pins survive). A deliberate stopgap Phase 7
-subsumes.
+subsystem and unreachable-branch-leaf pins survive). A deliberate stopgap in a later
+Phase subsumes.
 
 → Full record: [`adr/0014-maintenance-persistence.md`](adr/0014-maintenance-persistence.md)
 
@@ -193,7 +193,7 @@ ownership is a hard error** — branch checks like `host-metrics` + `qnap-metric
 disjoint child subtrees, so they still share a host node; no override / merge). Config
 applies at
 **startup**; a restart re-reads it — **no live reload**. Override-layering and reload
-are deferred; satellites (Phase 6) are the real multi-site mechanism.
+are deferred; satellites (later Phase) are the real multi-site mechanism.
 
 → Full record: [`adr/0015-check-discovery-union.md`](adr/0015-check-discovery-union.md)
 
@@ -272,7 +272,7 @@ set, else `users.yaml` in the **cwd** — mirroring how `.env` / `config.yaml` a
 found ([ADR-0003](adr/0003-config-and-secrets-via-env-file.md)). The package ships
 **`users.example.yaml`** only and no longer bundles a real `users.yaml`. Format
 and fail-fast-on-missing are unchanged; this is a **location** change, not an auth-mechanism
-one (password hashing is Phase 7, a pluggable auth provider Phase 5).
+one (password hashing and a pluggable auth provider are in later Phases).
 
 → Full record: [`adr/0020-user-list-location.md`](adr/0020-user-list-location.md)
 
@@ -301,6 +301,25 @@ once; the live tree keeps insertion order untouched. Pure name order (no severit
 which would jump on each poll); a branch check's curated leaf order (e.g. host-metrics'
 disk/memory/cpu/load) is **not** preserved — uniform alphabetical wins on predictability.
 Small, low-risk display change — recorded here, no ADR.
+
+### ADR-0024 — Dashboard layout: bounded heights, positional stability
+**Q:** Top-level cards differ wildly in height (a fifteen-disk host beside the
+one-line `little-sister` heartbeat), so the grid looks ragged and an erupting node
+reflows its neighbours. But whoever knows the wall relies on **where** a card is, so
+a packing layout that moves cards on any size change is out. How is the overview
+balanced without moving anything?
+
+**A:** Keep a card's **position a function of the node set alone** (alphabetical at
+every level, per *Node sibling ordering* above) and **bound the size variance**
+instead: the reason caps and a `min-height` hold height in a fixed band; a card's
+**quiet leaves** collapse to compact name+colour **chips** while a warn/error leaf
+keeps its full box and reason; and the always-tiny `little-sister` heartbeat
+(ADR-0005) lifts out of the grid into a slim **status strip** under the "updated …"
+line. Its `/little-sister` path is **reserved** at load so nothing user-configured
+can hide behind the one-line bar. Packing layouts and `nodes.yaml` size hints are
+rejected — both move cards on a state change, against the position rule.
+
+→ Full record: [`adr/0024-dashboard-layout.md`](adr/0024-dashboard-layout.md)
 
 ### Clickable breadcrumbs (no ADR)
 **Q:** The header path trail (`status / system/alpha/disk`) was a single non-clickable
@@ -370,6 +389,6 @@ storage — enter only **deployment-side**, wired by the application through the
 provider seams ([ADR-0023](adr/0023-secret-references.md); the auth seam follows the
 same philosophy): the core gains no SDK, no service, no extra deploy step, and a plain
 local install keeps working with none of it. Deliberately still open is whether the
-Phase-7 durable store can hold this same line — that belongs to the store choice
+later Phase durable store can hold this same line — that belongs to the store choice
 itself.
 

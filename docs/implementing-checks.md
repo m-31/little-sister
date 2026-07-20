@@ -10,7 +10,7 @@ types a **deployment** adds through the public `CHECK_TYPES` seam
 ([`architecture.md`](architecture.md) §11) — that a deployment can carry its own
 check types is the whole idea. Only §4 (registration timing) differs between the
 two. Later, deployment types lift out into installable plugin packages "as an
-evolution of this, not a rewrite" (Phase 9).
+evolution of this, not a rewrite" — in the packaging-and-PyPI phase of the roadmap.
 
 > Grounded in `src/little_sister/checks/` (`base.py`, `loader.py`, the built-in
 > types) and `app.py`. If a name here drifts from the source, the source wins —
@@ -178,7 +178,8 @@ slot) also registers **secret resolvers** (§6).
 
 **In the library** — the built-ins do the same thing via a side-effect import in
 `little_sister/checks/__init__.py` (it imports `http`, `file`, `command`, `ssh`).
-That's the graduation path for a deployment check at Phase 9: same class, moved into
+That's the graduation path for a deployment check at the packaging-and-PyPI phase:
+same class, moved into
 a package whose import registers it (eventually via entry points) — no wrapper
 needed.
 
@@ -274,7 +275,7 @@ import-before-app slot as the check types (§4); the library ships no store clie
 
 ---
 
-## 9. Extraction to a plugin (Phase 9)
+## 9. Extraction to a plugin
 
 Build a deployment check type so it lifts out cleanly later: a **self-contained
 module** (class + tests + an example YAML + a short doc), **minimal dependencies**,

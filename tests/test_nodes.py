@@ -103,6 +103,15 @@ class ConsistencyPassTests(TestCase):
             run_consistency_pass([host], {})
         self.assertIn("nexus", "\n".join(logs.output))
 
+    def test_heartbeat_declaration_is_not_an_orphan(self):
+        # Titling the engine's heartbeat is legitimate (it feeds the status
+        # strip and its hover card, #24) although no check covers the path.
+        with self.assertNoLogs(level="WARNING"):
+            run_consistency_pass(
+                [self._http(path="/web")],
+                {"/web": NodeMeta(about="ok"),
+                 "/little-sister": NodeMeta(title="engine heartbeat")})
+
 
 if __name__ == '__main__':
     unittest.main()

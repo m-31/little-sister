@@ -1,0 +1,10 @@
+# Live-demo check (Mode 2) — see tests/demo_check.py and docs/testing-the-gui.md.
+type: demo
+path: /storage/backup
+title: Backup store
+about: |
+  A branch check with `db` and `cache` children. `cache` **falls silent**
+  mid-cycle (dropped from the result) and goes stale, then reappears fresh.
+scenario: silent
+frequency: 5s
+period: 90s

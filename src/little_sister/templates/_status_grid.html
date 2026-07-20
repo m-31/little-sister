@@ -1,3 +1,44 @@
+{#- Reason overflow (#9): a node's reasons, capped. Render every entry (the
+    remainder stays in the DOM, hidden by CSS — never cut mid-HTML, ADR-0018) but
+    mark those past the cap; a per-node "show all (N)" (reasons.js) reveals them
+    and lifts the height clamp, expanding in place and surviving the ~10s fragment
+    swap. The leaf detail page (check.html) stays full; the JSON envelope is
+    untouched. The cap K lives here as a template constant (plan.md Phase 5). -#}
+{% macro reason_block(node) -%}
+{%- if node.reason -%}
+{%- set cap = 6 -%}
+{%- set total = node.reason | length -%}
+<div class="reason-block" data-reason-node="{{ node.path }}" data-reason-total="{{ total }}">
+{%- for r in node.reason %}
+    <div class="status-node__reason md-body{% if loop.index0 >= cap %} reason-extra{% endif %}">{{ r | shorten(400) | markdown }}</div>
+{%- endfor %}
+</div>
+{%- if total > cap %}
+<button type="button" class="reason-toggle" data-reason-toggle aria-expanded="false">show all ({{ total }})</button>
+{%- endif -%}
+{%- endif -%}
+{%- endmacro %}
+{%- if heartbeat is defined and heartbeat %}
+{#- Status strip (#24): the engine self-heartbeat (ADR-0005) lifted out of the
+    card grid into a compact caption pill. It lives inside #status-grid, so it
+    refreshes with the ~10s poll and dims with the grid under a sustained-outage
+    banner; it sits directly below the page's "updated …" freshness line. A stale
+    heartbeat (the scheduler stalled) shows vivid, not pale — the self-monitor's
+    own alarm. The path is reserved (the loader keeps custom checks off its
+    line), and a heartbeat that grew children is not lifted at all — see
+    _split_heartbeat. -#}
+<div class="ls-strip s-{{ heartbeat.code | status_slug }}"
+     data-path="{{ heartbeat.path }}">
+    <span class="ls-strip__pulse" aria-hidden="true"></span>
+    <a class="ls-strip__name"
+       href="{{ url_for('status', branch=heartbeat.path | url_branch) }}">{{ heartbeat.name }}</a>
+    {% if heartbeat.title %}<span class="node-title">{{ heartbeat.title | markdown_inline }}</span>{% endif %}
+    <span class="ls-strip__state">
+        {% if heartbeat.stale %}<span class="status-stale">stale</span>{% endif %}
+        {{ heartbeat.code.name.lower() }}
+    </span>
+</div>
+{%- endif %}
 {% if node is none %}
     <div class="alert alert-warning">
         No such branch: <code>{{ branch }}</code>.
@@ -21,11 +62,7 @@
                     </span>
                 </div>
                 {% if node.reason %}
-                    <div class="status-panel">
-                        {% for r in node.reason %}
-                            <div class="status-node__reason md-body">{{ r | shorten(400) | markdown }}</div>
-                        {% endfor %}
-                    </div>
+                    <div class="status-panel">{{ reason_block(node) }}</div>
                 {% endif %}
             </div>
         {% else %}
@@ -44,11 +81,21 @@
                     </span>
                 </div>
                 <div class="status-panel">
-                    {% for r in system.reason %}
-                        <div class="status-node__reason md-body">{{ r | shorten(400) | markdown }}</div>
-                    {% endfor %}
+                    {{ reason_block(system) }}
                     {% if card_has_kids %}
                     {% for child in system.children recursive %}
+                        {% if not child.children and child.code.name not in ('WARN', 'ERROR') %}
+                            {#- Leaf density (#24): a quiet leaf (not warn/error)
+                                collapses to a compact name+colour chip. It flows
+                                inline, so a run of quiet siblings packs into a
+                                wrapping row while a problem leaf or a branch below
+                                stays a full-width box that breaks the line —
+                                alphabetical sibling order is preserved across the
+                                mix. Any reason lives on the leaf's own page. -#}
+                            <a class="leaf-chip s-{{ child.code | status_slug }}"
+                               href="{{ url_for('status', branch=child.path | url_branch) }}"
+                               data-path="{{ child.path }}"><span class="leaf-chip__name">{{ child.name }}</span>{% if child.title %}<span class="node-title">{{ child.title | markdown_inline }}</span>{% endif %}</a>
+                        {% else %}
                         {% set has_kids = child.children and loop.depth0 < max_depth - 2 %}
                         {% set node_dim = child.code.name == 'OK' or (child.own_code != child.code and has_kids) %}
                         <div class="status-node s-{{ child.code | status_slug }}{% if node_dim %} dim{% endif %}">
@@ -57,14 +104,13 @@
                                    href="{{ url_for('status', branch=child.path | url_branch) }}">{{ child.name }}</a>
                                 {% if child.title %}<span class="node-title">{{ child.title | markdown_inline }}</span>{% endif %}
                                 {% if child.stale %}<span class="status-stale">stale{% if not child.children %} · {{ child.age_seconds | round | int | duration }} ago{% endif %}</span>{% endif %}
-                                {% for r in child.reason %}
-                                    <div class="status-node__reason md-body">{{ r | shorten(400) | markdown }}</div>
-                                {% endfor %}
+                                {{ reason_block(child) }}
                             </div>
                             {% if has_kids %}
                                 <div class="status-node__children">{{ loop(child.children) }}</div>
                             {% endif %}
                         </div>
+                        {% endif %}
                     {% endfor %}
                     {% endif %}
                 </div>

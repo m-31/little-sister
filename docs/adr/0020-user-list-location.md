@@ -37,8 +37,8 @@ Read the user list from a **deployment-controlled location**, not from the packa
   directory (git-ignored) or point `LITTLE_SISTER_USERS` at a fixture — the same way they
   already rely on a cwd `.env` / `config.yaml`.
 - This changes **only the file's location**, not the auth mechanism. Plaintext passwords
-  and the viewer/admin role model are untouched: password hashing stays a Phase 7 item, and
-  a **pluggable auth provider** (Keycloak / SSO) is Phase 5 — which would make this static
+  and the viewer/admin role model are untouched: password hashing stays a Phase 8 item, and
+  a **pluggable auth provider** (Keycloak / SSO) is Phase 6 — which would make this static
   file merely the *default* provider.
 - One env var and one file-shipping change; no API or template change.
 

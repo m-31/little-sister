@@ -61,12 +61,12 @@ Keep per-deployment directories, selected **explicitly** by env; extend the env 
 - The immutable-per-process set keeps the engine simple and lets the maintenance
   reaper ([ADR-0014](0014-maintenance-persistence.md)) reconcile **once at startup**
   against a fixed set of check roots.
-- A restart loses the in-memory event log / history until Phase 7 durability;
+- A restart loses the in-memory event log / history until Phase 8 durability;
   acceptable for an internal, single-process app, and config edits are
   deliberate.
 - Resolves the open check-layout question.
 - **Deferred (see alternatives):** override-layering and live reload. The genuine
-  multi-site story is **satellite federation** (`project.md` §2.9, Phase 6), not
+  multi-site story is **satellite federation** (`project.md` §2.9, Phase 7), not
   config layering.
 
 ## Alternatives considered

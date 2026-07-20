@@ -6,6 +6,27 @@
   [ADR-0004](0004-status-aggregation-semantics.md) (roll-up).
 - **Register:** [`../decisions.md`](../decisions.md)
 
+> **Update (2026-07-20):** decision §2 no longer treats a blip and an outage
+> alike. The "updated …" stamp is **server-seeded** into the page
+> (`data-rendered-at`), so a dashboard that never reaches the server again
+> still dates its data; the poll is the shared `static/js/poll.js` (the
+> `/system` page uses it too); a fragment response without `X-Rendered-At` —
+> the login redirect after session expiry — counts as a failed poll, never as
+> content. A **sustained** outage escalates: after six consecutive misses
+> (~1 min) the line shows a legible age (*"could not refresh for 14 min — last
+> ok …"*), a banner rises above the content, the frozen content dims and the
+> tab title gains a "(stale) " prefix — all reset by the first good poll, with
+> an immediate re-poll on `visibilitychange` so a woken tab self-heals at
+> once. Session expiry banners "reload to log in" instead of a misleading age.
+>
+> **Update (2026-07-20):** the heartbeat node renders as the
+> dashboard's slim **status strip** (no longer a grid tile), paired with the
+> "updated …" line and polled with the fragment — under a sustained-outage
+> banner it dims with the frozen content, while a *stale heartbeat itself*
+> stays vivid (the self-monitor's alarm). Its path is **reserved**: the loader
+> rejects custom checks on the `/little-sister` line, so nothing
+> user-configured can hide behind the one-line strip ([ADR-0024](0024-dashboard-layout.md)).
+
 ## Context
 State lives in memory and the dashboard is server-rendered, so two things can go
 silently stale: the **page** (loaded minutes ago) and the **data** (a check that
@@ -36,7 +57,7 @@ supervisor (launchd / systemd / gunicorn restart).
 
 ## Consequences
 - Green means "freshly verified"; a dead check or a dead engine surfaces
-  automatically (per-check staleness + the heartbeat tile).
+  automatically (per-check staleness + the heartbeat node).
 - Staleness is a *view* concern: `StatusTree.snapshot` degrades and flags it;
   `Status.get_status_code` / `effective` stay raw, and the event log / history keep
   recording only real check transitions.
@@ -49,4 +70,4 @@ supervisor (launchd / systemd / gunicorn restart).
 - **Server-sent events / push** — real-time but more moving parts (a connection per
   viewer); better once there's a JSON API / persistence.
 - **A dedicated watchdog thread** that restarts the scheduler — more machinery than
-  loop-hardening + the heartbeat tile warrant; easy to add later if needed.
+  loop-hardening + the heartbeat node warrant; easy to add later if needed.

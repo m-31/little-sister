@@ -1,0 +1,11 @@
+# Live-demo check (Mode 2) — see tests/demo_check.py and docs/testing-the-gui.md.
+# Synthetic: no real system is probed; the `demo` type replays a scenario on a loop.
+type: demo
+path: /services/api
+title: API gateway
+about: |
+  The public **API gateway** (a *synthetic* demo node). Cycles
+  ok → warn → error with a growing reason list → recover.
+scenario: escalate
+frequency: 4s
+period: 60s

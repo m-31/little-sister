@@ -4,7 +4,7 @@ Maintenance is a sticky admin override (`project.md` §2.6). The status tree own
 the side-table — `path -> `:class:`MaintenanceEntry` — and writes it through this
 store on every change, so a restart restores it. The file at
 ``var/maintenance.json`` is exactly that table serialized; the path is fixed
-runtime state (not env-configurable). A durable store in Phase 7 (`plan.md`)
+runtime state (not env-configurable). A durable store in a later Phase (`plan.md`)
 subsumes this file — :class:`MaintenanceStore` is the seam.
 """
 from __future__ import annotations

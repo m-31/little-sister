@@ -5,59 +5,21 @@
     {% include '_header.html' %}
 
     <div class="container-fluid mt-3 px-4" style="max-width: 980px">
-        <h1 class="h4 mb-3">System
+        <h1 class="h4 mb-1">System
             <span class="text-muted small">· little-sister {{ version }}</span></h1>
+        {# Server-seeded, same contract as the dashboard's stamp (ADR-0005):
+           this page doesn't navigate on its own, so it always says from when
+           the information below actually is. #}
+        <div class="text-muted small mb-3" id="status-updated"
+             data-rendered-at="{{ rendered_at }}">updated {{ rendered_at }}</div>
 
-        {% if info is none %}
-            <p class="text-muted">The engine is not running.</p>
-        {% else %}
-            <div class="row g-3 mb-3">
-                <div class="col-auto">
-                    <div class="card"><div class="card-body">
-                        <div class="text-muted small">Started</div>
-                        <div>{{ info.started_at | localtime }}</div>
-                        <div class="text-muted small mt-2">Uptime</div>
-                        <div>{{ (info.uptime_seconds | round | int) }}s</div>
-                    </div></div>
-                </div>
-                <div class="col-auto">
-                    <div class="card"><div class="card-body">
-                        <div class="text-muted small">Worker threads</div>
-                        <div>{{ info.max_workers }}</div>
-                        <div class="text-muted small mt-2">Checks</div>
-                        <div>{{ info.check_count }}</div>
-                        <div class="text-muted small mt-2">Currently running</div>
-                        <div>{{ info.running }}</div>
-                    </div></div>
-                </div>
-            </div>
-
-            <table class="table table-sm align-middle">
-                <thead>
-                    <tr><th>Check</th><th>Frequency</th><th>Running</th><th>Next run</th></tr>
-                </thead>
-                <tbody>
-                    {% for c in info.checks %}
-                        <tr>
-                            <td><a href="{{ url_for('status', branch=c.path | url_branch) }}">{{ c.path }}</a></td>
-                            <td>{{ c.frequency_seconds | duration }}</td>
-                            <td>{{ 'yes' if c.running else '' }}</td>
-                            <td>
-                                {% if c.running %}
-                                    <span class="text-muted">running</span>
-                                {% else %}
-                                    in {{ (c.next_in_seconds | round | int) }}s
-                                {% endif %}
-                            </td>
-                        </tr>
-                    {% else %}
-                        <tr><td colspan="4" class="text-muted">No checks.</td></tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        {% endif %}
+        <div id="system-info">
+            {% include '_system_info.html' %}
+        </div>
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="{{ url_for('static', filename='js/poll.js') }}"
+            data-target="system-info"></script>
 </body>
 </html>

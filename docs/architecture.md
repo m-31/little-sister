@@ -51,7 +51,7 @@ little-sister/
 │   ├── logger.py        # root logging (stdout + log file)
 │   ├── users.yaml       # local user list (gitignored; a sample is committed)
 │   ├── templates/       # Jinja2 pages
-│   └── static/          # CSS, the inspection-popover JS, favicons, webmanifest
+│   └── static/          # CSS, the dashboard JS (poll, popover, reason overflow), favicons, webmanifest
 └── tests/               # test_status, test_tree, test_checks, test_render, test_engine, test_web
 ```
 
@@ -319,7 +319,11 @@ other — naming the path and files, so a duplicated or shadowing check fails lo
 Disjoint owners share a host node freely: `host-metrics` + `qnap-metrics`,
 `host-metrics` + `macos-memory`, or a `file` heartbeat as a sibling child (e.g.
 `/macmini/findmy` beside the metric leaves), but **not** a leaf placed on the
-container itself ([ADR-0015](adr/0015-check-discovery-union.md)).
+container itself ([ADR-0015](adr/0015-check-discovery-union.md)). The
+`/little-sister` line is **reserved** for the engine's own heartbeat
+([ADR-0005](adr/0005-dashboard-freshness-and-self-monitoring.md)): a check owning
+nodes on it is rejected at load — the dashboard lifts that node into the status
+strip, which must never hide a subtree.
 
 **Secret references** (`secrets.py`, [ADR-0023](adr/0023-secret-references.md)): a
 check config field that carries a credential is a **reference**, resolved through
@@ -363,19 +367,28 @@ its leaves, and its own `about` carries the node-level "what is this box" (ADR-0
 `Engine` runs the configured checks against the shared tree.
 
 - A **scheduler** thread wakes every `poll_interval` (1s) and submits every *due*
-  check to a bounded `ThreadPoolExecutor`; each check is due at start, then every
-  `frequency_seconds`. A check already running is not re-submitted.
-- `_execute` runs `check.run()`, maps any exception or timeout to `ERROR`, logs the
+  check to a bounded `ThreadPoolExecutor`; each check is due at start (the first
+  sweep populates the tree), then every `frequency_seconds` — phase-shifted
+  **once**, at the first re-arm, by a stable per-check offset (a digest of
+  path + type within `min(frequency, 60s)`), so equal-frequency checks don't
+  fire in one tick forever and a host carrying two checks isn't hit by both at
+  once. A check already running is not re-submitted.
+- `_execute` runs `check.run()`, maps any exception or timeout to `ERROR`, records
+  the run's **wall time** on the schedule entry (`elapsed_seconds` — a raising or
+  timed-out run keeps its full wait), logs the
   result at **INFO** (`check <path>: <code> (<ms>) — <reason>`), and **stores** it
   via `_store`, which **upserts** the root at `check.path` and walks any
   `children` into nodes beneath it (`<parent path>/<child name>`), each inheriting the
   check's frequency (ADR-0007). A check with recorded `secret_errors` (§4.5) is
   **pinned**: `_execute` stores that `ERROR` ("secret unresolvable: …") without
-  calling `run()` — no retry until restart ([ADR-0023](adr/0023-secret-references.md)).
+  calling `run()` — no retry until restart, and no runtime recorded
+  ([ADR-0023](adr/0023-secret-references.md)).
 - `start()` / `stop()` are idempotent; threads are daemons. `run_once()` runs every
   check synchronously (for tests). `create_engine(dir)` loads checks into a new
-  engine bound to `status_tree`. `info()` returns runtime state (uptime, pool size,
-  check counts, per-check next-run) for the `/system` page.
+  engine bound to `status_tree`. `info()` returns runtime state for the `/system`
+  page — uptime, pool size, check counts, and per check its type, the in-flight
+  run (start + elapsed so far), the armed next slot (projected onto the wall
+  clock) and the last completed run (start + wall time).
 - The scheduler loop is **hardened** (a transient tick error logs and continues),
   and the engine **heartbeats a top-level `little-sister` node** every tick — if the
   scheduler stalls, that node goes stale and red (ADR-0005). Whole-process death is
@@ -384,6 +397,15 @@ its leaves, and its own `about` carries the node-level "what is this box" (ADR-0
 `app.py` starts the engine once at import (post-fork worker), guarded by
 `LITTLE_SISTER_ENGINE` (set `0` to disable) and tolerant of a missing checks
 directory; the dev server uses `use_reloader=False` so it starts exactly once.
+
+A start that **fails** (`create_engine()` raising `CheckError` — a bad checks
+config) does not stop the web app, but it must not hide in the log either: the
+reason is kept in a module-level `engine_error`, injected into every template by a
+context processor, and the shared header partial renders it as a persistent red
+banner — *"Engine not started — …"* — on every page (the standalone login page
+excluded, so nothing leaks pre-login). It is `None` on success and on the
+deliberate `LITTLE_SISTER_ENGINE=0` disable, and clears only with a restart
+against a fixed config. The JSON API carries no engine-health signal.
 
 A hung check still occupies a pool worker (Python can't kill threads); the built-in
 checks honour their own timeouts, and custom checks must too.
@@ -429,13 +451,15 @@ the `markdown` (block) and `markdown_inline` (one-line, no `<p>`) Jinja filters
 | `/history/<path>` | GET | A node's status history (Status / Since / Until / Reason). |
 | `/maintenance` | POST | **Admin only** — set/clear a node's maintenance with a reason and optional duration (default from `config.yaml`), recording who set it; redirects to the check. |
 | `/events` | GET | The transition log, newest first (When / Status / Service / Reason). |
-| `/system` | GET | **Admin only** — engine uptime, pool size, check counts, per-check next-run. |
+| `/system` | GET | **Admin only** — engine uptime, pool size, check counts; per check its type and the in-flight / armed-next / last run, each a time of day plus interval. Carries the dashboard's freshness stamp and ~10s poll (`fragment=1` returns just the info block). |
 | `/text`, `/links` | GET | Auth-gated stubs (not built). |
 | `/favicon.ico` | GET | Redirect to the static favicon. |
 
 Jinja filters back the views: `status_slug` (a CSS class suffix per code),
-`status_alert` (a Bootstrap alert class), `shorten`, `duration`, `localtime`
-(renders a timestamp in the configured timezone, §7), `url_branch`,
+`status_alert` (a Bootstrap alert class), `shorten`, `duration`, `elapsed`
+(a run's wall time: `412 ms` / `3.1 s` / `43 s`; `—` for none), `localtime`
+(renders a timestamp in the configured timezone, §7 — an optional argument
+overrides the format, never the timezone), `url_branch`,
 `markdown` / `markdown_inline` (server-side Markdown → safe HTML, §4.7), and
 `breadcrumbs` (a path → cumulative `(name, path)` crumbs for the clickable header
 trail, rendered by `_breadcrumb.html`; the current node stays plain). The dashboard
@@ -470,7 +494,8 @@ Jinja2 templates under `templates/`, with `StrictUndefined` (an undefined variab
 raises rather than rendering blank):
 
 - `_header.html` — shared `<head>` tail + navbar (Status / Events / Text / Links,
-  plus **System** for admins, current user, Logout).
+  plus **System** for admins, current user, Logout), and — only while the engine
+  failed to start — the persistent `engine_error` banner (§4.6).
 - `_breadcrumb.html` — the clickable header path trail (`status` root + a link per
   ancestor segment, current node plain); included in the dashboard and detail headers.
 - `status.html` / `_status_grid.html` — the **dashboard**: top-level systems as
@@ -490,12 +515,42 @@ raises rather than rendering blank):
   `_resolve_depth`). Nodes drill down; hide-ok / hide-idle switches;
   **stale** nodes get a badge; a node's short `title` (ADR-0017) follows the name
   (ellipsed, `.node-title`) on a card and the breadcrumb in the page header; and a
-  branch view shows the viewed node's `about` under its heading. The grid is the
-  `_status_grid.html` partial; the page **polls** it (`?fragment=1`) every ~10s, swaps
-  it in, and flags refresh failures (so it never silently shows old content); the
-  poll stamp shows the **server-formatted** render time — the fragment's
-  `X-Rendered-At` header, in `config.yaml`'s timezone and `time_format` (ADR-0006) —
-  not the browser clock.
+  branch view shows the viewed node's `about` under its heading.
+  To keep the everyday grid balanced **without moving cards**
+  ([ADR-0024](adr/0024-dashboard-layout.md)), a card's **quiet leaves** (OK or idle) collapse
+  to compact name+colour **chips** — an all-green host converges toward a wrapping
+  chip row instead of a stack of boxes — while a **warn/error** leaf keeps its full
+  box and reason so a problem stays legible; chips flow inline, so a run of quiet
+  siblings packs and a problem box breaks the line, preserving sibling order (a
+  chip's own reason is a click away on its leaf page — the popover still shows
+  title/about). Card heights are **bounded**: the reason caps from above, a
+  `min-height` floor from below. The engine's own **heartbeat** (`/little-sister`,
+  ADR-0005) is lifted out of the grid into a compact **status-strip pill** at the top
+  (fit-content — a side note under the "updated …" line, not a page-wide
+  banner); it renders inside the polled fragment, so it
+  refreshes with the grid and dims with it under a sustained outage — and a stalled
+  scheduler shows it **vivid** (its self-alarm), not dimmed; the engine seeds a
+  default `about` so the pill's hover card explains the heartbeat out of the
+  box, and a `nodes.yaml` title/about overrides it like any node's. The grid
+  is the
+  `_status_grid.html` partial; the page **polls** it (`?fragment=1`) every ~10s
+  via the shared `static/js/poll.js` (the script tag's `data-target` names the
+  container to swap), and flags refresh failures (so it never silently shows old
+  content); the
+  poll stamp (`#status-updated`) shows the **server-formatted** render time — in
+  `config.yaml`'s timezone and `time_format` (ADR-0006), not the browser clock —
+  **seeded into the page itself** at render (a `data-rendered-at` attribute; page
+  JavaScript cannot read navigation-response headers), then refreshed from the
+  fragment's `X-Rendered-At` header on each swap. So even a page whose polls all
+  fail dates its data ("could not refresh — last ok …") from first paint. A
+  response **without** that header is not a fragment at all — the login redirect
+  after a session expiry — and counts as a failed poll, so the grid is never
+  overwritten with a login form. A **sustained** outage escalates (ADR-0005
+  update note): after six consecutive misses the line grows a legible age, a
+  banner rises above the content, the frozen content dims (`.poll-stale`) and
+  the tab title gains a "(stale) " prefix — one good poll resets everything;
+  session expiry banners "reload to log in" instead of an age, and a
+  `visibilitychange` re-poll lets a woken tab self-heal immediately.
 - **Inspection popover** ([ADR-0019](adr/0019-inspection-popover.md)) — a node's static
   `title` / `about` (rendered Markdown) show in a custom **hover card**, not the native
   `title=` tooltip (the leaf `description` stays on its detail page). The page preloads a path-keyed map of the rendered
@@ -505,6 +560,17 @@ raises rather than rendering blank):
   `data-path`, and renders + positions the card with **Floating UI** (CDN). Opens on
   hover / focus, stays open when the pointer moves into it, closes on leave / blur /
   Escape; the node stays a link to its detail page; a tap opens the card on touch.
+- **Reason overflow** — a card caps how many reason entries it shows (six) and
+  clamps a tall reason block (a long `code()` trace) to about eight lines, so an
+  erupting node cannot outgrow the grid. Every entry is server-rendered into the DOM
+  and the surplus is hidden by CSS — trimmed **by entry and by CSS, never mid-HTML**,
+  so a reason's safe Markup ([ADR-0018](adr/0018-markdown-rendering.md)) is never
+  cut. A per-node **"show all (N)"** (`static/js/reasons.js`) reveals the rest and
+  lifts the clamp, expanding in place; like the popover it binds once via event
+  delegation on `#status-grid` and keeps a page-lifetime set of expanded paths, so an
+  expanded card survives the ~10s fragment swap. The leaf detail page (`check.html`)
+  always renders every reason and the JSON envelope
+  ([ADR-0008](adr/0008-json-output-api.md)) is untouched.
 - `check.html` — a leaf check's detail page (its `title` following the breadcrumb in
   the header ([ADR-0017](adr/0017-node-title.md)); the node name + `description`; its
   `about` when present
@@ -514,10 +580,14 @@ raises rather than rendering blank):
   form).
 - `history.html` / `events.html` — the status-history and event-log tables, rows
   tinted by status (`row-*` classes in `overview.css`).
-- `system.html` — the admin engine status page.
+- `system.html` / `_system_info.html` — the admin engine status page (per
+  check: type, the in-flight run, the armed next slot and the last completed
+  run), with the same server-seeded stamp and ~10s poll as the dashboard — the
+  info block is the `_system_info.html` partial, swapped by `poll.js`.
 - `login.html`, `text.html`, `links.html` — login, and the two stubs.
 - `static/css/overview.css` — the brand accent, dashboard grid/card/panel styles,
-  and table row tints; Bootstrap via CDN; favicons; `site.webmanifest`.
+  the leaf **chips** and the heartbeat **status strip**, and table row tints;
+  Bootstrap via CDN; favicons; `site.webmanifest`.
 
 ---
 

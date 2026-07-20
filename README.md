@@ -6,8 +6,10 @@ runs configurable **checks** on background threads, aggregates their results int
 a single status **tree**, and serves it over a small web interface.
 
 See `docs/` for the full picture — `project.md` (what it is), `architecture.md`
-(how the code is built), `use-cases.md` (the vision, in concrete scenes), and
-`implementing-checks.md` (how to build a check type of your own).
+(how the code is built), `use-cases.md` (the vision, in concrete scenes),
+`implementing-checks.md` (how to build a check type of your own), and
+`testing-the-gui.md` (previewing the web UI under extreme layouts and live
+scenarios).
 Design rationale is in `decisions.md` + `adr/`. The JSON API contract is
 `docs/api/openapi.yaml` (usage notes alongside). The native macOS menu-bar client
 lives in its own repository,

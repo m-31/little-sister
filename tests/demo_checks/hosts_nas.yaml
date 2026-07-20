@@ -1,0 +1,8 @@
+# Live-demo check (Mode 2) — see tests/demo_check.py and docs/testing-the-gui.md.
+type: demo
+path: /hosts/nas
+title: NAS host
+about: A host with disk/memory/load children in a shifting mix (roll-up demo).
+scenario: children
+frequency: 5s
+period: 45s

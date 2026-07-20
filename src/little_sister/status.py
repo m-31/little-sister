@@ -91,6 +91,14 @@ def on_same_line(a: str, b: str) -> bool:
     return sa[:shared] == sb[:shared]
 
 
+# The engine's self-heartbeat node (ADR-0005). The whole line is *reserved*: the
+# loader rejects a custom check owning nodes on it, so the subtree stays
+# engine-owned (leaving room for future engine children, e.g. connected
+# satellites) and the dashboard can lift the node out of the card grid into the
+# status strip (#24) knowing nothing user-configured hides behind it.
+HEARTBEAT_PATH = "/little-sister"
+
+
 def _coerce_code(code: StatusCode | str) -> StatusCode:
     """Accept a StatusCode or a valid (case-insensitive) status-code string."""
     if isinstance(code, StatusCode):

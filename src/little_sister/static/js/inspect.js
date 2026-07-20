@@ -123,6 +123,9 @@
     }, true);
     grid.addEventListener("click", function (e) {
         if (lastPointerType !== "touch") { return; }
+        // A reason "show all" tap is its own control (reasons.js) — not a request
+        // to open the popover for the node behind it.
+        if (e.target.closest && e.target.closest(".reason-toggle")) { return; }
         var hit = metaFor(e.target);
         if (!hit || current === hit.trigger) { return; }
         e.preventDefault();

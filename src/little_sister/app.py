@@ -31,7 +31,7 @@ from little_sister.maintenance import MaintenanceStore
 from little_sister.nodes import load_nodes, resolve_metadata, run_consistency_pass
 from little_sister.render import render_markdown, render_markdown_inline
 from little_sister.secrets import SecretError, resolve_setting
-from little_sister.status import StatusCode
+from little_sister.status import HEARTBEAT_PATH, StatusCode
 from little_sister.tree import StatusSnapshot, status_tree
 
 
@@ -156,9 +156,24 @@ def _duration(seconds: int | None) -> str:
     return f"{seconds}s"
 
 
-def _format_local(moment: datetime) -> str:
+@app.template_filter("elapsed")
+def _elapsed(seconds: float | None) -> str:
+    """Humanise a check runtime: milliseconds under a second (``412 ms``), one
+    decimal under ten seconds (``3.1 s``), whole seconds beyond (``43 s``);
+    ``—`` when no run has finished yet."""
+    if seconds is None:
+        return "—"
+    if seconds < 1.0:
+        return f"{seconds * 1000:.0f} ms"
+    if seconds < 10.0:
+        return f"{seconds:.1f} s"
+    return f"{seconds:.0f} s"
+
+
+def _format_local(moment: datetime, fmt: str | None = None) -> str:
     """Format a datetime in the configured timezone and ``time_format``
-    (config.yaml). A naive value is taken to be the server's local time.
+    (config.yaml); ``fmt`` overrides the format (never the timezone) for
+    dense spots like the system table's time-of-day cells.
 
     The one place display timestamps are formatted, so the dashboard's poll
     stamp (served in the ``X-Rendered-At`` response header) matches every
@@ -166,14 +181,14 @@ def _format_local(moment: datetime) -> str:
     """
     if moment.tzinfo is None:
         moment = moment.astimezone()
-    return moment.astimezone(config.tzinfo).strftime(config.time_format)
+    return moment.astimezone(config.tzinfo).strftime(fmt or config.time_format)
 
 
 @app.template_filter("localtime")
-def _localtime(value: object) -> str:
-    """Render an ISO-8601 timestamp in the configured timezone (config.yaml).
-
-    A naive value is taken to be the server's local time.
+def _localtime(value: object, fmt: str | None = None) -> str:
+    """Render an ISO-8601 timestamp in the configured timezone (config.yaml),
+    optionally with an explicit strftime ``fmt`` (the timezone always stays
+    the configured one). A naive value is taken to be the server's local time.
     """
     if not value:
         return "—"
@@ -181,7 +196,7 @@ def _localtime(value: object) -> str:
         moment = datetime.fromisoformat(str(value))
     except ValueError:
         return str(value)
-    return _format_local(moment)
+    return _format_local(moment, fmt)
 
 
 def _filter_snapshot(node: StatusSnapshot,
@@ -277,10 +292,16 @@ api_tokens = parse_api_tokens(_api_token_setting())
 # LITTLE_SISTER_ENGINE=0. A missing/invalid checks directory is non-fatal — the
 # web app still serves.
 engine: Engine | None = None
+# Why the engine did not start: the ``CheckError`` reason when the checks config
+# failed to load; ``None`` on success and on the deliberate
+# ``LITTLE_SISTER_ENGINE=0`` disable. Feeds the header banner so a config typo
+# doesn't take monitoring down with only a log line to show for it; persists
+# until a restart with fixed config.
+engine_error: str | None = None
 
 
 def _start_engine_once() -> None:
-    global engine
+    global engine, engine_error
     if engine is not None:
         return
     if os.environ.get("LITTLE_SISTER_ENGINE", "1").lower() in ("0", "false", "no"):
@@ -289,12 +310,21 @@ def _start_engine_once() -> None:
     try:
         engine = create_engine()
     except CheckError as error:
+        engine_error = str(error)
         logger.warning("engine not started: %s", error)
         return
     _restore_maintenance(engine)
     _seed_node_metadata(engine)
     engine.start()
     atexit.register(engine.stop)
+
+
+@app.context_processor
+def _inject_engine_error() -> dict[str, str | None]:
+    """Expose :data:`engine_error` to every template, so the shared header
+    partial can render its engine-not-started alert without per-route plumbing.
+    (The login page does not include the header, so nothing leaks pre-login.)"""
+    return {"engine_error": engine_error}
 
 
 def _seed_node_metadata(engine: Engine) -> None:
@@ -372,6 +402,37 @@ def logout() -> ResponseReturnValue:
     return redirect('/login')
 
 
+def _split_heartbeat(
+    node: StatusSnapshot | None,
+) -> tuple[StatusSnapshot | None, StatusSnapshot | None]:
+    """Lift the engine's self-heartbeat (ADR-0005) out of a root snapshot's
+    children so the dashboard can render it as the status strip (#24) rather than
+    a near-empty grid card. Returns ``(node_without_heartbeat, heartbeat)``.
+
+    The heartbeat is only ever a child of the root overview, so on a branch page
+    (or when the engine is disabled) this returns ``node`` unchanged with
+    ``None``. A heartbeat that grew children is not lifted either: the strip is
+    a one-line bar and must never hide a subtree, so such a node stays a grid
+    card. (The loader keeps custom checks off the reserved line — this guard is
+    belt and braces, and the fallback for future engine-owned children.)
+    Splitting happens before the hide-ok/hide-idle filter, so the strip stays
+    visible regardless of the filters. The JSON API is untouched: it serialises
+    the whole snapshot upstream of this call.
+    """
+    if node is None:
+        return None, None
+    heartbeat: StatusSnapshot | None = None
+    kept: list[StatusSnapshot] = []
+    for child in node.children:
+        if child.path == HEARTBEAT_PATH and not child.children:
+            heartbeat = child
+        else:
+            kept.append(child)
+    if heartbeat is None:
+        return node, None
+    return replace(node, children=tuple(kept)), heartbeat
+
+
 @app.route('/status')
 @app.route('/status/<path:branch>')
 def status(branch: str = "") -> ResponseReturnValue:
@@ -397,6 +458,9 @@ def status(branch: str = "") -> ResponseReturnValue:
                                firstname=session['firstname'], node=node,
                                branch=branch, since=since,
                                is_admin=session.get('admin', False))
+    # Lift the engine self-heartbeat into the status strip (#24) before filtering,
+    # so it shows there always — never as a card, never hidden by hide-ok.
+    node, heartbeat = _split_heartbeat(node)
     hide_ok = request.args.get('hide_ok') == '1'
     hide_idle = request.args.get('hide_idle') == '1'
     if node is not None and (hide_ok or hide_idle):
@@ -409,22 +473,29 @@ def status(branch: str = "") -> ResponseReturnValue:
             f for f in (_filter_snapshot(c, hidden) for c in node.children)
             if f is not None))
     depth = _resolve_depth()
+    # One server-formatted stamp per response (ADR-0006): rendered into the page
+    # so it dates its data from the first paint (page JavaScript cannot read
+    # navigation-response headers), and sent as X-Rendered-At so the poll loop
+    # reads the same clock — "updated …" / "could not refresh — last ok …" honour
+    # config.yaml's time_format and timezone, not the browser's locale.
+    rendered_at = _format_local(datetime.now())
     if request.args.get('fragment'):
         body = render_template('_status_grid.html', node=node, branch=branch,
                                max_depth=depth, hide_ok=hide_ok,
-                               hide_idle=hide_idle)
+                               hide_idle=hide_idle, heartbeat=heartbeat)
     else:
+        # The hover card (ADR-0019) must know the strip too: the lifted
+        # heartbeat's nodes.yaml title/about join the map like any node's.
+        node_meta = _node_meta_map(node) | _node_meta_map(heartbeat)
         body = render_template('status.html', username=session['username'],
                                firstname=session['firstname'], node=node,
                                branch=branch, max_depth=depth,
                                depth_limit=MAX_DEPTH, hide_ok=hide_ok,
-                               hide_idle=hide_idle,
-                               node_meta=_node_meta_map(node))
+                               hide_idle=hide_idle, heartbeat=heartbeat,
+                               node_meta=node_meta,
+                               rendered_at=rendered_at)
     response = make_response(body)
-    # The dashboard's poll stamp reads this server-formatted time instead of
-    # formatting client-side, so "updated …" / "could not refresh — last ok …"
-    # honour config.yaml's time_format and timezone (ADR-0006), not the browser.
-    response.headers['X-Rendered-At'] = _format_local(datetime.now())
+    response.headers['X-Rendered-At'] = rendered_at
     # Persist the choice only when the viewer set it explicitly.
     if 'depth' in request.args:
         response.set_cookie('depth', str(depth), max_age=DEPTH_COOKIE_MAX_AGE,
@@ -493,9 +564,21 @@ def system() -> ResponseReturnValue:
         return redirect('/login')
     if not session.get('admin'):
         abort(403)
-    return render_template('system.html', username=session['username'],
-                           firstname=session['firstname'], version=__version__,
-                           info=engine.info() if engine is not None else None)
+    # Same freshness contract as the dashboard (ADR-0005): one server-formatted
+    # stamp per response, seeded into the page and sent as X-Rendered-At for
+    # the ~10s fragment poll (`fragment=1` returns just the info block).
+    rendered_at = _format_local(datetime.now())
+    info = engine.info() if engine is not None else None
+    if request.args.get('fragment'):
+        body = render_template('_system_info.html', info=info)
+    else:
+        body = render_template('system.html', username=session['username'],
+                               firstname=session['firstname'],
+                               version=__version__, info=info,
+                               rendered_at=rendered_at)
+    response = make_response(body)
+    response.headers['X-Rendered-At'] = rendered_at
+    return response
 
 
 @app.route('/text')

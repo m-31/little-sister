@@ -1,0 +1,8 @@
+# Live-demo check (Mode 2) — see tests/demo_check.py and docs/testing-the-gui.md.
+type: demo
+path: /ci/nightly
+title: Nightly CI
+about: The nightly build matrix. Erupts into 12 linked failures, then recovers.
+scenario: eruption
+frequency: 4s
+period: 60s

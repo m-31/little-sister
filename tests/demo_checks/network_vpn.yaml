@@ -1,0 +1,8 @@
+# Live-demo check (Mode 2) — see tests/demo_check.py and docs/testing-the-gui.md.
+type: demo
+path: /network/vpn
+title: VPN tunnel
+about: Flips healthy/failed each half-cycle — exercises the ~10s fragment swap.
+scenario: flap
+frequency: 4s
+period: 20s

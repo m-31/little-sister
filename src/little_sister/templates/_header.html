@@ -41,3 +41,12 @@
         </div>
     </div>
 </nav>
+{# A failed engine start must not hide in the log: while the engine is down the
+   tree is empty, so this persistent alert is the page's only truthful signal. #}
+{% if engine_error %}
+<div class="container-fluid mt-3 px-4">
+    <div class="alert alert-danger mb-0" role="alert">
+        <strong>Engine not started</strong> — {{ engine_error }}
+    </div>
+</div>
+{% endif %}

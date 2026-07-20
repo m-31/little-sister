@@ -73,8 +73,9 @@ filters; render **all four fields**, and give checks helpers to keep reason cont
 - **No CSP and no extra sanitizer this slice.** The chosen posture is the safe renderer
   + `rel=noopener` (images were off, now on — see the Update note). A
   `Content-Security-Policy` stays a worthwhile separate
-  hardening step (it needs the inline poll script and the filter form's `onchange`
-  handlers externalized / nonced, and the CDN allowlisted) but is not part of this ADR.
+  hardening step (it needs the filter form's `onchange` handlers externalized /
+  nonced, and the CDN allowlisted — the poll script is already an external file)
+  but is not part of this ADR.
 - The JSON envelope ([ADR-0008](0008-json-output-api.md)) is **unchanged**: it carries
   the raw Markdown strings; a client renders its own.
 
