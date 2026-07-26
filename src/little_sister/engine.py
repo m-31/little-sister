@@ -32,7 +32,7 @@ DEFAULT_POLL_INTERVAL = 1.0
 STAGGER_WINDOW_SECONDS = 60.0
 
 # The engine's self-monitoring node: it heartbeats HEARTBEAT_PATH (reserved —
-# see status.py; the dashboard renders it as the status strip, #24) every
+# see status.py; the dashboard renders it as the status strip, ADR-0024) every
 # scheduler tick, so a dead scheduler shows up stale and degraded (ADR-0005).
 HEARTBEAT_DESCRIPTION = "little-sister monitoring engine — beats every scheduler tick"
 # Default `about` for the heartbeat, so the dashboard strip explains itself in
@@ -308,13 +308,21 @@ class Engine:
         the check's ``frequency`` so freshness (ADR-0005) applies uniformly.
         Identity, observation time, maintenance and event-on-change stay the tree's
         concern (ADR-0007).
+
+        A branch check's ``about`` / ``title`` for its subnodes ride the same way,
+        but only on **children** (ADR-0025): the root's labels keep their startup
+        sources (``nodes.yaml`` / the inline check), so its result labels are
+        ignored like its ``name``; each child's fill an empty node field only, so a
+        ``nodes.yaml`` override still wins.
         """
         description = (check.description or None) if is_root else result.description
         config = (check.config_summary() or None) if is_root else result.config
+        about = None if is_root else (result.about or None)
+        title = None if is_root else (result.title or None)
         self._tree.upsert(path, result.code, result.reason,
                           description=description,
                           frequency_seconds=check.frequency_seconds,
-                          config=config)
+                          config=config, about=about, title=title)
         for child in result.children:
             self._store(join_path(path, child.name), child, check)
 

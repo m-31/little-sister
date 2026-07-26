@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from datetime import datetime
 from html import escape
 from pathlib import Path
 
@@ -44,6 +45,7 @@ from flask import render_template, session  # noqa: E402
 from little_sister import app as app_module  # noqa: E402
 from little_sister.app import (  # noqa: E402
     MAX_DEPTH,
+    _maintenance_view,
     _node_meta_map,
     _split_heartbeat,
     app,
@@ -70,9 +72,10 @@ def render_page(fixture: Fixture) -> str:
     :func:`_localize_static` rewrites them per output directory.
     """
     node = fixture.build()
-    # Mirror the view: lift the engine heartbeat into the status strip (#24) so
+    # Mirror the view: lift the engine heartbeat into the status strip (ADR-0024) so
     # the harness renders the strip exactly as a live request does.
     node, heartbeat = _split_heartbeat(node)
+    maintenance_index, maintenance_ancestors = _maintenance_view(node, datetime.now())
     path = f"/status/{fixture.branch}" if fixture.branch else "/status"
     previous_error = app_module.engine_error
     app_module.engine_error = fixture.engine_error
@@ -91,9 +94,15 @@ def render_page(fixture: Fixture) -> str:
                 depth_limit=MAX_DEPTH,
                 hide_ok=False,
                 hide_idle=False,
+                dense=True,
                 heartbeat=heartbeat,
                 node_meta=_node_meta_map(node) | _node_meta_map(heartbeat),
                 rendered_at=_RENDERED_AT,
+                reason_cap=app_module.config.reason_cap,
+                branch_cap=app_module.config.branch_cap,
+                maintenance_cap=app_module.config.maintenance_cap,
+                maintenance_index=maintenance_index,
+                maintenance_ancestors=maintenance_ancestors,
             )
     finally:
         app_module.engine_error = previous_error

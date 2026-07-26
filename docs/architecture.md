@@ -126,7 +126,7 @@ per [ADR-0004](adr/0004-status-aggregation-semantics.md):
 
 ```python
 if self.code == StatusCode.MAINTENANCE:
-    return StatusCode.MAINTENANCE          # subtree cancelled; parent ignores it
+    return StatusCode.MAINTENANCE          # subtree canceled; parent ignores it
 counted = []
 if self.code != StatusCode.UNDEFINED:
     counted.append(self.code)
@@ -222,7 +222,7 @@ checks share (stdlib `subprocess`; the external `ssh` binary). The five checks:
   on the advisory.
 - **`ssh-script`** — pipe a local `script` (via `interpreter`, default `bash`) to
   the host and report its output, like `ssh-command`; the base the two metrics
-  checks specialise (they parse the output instead of returning it).
+  checks specialize (they parse the output instead of returning it).
 - **`host-metrics`** — read basic system parameters from a host over SSH and report a
   **branch** rooted at the **host node** (the check's `path` targets the
   host, e.g. `/system/alpha`). Because ssh is only the *helper* that fetches the
@@ -349,7 +349,17 @@ declaration keyed by path (so it reaches container / host nodes no single check 
 `NodeMeta`). `nodes.yaml` is **optional**, lives in the checks directory (unioned
 across the path-list, a duplicate path an error), carries both fields per path
 (`path: {about: …, title: …}`; a bare string is `about`), and is skipped by
-`load_checks`. A
+`load_checks`. For the **subnodes a branch check emits**, a child `CheckResult` may
+carry its own `about` / `title` — a third feed the engine applies at runtime
+([ADR-0025](adr/0025-check-provided-subnode-metadata.md)), so the per-field precedence
+there is `nodes.yaml` **>** check-provided **>** empty. Unlike the write-through
+`description` / `config`, these **fill an empty field only**, and because the startup
+seed runs before the engine's first tick a `nodes.yaml` label is already present and
+wins; a check-provided label then freezes at first fill (stable identity — text that
+changes each run belongs in `reason`). This carries **type-inherent** subnode identity —
+`host-metrics` ships a per-aspect `about` for `ssh` / `disk` / `memory` / `cpu` / `load`
+— so a reusable branch check explains its leaves in every deployment without per-node
+`nodes.yaml` copy-paste. A
 **branch** check gives each leaf its own `description` through a `descriptions:` map
 keyed by leaf name, leaving the shared container's description empty. A startup
 **consistency pass** warns for an `about` path no check covers (the ADR-0014
@@ -443,16 +453,16 @@ the `markdown` (block) and `markdown_inline` (one-line, no `<p>`) Jinja filters
 
 ### 5.1 Routes
 
-| Route | Methods | Behaviour |
+| Route | Methods | Behavior |
 |-------|---------|-----------|
 | `/` | GET | Redirect to `/status`. |
 | `/login`, `/logout` | GET, POST / GET | Session login (stores `username`, name, and an `admin` flag) / clears the session. |
 | `/status`, `/status/<path:branch>` | GET | Renders the dashboard from a live snapshot (whole tree or a branch; the `path:` converter passes the slash-separated node path, ADR-0016). A **leaf** check renders its **detail** page. `hide_ok` / `hide_idle` filter the view; `depth` caps how deep the tree renders (clamped to `MAX_DEPTH`, remembered in a `depth` cookie); `fragment=1` returns just the grid (for the page's live polling). With `Accept: application/json` and a valid bearer token, the same routes return the subtree as JSON instead (ADR-0008). |
 | `/history/<path>` | GET | A node's status history (Status / Since / Until / Reason). |
-| `/maintenance` | POST | **Admin only** — set/clear a node's maintenance with a reason and optional duration (default from `config.yaml`), recording who set it; redirects to the check. |
+| `/maintenance` | GET, POST | **GET** — the full, uncapped maintenance overview as its own read-only page (the leaf-detail pattern), reached from the strip pill's "+N more": every pinned node with its path, time left and reason. **POST** — **admin only**: set/clear a node's maintenance with a reason and optional duration (default from `config.yaml`), recording who set it; redirects to the check. |
 | `/events` | GET | The transition log, newest first (When / Status / Service / Reason). |
 | `/system` | GET | **Admin only** — engine uptime, pool size, check counts; per check its type and the in-flight / armed-next / last run, each a time of day plus interval. Carries the dashboard's freshness stamp and ~10s poll (`fragment=1` returns just the info block). |
-| `/text`, `/links` | GET | Auth-gated stubs (not built). |
+| `/copy`, `/links` | GET | Auth-gated stubs (not built). |
 | `/favicon.ico` | GET | Redirect to the static favicon. |
 
 Jinja filters back the views: `status_slug` (a CSS class suffix per code),
@@ -493,37 +503,58 @@ filter logic is `_filter_snapshot` (drops nodes whose effective code is hidden).
 Jinja2 templates under `templates/`, with `StrictUndefined` (an undefined variable
 raises rather than rendering blank):
 
-- `_header.html` — shared `<head>` tail + navbar (Status / Events / Text / Links,
+- `_header.html` — shared `<head>` tail + navbar (Status / Events / Maintenance / Links / Copy,
   plus **System** for admins, current user, Logout), and — only while the engine
   failed to start — the persistent `engine_error` banner (§4.6).
 - `_breadcrumb.html` — the clickable header path trail (`status` root + a link per
   ancestor segment, current node plain); included in the dashboard and detail headers.
 - `status.html` / `_status_grid.html` — the **dashboard**: top-level systems as
   cards in a responsive grid. **Every system and subsystem is a filled rounded box
-  coloured by its own rolled-up status, nested inside its parent's box** (so a
+  colored by its own rolled-up status, nested inside its parent's box** (so a
   green branch shows clearly inside a red system), each carrying its reasons; a
-  translucent edge keeps same-colour boxes legible. To surface the **culprit**, a
+  translucent edge keeps same-color boxes legible. To surface the **culprit**, a
   box is shown **vivid** only when it reports its own status; a box whose status is
   merely *derived* from a visible child — and any healthy (OK) box — is **dimmed**
   (pale fill, dark text), so the eye follows a faded trail down to the bold
-  originating node. When the tree is collapsed by depth, the deepest *visible* node
+  originating node. So status never rests on **color alone**, each card, node box and
+  the strip also carries a small **per-state shape cue** — a check (OK), triangle
+  (warn), filled disc (error), pause bars (maintenance), a hollow ring (idle) — beside
+  the fill, and the warn/error status word is lifted out of the muted state text, so a
+  red/green color-blind viewer can still separate error from OK. The card and strip
+  glyphs are decorative (`aria-hidden`) — their status word already speaks — but a
+  **warn/error node box** has no word, so its cue is named for a screen reader
+  (`role="img"` + an `aria-label` of the state, WCAG 1.1.1). When the tree is
+  collapsed by depth, the deepest *visible* node
   in a branch stays bold (it now carries the reason). A **depth** input in the
   filter bar sets how many levels below the viewed node render — the node itself is
   level 0, so depth 0 collapses to a single card carrying that node's rolled-up
   status (an overall traffic light), depth 1 shows its top-level systems, and so on.
   It is clamped to `MAX_DEPTH` and remembered in a `depth` cookie (resolved by
-  `_resolve_depth`). Nodes drill down; hide-ok / hide-idle switches;
-  **stale** nodes get a badge; a node's short `title` (ADR-0017) follows the name
-  (ellipsed, `.node-title`) on a card and the breadcrumb in the page header; and a
-  branch view shows the viewed node's `about` under its heading.
+  `_resolve_depth`). Nodes drill down; a **hide-ok** switch drops OK nodes and a
+  **hide-idle** switch drops never-reported (UNDEFINED) ones; a **chips** switch (leaf density, default on) toggles the quiet-leaf chip collapse below off for a viewer who wants every leaf as a full box, and these view switches — like `depth` — persist across visits in a `SameSite=Lax` cookie set on an explicit change; **stale** nodes get a
+  badge; a node's short `title` (ADR-0017) follows the name (ellipsed, `.node-title`) on
+  a card and the breadcrumb in the page header; and a branch view shows the viewed
+  node's `about` under its heading. Admin **maintenance**
+  ([ADR-0014](adr/0014-maintenance-persistence.md)) is surfaced so a pin the roll-up and
+  depth hide is still findable: a maintenance-tinted **pill** joins the status strip (a
+  pause-bars glyph and a live count, shown only when something is pinned), and clicking
+  it opens a popover (`static/js/maintenance.js`, reusing the inspection popover's Floating-UI positioning and poll-swap survival) of the pinned nodes (path, time left, reason, each linked), capped
+  at `maintenance_cap` with a **"+N more"** to a dedicated read-only **`/maintenance`
+  page** that lists the full, uncapped set; a maintenance-tinted **"contains
+  maintenance" pip** still marks any ancestor card whose subtree holds a pin, opening the
+  same popover scoped to that card. All are built from the *unfiltered* snapshot, so
+  hide-idle and a shallow depth don't hide them.
   To keep the everyday grid balanced **without moving cards**
   ([ADR-0024](adr/0024-dashboard-layout.md)), a card's **quiet leaves** (OK or idle) collapse
-  to compact name+colour **chips** — an all-green host converges toward a wrapping
+  to compact name+color **chips** — an all-green host converges toward a wrapping
   chip row instead of a stack of boxes — while a **warn/error** leaf keeps its full
   box and reason so a problem stays legible; chips flow inline, so a run of quiet
   siblings packs and a problem box breaks the line, preserving sibling order (a
   chip's own reason is a click away on its leaf page — the popover still shows
-  title/about). Card heights are **bounded**: the reason caps from above, a
+  title/about). In that same dense view a branch also **caps the quiet sub-branch
+  boxes** it shows to a configurable budget (`branch_cap`), folding the surplus behind
+  an in-place **"+N more"** (`static/js/branches.js` keeps the reveal open across the ~10s poll swap) so a deeply-nested card can't tower over the grid — a
+  warn/error box is never folded. Card heights are **bounded**: the reason caps from above, a
   `min-height` floor from below. The engine's own **heartbeat** (`/little-sister`,
   ADR-0005) is lifted out of the grid into a compact **status-strip pill** at the top
   (fit-content — a side note under the "updated …" line, not a page-wide
@@ -560,17 +591,20 @@ raises rather than rendering blank):
   `data-path`, and renders + positions the card with **Floating UI** (CDN). Opens on
   hover / focus, stays open when the pointer moves into it, closes on leave / blur /
   Escape; the node stays a link to its detail page; a tap opens the card on touch.
-- **Reason overflow** — a card caps how many reason entries it shows (six) and
-  clamps a tall reason block (a long `code()` trace) to about eight lines, so an
-  erupting node cannot outgrow the grid. Every entry is server-rendered into the DOM
-  and the surplus is hidden by CSS — trimmed **by entry and by CSS, never mid-HTML**,
-  so a reason's safe Markup ([ADR-0018](adr/0018-markdown-rendering.md)) is never
-  cut. A per-node **"show all (N)"** (`static/js/reasons.js`) reveals the rest and
-  lifts the clamp, expanding in place; like the popover it binds once via event
-  delegation on `#status-grid` and keeps a page-lifetime set of expanded paths, so an
-  expanded card survives the ~10s fragment swap. The leaf detail page (`check.html`)
-  always renders every reason and the JSON envelope
-  ([ADR-0008](adr/0008-json-output-api.md)) is untouched.
+- **Reason overflow** — a card clamps its reasons to a **line budget**
+  (`config.yaml`'s `reason_cap`, default 6, carried as the block's `--reason-lines`):
+  short reasons show that many, a reason that wraps to several lines uses more of the
+  budget, so an erupting node cannot outgrow the grid. Every reason is server-rendered
+  into the DOM and the surplus is clipped **by CSS, never mid-HTML**, so a reason's
+  safe Markup ([ADR-0018](adr/0018-markdown-rendering.md)) is never cut, then faded at
+  the edge. A single **chevron in the card header**, just after the status word
+  (`static/js/reasons.js`), reveals the rest in place (▼ → show all) and folds it back
+  (▲), with an empty same-width slot when nothing overflows so the status words stay
+  aligned; a nested node, which has no status word, gets it at the top-right of its
+  name row. Like the popover it binds once via event delegation on `#status-grid` and
+  keeps a page-lifetime set of expanded paths, so an expanded card survives the ~10s
+  fragment swap. The leaf detail page (`check.html`) always renders every reason and
+  the JSON envelope ([ADR-0008](adr/0008-json-output-api.md)) is untouched.
 - `check.html` — a leaf check's detail page (its `title` following the breadcrumb in
   the header ([ADR-0017](adr/0017-node-title.md)); the node name + `description`; its
   `about` when present
@@ -613,7 +647,7 @@ raises rather than rendering blank):
   [ADR-0012](adr/0012-node-metadata.md) / [ADR-0017](adr/0017-node-title.md)).
 - **General options** — `config.yaml` (working dir; override `LITTLE_SISTER_CONFIG`)
   holds display/runtime options: `timezone` (default `Europe/Berlin`), `time_format`,
-  and `maintenance_default_expiry` (default `7d`, the window applied when an admin
+  the dashboard budgets `reason_cap` (default 6), `branch_cap` (default 3) and `maintenance_cap` (default 5) — the reason-line, quiet-sub-branch and maintenance-pin caps ([ADR-0024](adr/0024-dashboard-layout.md)) — and `maintenance_default_expiry` (default `7d`, the window applied when an admin
   gives no explicit duration — ADR-0014), loaded once into `config.py`'s `Config`
   ([ADR-0006](adr/0006-config-file-and-timezones.md)). Displayed timestamps are
   stored as server-local and converted to that timezone by the `localtime` filter
@@ -633,7 +667,7 @@ Current gaps.
   so far, to a file (§7, [ADR-0014](adr/0014-maintenance-persistence.md)).
 - **Satellite federation** and **write actions** over the JSON API
   (`project.md` §2.9).
-- The `/text` and `/links` pages.
+- The `/copy` and `/links` pages.
 - **Hashed passwords** (plaintext today) and a machine-readable health endpoint.
 
 ---

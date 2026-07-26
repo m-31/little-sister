@@ -35,7 +35,7 @@ class FixtureRenderTests(TestCase):
     def test_eruption_keeps_all_twelve_linked_reasons(self):
         html = self._render("eruption_12_reasons")
         self.assertEqual(html.count("ci.example/runs/"), 12)
-        self.assertIn("web", html)          # calm neighbour still present
+        self.assertIn("web", html)          # calm neighbor still present
         self.assertIn("s-error", html)      # the erupting card rolled up to ERROR
 
     def test_hundred_long_links_all_render(self):
@@ -82,12 +82,11 @@ class FixtureRenderTests(TestCase):
 
     def test_reasons_graduated_keeps_the_largest_card(self):
         html = self._render("reasons_graduated")
-        # every entry stays in the DOM (nothing is cut), even on the 20-card
+        # every reason stays in the DOM (nothing is cut), even on the 20-reason card
         self.assertIn("reason line 20 of 20", html)
-        # …but the over-cap cards carry the entry cap (K = 6) and a "show all (N)"
-        self.assertIn("show all (7)", html)
-        self.assertIn("show all (20)", html)
-        self.assertNotIn("show all (6)", html)   # exactly the cap renders whole
+        # the cards carry the line budget; the show-all/collapse chevron is client-side
+        self.assertIn("--reason-lines: 6", html)
+        self.assertNotIn("show all", html)       # the bottom text link is gone
 
     def test_empty_tree_shows_the_engine_down_hint(self):
         html = self._render("empty_engine_down")
@@ -125,15 +124,15 @@ class WallFixtureTests(TestCase):
         self.assertIn("undefined", html)                    # the idle node
 
     def test_security_findings_flood_collapses_to_a_chip(self):
-        # Layout (#24): the OK "informational" leaf that floods 150 findings is a
-        # quiet leaf, so at the overview it collapses to a single name+colour chip
+        # Layout (ADR-0024): the OK "informational" leaf that floods 150 findings is a
+        # quiet leaf, so at the overview it collapses to a single name+color chip
         # — the skyscraper is tamed and its findings live on the leaf's own page,
         # not the card. Reasons ≠ bad status: an OK card no longer drowns the grid.
         html = self._render("security_findings_150")
         self.assertIn("leaf-chip", html)                     # the quiet leaves chipped
         self.assertIn("informational", html)                # the chip still names it
         self.assertNotIn("End of Life Software", html)      # findings off the overview
-        self.assertNotIn("show all (150)", html)            # no reason block on a chip
+        self.assertNotIn("--reason-lines", html)            # no reason block on a chip
         self.assertNotIn("s-error", html)                   # everything is OK
         # the engine heartbeat is lifted out of the grid into the status strip
         self.assertIn("ls-strip", html)

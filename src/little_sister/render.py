@@ -4,9 +4,9 @@ A small, safe-by-default renderer on markdown-it-py: raw HTML is **escaped**
 (``html=False``), link schemes are validated (``javascript:`` / ``vbscript:`` /
 ``file:`` / unsafe ``data:`` are dropped),
   **images are currently enabled**,
-  and links get
-``rel="noopener noreferrer"``. Exposed to templates via the ``markdown`` (block) and
-``markdown_inline`` (one-line) Jinja filters.
+  and links **open in a new tab**
+(``target="_blank"``) with ``rel="noopener noreferrer"``. Exposed to templates via the
+``markdown`` (block) and ``markdown_inline`` (one-line) Jinja filters.
 """
 from __future__ import annotations
 
@@ -21,7 +21,10 @@ from markupsafe import Markup
 
 def _harden_links(self: RendererHTML, tokens: Sequence[Token], idx: int,
                   options: Any, env: Any) -> str:
-    """Render-rule override: add ``rel="noopener noreferrer"`` to every link."""
+    """Render-rule override: open every link in a new tab (``target="_blank"``)
+    with ``rel="noopener noreferrer"`` — so following a link never navigates the
+    monitoring page away."""
+    tokens[idx].attrSet("target", "_blank")
     tokens[idx].attrSet("rel", "noopener noreferrer")
     return self.renderToken(tokens, idx, options, env)
 

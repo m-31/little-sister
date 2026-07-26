@@ -109,13 +109,24 @@ class StatusTree:
                reason: list[str] | str | None = None, *,
                description: str | None = None,
                frequency_seconds: int | None = None,
-               config: str | None = None) -> bool:
+               config: str | None = None,
+               about: str | None = None,
+               title: str | None = None) -> bool:
         """Create-or-update the node at ``path`` and record a transition event if
         its own code changed. ``description`` / ``frequency_seconds`` / ``config``
         (inherited from the check) are stored when given — ``config`` is static
-        display metadata, never a transition (ADR-0013). A node under
-        **maintenance** keeps its admin-set status — only its check time is
-        refreshed. Thread-safe.
+        display metadata, never a transition (ADR-0013).
+
+        ``about`` / ``title`` are the check-provided subnode labels (ADR-0025) and
+        differ from the three above: where those write through, these **fill an
+        empty field only** — a non-empty value seeds the node when its field is
+        blank, but never overwrites one already set. A ``nodes.yaml`` declaration
+        is seeded at startup (``set_about`` / ``set_title``) before the first tick,
+        so it always wins; and once a label is filled it stays put (a later tick
+        never rewrites it). Metadata, so no event either.
+
+        A node under **maintenance** keeps its admin-set status — only its check
+        time is refreshed; its metadata still updates. Thread-safe.
         """
         with self._lock:
             node = self._ensure_node(path)
@@ -125,6 +136,10 @@ class StatusTree:
                 node.frequency_seconds = frequency_seconds
             if config is not None:
                 node.config = config
+            if about and not node.about:
+                node.about = about
+            if title and not node.title:
+                node.title = title
             if node.maintenance:
                 node.touch()
                 return False

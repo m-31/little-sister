@@ -196,6 +196,14 @@ Each leaf's `description` comes from the `descriptions:` map (by leaf name —
 `ssh`, `disk`, `memory`, `cpu`, `load`) or a built-in default; the shared host node's
 own description stays empty so two checks can share it ([ADR-0012](../docs/adr/0012-node-metadata.md)).
 
+Each leaf also ships a built-in **`about`** — a short note on what the aspect
+(`ssh` / `disk` / `memory` / `cpu` / `load`) measures and how it grades — shown in the
+dashboard hover card. To retune one for your hosts, add a **`subnodes:`** block keyed by
+leaf name (`subnodes: {disk: {about: "…", title: "…"}}`): a config entry overrides the
+built-in default per field; an omitted field keeps the default, and `nodes.yaml` still
+overrides above both, per node path
+([ADR-0025](../docs/adr/0025-check-provided-subnode-metadata.md)).
+
 A check that reports several nodes like this returns a small tree of results
 (`CheckResult.children`); the engine writes each as a node under the check's node
 ([ADR-0007](../docs/adr/0007-check-result-branches.md)).

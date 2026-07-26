@@ -26,6 +26,7 @@ from little_sister.checks.base import (
     plain,
     register,
 )
+from little_sister.checks.metadata import parse_subnodes
 from little_sister.checks.ssh.base import SshScriptCheck, parse_descriptions
 from little_sister.checks.ssh.metrics import (
     grade,
@@ -71,6 +72,45 @@ DEFAULT_THRESHOLDS: dict[str, tuple[float, float]] = {
 # check does not own — a peer (e.g. ``qnap-metrics``) adds its own leaves (ADR-0015).
 METRIC_NODES = ("ssh", "disk", "memory", "cpu", "load")
 
+# Per-aspect ``about`` (ADR-0025): the **type-inherent** subject metadata for the
+# subnodes this check emits — what each aspect measures and how it grades — so every
+# deployment's hover cards (ADR-0019) explain these leaves out of the box. The grading
+# *thresholds* are deliberately not repeated here: they ride each leaf's ``config``
+# (ADR-0013). This is the **default**: a deployment overrides any of these per field in
+# its check config (a ``subnodes:`` block, read via ``_about`` / ``_title``) or, above
+# that, in ``nodes.yaml``.
+ABOUT: dict[str, str] = {
+    "ssh": (
+        "The SSH connection this check opens to collect the metrics — transport "
+        "health, not a resource on the host. **OK** when the host answers and the "
+        "script runs; **WARN** on an SSH advisory (e.g. the post-quantum key-exchange "
+        "banner); **ERROR** when the connection or script fails (the metric leaves "
+        "then can't be collected)."
+    ),
+    "disk": (
+        "Percentage of a filesystem's space in use, read from the host's own `df`. "
+        "Higher is worse — it grades **WARN** then **ERROR** as the volume fills. With "
+        "`disk_path: all` it fans out to one graded child per filesystem. The "
+        "warn/error thresholds are in this leaf's config."
+    ),
+    "memory": (
+        "Percentage of RAM in use on the host. Higher is worse, grading **WARN** then "
+        "**ERROR** as free memory runs low. The thresholds are in this leaf's config."
+    ),
+    "cpu": (
+        "How busy the processor is — 100% minus its idle time. Higher is worse, "
+        "grading **WARN** then **ERROR** as it saturates; each run is a one-shot "
+        "reading, so a brief spike can read high while a sustained high is the real "
+        "signal. The thresholds are in this leaf's config."
+    ),
+    "load": (
+        "The 1-minute load average **normalized per CPU core** (load ÷ cores), so one "
+        "number reads the same on a 2-core and a 32-core box. Around **1.0 per core** "
+        "the CPUs are fully subscribed; higher means work is queuing. Grades **WARN** "
+        "then **ERROR** upward; the thresholds are in this leaf's config."
+    ),
+}
+
 
 @register("host-metrics")
 class HostMetricsCheck(SshScriptCheck):
@@ -79,11 +119,15 @@ class HostMetricsCheck(SshScriptCheck):
 
     def __init__(self, *, thresholds: dict[str, tuple[float, float]],
                  descriptions: dict[str, str] | None = None,
+                 subnodes: dict[str, dict[str, str]] | None = None,
                  disk_path: str | None = None, profile: str = DEFAULT_PROFILE,
                  **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.thresholds = thresholds
         self.descriptions = descriptions or {}
+        # Per-aspect display text (`title` / `about`) a deployment may set in the
+        # check's own config to override the built-in ABOUT default (ADR-0025).
+        self.subnodes = subnodes or {}
         self.disk_path = disk_path
         self.profile = profile
 
@@ -98,6 +142,7 @@ class HostMetricsCheck(SshScriptCheck):
             "profile": profile,
             "thresholds": _parse_thresholds(config.get("thresholds")),
             "descriptions": parse_descriptions(config.get("descriptions")),
+            "subnodes": parse_subnodes(config),
             "disk_path": _parse_disk_path(config.get("disk_path")),
         }
 
@@ -122,6 +167,17 @@ class HostMetricsCheck(SshScriptCheck):
         """A leaf's description: the ``descriptions:`` override or the built-in
         default (ADR-0012)."""
         return self.descriptions.get(leaf, default)
+
+    def _about(self, aspect: str) -> str:
+        """A leaf's ``about``: the ``subnodes:`` config override, else the built-in
+        ``ABOUT`` default (ADR-0025). An empty config value falls back to the
+        default; ``nodes.yaml`` still wins over both, per field."""
+        return self.subnodes.get(aspect, {}).get("about") or ABOUT.get(aspect, "")
+
+    def _title(self, aspect: str) -> str:
+        """A leaf's ``title``: the ``subnodes:`` config override, else empty — this
+        family ships no title default (the names read fine)."""
+        return self.subnodes.get(aspect, {}).get("title", "")
 
     def _script_args(self) -> list[str]:
         # $1 = disk path to measure (empty → the script's per-OS default).
@@ -165,6 +221,7 @@ class HostMetricsCheck(SshScriptCheck):
         return CheckResult(StatusCode.UNDEFINED, children=(
             CheckResult(code, reasons, name="ssh",
                         description=self._describe("ssh", SSH_NODE_DESCRIPTION),
+                        about=self._about("ssh"), title=self._title("ssh"),
                         config=self._ssh_config()),))
 
     def _ssh_node(self, metrics: dict[str, str],
@@ -179,6 +236,7 @@ class HostMetricsCheck(SshScriptCheck):
         return CheckResult(StatusCode.WARN if notice else StatusCode.OK,
                            reasons, name="ssh",
                            description=self._describe("ssh", SSH_NODE_DESCRIPTION),
+                           about=self._about("ssh"), title=self._title("ssh"),
                            config=self._ssh_config())
 
     # --- parsing the script output into a branch ---
@@ -216,10 +274,12 @@ class HostMetricsCheck(SshScriptCheck):
             children.append(
                 self._volume_child(volume_name(sub.get("path", ""), used), sub))
         if not children:
-            return unavailable("disk", "Disk space per filesystem")
+            return unavailable("disk", "Disk space per filesystem",
+                               self._about("disk"))
         return CheckResult(StatusCode.UNDEFINED, name="disk",
                            description=self._describe(
                                "disk", "Disk space used, per filesystem"),
+                           about=self._about("disk"), title=self._title("disk"),
                            config=self._threshold_md("disk"),
                            children=tuple(children))
 
@@ -228,7 +288,7 @@ class HostMetricsCheck(SshScriptCheck):
         try:
             pct = float(sub["pct"])
         except (KeyError, ValueError):
-            return unavailable(name, description)
+            return unavailable(name, description, self._about("disk"))
         warn, error = self.thresholds["disk"]
         free = human_kb(sub.get("avail_kb"))
         total = human_kb(sub.get("total_kb"))
@@ -238,6 +298,7 @@ class HostMetricsCheck(SshScriptCheck):
         return CheckResult(grade(pct, warn, error),
                            [f"{pct:.0f}% used{detail}{suffix}"],
                            name=name, description=description,
+                           about=self._about("disk"), title=self._title("disk"),
                            config=self._threshold_md("disk"))
 
     def _percent_child(self, metrics: dict[str, str], name: str, key: str,
@@ -247,10 +308,11 @@ class HostMetricsCheck(SshScriptCheck):
         try:
             pct = float(metrics[key])
         except (KeyError, ValueError):
-            return unavailable(name, description)
+            return unavailable(name, description, self._about(name))
         warn, error = self.thresholds[name]
         return CheckResult(grade(pct, warn, error), [reason(metrics, pct)],
                            name=name, description=self._describe(name, description),
+                           about=self._about(name), title=self._title(name),
                            config=self._threshold_md(name))
 
     @staticmethod
@@ -276,13 +338,14 @@ class HostMetricsCheck(SshScriptCheck):
             load1 = float(metrics["load1"])
             ncpu = max(1, int(metrics.get("ncpu", "1")))
         except (KeyError, ValueError):
-            return unavailable(name, description)
+            return unavailable(name, description, self._about("load"))
         per_core = load1 / ncpu
         warn, error = self.thresholds["load"]
         reason = (f"{per_core:.2f} per core — load1 {load1:.2f} over "
                   f"{ncpu} CPUs")
         return CheckResult(grade(per_core, warn, error), [reason],
                            name=name, description=description,
+                           about=self._about("load"), title=self._title("load"),
                            config=self._threshold_md("load"))
 
     def _summary(self, metrics: dict[str, str]) -> str:

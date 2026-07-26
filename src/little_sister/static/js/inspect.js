@@ -25,6 +25,9 @@
     var lastPointerType = "mouse";
 
     function metaFor(el) {
+        // The maintenance pip is its own click-popover (maintenance.js); don't also
+        // open the node inspection card for it on hover / tap.
+        if (el && el.closest && el.closest(".maintenance-pip")) { return null; }
         var t = el && el.closest ? el.closest("[data-path]") : null;
         if (!t) { return null; }
         var m = META[t.getAttribute("data-path")];
@@ -123,9 +126,10 @@
     }, true);
     grid.addEventListener("click", function (e) {
         if (lastPointerType !== "touch") { return; }
-        // A reason "show all" tap is its own control (reasons.js) — not a request
-        // to open the popover for the node behind it.
-        if (e.target.closest && e.target.closest(".reason-toggle")) { return; }
+        // A reason chevron or "+N more" tap is its own control (reasons.js /
+        // branches.js) — not a request to open the popover for the node behind it.
+        if (e.target.closest
+                && e.target.closest(".reason-chevron, .branch-more")) { return; }
         var hit = metaFor(e.target);
         if (!hit || current === hit.trigger) { return; }
         e.preventDefault();

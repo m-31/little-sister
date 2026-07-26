@@ -78,6 +78,44 @@ class StatusTreeTests(TestCase):
         self.assertEqual(snap.own_code, StatusCode.UNDEFINED)   # not status, no event
         self.assertEqual(tree.recent_events(), ())
 
+    def test_upsert_fills_empty_about_and_title(self):
+        # A check-provided label (ADR-0025) seeds a node whose field is empty; it
+        # is metadata, not status, so it never emits an event.
+        tree = StatusTree()
+        self.assertTrue(tree.upsert("/host/disk", StatusCode.OK,
+                                    about="Free space on the data volume.",
+                                    title="Disk"))            # the OK is the event
+        snap = tree.snapshot("/host/disk")
+        assert snap is not None
+        self.assertEqual(snap.about, "Free space on the data volume.")
+        self.assertEqual(snap.title, "Disk")
+        self.assertEqual(len(tree.recent_events()), 1)        # only the status one
+
+    def test_upsert_about_and_title_fill_empty_per_field(self):
+        # nodes.yaml is seeded first (set_about/set_title); a check-provided value
+        # must not overwrite one already set, and each field resolves on its own —
+        # here yaml gave `about` but left `title`, so the check fills only `title`.
+        tree = StatusTree()
+        tree.set_about("/host/disk", "Declared in nodes.yaml.")
+        tree.upsert("/host/disk", StatusCode.OK,
+                    about="From the check.", title="From the check")
+        snap = tree.snapshot("/host/disk")
+        assert snap is not None
+        self.assertEqual(snap.about, "Declared in nodes.yaml.")   # seeded value wins
+        self.assertEqual(snap.title, "From the check")            # empty field filled
+
+    def test_upsert_about_and_title_freeze_at_first_fill(self):
+        # Once a check fills a label it is frozen — a later tick never rewrites it,
+        # even as the status itself transitions (stable identity, not live status).
+        tree = StatusTree()
+        tree.upsert("/host/disk", StatusCode.OK, about="First.", title="Disk")
+        tree.upsert("/host/disk", StatusCode.WARN, ["85% used"],
+                    about="Second.", title="Volume")
+        snap = tree.snapshot("/host/disk")
+        assert snap is not None
+        self.assertEqual((snap.about, snap.title), ("First.", "Disk"))
+        self.assertEqual(snap.own_code, StatusCode.WARN)          # status still moved
+
     def test_events_recorded_on_change_only(self):
         tree = StatusTree()
         tree.upsert("/db", StatusCode.OK)

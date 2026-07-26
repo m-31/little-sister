@@ -79,7 +79,7 @@ domain checks `host_metrics.py` and `qnap_metrics.py`.
   a clean break, no back-compat alias: the committed `checks/` configs and examples,
   and each deployment's own files (we own the deployments).
 - `architecture.md` §4.5 and `checks/README.md` are rewritten around the family.
-- Behaviour is otherwise preserved — this is structure and naming, not new function.
+- Behavior is otherwise preserved — this is structure and naming, not new function.
 
 ## Decided
 - **Metrics check name:** `host-metrics` (with `qnap-metrics` in parallel).

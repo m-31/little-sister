@@ -4,7 +4,7 @@ Pipe a local ``script`` to the host's shell via ``interpreter`` (default ``bash`
 and report its output, like ``ssh-command``: OK on exit 0, ERROR otherwise, the
 reason from the captured output (``capture`` / ``max_chars`` / ``keep``), and
 **WARN** on an ssh advisory such as a non-post-quantum key exchange. This is the
-base the metrics checks specialise — they parse the script's output instead of
+base the metrics checks specialize — they parse the script's output instead of
 returning it raw.
 """
 from __future__ import annotations

@@ -186,6 +186,17 @@ class CheckResultTreeTests(TestCase):
         leaf = CheckResult(StatusCode.OK, ["fine"])
         self.assertEqual((leaf.name, leaf.children), ("", ()))
 
+    def test_result_about_and_title_default_empty(self):
+        leaf = CheckResult(StatusCode.OK, ["fine"])
+        self.assertEqual((leaf.about, leaf.title), ("", ""))
+
+    def test_result_carries_about_and_title(self):
+        # A branch check captions the subnodes it emits (ADR-0025).
+        child = CheckResult(StatusCode.OK, name="disk",
+                            about="Free space on the data volume.", title="Disk")
+        self.assertEqual(child.about, "Free space on the data volume.")
+        self.assertEqual(child.title, "Disk")
+
 
 class LoaderTests(TestCase):
     def test_loads_configs_by_type(self):

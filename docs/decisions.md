@@ -305,14 +305,14 @@ Small, low-risk display change — recorded here, no ADR.
 ### ADR-0024 — Dashboard layout: bounded heights, positional stability
 **Q:** Top-level cards differ wildly in height (a fifteen-disk host beside the
 one-line `little-sister` heartbeat), so the grid looks ragged and an erupting node
-reflows its neighbours. But whoever knows the wall relies on **where** a card is, so
+reflows its neighbors. But whoever knows the wall relies on **where** a card is, so
 a packing layout that moves cards on any size change is out. How is the overview
 balanced without moving anything?
 
 **A:** Keep a card's **position a function of the node set alone** (alphabetical at
 every level, per *Node sibling ordering* above) and **bound the size variance**
 instead: the reason caps and a `min-height` hold height in a fixed band; a card's
-**quiet leaves** collapse to compact name+colour **chips** while a warn/error leaf
+**quiet leaves** collapse to compact name+color **chips** while a warn/error leaf
 keeps its full box and reason; and the always-tiny `little-sister` heartbeat
 (ADR-0005) lifts out of the grid into a slim **status strip** under the "updated …"
 line. Its `/little-sister` path is **reserved** at load so nothing user-configured
@@ -320,6 +320,25 @@ can hide behind the one-line bar. Packing layouts and `nodes.yaml` size hints ar
 rejected — both move cards on a state change, against the position rule.
 
 → Full record: [`adr/0024-dashboard-layout.md`](adr/0024-dashboard-layout.md)
+
+### ADR-0025 — Check-provided subnode metadata (`about` / `title` on `CheckResult`)
+**Q:** A branch check knows what its subnodes *are* (a metrics check's `disk` /
+`memory`), yet the subject label `about` and short `title` reach a child node only
+through a per-path `nodes.yaml` entry — so a **type-inherent** subnode identity has to
+be copy-pasted into every deployment and host. Where should those labels come from?
+
+**A:** From the **result value**: `CheckResult` gains `about` / `title`, read only on a
+**child** (ignored on the root, like `name`, which keeps its `nodes.yaml` / inline-check
+sources). Precedence per field is **`nodes.yaml` > check-provided > empty**, kept by
+**seed-once** semantics — startup seeding (`set_about` / `set_title`) overwrites, the
+engine's runtime write **fills an empty field only**; since `nodes.yaml` is seeded before
+the first tick it always wins, so neither tree nor engine needs provenance state. Labels
+**freeze at first fill** (stable identity, not live status — changing text is `reason`).
+`description` / `config` stay write-through; the JSON contract and web surface are
+unchanged. A **yaml-aware engine** and **per-field provenance on `Status`** were rejected
+as buying live label updates nothing needs.
+
+→ Full record: [`adr/0025-check-provided-subnode-metadata.md`](adr/0025-check-provided-subnode-metadata.md)
 
 ### Clickable breadcrumbs (no ADR)
 **Q:** The header path trail (`status / system/alpha/disk`) was a single non-clickable

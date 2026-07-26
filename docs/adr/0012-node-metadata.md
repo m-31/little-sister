@@ -82,5 +82,5 @@ concerns.
   ([ADR-0015](0015-check-discovery-union.md)) with big-file merge pain, and can never
   be complete once satellites graft branches at runtime.
 - **Fold links into the `about` Markdown.** Deferred and, when built, to be rejected
-  in favour of structured links — a free-text blob isn't machine-usable for the
+  in favor of structured links — a free-text blob isn't machine-usable for the
   `/links` page or the Swift client.

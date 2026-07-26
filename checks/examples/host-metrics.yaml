@@ -7,8 +7,10 @@
 # host's node: an `ssh` transport leaf (OK; WARN on an ssh advisory such as the
 # post-quantum key-exchange notice; ERROR on a failed connection) plus one leaf
 # per metric — disk / memory / cpu / load — as siblings, each graded by
-# `thresholds`. Auth must be non-interactive (BatchMode): set up key auth and a
-# known host key first; the metrics need no root. See checks/README.md and
+# `thresholds`. Each leaf ships a built-in `about` describing what it measures and
+# how it grades (shown in the dashboard hover card; override per node in
+# `nodes.yaml`, ADR-0025). Auth must be non-interactive (BatchMode): set up key auth
+# and a known host key first; the metrics need no root. See checks/README.md and
 # docs/adr/0009-per-profile-metrics-scripts.md.
 
 type: host-metrics
@@ -56,3 +58,15 @@ profile: linux               # host OS / userland — selects the metrics script
 #   memory: {warn: 85, error: 95}     # percent used
 #   cpu:    {warn: 85, error: 95}     # percent busy
 #   load:   {warn: 0.8, error: 1.0}   # 1-min load average per CPU core
+
+# --- display text (optional) -----------------------------------------------
+# Each leaf ships a built-in `about` explaining what it measures. Override it — or
+# add a `title` — per aspect here (ADR-0025); an omitted field keeps the built-in
+# default, and a nodes.yaml entry still overrides above this, per path.
+# subnodes:
+#   disk:
+#     title: Data volume
+#     about: |
+#       Space used on **/System/Volumes/Data** (the home directories live here).
+#   load:
+#     about: 1-minute load average per core; this NAS idles high, so warn at 2.0.

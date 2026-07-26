@@ -17,8 +17,9 @@ class RenderInlineTests(TestCase):
     def test_inline_has_no_paragraph_wrapper(self):
         self.assertNotIn("<p>", str(render_markdown_inline("hello")))
 
-    def test_links_get_noopener(self):
+    def test_links_open_in_new_tab_with_noopener(self):
         out = str(render_markdown_inline("[x](https://e.com)"))
+        self.assertIn('target="_blank"', out)
         self.assertIn('rel="noopener noreferrer"', out)
 
 

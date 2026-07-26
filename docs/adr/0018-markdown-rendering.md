@@ -81,7 +81,7 @@ filters; render **all four fields**, and give checks helpers to keep reason cont
 
 ## Alternatives considered
 - **Keep `reasons` as escaped plain text** (don't render the captured field). Safest and
-  simplest, but loses the links / emphasis a check may intend; rejected in favour of
+  simplest, but loses the links / emphasis a check may intend; rejected in favor of
   rendering **plus** per-reason helpers that put the choice in the check author's hands.
 - **A typed reason carrying a `markdown` / `plain` flag.** Cleaner in theory, but reasons
   are `list[str]` through `CheckResult`, `Status`, the event log, history, and the JSON

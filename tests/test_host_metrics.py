@@ -87,6 +87,90 @@ class HostMetricsCheckTests(TestCase):
         # the shared host container itself stays bare
         self.assertEqual(result.config, "")
 
+    def test_metric_children_carry_about(self):
+        # Each aspect leaf ships the type-inherent `about` (ADR-0025); the copy
+        # lives in the ABOUT map, so every deployment's hover cards explain these
+        # leaves out of the box. A deployment's nodes.yaml still overrides per field.
+        from little_sister.checks.ssh.host_metrics import ABOUT
+        with tempfile.TemporaryDirectory() as directory:
+            result, _ = self._run(directory, SSH_SAMPLE)
+        kids = self._kids(result)
+        for aspect in ("ssh", "disk", "memory", "cpu", "load"):
+            self.assertEqual(kids[aspect].about, ABOUT[aspect])
+        # the shared host container carries none — its labels stay nodes.yaml's
+        self.assertEqual(result.about, "")
+
+    def test_unavailable_aspect_still_carries_about(self):
+        # a missing aspect is a WARN "unavailable" leaf, but its hover still
+        # explains what the leaf is (ADR-0025).
+        from little_sister.checks.ssh.host_metrics import ABOUT
+        stdout = "disk_pct=10\ncpu_pct=5\nload1=0.1\nncpu=2\n"   # memory absent
+        with tempfile.TemporaryDirectory() as directory:
+            result, _ = self._run(directory, stdout)
+        memory = self._kids(result)["memory"]
+        self.assertEqual(memory.reason, ["unavailable"])
+        self.assertEqual(memory.about, ABOUT["memory"])
+
+    def test_disk_volumes_carry_the_disk_about(self):
+        # the `disk_path: all` branch and each per-filesystem volume carry the
+        # disk about, so every volume hover explains itself too.
+        from little_sister.checks.ssh.host_metrics import ABOUT
+        stdout = (
+            "disk_count=2\n"
+            "disk1_path=/\ndisk1_total_kb=1000000\ndisk1_used_kb=520000\n"
+            "disk1_avail_kb=480000\ndisk1_pct=52\n"
+            "disk2_path=/mnt/ext\ndisk2_total_kb=379888\ndisk2_used_kb=375916\n"
+            "disk2_avail_kb=3972\ndisk2_pct=99\n"
+            "mem_pct=30\ncpu_pct=5\nload1=0.5\nncpu=2\n")
+        with tempfile.TemporaryDirectory() as directory:
+            result, _ = self._run(directory, stdout)
+        disk = self._kids(result)["disk"]
+        self.assertEqual(disk.about, ABOUT["disk"])          # the branch container
+        vols = {c.name: c for c in disk.children}
+        self.assertEqual(vols["root"].about, ABOUT["disk"])  # and each volume
+        self.assertEqual(vols["ext"].about, ABOUT["disk"])
+
+    def test_subnodes_config_overrides_the_built_in_about(self):
+        # a deployment overrides a built-in aspect about (and sets a title) in the
+        # check's own config — per aspect, per field (ADR-0025).
+        from little_sister.checks.ssh.host_metrics import ABOUT
+        with tempfile.TemporaryDirectory() as directory:
+            result, _ = self._run(
+                directory, SSH_SAMPLE,
+                subnodes={"disk": {"about": "Root volume on the NVMe.",
+                                   "title": "Disk (NVMe)"}})
+        kids = self._kids(result)
+        self.assertEqual(kids["disk"].about, "Root volume on the NVMe.")  # override
+        self.assertEqual(kids["disk"].title, "Disk (NVMe)")
+        self.assertEqual(kids["memory"].about, ABOUT["memory"])   # default kept
+        self.assertEqual(kids["memory"].title, "")                # no title default
+
+    def test_subnodes_title_only_keeps_default_about(self):
+        # a config entry that sets only a title leaves the built-in about in place
+        # (an empty field falls back to the default, per field).
+        from little_sister.checks.ssh.host_metrics import ABOUT
+        with tempfile.TemporaryDirectory() as directory:
+            result, _ = self._run(
+                directory, SSH_SAMPLE, subnodes={"cpu": {"title": "Processor"}})
+        cpu = self._kids(result)["cpu"]
+        self.assertEqual(cpu.title, "Processor")
+        self.assertEqual(cpu.about, ABOUT["cpu"])
+
+    def test_subnodes_override_reaches_disk_branch_and_volumes(self):
+        # the disk override applies to the `disk_path: all` branch and each volume
+        # (they share the disk aspect's label).
+        stdout = (
+            "disk_count=1\n"
+            "disk1_path=/\ndisk1_total_kb=1000000\ndisk1_used_kb=520000\n"
+            "disk1_avail_kb=480000\ndisk1_pct=52\n"
+            "mem_pct=30\ncpu_pct=5\nload1=0.5\nncpu=2\n")
+        with tempfile.TemporaryDirectory() as directory:
+            result, _ = self._run(
+                directory, stdout, subnodes={"disk": {"about": "Volumes on this NAS."}})
+        disk = self._kids(result)["disk"]
+        self.assertEqual(disk.about, "Volumes on this NAS.")               # the branch
+        self.assertEqual(disk.children[0].about, "Volumes on this NAS.")   # each volume
+
     def test_descriptions_override_leaf_descriptions(self):
         with tempfile.TemporaryDirectory() as directory:
             result, _ = self._run(

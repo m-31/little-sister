@@ -12,6 +12,10 @@
             </h1>
             <form method="get" class="status-filters mb-0"
                   action="{{ url_for('status', branch=branch) if branch else url_for('status') }}">
+                {# A form submit carries this marker, so an unchecked switch (which
+                   sends nothing) is told apart from a fresh visit — lets the switches
+                   persist and a default-on switch turn off (slices 4–5). #}
+                <input type="hidden" name="view" value="1">
                 <div class="form-check form-switch">
                     <input class="form-check-input" type="checkbox" role="switch"
                            id="hide_ok" name="hide_ok" value="1"
@@ -23,6 +27,12 @@
                            id="hide_idle" name="hide_idle" value="1"
                            {% if hide_idle %}checked{% endif %} onchange="this.form.submit()">
                     <label class="form-check-label" for="hide_idle">hide idle</label>
+                </div>
+                <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" role="switch"
+                           id="dense" name="dense" value="1"
+                           {% if dense %}checked{% endif %} onchange="this.form.submit()">
+                    <label class="form-check-label" for="dense">chips</label>
                 </div>
                 <div class="status-filters__depth">
                     <label class="form-check-label" for="depth">depth</label>
@@ -39,7 +49,7 @@
         {# Server-seeded (ADR-0005): the page dates its data from the first
            paint, so a dashboard that never reaches the server again still says
            when its grid was true instead of claiming to be "live". Sits as the
-           caption directly above the heartbeat status strip (#24), which is the
+           caption directly above the heartbeat status strip (ADR-0024), which is the
            first thing #status-grid renders. #}
         <div class="text-muted small mb-1" id="status-updated"
              data-rendered-at="{{ rendered_at }}">updated {{ rendered_at }}</div>
@@ -55,10 +65,15 @@
     <script src="{{ url_for('static', filename='js/poll.js') }}"
             data-target="status-grid"></script>
 
-    {# Reason overflow (#9): caps/clamps each card's reason block with an in-place
-       "show all (N)" that survives the ~10s fragment swap (event-delegated on
-       #status-grid, the ADR-0019 pattern). #}
+    {# Reason overflow (#9): clamps each card's reason block to its line budget with
+       an in-place header chevron (▼/▲) that survives the ~10s fragment swap
+       (event-delegated on #status-grid, the ADR-0019 pattern). #}
     <script src="{{ url_for('static', filename='js/reasons.js') }}"></script>
+
+    {# Branch density (ADR-0024): the "+N more" reveal for a level's capped quiet
+       boxes, toggled in place and re-applied across the ~10s fragment swap
+       (event-delegated on #status-grid, the ADR-0019 pattern). #}
+    <script src="{{ url_for('static', filename='js/branches.js') }}"></script>
 
     {# Inspection popover (ADR-0019): static node metadata preloaded with the page
        (not the polled fragment), rendered into a hover card client-side. #}
@@ -67,5 +82,11 @@
     <script src="https://cdn.jsdelivr.net/npm/@floating-ui/core@1.6.8/dist/floating-ui.core.umd.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@floating-ui/dom@1.6.12/dist/floating-ui.dom.umd.min.js"></script>
     <script src="{{ url_for('static', filename='js/inspect.js') }}"></script>
+
+    {# Maintenance click-popover (slice 9; ADR-0019 machinery, ADR-0014 data): clicking
+       a card's "contains maintenance" pip opens this card listing that subtree's pins as
+       links. Event-delegated on #status-grid so it survives the ~10s poll swap. #}
+    <div id="maintenance-card" class="maintenance-pop" role="dialog" aria-label="maintenance in this card" hidden></div>
+    <script src="{{ url_for('static', filename='js/maintenance.js') }}"></script>
 </body>
 </html>

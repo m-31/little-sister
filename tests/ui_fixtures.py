@@ -69,7 +69,7 @@ def _snapshot(tree: StatusTree, branch: str = "",
 
 
 def _hosts_ok(count: int) -> StatusSnapshot:
-    """``count`` all-OK leaf hosts — the overview at scale (leaf density, #24)."""
+    """``count`` all-OK leaf hosts — the overview at scale (leaf density, ADR-0024)."""
     tree = StatusTree()
     for index in range(1, count + 1):
         tree.upsert(f"/host{index:02d}", StatusCode.OK)
@@ -78,7 +78,7 @@ def _hosts_ok(count: int) -> StatusSnapshot:
 
 def _eruption() -> StatusSnapshot:
     """A CI host whose ``actions`` leaf lists twelve failed workflows, each a
-    link (the github-``actions`` case, #9) — beside two calm neighbours so the
+    link (the github-``actions`` case, #9) — beside two calm neighbors so the
     eruption's effect on the grid is visible."""
     tree = StatusTree()
     tree.upsert("/web", StatusCode.OK)
@@ -100,7 +100,7 @@ def _long_link_eruption() -> StatusSnapshot:
     """A CI ``nightly`` leaf reporting **100** failed jobs, each a long link — a
     real deployment case (a check that emits ~100 reason lines with long links).
     The reason list at its worst: many entries *and* wide, hard-to-break link
-    text. Beside a calm neighbour so the blast radius on the grid is visible."""
+    text. Beside a calm neighbor so the blast radius on the grid is visible."""
     tree = StatusTree()
     tree.upsert("/web", StatusCode.OK)
     reasons = [
@@ -117,7 +117,7 @@ def _long_link_eruption() -> StatusSnapshot:
 
 def _code_reason() -> StatusSnapshot:
     """A single 200-line ``code()`` reason (a captured traceback) — the vertical
-    overflow case (#9) — beside a calm neighbour."""
+    overflow case (#9) — beside a calm neighbor."""
     tree = StatusTree()
     tree.upsert("/web", StatusCode.OK)
     lines = "\n".join(
@@ -130,7 +130,7 @@ def _code_reason() -> StatusSnapshot:
 
 def _wide_host() -> StatusSnapshot:
     """One NAS host with fifteen leaf disks in a mixed state — the many-children
-    side of the overflow problem (#24)."""
+    side of the overflow problem (ADR-0024)."""
     tree = StatusTree()
     pattern = [
         StatusCode.OK, StatusCode.OK, StatusCode.WARN, StatusCode.OK,
@@ -140,6 +140,30 @@ def _wide_host() -> StatusSnapshot:
         status = pattern[index % len(pattern)]
         reason = None if status is StatusCode.OK else f"disk{index:02d} degraded"
         tree.upsert(f"/nas/disk{index:02d}", status, reason)
+    return _snapshot(tree)
+
+
+def _branchy_host() -> StatusSnapshot:
+    """One NAS host whose card stacks several all-OK sub-*branches* — each a boxed
+    chip-row (``disk`` / ``smart`` / ``system`` …) — the branch-density case
+    (ADR-0024): in the dense view the quiet sub-branches past ``branch_cap`` fold
+    behind a "+N more", while the one erupting sub-branch keeps its box. Beside a calm
+    neighbor so the fold's effect on the grid is visible."""
+    tree = StatusTree()
+    tree.upsert("/web", StatusCode.OK)
+    aspects = {
+        "disk": ("sda", "sdb", "sdc", "sdd"),
+        "smart": ("sda", "sdb", "sdc", "sdd"),
+        "system": ("cpu", "load", "memory", "uptime"),
+        "temperature": ("board", "cpu", "drive-bay"),
+        "network": ("eth0", "eth1"),
+        "power": ("psu0", "psu1"),
+    }
+    for aspect, leaves in aspects.items():
+        for leaf in leaves:
+            tree.upsert(f"/qnap/{aspect}/{leaf}", StatusCode.OK)
+    # One aspect erupts: its box must stay put, never fold behind "+N more".
+    tree.upsert("/qnap/fans/rpm-fan2", StatusCode.ERROR, "fan 2 stalled (0 rpm)")
     return _snapshot(tree)
 
 
@@ -155,7 +179,7 @@ def _deep_tree() -> StatusSnapshot:
 def _long_text() -> StatusSnapshot:
     """A host with an over-long name, an over-long child name, an ellipsable
     title and a long ``about`` on the branch head — viewed at the branch so the
-    header (title + about) and the card heads all take the strain (#4/#24)."""
+    header (title + about) and the card heads all take the strain (#4/ADR-0024)."""
     tree = StatusTree()
     leaf = f"/{_LONG_HOST}/{_LONG_LEAF}"
     tree.upsert(leaf, StatusCode.WARN,
@@ -192,11 +216,62 @@ def _idle_mix() -> StatusSnapshot:
     return _snapshot(tree, now=built + timedelta(minutes=20))
 
 
+def _maintenance_deep() -> StatusSnapshot:
+    """An admin pin sits **deep** in a card (``nexus/disk/smart/bay-7``), where the
+    roll-up and a shallow depth hide it — the maintenance-surfacing case (slice 9/10):
+    the strip **pill**'s popover lists it by path with time left, and the ``nexus`` card
+    gains a "contains maintenance" pip. Beside two calm hosts."""
+    tree = StatusTree()
+    built = datetime.now()
+    tree.upsert("/web", StatusCode.OK)
+    tree.upsert("/db", StatusCode.OK)
+    tree.upsert("/nexus/disk/smart/bay-1", StatusCode.OK)
+    tree.upsert("/nexus/disk/smart/bay-2", StatusCode.OK)
+    tree.set_maintenance("/nexus/disk/smart/bay-7", "disk swap (RMA 4471)",
+                         expires_at=built + timedelta(days=2, hours=6), set_by="pan")
+    return _snapshot(tree, now=built + timedelta(minutes=1))
+
+
+def _maintenance_many() -> StatusSnapshot:
+    """Twelve admin pins scattered across the tree — past the popover's
+    ``maintenance_cap`` (5 by default), the case slice 10 folds away: the strip **pill**
+    reads "12 in maintenance", its popover lists the first five and folds the rest
+    behind a "+7 more" link to the dedicated **/maintenance page**. Varied depths,
+    reasons and expiries exercise the page's path column and the coarse "time left"
+    (days, hours, minutes). Beside the ``little-sister`` heartbeat and a few calm hosts,
+    so the pill's place in the strip band — just left of the heartbeat — is visible."""
+    tree = StatusTree()
+    built = datetime.now()
+    tree.upsert("/little-sister", StatusCode.OK, frequency_seconds=3600)
+    for index in range(1, 5):
+        tree.upsert(f"/host{index:02d}", StatusCode.OK, frequency_seconds=3600)
+    # Twelve pins: several share a rack ancestor (one card pip then covers a few),
+    # others stand alone, across a spread of depths, reasons and expiries.
+    pins = (
+        ("/rack-a/shelf1/bay-03", "disk swap (RMA 4471)", timedelta(days=2, hours=6)),
+        ("/rack-a/shelf1/bay-09", "disk swap (RMA 4472)", timedelta(days=1, hours=2)),
+        ("/rack-a/shelf2/psu-1", "PSU replacement", timedelta(hours=8)),
+        ("/rack-b/node-07/nic-eth1", "cable reseat", timedelta(hours=3, minutes=30)),
+        ("/rack-b/node-11", "kernel upgrade", timedelta(days=1)),
+        ("/db-primary", "planned failover drill", timedelta(hours=1)),
+        ("/db-replica-02", "storage migration", timedelta(days=5)),
+        ("/cache/redis-03", "memory bump", timedelta(minutes=45)),
+        ("/edge/lb-01", "firmware update", timedelta(hours=12)),
+        ("/edge/lb-02", "firmware update", timedelta(hours=12, minutes=30)),
+        ("/warehouse/etl/nightly", "pipeline rewrite", timedelta(days=3)),
+        ("/sensor-bay/probe-7", "recalibration", timedelta(minutes=20)),
+    )
+    for path, reason, remaining in pins:
+        tree.set_maintenance(path, reason,
+                             expires_at=built + remaining, set_by="pan")
+    return _snapshot(tree, now=built + timedelta(minutes=1))
+
+
 def _reasons_graduated() -> StatusSnapshot:
-    """Cards carrying 1 / 6 / 7 / 20 reasons side by side — the boundary either
-    side of the per-card entry cap (K = 6, ``_status_grid.html``): 1 and 6 render
-    whole, 7 and 20 cap to six behind a "show all (N)" (the rest stay in the DOM,
-    hidden by CSS)."""
+    """Cards carrying 1 / 6 / 7 / 20 reasons side by side — around the per-card line
+    budget (``reason_cap`` = 6 by default): the 1- and 6-reason cards fit, the 7- and
+    20-reason cards overflow it and clip behind the header chevron (the rest stay in
+    the DOM, faded by CSS)."""
     tree = StatusTree()
     for count in (1, 6, 7, 20):
         reasons = [f"reason line {i} of {count}" for i in range(1, count + 1)]
@@ -213,7 +288,7 @@ def _empty() -> StatusSnapshot:
 
 # --- The "realistic wall" tier: extremes embedded in a populated overview -----
 #
-# The fixtures above isolate one extreme beside a calm neighbour or two, which
+# The fixtures above isolate one extreme beside a calm neighbor or two, which
 # judges a single card. Real deployments put the extreme *inside a wall of
 # roots* — and the wall itself is an extreme once it grows. All content below is
 # synthetic (invented hosts, a fake 123456789012 account, `.example` domains).
@@ -307,9 +382,9 @@ def _finding(index: int) -> str:
 
 def _security_findings() -> StatusSnapshot:
     """The real-deployment screenshot case: three roots — a small branch, the
-    ``little-sister`` heartbeat (now lifted into the status strip, #24), and a
+    ``little-sister`` heartbeat (now lifted into the status strip, ADR-0024), and a
     security card whose ``informational`` severity leaf is **OK yet floods 150
-    findings**. Once the skyscraper beside near-empty tiles; with #24 the quiet
+    findings**. Once the skyscraper beside near-empty tiles; with ADR-0024 the quiet
     leaf collapses to a chip and the flood moves to its detail page, so it now
     proves the layout *tames* an OK card that would otherwise drown the grid."""
     tree = StatusTree()
@@ -357,12 +432,21 @@ FIXTURES: tuple[Fixture, ...] = (
             _long_link_eruption),
     Fixture("code_reason_200_lines", "a 200-line code() reason", _code_reason),
     Fixture("wide_host_15_leaves", "one host with 15 leaves", _wide_host),
+    Fixture("branchy_host_subbranches",
+            "one host with 7 sub-branches, one erupting (branch-density +N more)",
+            _branchy_host),
     Fixture("deep_tree_depth_8", "a branch nested to depth 8", _deep_tree),
     Fixture("long_names_titles",
             "long names, ellipsable title, long about on a branch head",
             _long_text, branch=_LONG_HOST),
     Fixture("idle_maintenance_stale_mix",
             "live + stale + idle (UNDEFINED) + maintenance", _idle_mix),
+    Fixture("maintenance_deep_pin",
+            "an admin pin deep in a card — the strip pill's popover + ancestor pip",
+            _maintenance_deep),
+    Fixture("maintenance_many_pins",
+            "12 pins past the cap — the strip pill, its capped '+N more' popover, "
+            "and the /maintenance page", _maintenance_many),
     Fixture("reasons_graduated",
             "cards with 1/6/7/20 reasons (reason-cap boundary material)",
             _reasons_graduated),

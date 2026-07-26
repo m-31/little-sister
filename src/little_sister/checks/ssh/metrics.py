@@ -34,15 +34,18 @@ def grade(value: float, warn: float, error: float) -> StatusCode:
     return StatusCode.OK
 
 
-def unavailable(name: str, description: str) -> CheckResult:
-    """A WARN leaf for an aspect the script was expected to report but didn't."""
+def unavailable(name: str, description: str, about: str = "") -> CheckResult:
+    """A WARN leaf for an aspect the script was expected to report but didn't.
+
+    ``about`` is the aspect's optional subject label (ADR-0025), carried so a
+    missing aspect's hover card still explains what the leaf *is*."""
     return CheckResult(StatusCode.WARN, ["unavailable"], name=name,
-                       description=description)
+                       description=description, about=about)
 
 
 def volume_name(mount: str, used: set[str]) -> str:
     """A tree-safe node name for a filesystem: the mount's last path component
-    (``/`` → ``root``), sanitised to ``[A-Za-z0-9_-]`` and de-duplicated so
+    (``/`` → ``root``), sanitized to ``[A-Za-z0-9_-]`` and de-duplicated so
     sibling volumes never collide."""
     base = mount.rstrip("/").rsplit("/", 1)[-1] or "root"
     base = "".join(c if (c.isalnum() or c in "-_") else "_" for c in base) or "root"

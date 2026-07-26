@@ -14,7 +14,7 @@ The overview renders each top-level system as a card in a responsive grid. Cards
 differ wildly in height — a host with a dozen metric leaves beside the one-line
 `little-sister` heartbeat — so a row is as tall as its tallest card, the everyday
 all-green view looks ragged with holes, and when a node erupts its card grows and
-reflows its neighbours mid-incident. The `depth` control already lets a viewer
+reflows its neighbors mid-incident. The `depth` control already lets a viewer
 flatten the tree, but the *default* view should look balanced on its own.
 
 One constraint rules the design: operators rely on **where** a card is — whoever
@@ -37,7 +37,7 @@ variance** three ways rather than relaxing the position rule:
    `[min, cap]` band, so holes stay shallow and an erupting card shifts its row by a
    bounded amount.
 2. **Collapse quiet leaves to chips.** A card's descendant leaves that are OK or
-   idle render as compact name+colour **chips** instead of stacked boxes, so an
+   idle render as compact name+color **chips** instead of stacked boxes, so an
    all-green host converges toward a wrapping chip row of near-uniform height. A
    warn/error leaf keeps its full box and reason, so a problem stays legible; a
    chip's own detail is one click away on its leaf page, and its `title`/`about`
@@ -91,3 +91,97 @@ Judged by rendering the real grid template against the fixture extremes (all-gre
 a node erupting with a dozen reasons) as side-by-side static pages and comparing
 screenshots — layout judged in the abstract fails; forty rendered extremes side by
 side works.
+
+## Update — 2026-07-22 (Phase 3, slice 3)
+
+The lifted heartbeat's strip moved from directly under the "updated …" caption to a
+**right-aligned band at the top of `#status-grid`, beneath the hide/depth controls**,
+so it reads as its own element rather than the grid's first row. It stays **inside
+the poll fragment** — both regions (the strip band and the card grid) swap and dim as
+one unit, `poll.js` unchanged — while the "updated …" freshness line stays *outside*
+the fragment so it survives a failed fetch. The pill keeps its fit-content width (still
+not a page-wide banner) and gains a small **watching-eye glyph** as a self-monitor
+identity, setting it apart from the node pills. The rejected negative-margin pull-up
+onto the caption row still stands: `poll.js` inserts the sustained-outage banner
+exactly there (`insertBefore(banner, #status-grid)`).
+
+## Update — 2026-07-22 (Phase 3, slice 6)
+
+Leaf density (decision 2 above) chips a card's quiet *leaves*, but a quiet
+sub-*branch* still renders as a full box, so a card with many sub-branches — a NAS
+whose `disk` / `smart` / `system` / `temperature` each box a chip-row — grows into a
+skyscraper. The collapse now extends one level: in the dense view a branch caps the
+quiet (non-warn/error) child **boxes** it shows to a `config.yaml` budget
+(`branch_cap`, default 3, the count-cap sibling of `reason_cap`). The surplus boxes
+are marked `is-extra` — kept in the DOM but hidden — and the level grows a **"+N
+more"** control that reveals them in place; `branches.js` holds the open state across
+the ~10s poll swap (the reason-chevron pattern), keyed by branch path. The cap is an
+exact server-side count, so unlike the reason chevron it needs no browser measurement,
+and it is applied at **every** branch level. A **warn/error box is never capped**, so
+nothing urgent is hidden; with the density switch off, `branch_cap` does nothing and
+every node renders as a full box. Positions are untouched — folding only shortens a
+card — so the grid keeps its alphabetical, size-independent layout.
+
+## Update — 2026-07-23 (Phase 3, slice 9)
+
+Admin **maintenance** (a sticky override, [ADR-0014](0014-maintenance-persistence.md))
+was easy to lose: a pin deep in the tree rolls up out of sight at a shallow `depth`,
+and *hide idle* hid it outright (maintenance was bundled with `UNDEFINED` in the
+filter). The dashboard now surfaces the persisted set two ways, both computed from the
+**unfiltered** snapshot in the route so they survive the hide filters and any depth: a
+**maintenance index** — an always-visible list of every pinned node (path, time left,
+reason) at the top of the polled grid, each linking to its node — and a **"contains
+maintenance" pip** on any card whose subtree holds a pin but which is not itself pinned,
+so a glance at any depth shows where to drill. The pip is maintenance-tinted (legible on
+any card fill, since the card's own status is a different color) and is a **button**:
+clicking it opens a small popover listing just that card's pins as links — a deliberate,
+less-obtrusive alternative to a hover — reusing the inspection popover's Floating-UI
+positioning and poll-swap survival ([ADR-0019](0019-inspection-popover.md)). The button
+is keyboard-reachable and carries an accessible name plus `aria-haspopup` /
+`aria-expanded`, so assistive tech announces it as a popup control. And *hide idle* now
+hides only never-reported
+(`UNDEFINED`) nodes: maintenance is an intentional admin state, not idle, and stays
+visible. View-only — the snapshot, the maintenance side-table and the JSON envelope are
+unchanged.
+
+## Update — 2026-07-23 (Phase 3, slice 10)
+
+Slice 9's **maintenance index** (above) suits a handful of pins but becomes a wall once
+they pile up, dwarfing the grid it sits over. The always-on global list now **folds
+away**: a compact, maintenance-tinted **pill** joins the status strip just left of the
+`little-sister` heartbeat — the pause-bars glyph and a live count (`12 in maintenance`),
+shown only when something is pinned and refreshed inside the polled fragment like the
+strip around it. Clicking it opens the slice-9 popover (`maintenance.js`, Floating UI,
+[ADR-0019](0019-inspection-popover.md)) over the **whole** set rather than one card's,
+**capped like a node**: a `maintenance_cap` in `config.yaml` (the count-cap sibling of
+`reason_cap` / `branch_cap`, plumbed to the full page and the `?fragment` swap) shows the
+first N pins, then a **"+N more"** to a dedicated **`/maintenance` route** — a read-only
+page (the leaf-detail pattern) that renders the full, uncapped overview, viewer-visible
+and bookmarkable. The pill is itself an `<a>` to that route, so the full list stays
+reachable with no JavaScript (or when Floating UI fails to load); JS upgrades a plain
+click to the popover and leaves a modified click to open a new tab. The strip band that
+already right-aligns the heartbeat now holds both,
+so the pill and heartbeat sit together under the view controls. The per-card **pips
+stay** as the at-a-glance "which card" and open the same popover scoped to their subtree;
+only the *global* list moves — from an always-visible block to a count plus one click.
+That is a deliberate step back from an always-on index (the pips keep the glance honest),
+so the trade is named, not slid into. Still view-only: the snapshot, the maintenance
+side-table and the JSON envelope are unchanged; this adds HTML/CSS/JS, one read-only
+route and one config knob.
+
+## Update — 2026-07-23 (reason legibility: separators)
+
+Within a card, stacked reasons blurred together: each reason is a block whose wrapped
+lines share the body leading (ADR-0018 keeps them compact), and nothing separated one
+reason from the next, so a several-reason block read as a single paragraph. Reasons now
+carry a **tight hairline between entries** (never above the first) plus a small gap — the
+"tight rows + rule" of the options weighed — on the dashboard and the leaf detail page's
+alert alike. The rule is drawn from `currentColor` at low alpha, so it takes each surface's
+readable text color and reads on a vivid fill (white text), a dim tint and the pale alert
+(dark text) without a per-status rule — the same non-color-dependent posture as the status
+cues. The divider **adds height per reason**, nominally lifting a reason block's share of
+the bounded-height cap (decision 1); on the dashboard that per-boundary height is folded
+into the `reason_cap` clamp (`--reason-lines × (line + gap)`), so the budget still shows
+about `reason_cap` entries and the reasons.js overflow chevron is unaffected. The detail
+page shows every reason uncapped, so it only gains the rules. CSS plus one template class;
+the snapshot, the JSON envelope and the reason data are unchanged.

@@ -1,5 +1,7 @@
 import os
 import unittest
+from dataclasses import replace
+from datetime import datetime, timedelta
 from unittest import TestCase, mock
 
 # Import the app with the background engine disabled (no threads/network).
@@ -146,46 +148,37 @@ class WebTests(TestCase):
         self.assertNotIn("<script>x</script>", body)
         self.assertIn("&lt;script&gt;", body)
 
-    # --- Reason overflow (#9): a dashboard card caps how many reason entries it
-    # shows and clamps a tall block's height, with an in-place "show all (N)".
-    # Trim is by entry (a marked class) + CSS only — every entry stays in the DOM,
-    # never cut mid-HTML. The leaf detail page and the JSON envelope stay full. ---
+    # --- Reason overflow (#9): a dashboard card clamps its reasons to a *line
+    # budget* (config.yaml reason_cap → the block's --reason-lines); the overflow
+    # stays in the DOM, clipped by CSS. The show-all / collapse chevron is added
+    # client-side (reasons.js), so it is exercised in the browser, not here. The
+    # leaf detail page and the JSON envelope stay full. ---
 
-    def test_reason_cap_marks_entries_and_offers_show_all(self):
+    def test_reason_cap_sets_line_budget(self):
         self._login()
         self.tree.upsert("/ci/actions", StatusCode.ERROR,
-                         [f"workflow {i} failed" for i in range(1, 9)])  # 8 > cap 6
+                         [f"workflow {i} failed" for i in range(1, 9)])
         body = self.client.get("/status").get_data(as_text=True)
+        self.assertIn("--reason-lines: 6", body)          # the default budget
         self.assertIn('data-reason-total="8"', body)      # the block knows the total
-        self.assertEqual(body.count("reason-extra"), 2)   # only entries 7 and 8
-        self.assertIn("show all (8)", body)               # the in-place affordance
         self.assertIn("workflow 8 failed", body)          # nothing omitted from the DOM
-
-    def test_reason_cap_absent_at_the_boundary(self):
-        # exactly the cap (6) renders whole — no marked extras, no toggle
-        self._login()
-        self.tree.upsert("/ci/actions", StatusCode.ERROR,
-                         [f"workflow {i} failed" for i in range(1, 7)])  # 6 == cap
-        body = self.client.get("/status").get_data(as_text=True)
-        self.assertIn('data-reason-total="6"', body)
-        self.assertNotIn("reason-extra", body)
-        self.assertNotIn("show all", body)
+        self.assertNotIn("reason-extra", body)            # no per-entry cap any more
+        self.assertNotIn("show all", body)                # the bottom text link is gone
 
     def test_reason_cap_absent_on_detail_page(self):
-        # the leaf detail page keeps everything, uncapped (check.html, not the grid)
+        # the leaf detail page keeps everything, unclamped (check.html, not the grid)
         self._login()
         self.tree.upsert("/svc/api", StatusCode.ERROR,
-                         [f"line {i}" for i in range(1, 11)])   # 10 > cap
+                         [f"line {i}" for i in range(1, 11)])
         body = self.client.get("/status/svc/api").get_data(as_text=True)
         self.assertIn("line 1", body)
         self.assertIn("line 10", body)                    # the tail is present
-        self.assertNotIn("reason-block", body)            # no cap machinery
-        self.assertNotIn("reason-extra", body)
-        self.assertNotIn("show all", body)
+        self.assertNotIn("reason-block", body)            # no clamp machinery
+        self.assertNotIn("--reason-lines", body)
 
     def test_reason_cap_fragment_is_well_formed(self):
-        # trim by entry + CSS only: the polled fragment never cuts rendered HTML
-        # mid-tag, even with a tall code() block among many linked reasons
+        # clip by CSS only: the polled fragment never cuts rendered HTML mid-tag,
+        # even with a tall code() block among many linked reasons
         self._login()
         trace = code("\n".join(f"frame {i}" for i in range(1, 60)))
         self.tree.upsert("/ci/actions", StatusCode.ERROR,
@@ -195,10 +188,25 @@ class WebTests(TestCase):
         self.assertEqual(body.count("<pre>"), body.count("</pre>"))  # code fence closed
         self.assertEqual(body.count("<a "), body.count("</a>"))      # every link closed
         self.assertIn('data-reason-total="10"', body)
-        self.assertIn("show all (10)", body)
+        self.assertIn("--reason-lines:", body)
+
+    def test_reason_cap_is_configurable(self):
+        # config.yaml's reason_cap is the line budget; it reaches both the full page
+        # and the ?fragment swap as the block's --reason-lines.
+        self._login()
+        self.tree.upsert("/ci/actions", StatusCode.ERROR,
+                         [f"workflow {i} failed" for i in range(1, 9)])
+        with mock.patch.object(app_module, "config",
+                               replace(app_module.config, reason_cap=3)):
+            page = self.client.get("/status").get_data(as_text=True)
+            frag = self.client.get("/status?fragment=1").get_data(as_text=True)
+        for body in (page, frag):
+            self.assertIn("--reason-lines: 3", body)
+            self.assertIn('data-reason-total="8"', body)
+            self.assertNotIn("--reason-lines: 6", body)   # not the default
 
     def test_reasons_script_ships_with_page_not_fragment(self):
-        # like the popover assets: the behaviour loads once with the page, not on
+        # like the popover assets: the behavior loads once with the page, not on
         # every ~10s poll fragment
         self._login()
         self.tree.upsert("/db", StatusCode.ERROR, "down")
@@ -207,7 +215,7 @@ class WebTests(TestCase):
         self.assertIn("js/reasons.js", page)
         self.assertNotIn("js/reasons.js", frag)
 
-    # --- Dashboard layout (#24): the engine self-heartbeat moves out of the card
+    # --- Dashboard layout (ADR-0024): the engine self-heartbeat moves out of the card
     # grid into a slim status strip, and a card's quiet (not warn/error) leaves
     # collapse to compact chips so the everyday grid holds a steadier shape. HTML
     # only — the snapshot and the JSON envelope are unchanged. ---
@@ -248,6 +256,14 @@ class WebTests(TestCase):
         self.assertIn('class="ls-strip__name"', body)
         self.assertIn('href="/status/little-sister"', body)
 
+    def test_heartbeat_strip_carries_self_monitor_mark(self):
+        # slice 3: the strip gets a watching-eye glyph, marking it as the monitor
+        # watching itself, set apart from the node pills.
+        self._login()
+        self.tree.upsert("/little-sister", StatusCode.OK, frequency_seconds=3600)
+        body = self.client.get("/status").get_data(as_text=True)
+        self.assertIn("ls-strip__eye", body)
+
     def test_no_strip_without_a_heartbeat_node(self):
         # a branch page (or a tree with no heartbeat) shows no strip
         self._login()
@@ -256,7 +272,7 @@ class WebTests(TestCase):
         self.assertNotIn("ls-strip", body)
 
     def test_heartbeat_title_reaches_strip_and_popover_map(self):
-        # The strip is a node like any other (#24): a nodes.yaml title/about on
+        # The strip is a node like any other (ADR-0024): a nodes.yaml title/about on
         # the heartbeat shows in the strip and feeds the hover-card map.
         self._login()
         self.tree.upsert("/little-sister", StatusCode.OK, frequency_seconds=3600)
@@ -280,7 +296,7 @@ class WebTests(TestCase):
         self.assertIn("satellite", body)                    # nothing vanishes
 
     def test_quiet_leaf_renders_as_a_chip(self):
-        # a card's OK leaf collapses to a compact chip (name + colour); its reason,
+        # a card's OK leaf collapses to a compact chip (name + color); its reason,
         # if any, is a click away on the leaf page (the hover card shows title/about)
         self._login()
         self.tree.upsert("/host/cpu", StatusCode.OK)
@@ -383,13 +399,319 @@ class WebTests(TestCase):
         self.assertNotIn(
             "boom", self.client.get("/status").get_data(as_text=True))
 
+    def test_leaf_density_off_renders_boxes(self):
+        # slice 4: the density switch off (a form submit — the `view` marker — with
+        # the chips box unchecked, so no `dense`) spells quiet leaves out as boxes
+        self._login()
+        self.tree.upsert("/host/cpu", StatusCode.OK)
+        body = self.client.get("/status?view=1").get_data(as_text=True)
+        self.assertNotIn("leaf-chip", body)              # no chip
+        self.assertIn("status-node s-ok", body)          # a full box instead
+        self.assertIn("cpu", body)
+
+    def test_leaf_density_reaches_the_fragment(self):
+        # the flag drives the ?fragment swap too, not just the full page
+        self._login()
+        self.tree.upsert("/host/cpu", StatusCode.OK)
+        self.assertIn(
+            "leaf-chip", self.client.get("/status?fragment=1").get_data(as_text=True))
+        self.assertNotIn(
+            "leaf-chip",
+            self.client.get("/status?view=1&fragment=1").get_data(as_text=True))
+
+    def _branchy_card(self):
+        # a card ('nas') whose sub-branches are all-OK boxes (each holds an OK leaf) —
+        # the branch-density skyscraper — plus one erupting sub-branch (ADR-0024).
+        for aspect in ("alpha", "beta", "gamma", "delta", "epsilon"):
+            self.tree.upsert(f"/nas/{aspect}/probe", StatusCode.OK)
+        self.tree.upsert("/nas/zeta/probe", StatusCode.ERROR, "zeta down")
+
+    def test_branch_density_caps_quiet_boxes(self):
+        # dense view: a branch shows branch_cap quiet sub-branch boxes and folds the
+        # rest behind a "+N more" (cap 3, five quiet aspects → two folded)
+        self._login()
+        self._branchy_card()
+        with mock.patch.object(app_module, "config",
+                               replace(app_module.config, branch_cap=3)):
+            body = self.client.get("/status").get_data(as_text=True)
+        self.assertEqual(body.count("is-extra"), 2)          # 5 quiet − cap 3
+        self.assertIn('class="branch-more"', body)
+        self.assertIn("+2 more", body)
+
+    def test_branch_density_never_folds_a_problem_box(self):
+        # nothing urgent hides: even at cap 0 (every quiet box folds) the erupting
+        # sub-branch keeps its box and reason, and never counts toward the cap
+        self._login()
+        self._branchy_card()
+        with mock.patch.object(app_module, "config",
+                               replace(app_module.config, branch_cap=0)):
+            body = self.client.get("/status").get_data(as_text=True)
+        self.assertEqual(body.count("is-extra"), 5)      # the five quiet, not zeta
+        self.assertIn("zeta down", body)                 # the culprit's reason shows
+        self.assertIn("+5 more", body)
+
+    def test_branch_density_off_spells_everything_out(self):
+        # density off (the `view` marker, chips unchecked) → no cap, no control
+        self._login()
+        self._branchy_card()
+        body = self.client.get("/status?view=1").get_data(as_text=True)
+        self.assertNotIn("is-extra", body)
+        self.assertNotIn("branch-more", body)
+
+    def test_branch_cap_reaches_the_fragment(self):
+        # the cap drives the ~10s ?fragment swap too, not just the full page
+        self._login()
+        self._branchy_card()
+        with mock.patch.object(app_module, "config",
+                               replace(app_module.config, branch_cap=3)):
+            frag = self.client.get("/status?fragment=1").get_data(as_text=True)
+        self.assertIn('class="branch-more"', frag)
+        self.assertIn("+2 more", frag)
+
+    def test_branches_script_ships_with_page_not_fragment(self):
+        # like reasons.js / the popover assets: the behavior loads once with the page,
+        # not on every ~10s poll fragment
+        self._login()
+        self._branchy_card()
+        page = self.client.get("/status").get_data(as_text=True)
+        frag = self.client.get("/status?fragment=1").get_data(as_text=True)
+        self.assertIn("js/branches.js", page)
+        self.assertNotIn("js/branches.js", frag)
+
+    def test_status_cue_marks_state_not_color_alone(self):
+        # a11y: a per-state shape cue gives a non-color channel; it is decorative
+        # (aria-hidden), the status word stays for screen readers
+        self._login()
+        self.tree.upsert("/web", StatusCode.OK)
+        self.tree.upsert("/db", StatusCode.ERROR, "down")
+        body = self.client.get("/status").get_data(as_text=True)
+        self.assertIn("status-cue--ok", body)
+        self.assertIn("status-cue--error", body)
+        self.assertIn('aria-hidden="true"', body)
+
+    def test_status_cue_on_a_problem_node_box(self):
+        # a warn/error leaf is a color-only box with no status word — it gets a cue
+        # too (the host card rolls up to WARN, so two warn cues: the card and the box)
+        self._login()
+        self.tree.upsert("/host/disk", StatusCode.WARN, "SMART pending")
+        body = self.client.get("/status").get_data(as_text=True)
+        self.assertEqual(body.count("status-cue--warn"), 2)
+
+    def test_status_cue_not_on_quiet_chips(self):
+        # chips are only ever quiet leaves and stay uncued; the card still cues, so a
+        # lone OK leaf yields exactly one cue (the card's, not the chip's)
+        self._login()
+        self.tree.upsert("/host/cpu", StatusCode.OK)   # dense → a chip
+        body = self.client.get("/status").get_data(as_text=True)
+        self.assertIn("leaf-chip", body)
+        self.assertEqual(body.count("status-cue--"), 1)
+
+    def test_status_cue_on_the_strip(self):
+        # the self-monitor strip carries a state cue like the cards
+        self._login()
+        self.tree.upsert("/little-sister", StatusCode.OK, frequency_seconds=3600)
+        self.tree.upsert("/web", StatusCode.OK)
+        body = self.client.get("/status").get_data(as_text=True)
+        self.assertIn("ls-strip", body)
+        self.assertEqual(body.count("status-cue--"), 2)   # strip + web card
+
+    def test_node_box_cue_named_for_screen_readers(self):
+        # slice 8 (WCAG 1.1.1): a node box has no status word, so its cue is named for
+        # assistive tech (role=img + aria-label); the card cue in the same view is not
+        self._login()
+        self.tree.upsert("/host/disk", StatusCode.ERROR, "disk full")
+        body = self.client.get("/status").get_data(as_text=True)
+        self.assertIn('role="img" aria-label="error"', body)   # the disk box cue speaks
+        self.assertEqual(body.count('role="img"'), 1)          # only the box, not card
+
+    def test_quiet_node_box_cue_not_announced(self):
+        # slice 8 tweak: only a problem (warn/error) box announces; a quiet box keeps a
+        # decorative aria-hidden cue, so a reader doesn't hear a stream of "ok"s
+        self._login()
+        self.tree.upsert("/host/disk/smart", StatusCode.OK)  # /host/disk = quiet box
+        body = self.client.get("/status").get_data(as_text=True)
+        self.assertIn("status-node__self", body)   # /host/disk renders as a box
+        self.assertNotIn('role="img"', body)       # no box announces (all quiet)
+
+    def test_card_and_strip_cues_stay_aria_hidden(self):
+        # a card/strip cue stays decorative — the status word beside it already speaks,
+        # so a named cue would double-announce
+        self._login()
+        self.tree.upsert("/little-sister", StatusCode.OK, frequency_seconds=3600)
+        self.tree.upsert("/db", StatusCode.ERROR, "down")
+        body = self.client.get("/status").get_data(as_text=True)
+        self.assertIn("ls-strip", body)
+        self.assertNotIn('role="img"', body)   # no boxes → every cue hidden
+
+    def test_maintenance_pill_lists_a_deep_pin(self):
+        # slice 10: the strip pill's whole-set popover surfaces every pin regardless of
+        # depth — a pin the roll-up hides at a shallow depth is still listed in full
+        self._login()
+        self.tree.set_maintenance(
+            "/rack/shelf/box", "planned",
+            expires_at=datetime.now() + timedelta(hours=5), set_by="pan")
+        body = self.client.get("/status?depth=1").get_data(as_text=True)
+        self.assertIn("maintenance-pill", body)
+        # the __all__ popover source carries the full path, though depth 1 hides it
+        frag = body.split('data-pop-for="__all__"', 1)[1].split("</template>", 1)[0]
+        self.assertIn("/rack/shelf/box", frag)
+
+    def test_maintenance_pill_survives_hide_idle(self):
+        # the pill and its popover are built from the unfiltered snapshot, so hide-idle
+        # can't hide them
+        self._login()
+        self.tree.set_maintenance(
+            "/db", "planned",
+            expires_at=datetime.now() + timedelta(days=2), set_by="pan")
+        body = self.client.get("/status?hide_idle=1").get_data(as_text=True)
+        self.assertIn("maintenance-pill", body)
+        self.assertIn("/db", body)
+
+    def test_hide_idle_keeps_maintenance_but_hides_undefined(self):
+        # slice 9: hide-idle now hides only never-reported (UNDEFINED); maintenance is
+        # an intentional admin state and stays in the grid
+        self._login()
+        self.tree.set_maintenance(
+            "/planned-host", "kernel",
+            expires_at=datetime.now() + timedelta(days=1), set_by="pan")
+        self.tree.set_about("/idle-host", "provisioned, not reporting yet")  # UNDEFINED
+        self.tree.upsert("/web", StatusCode.OK)
+        body = self.client.get("/status?hide_idle=1").get_data(as_text=True)
+        self.assertIn("planned-host", body)      # maintenance card stays visible
+        self.assertNotIn("idle-host", body)      # never-reported card hidden
+
+    def test_maintenance_pip_on_ancestor_card(self):
+        # a card whose subtree holds a pin (but isn't itself pinned) gets a clickable
+        # pip button (maintenance.js opens its popover); a glance shows where to drill
+        self._login()
+        self.tree.set_maintenance(
+            "/rack/shelf/box", "planned",
+            expires_at=datetime.now() + timedelta(hours=3), set_by="pan")
+        body = self.client.get("/status").get_data(as_text=True)
+        self.assertIn("maintenance-pip", body)
+        self.assertIn('aria-haspopup="true"', body)   # the pip opens a popover
+        self.assertIn('data-pop-for="/rack"', body)    # keyed to the card
+
+    def test_maintenance_pip_popover_is_scoped_to_its_card(self):
+        # each pip's popover source lists only that card's pins, not another card's
+        self._login()
+        self.tree.set_maintenance(
+            "/rack/a/x", "swap",
+            expires_at=datetime.now() + timedelta(hours=2), set_by="pan")
+        self.tree.set_maintenance(
+            "/other/b/y", "swap",
+            expires_at=datetime.now() + timedelta(hours=2), set_by="pan")
+        body = self.client.get("/status").get_data(as_text=True)
+        frag = body.split('data-pop-for="/rack"', 1)[1].split("</template>", 1)[0]
+        self.assertIn("/rack/a/x", frag)         # /rack's own pin is in its popover
+        self.assertNotIn("/other/b/y", frag)     # another card's pin is not
+
+    def test_no_maintenance_surfaces_without_pins(self):
+        self._login()
+        self.tree.upsert("/web", StatusCode.OK)
+        body = self.client.get("/status").get_data(as_text=True)
+        self.assertNotIn("maintenance-pill", body)   # no strip pill without pins
+        self.assertNotIn("maintenance-pip", body)
+
+    def test_maintenance_pill_shows_count(self):
+        # slice 10: the pill wears a live count of pinned nodes ("N in maintenance")
+        self._login()
+        for path in ("/db", "/rack/shelf/box", "/web/api"):
+            self.tree.set_maintenance(
+                path, "planned",
+                expires_at=datetime.now() + timedelta(hours=4), set_by="pan")
+        body = self.client.get("/status").get_data(as_text=True)
+        self.assertIn("maintenance-pill", body)
+        self.assertIn('maintenance-pill__count">3<', body)   # live count of pins
+        self.assertIn("in maintenance", body)
+
+    def test_maintenance_pill_is_a_link_to_the_page(self):
+        # the pill is a link to /maintenance, so no-JS still reaches the page; JS
+        # upgrades that click to the popover instead
+        self._login()
+        self.tree.set_maintenance(
+            "/db", "planned",
+            expires_at=datetime.now() + timedelta(hours=2), set_by="pan")
+        body = self.client.get("/status").get_data(as_text=True)
+        tag = body.split('<a class="maintenance-pill"', 1)[1].split(">", 1)[0]
+        self.assertIn('href="/maintenance"', tag)   # the pill itself links to the page
+
+    def test_maintenance_popover_caps_with_more_link(self):
+        # slice 10: the pill popover shows the first maintenance_cap pins, then a
+        # "+N more" link to the full /maintenance page (the leaf-detail pattern)
+        self._login()
+        for i in range(5):
+            self.tree.set_maintenance(
+                f"/host{i}/box", "planned",
+                expires_at=datetime.now() + timedelta(hours=2), set_by="pan")
+        with mock.patch.object(app_module, "config",
+                               replace(app_module.config, maintenance_cap=2)):
+            body = self.client.get("/status").get_data(as_text=True)
+        frag = body.split('data-pop-for="__all__"', 1)[1].split("</template>", 1)[0]
+        # exactly the cap of pins are listed inline, the rest fold into "+3 more"
+        self.assertEqual(frag.count("maintenance-pop__item"), 2)
+        self.assertIn("+3 more", frag)
+        self.assertIn('href="/maintenance"', frag)
+
+    def test_maintenance_page_lists_all_pins_uncapped(self):
+        # the /maintenance page renders the full overview, past the popover's cap
+        self._login()
+        for i in range(5):
+            self.tree.set_maintenance(
+                f"/host{i}/box", "planned",
+                expires_at=datetime.now() + timedelta(hours=2), set_by="pan")
+        with mock.patch.object(app_module, "config",
+                               replace(app_module.config, maintenance_cap=2)):
+            body = self.client.get("/maintenance").get_data(as_text=True)
+        for i in range(5):
+            self.assertIn(f"/host{i}/box", body)   # every pin, not just the first two
+
+    def test_maintenance_page_requires_login(self):
+        # a read-only page behind the same auth gate as /status
+        response = self.client.get("/maintenance")
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/login", response.headers["Location"])
+
+    def test_humanize_remaining(self):
+        # the index's coarse 'time left' picks the largest one or two units
+        h = app_module._humanize_remaining
+        self.assertEqual(h(90000), "1d 1h")
+        self.assertEqual(h(86400), "1d")
+        self.assertEqual(h(5400), "1h 30m")
+        self.assertEqual(h(3600), "1h")
+        self.assertEqual(h(300), "5m")
+        self.assertEqual(h(30), "< 1m")
+        self.assertEqual(h(0), "expired")
+        self.assertEqual(h(-10), "expired")
+
+    def test_density_off_persists_via_cookie(self):
+        # slice 5: the density switch persists like depth — set on an explicit
+        # change (SameSite=Lax), honoured on a later plain visit
+        self._login()
+        self.tree.upsert("/host/cpu", StatusCode.OK)   # quiet leaf, chip by default
+        first = self.client.get("/status?view=1")        # chips unchecked
+        self.assertIn("SameSite=Lax", first.headers.get("Set-Cookie", ""))
+        body = self.client.get("/status").get_data(as_text=True)   # later plain visit
+        self.assertNotIn("leaf-chip", body)              # density-off remembered
+        self.assertIn("status-node s-ok", body)
+
+    def test_hide_ok_persists_via_cookie(self):
+        # slice 5: hide-ok persists across visits, like depth
+        self._login()
+        self.tree.upsert("/database", StatusCode.OK)
+        self.tree.upsert("/webserver", StatusCode.ERROR, "500")
+        self.client.get("/status?view=1&hide_ok=1")      # explicit change → cookie
+        body = self.client.get("/status").get_data(as_text=True)   # later plain visit
+        self.assertNotIn("database", body)               # OK card stays hidden
+        self.assertIn("webserver", body)
+
     def test_depth_zero_shows_single_overall_card(self):
         self._login()
         self.tree.upsert("/sys/host/check", StatusCode.ERROR, "down")
         body = self.client.get("/status?depth=0").get_data(as_text=True)
         # depth 0 collapses the whole tree to one rolled-up "overall" card
         self.assertIn("overall", body)
-        # it shows the rolled-up colour and stays bold (it carries the status)
+        # it shows the rolled-up color and stays bold (it carries the status)
         self.assertIn('status-card s-error"', body)
         # nothing below the root is rendered
         self.assertNotIn("status-node s-", body)
@@ -518,7 +840,7 @@ class WebTests(TestCase):
 
     def test_poll_js_swaps_muted_for_danger_on_failure(self):
         # both .text-muted and .text-danger are !important in Bootstrap and
-        # muted comes later in the stylesheet — stacking them renders grey, so
+        # muted comes later in the stylesheet — stacking them renders gray, so
         # the failure path must remove muted for the red to actually show
         js = self.client.get("/static/js/poll.js").get_data(as_text=True)
         self.assertIn("classList.remove('text-muted')", js)

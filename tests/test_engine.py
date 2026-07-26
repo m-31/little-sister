@@ -190,6 +190,43 @@ class EngineTests(TestCase):
         # child inherits the check's frequency, so freshness applies (ADR-0005)
         self.assertEqual(disk.frequency_seconds, 120)
 
+    def test_child_about_and_title_land_on_child_nodes(self):
+        # A branch check captions the subnodes it emits (ADR-0025): each child's
+        # about/title ride onto its node like description/config.
+        tree = StatusTree()
+        result = CheckResult(StatusCode.OK, ["host up"], children=(
+            CheckResult(StatusCode.OK, name="disk",
+                        about="Free space on the data volume.", title="Disk"),))
+        Engine([_FakeCheck(path="/host", result=result)], tree).run_once()
+        disk = tree.snapshot("/host/disk")
+        assert disk is not None
+        self.assertEqual(disk.about, "Free space on the data volume.")
+        self.assertEqual(disk.title, "Disk")
+
+    def test_root_result_labels_are_ignored(self):
+        # The root's labels keep their startup sources (nodes.yaml / inline check),
+        # so about/title on the root result are ignored like its name (ADR-0025).
+        tree = StatusTree()
+        result = CheckResult(StatusCode.OK, about="ignored", title="ignored")
+        Engine([_FakeCheck(path="/host", result=result)], tree).run_once()
+        root = tree.snapshot("/host")
+        assert root is not None
+        self.assertEqual((root.about, root.title), ("", ""))
+
+    def test_nodes_yaml_label_beats_check_provided_child(self):
+        # A nodes.yaml value is seeded (set_about) before the first tick and wins
+        # over the check-provided child label; resolved per field.
+        tree = StatusTree()
+        tree.set_about("/host/disk", "Declared in nodes.yaml.")
+        result = CheckResult(StatusCode.OK, children=(
+            CheckResult(StatusCode.OK, name="disk",
+                        about="From the check.", title="Disk"),))
+        Engine([_FakeCheck(path="/host", result=result)], tree).run_once()
+        disk = tree.snapshot("/host/disk")
+        assert disk is not None
+        self.assertEqual(disk.about, "Declared in nodes.yaml.")   # yaml wins
+        self.assertEqual(disk.title, "Disk")                      # yaml left it empty
+
     def test_elapsed_none_before_first_run(self):
         engine = Engine([_FakeCheck(path="/a")], StatusTree())
         self.assertIsNone(engine.info().checks[0].elapsed_seconds)
@@ -313,7 +350,7 @@ class EngineTests(TestCase):
 
     def test_heartbeat_carries_a_default_about(self):
         # The dashboard strip's hover card explains the self-monitor out of
-        # the box (#24); a later seed (the startup nodes.yaml pass) overrides.
+        # the box (ADR-0024); a later seed (the startup nodes.yaml pass) overrides.
         from little_sister.engine import HEARTBEAT_ABOUT, HEARTBEAT_PATH
         tree = StatusTree()
         Engine([_FakeCheck(path="/x")], tree)

@@ -44,7 +44,7 @@ small **tree**.
 
 ## Consequences
 - A single check (one SSH connection) can report several aspects, each its own
-  colour-coded node with its own reason — and roll-up/staleness/maintenance work
+  color-coded node with its own reason — and roll-up/staleness/maintenance work
   on them for free.
 - `CheckResult` stays backward compatible: `code`/`reason` are still the first two
   fields and every existing call site is untouched.
@@ -64,4 +64,4 @@ small **tree**.
   duplication; one recursive value is simpler and matches the tree's shape.
 - **One node, multi-line reason** (percentages crammed into one leaf's text) —
   smallest change, but the aspects aren't separate nodes, so they can't be
-  coloured, rolled up, or put into maintenance individually.
+  colored, rolled up, or put into maintenance individually.

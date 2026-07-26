@@ -1,7 +1,7 @@
 """Secret references: name where a secret comes from, resolve it once (ADR-0023).
 
 A reference is a string in a check's config. A **bare name** (``GITHUB_TOKEN``)
-is an environment-variable lookup — exactly ADR-0003's behaviour, and the
+is an environment-variable lookup — exactly ADR-0003's behavior, and the
 default. A ``scheme://address`` reference (``aws-sm://team/github-token``) is
 resolved by the resolver the **application registered** for that scheme: a
 deployment calls :func:`register_resolver` in its own code before importing

@@ -2,7 +2,7 @@
 #
 # Start little-sister under gunicorn, in the background, safely.
 #
-# Behaviour around the bind port:
+# Behavior around the bind port:
 #   * Port free                       -> start gunicorn.
 #   * Port held by *our* gunicorn     -> stop it, then restart cleanly.
 #   * Port held by an *other* process -> refuse to start and exit non-zero.

@@ -58,7 +58,7 @@ Add an optional **`title`** — a short display label for the node.
   the addressing key ([ADR-0016](0016-node-addressing.md)); a human label must not
   change where the node lives or how it is reached.
 - **Fold the label into `about` / `description`.** Rejected: those are longer-form and
-  semantically different (subject vs check behaviour); a card needs a terse caption and
+  semantically different (subject vs check behavior); a card needs a terse caption and
   a leaf a short heading, neither of which a paragraph serves.
 - **A separate `nodes.yaml`-only field (no inline source).** Rejected: a leaf check
   often wants to name its own node inline, exactly as it can set `about`; reusing the

@@ -78,7 +78,7 @@ def run_consistency_pass(checks: list[Check],
     a host / container node that has checks but no ``about`` (ADR-0012)."""
     # The engine's heartbeat is check-less by design (ADR-0005) yet a fair
     # metadata target — a title/about there feeds the status strip and its
-    # hover card (#24) — so it counts as covered, never as an orphan.
+    # hover card (ADR-0024) — so it counts as covered, never as an orphan.
     roots = [check.path for check in checks] + [HEARTBEAT_PATH]
     for path in sorted(metadata):
         if not any(on_same_line(path, root) for root in roots):

@@ -37,7 +37,7 @@ path.**
   `checks/scripts/` into the `little_sister` package (e.g. `little_sister/scripts/`), so
   they ship in the wheel — as `templates/` and `static/` already do.
 - **Explicit `script:` is unchanged.** An absolute or `~` path is used as given; a relative
-  `script:` resolves against the **config's own directory** (today's behaviour) — so a
+  `script:` resolves against the **config's own directory** (today's behavior) — so a
   deployment's bespoke scripts keep working exactly as now.
 - **A built-in check's *default* script (no `script:` given) resolves against a search
   path, first match wins:**

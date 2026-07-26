@@ -8,6 +8,22 @@ timezone: Europe/Berlin
 # strftime format for displayed timestamps.
 time_format: "%Y-%m-%d %H:%M:%S"
 
+# Reason lines a dashboard card shows before a header chevron reveals the rest (the
+# reason-overflow budget, #9). Short reasons show this many reasons; a reason that
+# wraps to several lines uses more of the budget. A non-negative integer; default 6.
+reason_cap: 6
+
+# Quiet (non-warn/error) child boxes a branch shows in the dense ("chips") view
+# before a "+N more" control reveals the rest (extends ADR-0024). Warn/error boxes
+# are never capped, so nothing urgent is hidden; with the density switch off,
+# everything is spelled out regardless. A non-negative integer; default 3.
+branch_cap: 3
+
+# Maintenance pins the strip pill's popover shows before a "+N more" links to the full
+# /maintenance page (extends ADR-0024). A non-negative integer; default 5 (0 sends
+# every pin straight to the /maintenance page).
+maintenance_cap: 5
+
 # Default maintenance window when an admin sets maintenance without an explicit
 # duration (e.g. 12h, 7d). Maintenance always expires — there is no indefinite pin.
 maintenance_default_expiry: 7d

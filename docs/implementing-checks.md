@@ -123,6 +123,8 @@ CheckResult(
     description: str = "",                 # node metadata
     children:    tuple[CheckResult, ...] = (),
     config:      str = "",                 # per-child config markdown (branch checks)
+    about:       str = "",                 # subnode subject label; child-only, fills empty (ADR-0025)
+    title:       str = "",                 # subnode short label; child-only, fills empty (ADR-0025)
 )
 ```
 
@@ -149,6 +151,15 @@ CheckResult(
   inline value (a path, an error, an API message); `code(text)` fences multi-line /
   log output as a verbatim block ([ADR-0018](adr/0018-markdown-rendering.md)). Never
   interpolate raw external bytes straight into a reason.
+- **Subnode labels — `about` / `title`** — a branch check can caption the subnodes it
+  emits by setting a child's `about` (subject: what the aspect *is* and how it grades)
+  and, rarely, `title` (a short label) ([ADR-0025](adr/0025-check-provided-subnode-metadata.md)).
+  Set these only for **type-inherent** identity — a label the same in every deployment
+  (a metrics type's `disk` / `memory` aspects) — and leave **deployment-specific**
+  identity (this host's location, this box's role) to the deployment's `nodes.yaml`.
+  They are **ignored on the root** (like `name`) and **fill an empty node field only**,
+  so a `nodes.yaml` declaration always wins and the label freezes at its first fill;
+  text that changes with each run belongs in `reason`, not here.
 
 ---
 
@@ -199,10 +210,23 @@ them under a deployment.
   ([ADR-0015](adr/0015-check-discovery-union.md)). A restart re-reads them.
 - **Relative paths resolve against the config file's own directory** (`base_dir` in
   `_extra_from_config`) — e.g. a bundled script sits next to its YAML.
-- **Node metadata** (`title`, `about`) may come inline on the check or from a
-  `nodes.yaml` keyed by node path; `nodes.yaml` wins
-  ([ADR-0012](adr/0012-node-metadata.md) / [ADR-0017](adr/0017-node-title.md)). A
-  container node no single check owns can still be labelled via `nodes.yaml`.
+- **Node metadata** (`title`, `about`) resolves **per field** by precedence:
+  `nodes.yaml` keyed by node path **>** the check **>** empty
+  ([ADR-0012](adr/0012-node-metadata.md) / [ADR-0017](adr/0017-node-title.md)). For a
+  check's **root** node the check source is an inline `about:` / `title:` in its YAML;
+  for the **subnodes a branch check emits** it is the child `CheckResult`'s
+  `about` / `title`, which fill an empty field only
+  ([ADR-0025](adr/0025-check-provided-subnode-metadata.md); see §3). A container node no
+  single check owns can still be labeled via `nodes.yaml`.
+- **Where a branch check gets its subnode labels.** The `CheckResult.about` / `title` a
+  branch check emits can be **hardcoded** (a per-aspect default in code, like
+  `host-metrics`' built-in `about`s) or read from the check's **own config** — a
+  `subnodes:` block, `name → {title, about}`, sitting beside the root's inline metadata.
+  `little_sister.checks.metadata` provides the reader: `parse_subnodes(config)` →
+  `{name: {title, about}}`, and `expand_tokens(text, {…})` to fill `{token}` placeholders
+  (a plain replace, never `str.format`, so backticks / braces in the Markdown survive). A
+  check with both uses the config value when present and falls back to its default (so a
+  deployment can retune one aspect's label without touching code or `nodes.yaml`).
 - **Ownership** — two checks may not own overlapping nodes; the loader rejects the
   whole load with a named conflict. A branch check overrides `owned_nodes()` to own
   its child subtrees (not the shared container) so peers can coexist (ADR-0015).

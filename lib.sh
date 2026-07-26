@@ -4,7 +4,7 @@
 # Shared helpers for start.sh / stop.sh.
 #
 # Source this *after* `cd`-ing to the repo root (both scripts do `cd
-# "$(dirname "$0")"` first). It defines the bind target, the way we recognise
+# "$(dirname "$0")"` first). It defines the bind target, the way we recognize
 # our own gunicorn, and the graceful-stop routine -- so start and stop always
 # agree on what "our process" means and never touch an unrelated service.
 

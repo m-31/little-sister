@@ -1,6 +1,6 @@
 import atexit
 import os
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from secrets import token_hex
 
@@ -62,8 +62,8 @@ app.jinja_env.undefined = StrictUndefined
 # How deep the /status tree renders before stopping (the default and the ceiling
 # for the user-chosen depth).
 MAX_DEPTH = 8
-# Remember a viewer's chosen depth for a year.
-DEPTH_COOKIE_MAX_AGE = 60 * 60 * 24 * 365
+# Remember a viewer's chosen view (depth + the on/off switches) for a year.
+VIEW_COOKIE_MAX_AGE = 60 * 60 * 24 * 365
 
 
 def _resolve_depth() -> int:
@@ -77,6 +77,23 @@ def _resolve_depth() -> int:
     except ValueError:
         depth = MAX_DEPTH
     return max(0, min(depth, MAX_DEPTH))
+
+
+def _resolve_flag(name: str, default: bool) -> bool:
+    """A tri-source on/off view flag (like :func:`_resolve_depth`): an explicit form
+    value wins (present ⇒ the switch was checked, or a manual ``?name=1``/``0``);
+    else, on a form submission — marked by the hidden ``view`` field — an *absent*
+    switch means off (an unchecked checkbox sends nothing); else the saved cookie;
+    else ``default`` — so a default-on switch (leaf density) round-trips."""
+    values = request.args.getlist(name)
+    if values:
+        return "1" in values
+    if request.args.get("view"):
+        return False
+    cookie = request.cookies.get(name)
+    if cookie is not None:
+        return cookie == "1"
+    return default
 
 
 @app.template_filter("status_slug")
@@ -231,6 +248,73 @@ def _node_meta_map(node: StatusSnapshot | None) -> dict[str, dict[str, str]]:
             out[current.path] = meta
         stack.extend(current.children)
     return out
+
+
+@dataclass(frozen=True)
+class _MaintenancePin:
+    """One row of the maintenance index (view-only, ADR-0014): where a pin sits, its
+    reason and short title, and a coarse 'time left'."""
+    path: str
+    title: str
+    reason: str
+    remaining: str
+
+
+def _humanize_remaining(seconds: float) -> str:
+    """A coarse 'time left' for the maintenance index — the largest one or two units
+    (``2d 3h`` / ``5h`` / ``12m`` / ``< 1m``), or ``expired`` once past."""
+    total = int(seconds)
+    if total <= 0:
+        return "expired"
+    if total >= 86400:
+        days, rest = divmod(total, 86400)
+        hours = rest // 3600
+        return f"{days}d {hours}h" if hours else f"{days}d"
+    if total >= 3600:
+        hours, rest = divmod(total, 3600)
+        minutes = rest // 60
+        return f"{hours}h {minutes}m" if minutes else f"{hours}h"
+    if total >= 60:
+        return f"{total // 60}m"
+    return "< 1m"
+
+
+def _maintenance_view(
+    node: StatusSnapshot | None, now: datetime,
+) -> tuple[list[_MaintenancePin], set[str]]:
+    """Surface the maintenance side-table (ADR-0014) for the dashboard, read from the
+    **unfiltered** snapshot so it survives hide-idle and any render depth: an *index*
+    of every pinned node (path, title, reason, time left) and the set of every path
+    that is a **proper ancestor** of a pin (for the "contains maintenance" card pip).
+    A pinned node shows its own maintenance, so it never appears in the ancestor set.
+    """
+    index: list[_MaintenancePin] = []
+    ancestors: set[str] = set()
+
+    def walk(current: StatusSnapshot) -> bool:
+        """Record ``current``'s pin (if any); return whether its subtree holds one."""
+        below = False
+        for child in current.children:
+            if walk(child):
+                below = True
+        entry = current.maintenance_entry
+        if entry is not None:
+            try:
+                remaining = (
+                    datetime.fromisoformat(entry.expires_at) - now).total_seconds()
+            except ValueError:
+                remaining = 0.0
+            index.append(_MaintenancePin(
+                path=current.path, title=current.title, reason=entry.reason,
+                remaining=_humanize_remaining(remaining)))
+        if below and entry is None:
+            ancestors.add(current.path)
+        return below or entry is not None
+
+    if node is not None:
+        walk(node)
+    index.sort(key=lambda pin: pin.path)
+    return index, ancestors
 
 # Session signing key (ADR-0003): an explicit SECRET_KEY wins — its value may
 # itself be a secret reference (`scheme://address`, ADR-0023 update note) —
@@ -406,7 +490,7 @@ def _split_heartbeat(
     node: StatusSnapshot | None,
 ) -> tuple[StatusSnapshot | None, StatusSnapshot | None]:
     """Lift the engine's self-heartbeat (ADR-0005) out of a root snapshot's
-    children so the dashboard can render it as the status strip (#24) rather than
+    children so the dashboard can render it as the status strip (ADR-0024) rather than
     a near-empty grid card. Returns ``(node_without_heartbeat, heartbeat)``.
 
     The heartbeat is only ever a child of the root overview, so on a branch page
@@ -458,17 +542,25 @@ def status(branch: str = "") -> ResponseReturnValue:
                                firstname=session['firstname'], node=node,
                                branch=branch, since=since,
                                is_admin=session.get('admin', False))
-    # Lift the engine self-heartbeat into the status strip (#24) before filtering,
+    # Lift the engine self-heartbeat into the status strip (ADR-0024) before filtering,
     # so it shows there always — never as a card, never hidden by hide-ok.
     node, heartbeat = _split_heartbeat(node)
-    hide_ok = request.args.get('hide_ok') == '1'
-    hide_idle = request.args.get('hide_idle') == '1'
+    hide_ok = _resolve_flag('hide_ok', False)
+    hide_idle = _resolve_flag('hide_idle', False)
+    dense = _resolve_flag('dense', True)
+    # Surface the maintenance set (ADR-0014) from the *unfiltered* snapshot, so the
+    # index and the "contains maintenance" pips survive hide-idle and any depth.
+    now = datetime.now()
+    maintenance_index, maintenance_ancestors = _maintenance_view(node, now)
     if node is not None and (hide_ok or hide_idle):
         hidden: set[StatusCode] = set()
         if hide_ok:
             hidden.add(StatusCode.OK)
+        # hide-idle hides only never-reported (UNDEFINED) nodes; maintenance is an
+        # intentional admin state, not idle, and stays visible (the index/pip surface
+        # it, so bundling it with idle only made it harder to find).
         if hide_idle:
-            hidden |= {StatusCode.MAINTENANCE, StatusCode.UNDEFINED}
+            hidden.add(StatusCode.UNDEFINED)
         node = replace(node, children=tuple(
             f for f in (_filter_snapshot(c, hidden) for c in node.children)
             if f is not None))
@@ -478,11 +570,16 @@ def status(branch: str = "") -> ResponseReturnValue:
     # navigation-response headers), and sent as X-Rendered-At so the poll loop
     # reads the same clock — "updated …" / "could not refresh — last ok …" honour
     # config.yaml's time_format and timezone, not the browser's locale.
-    rendered_at = _format_local(datetime.now())
+    rendered_at = _format_local(now)
     if request.args.get('fragment'):
         body = render_template('_status_grid.html', node=node, branch=branch,
                                max_depth=depth, hide_ok=hide_ok,
-                               hide_idle=hide_idle, heartbeat=heartbeat)
+                               hide_idle=hide_idle, dense=dense,
+                               heartbeat=heartbeat, reason_cap=config.reason_cap,
+                               branch_cap=config.branch_cap,
+                               maintenance_cap=config.maintenance_cap,
+                               maintenance_index=maintenance_index,
+                               maintenance_ancestors=maintenance_ancestors)
     else:
         # The hover card (ADR-0019) must know the strip too: the lifted
         # heartbeat's nodes.yaml title/about join the map like any node's.
@@ -491,15 +588,27 @@ def status(branch: str = "") -> ResponseReturnValue:
                                firstname=session['firstname'], node=node,
                                branch=branch, max_depth=depth,
                                depth_limit=MAX_DEPTH, hide_ok=hide_ok,
-                               hide_idle=hide_idle, heartbeat=heartbeat,
-                               node_meta=node_meta,
-                               rendered_at=rendered_at)
+                               hide_idle=hide_idle, dense=dense,
+                               heartbeat=heartbeat, node_meta=node_meta,
+                               rendered_at=rendered_at,
+                               reason_cap=config.reason_cap,
+                               branch_cap=config.branch_cap,
+                               maintenance_cap=config.maintenance_cap,
+                               maintenance_index=maintenance_index,
+                               maintenance_ancestors=maintenance_ancestors)
     response = make_response(body)
     response.headers['X-Rendered-At'] = rendered_at
-    # Persist the choice only when the viewer set it explicitly.
-    if 'depth' in request.args:
-        response.set_cookie('depth', str(depth), max_age=DEPTH_COOKIE_MAX_AGE,
-                            samesite='Lax')
+    # Persist a view choice only when the viewer set it explicitly (never on the
+    # ~10s poll fragment), so the chosen shape sticks across visits (slice 5).
+    if not request.args.get('fragment'):
+        if 'depth' in request.args:
+            response.set_cookie('depth', str(depth),
+                                max_age=VIEW_COOKIE_MAX_AGE, samesite='Lax')
+        for name, value in (('hide_ok', hide_ok), ('hide_idle', hide_idle),
+                            ('dense', dense)):
+            if request.args.getlist(name) or request.args.get('view'):
+                response.set_cookie(name, '1' if value else '0',
+                                    max_age=VIEW_COOKIE_MAX_AGE, samesite='Lax')
     return response
 
 
@@ -549,6 +658,19 @@ def maintenance() -> ResponseReturnValue:
     return redirect(url_for('status', branch=path.lstrip('/')))
 
 
+@app.route('/maintenance', methods=['GET'])
+def maintenance_overview() -> ResponseReturnValue:
+    """The full, uncapped maintenance overview as its own page — every pinned node with
+    its path, time left and reason, read from the whole snapshot (depth- and
+    filter-independent, ADR-0014). Viewer-visible and bookmarkable; the strip pill's
+    popover "+N more" links here (slice 10)."""
+    if 'username' not in session:
+        return redirect('/login')
+    pins, _ = _maintenance_view(status_tree.snapshot(""), datetime.now())
+    return render_template('maintenance.html', username=session['username'],
+                           firstname=session['firstname'], pins=pins)
+
+
 @app.route('/events')
 def events() -> ResponseReturnValue:
     if 'username' not in session:
@@ -581,8 +703,8 @@ def system() -> ResponseReturnValue:
     return response
 
 
-@app.route('/text')
-def text() -> ResponseReturnValue:
+@app.route('/copy')
+def copy() -> ResponseReturnValue:
     if 'username' in session:
         return render_template('text.html', username=session['username'],
                                firstname=session['firstname'])

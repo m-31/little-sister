@@ -39,6 +39,16 @@ class CheckResult:
     root at ``check.path``); ``description`` is inherited metadata for the
     node, and ``config`` is the parameters the check ran with — display metadata
     (Markdown) carried onto the node like ``description`` (ADR-0013).
+
+    ``about`` (subject metadata — what the node *is*) and ``title`` (a short
+    display label) are the **type-inherent** labels a branch check gives the
+    subnodes it emits (ADR-0025) — e.g. a metrics check captioning its ``disk`` /
+    ``memory`` aspects. Like ``name`` they are **ignored on the root** (whose
+    labels keep their ``nodes.yaml`` / inline-check sources), and unlike
+    ``description`` / ``config`` they **fill an empty node field only**: a
+    ``nodes.yaml`` declaration seeded at startup always wins, and the label
+    freezes at its first fill (stable identity, not live status — text that
+    changes with the observation belongs in ``reason``).
     """
     code: StatusCode
     reason: list[str] = field(default_factory=list)
@@ -46,6 +56,8 @@ class CheckResult:
     description: str = ""
     children: tuple[CheckResult, ...] = ()
     config: str = ""
+    about: str = ""
+    title: str = ""
 
     def __post_init__(self) -> None:
         for child in self.children:

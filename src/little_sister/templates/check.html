@@ -22,7 +22,7 @@
                 <div class="alert {{ node.code | status_alert }} mb-0">
                     Status: <strong>{{ node.code.name.lower() }}</strong>
                     {% for r in node.reason %}
-                        <div class="md-body small">{{ r | markdown }}</div>
+                        <div class="md-body small check-reason">{{ r | markdown }}</div>
                     {% endfor %}
                     {% if node.stale %}
                         <div><small>Stale — last checked {{ node.age_seconds | round | int | duration }} ago.</small></div>

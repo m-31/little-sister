@@ -1,42 +1,154 @@
-{#- Reason overflow (#9): a node's reasons, capped. Render every entry (the
-    remainder stays in the DOM, hidden by CSS — never cut mid-HTML, ADR-0018) but
-    mark those past the cap; a per-node "show all (N)" (reasons.js) reveals them
-    and lifts the height clamp, expanding in place and surviving the ~10s fragment
-    swap. The leaf detail page (check.html) stays full; the JSON envelope is
-    untouched. The cap K lives here as a template constant (plan.md Phase 5). -#}
-{% macro reason_block(node) -%}
+{#- Reason overflow (#9): a node's reasons clamped to a *line budget*. The block
+    shows at most ``cap`` lines (config.yaml ``reason_cap``: short reasons ⇒ that
+    many reasons, a wrapped reason uses more of the budget); the overflow stays in
+    the DOM, clipped by CSS (never cut mid-HTML, ADR-0018) and faded. A header
+    chevron (reasons.js) reveals it in place and survives the ~10s fragment swap —
+    ▼ when clipped, ▲ when open. The leaf detail page (check.html) stays full; the
+    JSON envelope is untouched. -#}
+{% macro reason_block(node, cap) -%}
 {%- if node.reason -%}
-{%- set cap = 6 -%}
 {%- set total = node.reason | length -%}
-<div class="reason-block" data-reason-node="{{ node.path }}" data-reason-total="{{ total }}">
+<div class="reason-block" style="--reason-lines: {{ cap }}"
+     data-reason-node="{{ node.path }}" data-reason-total="{{ total }}">
 {%- for r in node.reason %}
-    <div class="status-node__reason md-body{% if loop.index0 >= cap %} reason-extra{% endif %}">{{ r | shorten(400) | markdown }}</div>
+    <div class="status-node__reason md-body">{{ r | shorten(400) | markdown }}</div>
 {%- endfor %}
 </div>
-{%- if total > cap %}
-<button type="button" class="reason-toggle" data-reason-toggle aria-expanded="false">show all ({{ total }})</button>
-{%- endif -%}
 {%- endif -%}
 {%- endmacro %}
+{#- Status not by color alone (ADR-0024): a small shape cue per state — a check (ok),
+    triangle (warn), filled disc (error), pause bars (maintenance), hollow ring (idle /
+    undefined) — so a status reads without leaning on the fill color, and a red/green
+    color-blind viewer can separate error from ok. Drawn in ``currentColor`` so it
+    inherits each surface's readable text color. ``labeled`` names the cue for assistive
+    tech (WCAG 1.1.1): a *problem* box (warn/error) has no status word, so its cue is its
+    only status channel (role=img + aria-label). A quiet box, like every card and strip
+    cue, stays ``aria-hidden`` — a card/strip word already speaks, and a healthy box's
+    "ok" is noise, not signal. -#}
+{% macro status_cue(code, labeled=false) -%}
+<svg class="status-cue status-cue--{{ code | status_slug }}" viewBox="0 0 16 16"
+     width="12" height="12" focusable="false"
+     {% if labeled %}role="img" aria-label="{{ code.name.lower() }}"{% else %}aria-hidden="true"{% endif %}>
+{%- if code.name == 'OK' -%}
+<path d="M3.5 8.5 6.5 11.5 12.5 4.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+{%- elif code.name == 'WARN' -%}
+<path d="M8 2 15 14 1 14 Z" fill="currentColor"/>
+{%- elif code.name == 'ERROR' -%}
+<circle cx="8" cy="8" r="5.5" fill="currentColor"/>
+{%- elif code.name == 'MAINTENANCE' -%}
+<rect x="4" y="3.5" width="2.7" height="9" rx="0.7" fill="currentColor"/><rect x="9.3" y="3.5" width="2.7" height="9" rx="0.7" fill="currentColor"/>
+{%- else -%}
+<circle cx="8" cy="8" r="5" fill="none" stroke="currentColor" stroke-width="2"/>
+{%- endif -%}
+</svg>
+{%- endmacro %}
+{#- Maintenance pip (slice 9): a click-to-open marker on a card whose subtree holds a
+    pinned node but which is not itself pinned — a glance at any depth shows where to
+    drill, and a click opens a popover (maintenance.js) listing that card's pins as
+    links. A real <button> (keyboard-reachable, announced as a popup control); the
+    hidden <template> carries the card-scoped pin list the popover clones. Solid
+    maintenance-blue so it reads on any card fill. -#}
+{% macro maintenance_pip(card_path, pins) -%}
+<button type="button" class="maintenance-pip" aria-haspopup="true" aria-expanded="false" aria-label="show maintenance under {{ card_path }}"><svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" focusable="false"><rect x="4" y="3.5" width="2.7" height="9" rx="0.7" fill="currentColor"/><rect x="9.3" y="3.5" width="2.7" height="9" rx="0.7" fill="currentColor"/></svg></button><template class="maintenance-pop-src" data-pop-for="{{ card_path }}"><ul class="maintenance-pop__list">
+{%- for pin in pins if pin.path.startswith(card_path ~ '/') %}
+<li class="maintenance-pop__item"><span class="maintenance-pop__row"><a class="maintenance-pop__path" href="{{ url_for('status', branch=pin.path | url_branch) }}">{{ pin.path }}</a> <span class="maintenance-pop__left">{{ pin.remaining }}</span></span>{% if pin.reason and pin.reason != 'maintenance' %}<span class="maintenance-pop__reason">{{ pin.reason | shorten(80) }}</span>{% endif %}</li>
+{%- endfor %}
+</ul></template>
+{%- endmacro %}
+{#- Branch density (ADR-0024): render one level of a card's descendants — a quiet
+    leaf as an inline chip, everything else as a box — and, in the dense view, cap the
+    quiet (non-warn/error) *boxes* this branch shows. Surplus quiet boxes are marked
+    ``is-extra`` (kept in the DOM, hidden by CSS) and the level grows a "+N more"
+    control that branches.js reveals in place and re-applies across the ~10s poll swap.
+    A warn/error box is never capped, so nothing urgent hides; with density off,
+    ``branch_cap`` does nothing and every node renders as a box. ``depth0`` carries the
+    render-depth ceiling (``max_depth``) down the recursion. The render constants are
+    passed explicitly so the macro never depends on call-site context. -#}
+{% macro render_nodes(children, depth0, parent_path, dense, max_depth, branch_cap, reason_cap) -%}
+{%- set ns = namespace(quiet_boxes=0) -%}
+{%- for child in children -%}
+{%- if dense and not child.children and child.code.name not in ('WARN', 'ERROR') -%}
+    {#- A quiet leaf collapses to a compact name+color chip; it flows inline, so a run
+        of quiet siblings packs into a wrapping row while a problem leaf or a branch
+        stays a full-width box that breaks the line — alphabetical order survives the
+        mix. Any reason lives on the leaf's own page. -#}
+    <a class="leaf-chip s-{{ child.code | status_slug }}"
+       href="{{ url_for('status', branch=child.path | url_branch) }}"
+       data-path="{{ child.path }}"><span class="leaf-chip__name">{{ child.name }}</span>{% if child.title %}<span class="node-title">{{ child.title | markdown_inline }}</span>{% endif %}</a>
+{%- else -%}
+    {%- set has_kids = child.children and depth0 < max_depth - 2 -%}
+    {%- set node_dim = child.code.name == 'OK' or (child.own_code != child.code and has_kids) -%}
+    {%- set is_quiet = child.code.name not in ('WARN', 'ERROR') -%}
+    {%- if dense and is_quiet %}{% set ns.quiet_boxes = ns.quiet_boxes + 1 %}{% endif -%}
+    <div class="status-node s-{{ child.code | status_slug }}{% if node_dim %} dim{% endif %}{% if dense and is_quiet and ns.quiet_boxes > branch_cap %} is-extra{% endif %}">
+        <div class="status-node__self" data-path="{{ child.path }}">
+            {{ status_cue(child.code, labeled=not is_quiet) }}<a class="status-node__name"
+               href="{{ url_for('status', branch=child.path | url_branch) }}">{{ child.name }}</a>
+            {% if child.title %}<span class="node-title">{{ child.title | markdown_inline }}</span>{% endif %}
+            {% if child.stale %}<span class="status-stale">stale{% if not child.children %} · {{ child.age_seconds | round | int | duration }} ago{% endif %}</span>{% endif %}
+            {{ reason_block(child, reason_cap) }}
+        </div>
+        {%- if has_kids -%}
+        <div class="status-node__children node-children" data-branch="{{ child.path }}">{{ render_nodes(child.children, depth0 + 1, child.path, dense, max_depth, branch_cap, reason_cap) }}</div>
+        {%- endif -%}
+    </div>
+{%- endif -%}
+{%- endfor -%}
+{%- if dense and ns.quiet_boxes > branch_cap -%}
+    {#- The in-place reveal for this level's folded quiet boxes; branches.js keeps the
+        open state across the ~10s poll swap (the reasons.js pattern), and CSS swaps
+        the label and shows the boxes. -#}
+    <button type="button" class="branch-more" data-branch="{{ parent_path }}"
+            aria-expanded="false"><span class="branch-more__show">+{{ ns.quiet_boxes - branch_cap }} more</span><span class="branch-more__hide">show less</span></button>
+{%- endif -%}
+{%- endmacro %}
+{%- if maintenance_index or (heartbeat is defined and heartbeat) %}
+{#- Status-strip band (ADR-0024): the self-monitor heartbeat pill (slice 3) and, to its
+    left, the maintenance pill (slice 10) — a compact count that folds slice 9's
+    always-visible index. Both live in the poll fragment, right-aligned beneath the
+    controls, refreshing on the ~10s poll. -#}
+<div class="strip-band">
+{%- if maintenance_index %}
+{#- Maintenance pill (slice 10): the always-visible index folded to a count. A click
+    opens the shared popover (maintenance.js) over the whole set — the first
+    ``maintenance_cap`` pins, then a "+N more" to the /maintenance page. Only shown when
+    there are pins; maintenance-tinted, refreshed in the poll like the strip. -#}
+<a class="maintenance-pill" href="{{ url_for('maintenance_overview') }}" aria-haspopup="true" aria-expanded="false" aria-label="{{ maintenance_index | length }} nodes in maintenance"><svg class="maintenance-pill__glyph" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" focusable="false"><rect x="4" y="3.5" width="2.7" height="9" rx="0.7" fill="currentColor"/><rect x="9.3" y="3.5" width="2.7" height="9" rx="0.7" fill="currentColor"/></svg><span class="maintenance-pill__count">{{ maintenance_index | length }}</span> in maintenance</a><template class="maintenance-pop-src" data-pop-for="__all__"><ul class="maintenance-pop__list">
+{%- for pin in maintenance_index[:maintenance_cap] %}
+<li class="maintenance-pop__item"><span class="maintenance-pop__row"><a class="maintenance-pop__path" href="{{ url_for('status', branch=pin.path | url_branch) }}">{{ pin.path }}</a> <span class="maintenance-pop__left">{{ pin.remaining }}</span></span>{% if pin.reason and pin.reason != 'maintenance' %}<span class="maintenance-pop__reason">{{ pin.reason | shorten(80) }}</span>{% endif %}</li>
+{%- endfor %}
+{%- if maintenance_index | length > maintenance_cap %}
+<li class="maintenance-pop__more"><a href="{{ url_for('maintenance_overview') }}">+{{ maintenance_index | length - maintenance_cap }} more…</a></li>
+{%- endif %}
+</ul></template>
+{%- endif %}
 {%- if heartbeat is defined and heartbeat %}
-{#- Status strip (#24): the engine self-heartbeat (ADR-0005) lifted out of the
-    card grid into a compact caption pill. It lives inside #status-grid, so it
-    refreshes with the ~10s poll and dims with the grid under a sustained-outage
-    banner; it sits directly below the page's "updated …" freshness line. A stale
-    heartbeat (the scheduler stalled) shows vivid, not pale — the self-monitor's
-    own alarm. The path is reserved (the loader keeps custom checks off its
-    line), and a heartbeat that grew children is not lifted at all — see
-    _split_heartbeat. -#}
+{#- Status strip (ADR-0024): the engine self-heartbeat (ADR-0005) lifted out of the card
+    grid into a compact caption pill. It refreshes with the ~10s poll and dims with the
+    grid under a sustained-outage banner. A stale heartbeat (the scheduler stalled) shows
+    vivid, not pale — the self-monitor's own alarm. The path is reserved (the loader
+    keeps custom checks off its line), and a heartbeat that grew children is not lifted
+    at all — see _split_heartbeat. -#}
 <div class="ls-strip s-{{ heartbeat.code | status_slug }}"
      data-path="{{ heartbeat.path }}">
-    <span class="ls-strip__pulse" aria-hidden="true"></span>
+    {#- Self-monitor identity (slice 3): a watching-eye glyph marks this as the
+        monitor observing itself, apart from the node pills. Decorative — the
+        name carries the identity for screen readers. -#}
+    <svg class="ls-strip__eye" viewBox="0 0 24 24" width="13" height="13"
+         aria-hidden="true" focusable="false">
+        <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"
+              fill="none" stroke="currentColor" stroke-width="2"/>
+        <circle cx="12" cy="12" r="3.2" fill="currentColor"/>
+    </svg>
     <a class="ls-strip__name"
        href="{{ url_for('status', branch=heartbeat.path | url_branch) }}">{{ heartbeat.name }}</a>
     {% if heartbeat.title %}<span class="node-title">{{ heartbeat.title | markdown_inline }}</span>{% endif %}
     <span class="ls-strip__state">
         {% if heartbeat.stale %}<span class="status-stale">stale</span>{% endif %}
-        {{ heartbeat.code.name.lower() }}
+        {{ status_cue(heartbeat.code) }}{{ heartbeat.code.name.lower() }}
     </span>
+</div>
+{%- endif %}
 </div>
 {%- endif %}
 {% if node is none %}
@@ -58,11 +170,11 @@
                     {% if node.title %}<span class="node-title">{{ node.title | markdown_inline }}</span>{% endif %}
                     <span class="status-card__state">
                         {% if node.stale %}<span class="status-stale">stale</span>{% endif %}
-                        {{ node.code.name.lower() }}
+                        {% if node.path in maintenance_ancestors %}{{ maintenance_pip(node.path, maintenance_index) }}{% endif %}{{ status_cue(node.code) }}{{ node.code.name.lower() }}<button type="button" class="reason-chevron" tabindex="-1" aria-hidden="true"></button>
                     </span>
                 </div>
                 {% if node.reason %}
-                    <div class="status-panel">{{ reason_block(node) }}</div>
+                    <div class="status-panel">{{ reason_block(node, reason_cap) }}</div>
                 {% endif %}
             </div>
         {% else %}
@@ -77,41 +189,13 @@
                     {% if system.title %}<span class="node-title">{{ system.title | markdown_inline }}</span>{% endif %}
                     <span class="status-card__state">
                         {% if system.stale %}<span class="status-stale">stale</span>{% endif %}
-                        {{ system.code.name.lower() }}
+                        {% if system.path in maintenance_ancestors %}{{ maintenance_pip(system.path, maintenance_index) }}{% endif %}{{ status_cue(system.code) }}{{ system.code.name.lower() }}<button type="button" class="reason-chevron" tabindex="-1" aria-hidden="true"></button>
                     </span>
                 </div>
                 <div class="status-panel">
-                    {{ reason_block(system) }}
+                    {{ reason_block(system, reason_cap) }}
                     {% if card_has_kids %}
-                    {% for child in system.children recursive %}
-                        {% if not child.children and child.code.name not in ('WARN', 'ERROR') %}
-                            {#- Leaf density (#24): a quiet leaf (not warn/error)
-                                collapses to a compact name+colour chip. It flows
-                                inline, so a run of quiet siblings packs into a
-                                wrapping row while a problem leaf or a branch below
-                                stays a full-width box that breaks the line —
-                                alphabetical sibling order is preserved across the
-                                mix. Any reason lives on the leaf's own page. -#}
-                            <a class="leaf-chip s-{{ child.code | status_slug }}"
-                               href="{{ url_for('status', branch=child.path | url_branch) }}"
-                               data-path="{{ child.path }}"><span class="leaf-chip__name">{{ child.name }}</span>{% if child.title %}<span class="node-title">{{ child.title | markdown_inline }}</span>{% endif %}</a>
-                        {% else %}
-                        {% set has_kids = child.children and loop.depth0 < max_depth - 2 %}
-                        {% set node_dim = child.code.name == 'OK' or (child.own_code != child.code and has_kids) %}
-                        <div class="status-node s-{{ child.code | status_slug }}{% if node_dim %} dim{% endif %}">
-                            <div class="status-node__self" data-path="{{ child.path }}">
-                                <a class="status-node__name"
-                                   href="{{ url_for('status', branch=child.path | url_branch) }}">{{ child.name }}</a>
-                                {% if child.title %}<span class="node-title">{{ child.title | markdown_inline }}</span>{% endif %}
-                                {% if child.stale %}<span class="status-stale">stale{% if not child.children %} · {{ child.age_seconds | round | int | duration }} ago{% endif %}</span>{% endif %}
-                                {{ reason_block(child) }}
-                            </div>
-                            {% if has_kids %}
-                                <div class="status-node__children">{{ loop(child.children) }}</div>
-                            {% endif %}
-                        </div>
-                        {% endif %}
-                    {% endfor %}
+                    <div class="node-children" data-branch="{{ system.path }}">{{ render_nodes(system.children, 0, system.path, dense, max_depth, branch_cap, reason_cap) }}</div>
                     {% endif %}
                 </div>
             </div>

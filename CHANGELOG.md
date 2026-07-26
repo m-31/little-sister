@@ -8,12 +8,103 @@ contract versions **separately** — see `docs/api/openapi.yaml` `info.version`.
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-07-26
+
+### Added
+
+- **Checks can label the subnodes they emit**: a branch check's `CheckResult` now
+  carries optional `about` / `title` for each child, so a reusable check type ships the
+  **subject metadata for its aspects once** instead of every deployment copy-pasting it
+  into `nodes.yaml`
+  ([ADR-0025](docs/adr/0025-check-provided-subnode-metadata.md)). The labels are ignored
+  on the check's root (its own keep their `nodes.yaml` / inline sources) and **fill an
+  empty node field only** — a `nodes.yaml` declaration still wins, per field, and a
+  label freezes at its first fill (text that changes each run belongs in `reason`).
+  `host-metrics` adopts it, shipping a per-aspect `about` for
+  `ssh` / `disk` / `memory` / `cpu` / `load` — what each measures and how it grades, the
+  thresholds staying in each leaf's config. No web or JSON-API change (`about` / `title`
+  were already node fields).
+- **Author subnode labels in a check's config**: a branch check can read a `subnodes:`
+  block — `name → {title, about}` — from its own YAML, beside the root's inline
+  `about:` / `title:`, so per-aspect display text lives *with the check* instead of being
+  copy-pasted per node into `nodes.yaml`. The new `little_sister.checks.metadata` helper
+  reads it (`parse_subnodes`, plus `expand_tokens` for `{token}` placeholders a label
+  reuses); `host-metrics` layers a config `subnodes:` override on its built-in defaults,
+  and a deployment's own branch checks can keep their labels wholly in config
+  ([ADR-0025](docs/adr/0025-check-provided-subnode-metadata.md)).
+- **Dashboard reason overflow, configurable and foldable**: a card clamps its
+  reasons to a **line budget** — `config.yaml`'s `reason_cap` (default 6), plumbed to
+  both the full page and the ~10s `?fragment` swap — so short reasons show that many
+  while a reason that wraps to several lines uses more of the budget. A single
+  **chevron in the card header**, just after the status word, reveals the rest in
+  place (▼) and folds it back (▲), with an empty aligned slot when nothing overflows;
+  every reason stays in the DOM (clipped by CSS, never mid-HTML), and the leaf detail
+  page stays complete.
+- **Reasons are separated by a tight rule**: stacked reasons in a card used to run
+  together — a wrapped reason's later lines shared the leading of the next reason's first
+  line, so several reasons read as one paragraph. Consecutive reasons now carry a thin
+  hairline and a tight gap (never above the first), on the dashboard and the leaf detail
+  page alike, drawn from `currentColor` so the line reads on every status fill without a
+  per-color rule. The added per-reason height is folded into the `reason_cap` line budget,
+  so the fold-away chevron still shows about that many entries.
+- **Leaf density is a view toggle, and the filters stick**: a **chips** switch joins
+  *hide ok* / *hide idle* / *depth* in the status bar (default on — today's look);
+  turn it off and a card's quiet leaves render as full boxes instead of chips. All
+  three switches now **persist across visits** in a `SameSite=Lax` cookie, like
+  `depth` already did — set only on an explicit change and read back on a plain visit,
+  so a viewer's chosen shape sticks. (A hidden form marker tells an unchecked switch,
+  which sends nothing, from a fresh visit — the trick that lets the default-on density
+  switch round-trip.)
+- **Branch density caps deep cards**: in the dense ("chips") view a card's quiet
+  (non-warn/error) sub-**branches** past a `config.yaml` budget — `branch_cap`
+  (default 3), the count-cap sibling of `reason_cap` — fold behind a **"+N more"** you
+  expand in place, so a NAS whose `disk` / `smart` / `system` / `temperature` each box
+  a chip-row no longer towers over the grid. A warn/error branch is never folded, so
+  nothing urgent hides; with the density switch off, every node is spelled out. The
+  reveal survives the ~10s refresh.
+- **Status is no longer shown by color alone**: every card, node box and the
+  self-monitor strip now carries a small per-state shape cue — a check (ok), triangle
+  (warn), filled disc (error), pause bars (maintenance), a hollow ring (idle) — beside
+  the color fill, and the warn/error word is lifted out of the muted state text. The
+  status word stays for screen readers, so a red/green color-blind viewer can tell the
+  states apart. HTML/CSS only.
+- **Screen readers announce a problem node box's status**: a nested node box shows no
+  status word (only cards and the strip do), so a **warn/error** box's shape cue now
+  carries an accessible name and assistive tech reads out its "error"/"warn" state; quiet
+  boxes, and the card and strip cues, stay silent (a card/strip word already speaks, and a
+  healthy box's "ok" is not worth reading out). HTML only.
+- **Maintenance is easy to find again, and folds away when it piles up**: a node
+  pinned for maintenance is surfaced no matter how deep it sits or how shallow the
+  depth. A maintenance-tinted **pill** joins the status strip just left of the
+  `little-sister` heartbeat — a pause-bars glyph and a live count (`12 in maintenance`),
+  shown only when something is pinned; click it for a popover of the pinned nodes (path,
+  time left and reason, each a link), capped at `config.yaml`'s `maintenance_cap`
+  (default 5) with a **"+N more"** to a dedicated **`/maintenance` page** that lists the
+  full set — the pill is itself a link to that page, so the full list stays reachable
+  without JavaScript. A clickable **"contains maintenance" pip** still marks any card
+  whose subtree
+  holds a pin — a glance shows where to drill — and opens the same popover scoped to that
+  card. And **hide idle** now hides only never-reported nodes, not maintenance (an
+  intentional admin state), so a planned window no longer disappears when you tidy the
+  view.
+
+### Changed
+
+- **The self-monitor status strip stands on its own**: the `little-sister` heartbeat
+  pill moves from under the "updated …" line to a **right-aligned band beneath the
+  view controls**, with a small watching-eye glyph marking it as the monitor watching
+  itself. It still refreshes and dims inside the ~10s poll fragment (no `poll.js`
+  change), and the freshness line stays put.
+- **links open in a new tab**: instead of just following the links the renderer now
+  opens the link in a new tab.
+
+
 ## [0.2.2] - 2026-07-20
 
 ### Added
 
 - **The dashboard holds its shape under stress**: a card's **quiet
-  leaves** (OK or idle) collapse to compact name+colour **chips**, so an all-green
+  leaves** (OK or idle) collapse to compact name+color **chips**, so an all-green
   host converges toward a wrapping chip row instead of a stack of boxes — a
   warn/error leaf keeps its full box and reason, and a chip's own reason is a click
   away on its leaf page. Card heights are bounded (the reason caps above, a
@@ -90,7 +181,7 @@ contract versions **separately** — see `docs/api/openapi.yaml` `info.version`.
   as a failed poll (shown red) instead of being swapped in.
 - The freshness line's failure state now actually renders **red**: the stamp
   kept its muted styling class alongside the danger class and Bootstrap's
-  cascade let muted win, so a dead server showed a grey "could not refresh —
+  cascade let muted win, so a dead server showed a gray "could not refresh —
   last ok …" line. The poll now swaps the classes instead of stacking them.
 
 ## [0.2.1] - 2026-07-19

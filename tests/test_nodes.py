@@ -105,7 +105,7 @@ class ConsistencyPassTests(TestCase):
 
     def test_heartbeat_declaration_is_not_an_orphan(self):
         # Titling the engine's heartbeat is legitimate (it feeds the status
-        # strip and its hover card, #24) although no check covers the path.
+        # strip and its hover card, ADR-0024) although no check covers the path.
         with self.assertNoLogs(level="WARNING"):
             run_consistency_pass(
                 [self._http(path="/web")],

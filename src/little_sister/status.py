@@ -95,7 +95,7 @@ def on_same_line(a: str, b: str) -> bool:
 # loader rejects a custom check owning nodes on it, so the subtree stays
 # engine-owned (leaving room for future engine children, e.g. connected
 # satellites) and the dashboard can lift the node out of the card grid into the
-# status strip (#24) knowing nothing user-configured hides behind it.
+# status strip (ADR-0024) knowing nothing user-configured hides behind it.
 HEARTBEAT_PATH = "/little-sister"
 
 
@@ -113,7 +113,7 @@ def _coerce_code(code: StatusCode | str) -> StatusCode:
 
 
 def _coerce_reason(reason: list[str] | str | None) -> list[str]:
-    """Normalise a reason into a list of strings."""
+    """Normalize a reason into a list of strings."""
     if reason is None:
         return []
     if isinstance(reason, str):

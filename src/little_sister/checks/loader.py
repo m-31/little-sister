@@ -88,7 +88,7 @@ def _reject_reserved_paths(loaded: list[tuple[Check, Path]]) -> None:
 
     ``HEARTBEAT_PATH`` is reserved: the engine heartbeats that node itself, and
     the dashboard lifts it out of the card grid into the one-line status strip
-    (#24), which must never have a subtree hiding behind it. Keeping deployment
+    (ADR-0024), which must never have a subtree hiding behind it. Keeping deployment
     checks off the whole line also leaves it free for future engine-owned
     children (connected satellite engines, say).
     """

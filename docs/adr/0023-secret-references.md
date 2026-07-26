@@ -42,7 +42,7 @@ almost never changes.
 
 1. **Reference syntax.** A secret-consuming config field takes a string reference:
    - a **bare name** (`GITHUB_TOKEN`) is an environment-variable lookup — exactly
-     ADR-0003's behaviour, unchanged and the default;
+     ADR-0003's behavior, unchanged and the default;
    - a **`scheme://address`** reference (`aws-sm://myteam/github-token`,
      `aws-ps://myteam/github/token`) is resolved by the resolver registered for its
      scheme. Different references may use different schemes — one deployment mixes
@@ -53,7 +53,7 @@ almost never changes.
 2. **A resolver registry in the library, filled by the application.**
    `little_sister.secrets` exposes `resolve(reference)` and
    `register_resolver(scheme, resolver)` (a resolver: address → value, raising on
-   failure). The library ships **only the env behaviour**; a deployment registers its
+   failure). The library ships **only the env behavior**; a deployment registers its
    cloud resolvers **in its own code**, in the same import-before-`little_sister.app`
    slot its WSGI wrapper already uses to register check types — and owns their
    dependencies (boto3 never enters the core). Packaging resolvers as installable
@@ -89,7 +89,7 @@ almost never changes.
 - The reference syntax and the registry become part of the library's public,
   version-promised surface once shipped.
 - Tests substitute a fake resolver; the built-in env path is covered by the existing
-  behaviour's regression tests.
+  behavior's regression tests.
 
 ## Alternatives considered
 - **One global secret provider, selected by config.** Rejected: a single deployment

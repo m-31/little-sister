@@ -88,7 +88,7 @@ from that one tree.
 ### 2.4 System / subsystem
 "System" and "subsystem" are not separate types — they are just `Status` nodes at
 different depths. A "system" is a node; its "subsystems" are its children.
-Aggregation lets a high-level system summarise everything beneath it.
+Aggregation lets a high-level system summarize everything beneath it.
 
 ### 2.5 Check
 A **check** determines the status of one thing and writes the result into the
@@ -115,7 +115,7 @@ Besides the current status, little-sister records **status changes**:
 - A node's **status history** is the sequence of status periods it has held
   (status, since, until, reason).
 - An **admin** can put a node into **maintenance** with a reason. Maintenance is a
-  sticky override: it pins the node to `MAINTENANCE` (cancelling its subtree) until
+  sticky override: it pins the node to `MAINTENANCE` (canceling its subtree) until
   an admin clears it.
 
 Durable storage and retention of this history is a later concern.
@@ -129,7 +129,7 @@ read there as an informational note rather than a problem.
 The **engine** is the background runner that drives the checks: it discovers them,
 schedules each to run at its own `frequency` on background threads, and writes each
 result into the single shared status tree in a thread-safe way (many checks run
-concurrently against one tree). Each run is logged. *(How this is realised —
+concurrently against one tree). Each run is logged. *(How this is realized —
 process model, thread pool, locking — is in `architecture.md` and ADR-0001/0002.)*
 
 ### 2.9 JSON output & satellite instances (federation)
@@ -155,9 +155,9 @@ Two related capabilities (planned):
 The app is gated behind a small user list (login/logout) and offers:
 
 - **Status dashboard** (`/status`, `/status/<branch>`) — the live status tree as a
-  grid of system cards. Each system and subsystem is a box colour-coded by its
+  grid of system cards. Each system and subsystem is a box color-coded by its
   rolled-up status and nested inside its parent, with reasons. To make the
-  **culprit** obvious, healthy branches and boxes that are merely coloured by a
+  **culprit** obvious, healthy branches and boxes that are merely colored by a
   child (a *derived* status) are **dimmed**, leaving the node that actually reports
   the problem bold. Nodes drill down to a branch or a single check; **hide-ok /
   hide-idle** filters narrow the view and an adjustable **depth** controls how much
@@ -178,8 +178,8 @@ The app is gated behind a small user list (login/logout) and offers:
   curated set of runbook/dashboard links. *(Planned.)*
 - **JSON / backend mode** and **satellite federation** (§2.9) — planned.
 
-Visual style is Bootstrap 5; status colours are green/ok, amber/warn, red/error,
-blue/maintenance, grey/undefined. Displayed timestamps use a configurable timezone
+Visual style is Bootstrap 5; status colors are green/ok, amber/warn, red/error,
+blue/maintenance, gray/undefined. Displayed timestamps use a configurable timezone
 (`config.yaml`, default `Europe/Berlin`).
 
 **Roles:** there are **viewer** and **admin** roles; some actions (notably setting

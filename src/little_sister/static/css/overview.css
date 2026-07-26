@@ -28,7 +28,7 @@
     border-radius: 8px;
     padding: 8px 10px;
     color: #fff;
-    /* Bound card heights (#24): the shipped reason caps (#9) bound growth from
+    /* Bound card heights (ADR-0024): the shipped reason caps (#9) bound growth from
        above; this floors a sparse card (a bare heartbeat-less leaf, or an
        all-green host that shrank to a chip row) so the everyday grid keeps a
        steady rhythm and holes stay shallow. Height ∈ [min, cap]. */
@@ -58,6 +58,138 @@
     color: inherit;
     opacity: 0.8;
 }
+
+/* Status not by color alone (ADR-0024): a per-state shape cue (the status_cue macro)
+   gives a non-color channel beside the fill, and the warn/error status word is lifted
+   out of the muted state text — so a problem reads at a glance and to a red/green
+   color-blind viewer. The cue is decorative (aria-hidden); the word stays for screen
+   readers. It is drawn in currentColor, so it takes each surface's readable text
+   color and sizes with the surrounding text. */
+.status-cue {
+    width: 0.85em;
+    height: 0.85em;
+    vertical-align: -0.13em;
+    margin-right: 0.3em;
+}
+/* lift the problem word out of the muted 0.8 state text (the cue carries a quiet OK) */
+.status-card.s-warn  > .status-card__head > .status-card__state,
+.status-card.s-error > .status-card__head > .status-card__state,
+.ls-strip.s-warn  > .ls-strip__state,
+.ls-strip.s-error > .ls-strip__state {
+    opacity: 1;
+    font-weight: 600;
+}
+
+/* Maintenance surfacing (slice 9/10, ADR-0014): the persisted maintenance set, surfaced
+   so a pin the roll-up and a shallow depth hide is still findable — a count **pill** in
+   the strip (folding slice 9's always-visible index), a **pip** on each ancestor card,
+   and the click **popover** both open. All maintenance-tinted, reading as maintenance
+   whatever the surrounding status colors. */
+
+/* the strip band holds the maintenance pill (left) and the heartbeat pill (right),
+   right-aligned beneath the controls. */
+.strip-band {
+    display: flex;
+    justify-content: flex-end;
+    align-items: baseline;
+    gap: 0.5rem;
+    margin-bottom: 0.6rem;
+}
+
+/* the maintenance pill: a compact count. A link to /maintenance (the no-JS fallback)
+   that JS upgrades to the whole-set popover on click. */
+.maintenance-pill {
+    border: 1px solid rgba(36, 74, 119, 0.25);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35em;
+    background: var(--tint-maintenance);
+    color: #244a77;
+    text-decoration: none;
+    border-radius: 8px;
+    padding: 2px 10px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    white-space: nowrap;
+}
+.maintenance-pill:hover { border-color: rgba(36, 74, 119, 0.5); text-decoration: none; }
+.maintenance-pill:focus-visible { outline: 2px solid #244a77; outline-offset: 1px; }
+.maintenance-pill__glyph { flex: 0 0 auto; }
+.maintenance-pill__count { font-variant-numeric: tabular-nums; }
+
+/* the "contains maintenance" pip on an ancestor card — a solid maintenance-blue button
+   that reads on any card fill (an actual maintenance card is the pin itself and gets no
+   pip). A click opens its popover (maintenance.js); the right gap keeps it off the
+   status cue. */
+.maintenance-pip {
+    appearance: none;
+    -webkit-appearance: none;
+    border: none;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    color: #fff;
+    background: #5a8fd6;
+    border-radius: 4px;
+    padding: 2px 3px;
+    margin-left: 0.4em;
+    margin-right: 0.5em;
+    vertical-align: -0.28em;
+    line-height: 0;
+}
+.maintenance-pip:hover { background: #497fce; }
+.maintenance-pip:focus-visible { outline: 2px solid #244a77; outline-offset: 1px; }
+.maintenance-pip > svg { width: 14px; height: 14px; display: block; }
+
+/* the popover the pip opens (maintenance.js): that card's pins as links, floated over
+   the grid and positioned by Floating UI (ADR-0019). */
+.maintenance-pop {
+    position: fixed;
+    z-index: 60;
+    width: 22rem;
+    max-width: calc(100vw - 1.5rem);
+    background: #fff;
+    color: #244a77;
+    border: 1px solid rgba(36, 74, 119, 0.28);
+    border-radius: 8px;
+    box-shadow: 0 6px 20px rgba(20, 40, 70, 0.18);
+    padding: 6px 10px;
+    font-size: 0.8rem;
+}
+.maintenance-pop[hidden] { display: none; }
+.maintenance-pop__list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+}
+.maintenance-pop__item {
+    display: flex;
+    flex-direction: column;
+    gap: 0.05rem;
+}
+.maintenance-pop__row {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+}
+.maintenance-pop__path { color: inherit; font-weight: 600; text-decoration: none; }
+.maintenance-pop__path:hover { text-decoration: underline; }
+.maintenance-pop__left {
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    opacity: 0.85;
+}
+.maintenance-pop__reason {
+    padding-left: 0.2rem;      /* its own line under the pin's row, never an orphan */
+    opacity: 0.7;
+}
+/* the "+N more" row links to the full /maintenance page (slice 10). */
+.maintenance-pop__more { margin-top: 0.2rem; }
+.maintenance-pop__more a { color: #244a77; font-weight: 600; }
 
 /* A node's short title (ADR-0017) follows its name; ellipsed when too long. */
 .node-title {
@@ -118,7 +250,7 @@
     padding: 6px 8px;
     margin-bottom: 6px;
     color: #fff;
-    /* a translucent edge so a box still reads against a same-colour parent */
+    /* a translucent edge so a box still reads against a same-color parent */
     border: 1px solid rgba(255, 255, 255, 0.45);
 }
 
@@ -156,49 +288,85 @@
     margin-left: 0.5rem;
 }
 
-/* Reason overflow (#9). A dashboard card caps how many reason entries it shows
-   (cap K in _status_grid.html) and clamps a tall block's height (~8 reason
-   lines); a per-node "show all (N)" toggles both. Entries past the cap and the
-   clipped remainder stay in the DOM — hidden by CSS, never cut mid-HTML
-   (ADR-0018). reasons.js sets .is-open / .is-clipped and re-applies the open
-   state after each ~10s fragment swap; the detail page always shows everything. */
+/* Reason separation (tight rows + rule). Stacked reasons blur together: each reason is a
+   block whose wrapped lines share the body leading (ADR-0018 keeps them compact), so with
+   nothing between entries a several-reason block reads as one paragraph. A hairline plus a
+   tight gap between consecutive reasons — never above the first, so a lone reason shows no
+   rule — draws the boundary, on the dashboard (.status-node__reason) and the leaf detail
+   page's alert (.check-reason) alike. The rule is drawn from currentColor at low alpha, so
+   it reads on a vivid card (white text), a dim tint and the pale alert (dark text) alike
+   with no per-status color; a fixed white/black rule would vanish on half the surfaces. On
+   the dashboard the per-boundary height is folded into the reason-block clamp below, so
+   reason_cap still shows ~that many entries; the detail page shows every reason, uncapped. */
+.status-node__reason + .status-node__reason,
+.check-reason + .check-reason {
+    margin-top: 0.24rem;
+    padding-top: 0.24rem;
+    border-top: 1px solid color-mix(in srgb, currentColor 22%, transparent);
+}
+
+/* Reason overflow (#9). A card clamps its reasons to a *line budget* (the block's
+   ``--reason-lines``, from config.yaml ``reason_cap``): short reasons show that
+   many, a wrapped reason uses more of the budget. The overflow stays in the DOM,
+   clipped by CSS (never cut mid-HTML, ADR-0018) and faded. A header chevron
+   (reasons.js) toggles it — ▼ when the reasons overflow the budget, ▲ when open —
+   and re-applies the open state after each ~10s fragment swap; the detail page
+   always shows everything. */
 .reason-block { position: relative; }
 .reason-block:not(.is-open) {
-    max-height: 8.5rem;                 /* ~8 lines at 0.8rem × 1.35 line-height */
+    /* cap "lines" @ 0.8rem × 1.35 = 1.08rem, each also reserving the tight divider gap
+       (0.24 + 0.24rem + a 1px rule ≈ 0.48rem) now added between reasons, so reason_cap
+       still shows about that many entries once the rules take their space. */
+    max-height: calc(var(--reason-lines, 6) * (1.08rem + 0.48rem) + 0.1rem);
     overflow: hidden;
 }
-.reason-block:not(.is-open) .reason-extra { display: none; }
-/* Fade the clipped edge to the card colour — a mask is background-agnostic, so
-   the one rule works on every status tint. Only when the content truly overflows
-   the clamp (.is-clipped), so a short capped list never gets a misleading fade. */
+/* Fade the clipped edge to the card color — a mask is background-agnostic, so the
+   one rule works on every status tint. Only when the content truly overflows the
+   budget (.is-clipped), so a block that fits never gets a misleading fade. */
 .reason-block.is-clipped:not(.is-open) {
     -webkit-mask-image: linear-gradient(to bottom, #000 72%, transparent);
             mask-image: linear-gradient(to bottom, #000 72%, transparent);
 }
-.reason-toggle {
+
+/* The show-all / collapse control: one chevron in the card header, just after the
+   status word (reasons.js fills it). ▼ when the reasons overflow the budget (click
+   to show all), ▲ when expanded (click to collapse), and an empty same-width slot
+   otherwise so the status words stay aligned. Nested nodes, which have no status
+   word, get it pinned to the top-right of their name row instead. */
+.reason-chevron {
     display: inline-block;
-    margin: 0.15rem 0 0 0.5rem;         /* align under .status-node__reason */
+    width: 0.95rem;                     /* fixed slot: ▼ / ▲ / empty align the words */
+    margin-left: 0.35rem;
     padding: 0;
     background: none;
     border: 0;
     -webkit-appearance: none;
             appearance: none;
     color: inherit;
-    font-size: 0.8rem;
-    line-height: 1.35;
-    text-decoration: underline;
-    opacity: 0.85;
-    cursor: pointer;
+    font-size: 0.72rem;
+    line-height: 1;
+    text-align: center;
+    vertical-align: baseline;
+    opacity: 0.72;
 }
-.reason-toggle:hover { opacity: 1; }
+.reason-chevron.is-active { cursor: pointer; }
+.reason-chevron.is-active:hover { opacity: 1; }
+.reason-chevron--node {
+    position: absolute;
+    top: 2px;
+    right: 4px;
+    margin-left: 0;
+}
+/* nodes have no status word, so their chevron anchors to the self row */
+.status-node__self { position: relative; }
 
 /* nested boxes sit below the parent's label, inside its box */
 .status-node__children {
     margin-top: 6px;
 }
 
-/* Leaf density (#24): a card's quiet (not warn/error) descendant leaves render
-   as compact name+colour chips instead of stacked boxes, so an all-green host
+/* Leaf density (ADR-0024): a card's quiet (not warn/error) descendant leaves render
+   as compact name+color chips instead of stacked boxes, so an all-green host
    converges toward a wrapping chip row and holds a steadier height. A chip flows
    inline; a problem leaf or a branch stays a full-width box that breaks the line,
    so alphabetical sibling order survives the mix. A chip's reason (if any) is one
@@ -235,33 +403,61 @@
 .leaf-chip.s-undefined   { background: var(--tint-undefined);   color: #54585c; border-color: rgba(84, 88, 92, 0.28); }
 .leaf-chip.s-maintenance { background: var(--tint-maintenance); color: #244a77; border-color: rgba(36, 74, 119, 0.28); }
 
-/* Status strip (#24): the engine self-heartbeat (ADR-0005), lifted out of the
-   grid into a compact caption pill directly under the "updated …" freshness
-   line — a side note, not a summary banner (fit-content width keeps it from
-   reading as a page-wide roll-up; judged on harness screenshots 2026-07-20).
-   Healthy it reads pale (tint green); a stalled scheduler degrades it to
+/* Branch density (ADR-0024): in the dense view a branch caps the quiet
+   (non-warn/error) child boxes it shows to config.yaml ``branch_cap``; the surplus are
+   marked ``.is-extra`` — kept in the DOM but hidden until this level's "+N more"
+   control (branches.js) expands them in place, surviving the ~10s poll swap like the
+   reason chevron. A warn/error box is never ``.is-extra``, so nothing urgent hides;
+   with density off the class is never emitted and every node is a full box. */
+.node-children:not(.is-expanded) > .status-node.is-extra { display: none; }
+
+/* The reveal control — a subtle text button after a level's boxes. CSS swaps the
+   label by the container's expanded state, so branches.js only toggles the class and
+   aria-expanded, and a poll swap re-rendering the collapsed button stays correct. */
+.branch-more {
+    display: inline-block;
+    margin: 0 0 2px 2px;
+    padding: 0;
+    background: none;
+    border: 0;
+    -webkit-appearance: none;
+            appearance: none;
+    color: inherit;
+    font-size: 0.78rem;
+    font-weight: 600;
+    line-height: 1.5;
+    text-align: left;
+    opacity: 0.8;
+    cursor: pointer;
+}
+.branch-more:hover { opacity: 1; text-decoration: underline; }
+.node-children:not(.is-expanded) > .branch-more .branch-more__hide,
+.node-children.is-expanded > .branch-more .branch-more__show { display: none; }
+
+/* Status strip (ADR-0024; slice 3): the engine self-heartbeat (ADR-0005), lifted
+   out of the grid into a compact pill — now a right-aligned band at the top of
+   #status-grid, beneath the hide/depth controls, reading as its own element rather
+   than the grid's first row. A side note, not a summary banner (fit-content width
+   keeps it from reading as a page-wide roll-up; judged on harness screenshots). A
+   leading watching-eye glyph gives it a self-monitor identity, apart from the node
+   pills. Healthy it reads pale (tint green); a stalled scheduler degrades it to
    warn/error (vivid), the self-monitor's alarm. Living inside #status-grid, it
-   refreshes with the ~10s poll and dims under the sustained-outage banner with
-   the rest of the content. */
+   refreshes with the ~10s poll and dims under the sustained-outage banner with the
+   rest of the content — poll.js unchanged. */
 .ls-strip {
     display: flex;
     width: fit-content;
     max-width: 100%;
     align-items: baseline;
     gap: 0.45rem;
-    margin-bottom: 0.6rem;
     padding: 2px 10px;
     border: 1px solid transparent;
     border-radius: 8px;
     font-size: 0.8rem;
 }
-.ls-strip__pulse {
+.ls-strip__eye {
     flex: 0 0 auto;
     align-self: center;
-    width: 0.5rem;
-    height: 0.5rem;
-    border-radius: 50%;
-    background: currentColor;
     opacity: 0.85;
 }
 .ls-strip__name { font-weight: 600; color: inherit; text-decoration: none; }
@@ -275,7 +471,7 @@
     background: var(--tint-ok); color: #2c6a3f; border-color: rgba(44, 106, 63, 0.22);
 }
 
-/* status colours.
+/* status colors.
    Vivid (white text) = a node reporting its own problem — the culprit.
    Dim (pale fill, dark text) = healthy, or a status only *derived* from a
    visible child — so the culprit pops and its parents fade into a trail. */
