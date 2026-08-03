@@ -27,6 +27,16 @@
 > rejects custom checks on the `/little-sister` line, so nothing
 > user-configured can hide behind the one-line strip ([ADR-0024](0024-dashboard-layout.md)).
 
+> **Update (2026-07-31):** the heartbeat node also carries the engine's **configuration**
+> verdict. A deployment whose config tree is absent no longer starts at all
+> ([ADR-0031](0031-deployment-config-directory.md)); but a tree that is present and simply
+> holds **no checks** is a legitimate state — a fresh install, a deployment mid-bring-up —
+> so the engine runs, a warning names the reason and the directories searched, and the
+> heartbeat reports **WARN** with that reason. This matters because with zero checks the
+> tree is *only* the heartbeat: an OK heartbeat would roll up to an all-green root while
+> nothing whatsoever is being watched, which is precisely the lie decision (1) exists to
+> prevent. Amber, saying "no checks configured", is the honest reading.
+
 ## Context
 State lives in memory and the dashboard is server-rendered, so two things can go
 silently stale: the **page** (loaded minutes ago) and the **data** (a check that

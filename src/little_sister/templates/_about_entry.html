@@ -1,0 +1,23 @@
+{#- The way into /about, in whichever layout is showing.
+
+    It sits apart from the sections rather than among them: /about is not a place
+    you go to work, so in the rail it lives at the foot, below the spacer, and in
+    the top bar it is the last, quietest entry. Written once here so the eye is
+    drawn in one place — the same watching eye the status strip uses. -#}
+{%- set is_on = request.path == '/about' -%}
+{% if nav_style | default('bar') == 'rail' %}
+    <a class="ls-rail__item{{ ' is-on' if is_on }}" href="/about" title="about"
+       {% if is_on %}aria-current="page"{% endif %}>
+        <svg class="ls-rail__icon" width="15" height="15" viewBox="0 0 24 24"
+             aria-hidden="true" focusable="false">
+            <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"
+                  fill="none" stroke="currentColor" stroke-width="2"/>
+            <circle cx="12" cy="12" r="3.2" fill="currentColor"/>
+        </svg><span class="ls-rail__label">about</span>
+    </a>
+{% else %}
+    <li class="nav-item">
+        <a class="nav-link{{ ' active' if is_on }}" href="/about"
+           {% if is_on %}aria-current="page"{% endif %}>about</a>
+    </li>
+{% endif %}

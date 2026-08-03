@@ -1,4 +1,4 @@
-"""Render the UI-harness fixtures through the real templates (backlog #25, Mode 1).
+"""Render the fixtures through the real templates (testing-the-gui.md, Mode 1).
 
 The *fast loop*. Each extreme fixture (``ui_fixtures.py``) is fed through the
 genuine Jinja pipeline — the very ``status.html`` / ``_status_grid.html`` the
@@ -45,6 +45,7 @@ from flask import render_template, session  # noqa: E402
 from little_sister import app as app_module  # noqa: E402
 from little_sister.app import (  # noqa: E402
     MAX_DEPTH,
+    _maintenance_rows,
     _maintenance_view,
     _node_meta_map,
     _split_heartbeat,
@@ -75,7 +76,9 @@ def render_page(fixture: Fixture) -> str:
     # Mirror the view: lift the engine heartbeat into the status strip (ADR-0024) so
     # the harness renders the strip exactly as a live request does.
     node, heartbeat = _split_heartbeat(node)
-    maintenance_index, maintenance_ancestors = _maintenance_view(node, datetime.now())
+    node_pins, entry_pins, maintenance_ancestors = _maintenance_view(
+        node, datetime.now())
+    maintenance_rows = _maintenance_rows(node_pins, entry_pins)
     path = f"/status/{fixture.branch}" if fixture.branch else "/status"
     previous_error = app_module.engine_error
     app_module.engine_error = fixture.engine_error
@@ -95,13 +98,15 @@ def render_page(fixture: Fixture) -> str:
                 hide_ok=False,
                 hide_idle=False,
                 dense=True,
+                is_admin=True,
+                maintenance_default=app_module.config.maintenance_default_expiry,
                 heartbeat=heartbeat,
                 node_meta=_node_meta_map(node) | _node_meta_map(heartbeat),
                 rendered_at=_RENDERED_AT,
                 reason_cap=app_module.config.reason_cap,
                 branch_cap=app_module.config.branch_cap,
                 maintenance_cap=app_module.config.maintenance_cap,
-                maintenance_index=maintenance_index,
+                maintenance_rows=maintenance_rows,
                 maintenance_ancestors=maintenance_ancestors,
             )
     finally:

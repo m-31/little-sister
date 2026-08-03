@@ -1,19 +1,25 @@
-"""General application configuration, loaded once from a YAML file.
+"""General application configuration, loaded once from the ``settings`` aspect.
 
-Defaults apply when the file or a key is missing. The path defaults to
-``config.yaml`` in the working directory (override with ``LITTLE_SISTER_CONFIG``).
-Add new options by giving them a field and a default here and reading them in
-:func:`load_config`.
+Defaults apply when the file or a key is missing. Settings are the ``settings``
+aspect of the configuration directory — ``config/settings.yaml`` in each root of the
+path-list, **shallow-merged per key** with the later root winning (ADR-0031); the
+file is a flat mapping of scalars, so that is well defined.
+``LITTLE_SISTER_CONFIG`` names a single file instead and **bypasses layering
+entirely**, which is what an override should mean. Add new options by giving them a
+field and a default here and reading them in :func:`load_config`.
 """
 from __future__ import annotations
 
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
 
+from little_sister import values
+from little_sister.config_dir import aspect_files
 from little_sister.logger import logger
 
 DEFAULT_TIMEZONE = "Europe/Berlin"
@@ -22,7 +28,11 @@ DEFAULT_MAINTENANCE_EXPIRY = "7d"
 DEFAULT_REASON_CAP = 6
 DEFAULT_BRANCH_CAP = 3
 DEFAULT_MAINTENANCE_CAP = 5
-DEFAULT_CONFIG_PATH = os.environ.get("LITTLE_SISTER_CONFIG", "config.yaml")
+DEFAULT_RETRY_ATTEMPTS = 2
+SETTINGS_ASPECT = "settings"
+# An explicit single-file override, read at import so a wrapper can set it before
+# importing the app. Empty (the normal case) means "use the aspect and its layering".
+CONFIG_PATH_OVERRIDE = os.environ.get("LITTLE_SISTER_CONFIG", "")
 
 
 @dataclass(frozen=True)
@@ -51,6 +61,24 @@ class Config:
     # branch_cap, plumbed to the full page and the ?fragment swap. A non-negative int
     # (0 sends every pin straight to the /maintenance page).
     maintenance_cap: int = DEFAULT_MAINTENANCE_CAP
+    # Show a failing check's **stack trace** on its node, not just the exception
+    # message (ADR-0040). On by default: this is an operator dashboard, and
+    # a deployment where the log is awkward to reach — a container, someone else's
+    # cloud — should not have to go looking for the one thing that explains the
+    # failure. Set false where the dashboard has a wider audience than its logs.
+    stacktrace: bool = True
+    # The budgeted failure retry (ADR-0033): while a check's last result is not
+    # OK, run it again after this interval instead of waiting out its frequency
+    # — at most `retry_attempts` times per failure episode, then back to the
+    # nominal frequency until it recovers. A duration string or bare seconds,
+    # kept as text and parsed where used (the maintenance_default_expiry
+    # pattern); empty or 0 = off, which is the default — nothing changes until
+    # a deployment opts in. A check config can override either field.
+    retry_interval: str = ""
+    # Fast attempts per failure episode (the budget); a non-negative int, 0
+    # disables the retry even where an interval is set. The later damping work
+    # ties its escalation count here.
+    retry_attempts: int = DEFAULT_RETRY_ATTEMPTS
 
     @property
     def tzinfo(self) -> ZoneInfo:
@@ -113,40 +141,99 @@ def _valid_maintenance_cap(value: object) -> int:
     return cap
 
 
-def load_config(path: str | Path | None = None) -> Config:
-    """Load the config from ``path`` (default ``config.yaml``); on any problem,
-    fall back to defaults. Logs (INFO) the resolved absolute path and the values it
-    yields, so a deployment can see exactly which file and cap took effect."""
-    source = Path(path) if path is not None else Path(DEFAULT_CONFIG_PATH)
+def _valid_retry_attempts(value: object) -> int:
+    """Coerce the failure-retry budget (ADR-0033) to a non-negative int; a bad
+    or negative value falls back safely (``0`` disables the fast retry)."""
+    try:
+        attempts = int(str(value).strip())
+    except ValueError:
+        logger.warning("config: retry_attempts %r is not an integer; using %d",
+                       value, DEFAULT_RETRY_ATTEMPTS)
+        return DEFAULT_RETRY_ATTEMPTS
+    if attempts < 0:
+        logger.warning("config: retry_attempts %d is negative; using 0",
+                       attempts)
+        return 0
+    return attempts
+
+
+def settings_files(config_dir: str | Path | None = None) -> list[Path]:
+    """The settings layers, in path-list order.
+
+    ``LITTLE_SISTER_CONFIG`` (or an explicit ``path``) short-circuits to that one
+    file and never consults the configuration directory — the override bypasses
+    layering. Otherwise the ``settings`` aspect of every root, lowest first.
+    """
+    if CONFIG_PATH_OVERRIDE:
+        return [Path(CONFIG_PATH_OVERRIDE)]
+    return aspect_files(SETTINGS_ASPECT, config_dir)
+
+
+def _read_settings(source: Path) -> dict[str, Any]:
+    """One settings file as a mapping. Every problem — absent, unparsable, not a
+    mapping — logs and yields ``{}``, so a bad layer costs its own keys and not the
+    whole configuration."""
     try:
         with open(source, encoding="utf-8") as handle:
             data = yaml.safe_load(handle) or {}
     except FileNotFoundError:
         logger.info("config: no file at %s; using defaults (reason_cap=%d)",
                     source.resolve(), DEFAULT_REASON_CAP)
-        return Config()
+        return {}
     except yaml.YAMLError as error:
         logger.warning("config: invalid YAML in %s: %s; using defaults",
                        source, error)
-        return Config()
+        return {}
     if not isinstance(data, dict):
         logger.warning("config: %s must be a mapping; using defaults", source)
-        return Config()
+        return {}
+    return data
+
+
+def load_config(path: str | Path | None = None, *,
+                config_dir: str | Path | None = None) -> Config:
+    """Load the settings; on any problem, fall back to defaults.
+
+    ``path`` names a single file and bypasses layering (as
+    ``LITTLE_SISTER_CONFIG`` does). Otherwise the ``settings`` aspect of every
+    configuration root in ``config_dir`` (default ``LITTLE_SISTER_CONFIG_DIR``) is
+    shallow-merged **per key**, later root winning. Logs (INFO) the resolved
+    absolute path of every layer and the values they yield, so a deployment can see
+    exactly which file and which cap took effect.
+    """
+    sources = [Path(path)] if path is not None else settings_files(config_dir)
+    data: dict[str, Any] = {}
+    for source in sources:
+        data.update(_read_settings(source))
+    if not sources:
+        logger.info("config: no settings file in any configuration root; "
+                    "using defaults (reason_cap=%d)", DEFAULT_REASON_CAP)
     cfg = Config(
-        timezone=_valid_timezone(str(data.get("timezone", DEFAULT_TIMEZONE))),
-        time_format=str(data.get("time_format", DEFAULT_TIME_FORMAT)),
-        maintenance_default_expiry=str(
-            data.get("maintenance_default_expiry", DEFAULT_MAINTENANCE_EXPIRY)),
+        timezone=_valid_timezone(
+            values.text(data, "timezone", default=DEFAULT_TIMEZONE)),
+        time_format=values.text(data, "time_format",
+                                default=DEFAULT_TIME_FORMAT),
+        maintenance_default_expiry=values.text(
+            data, "maintenance_default_expiry",
+            default=DEFAULT_MAINTENANCE_EXPIRY),
         reason_cap=_valid_reason_cap(data.get("reason_cap", DEFAULT_REASON_CAP)),
         branch_cap=_valid_branch_cap(data.get("branch_cap", DEFAULT_BRANCH_CAP)),
         maintenance_cap=_valid_maintenance_cap(
             data.get("maintenance_cap", DEFAULT_MAINTENANCE_CAP)),
+        retry_interval=values.text(data, "retry_interval", default=""),
+        retry_attempts=_valid_retry_attempts(
+            data.get("retry_attempts", DEFAULT_RETRY_ATTEMPTS)),
+        stacktrace=values.flag(data, "stacktrace", default=True),
     )
-    logger.info(
-        "config: loaded %s — timezone=%s, time_format=%r, reason_cap=%d, "
-        "branch_cap=%d, maintenance_cap=%d, maintenance_default_expiry=%s",
-        source.resolve(), cfg.timezone, cfg.time_format, cfg.reason_cap,
-        cfg.branch_cap, cfg.maintenance_cap, cfg.maintenance_default_expiry)
+    if sources:
+        logger.info(
+            "config: loaded %s — timezone=%s, time_format=%r, reason_cap=%d, "
+            "branch_cap=%d, maintenance_cap=%d, maintenance_default_expiry=%s, "
+            "retry_interval=%s, retry_attempts=%d",
+            ", ".join(str(source.resolve()) for source in sources),
+            cfg.timezone, cfg.time_format, cfg.reason_cap, cfg.branch_cap,
+            cfg.maintenance_cap, cfg.maintenance_default_expiry,
+            cfg.retry_interval or "off", cfg.retry_attempts)
     return cfg
 
 

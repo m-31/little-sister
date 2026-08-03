@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from unittest import TestCase
 
 from little_sister.maintenance import MaintenanceEntry
-from little_sister.status import StatusCode
+from little_sister.status import HEARTBEAT_PATH, StatusCode
 from little_sister.tree import Event, StatusTree
 
 
@@ -13,12 +13,17 @@ class _RecordingStore:
 
     def __init__(self) -> None:
         self.saved: dict[str, MaintenanceEntry] = {}
+        self.saved_entries: dict[tuple[str, str], MaintenanceEntry] = {}
 
     def load(self) -> dict[str, MaintenanceEntry]:
         return {}
 
-    def save(self, entries):
+    def load_entries(self) -> dict[tuple[str, str], MaintenanceEntry]:
+        return {}
+
+    def save(self, entries, entry_pins=None):
         self.saved = dict(entries)
+        self.saved_entries = dict(entry_pins or {})
 
 
 class StatusTreeTests(TestCase):
@@ -194,6 +199,35 @@ class StatusTreeTests(TestCase):
         self.assertEqual(snap.description, "the API")
         self.assertEqual(snap.frequency_seconds, 300)
 
+    def test_written_node_is_stamped_unwritten_container_is_not(self):
+        # ADR-0027: a timestamp means a check wrote the node. The container the
+        # upsert created on the way down was never written, so it has none — and no
+        # age either (the process start time can no longer pose as an observation).
+        # No mount is registered here, so nothing is inherited either
+        # (MountTimestampTests covers that).
+        tree = StatusTree()
+        tree.upsert("/svc/api", StatusCode.OK)
+        leaf = tree.snapshot("/svc/api")
+        container = tree.snapshot("/svc")
+        root = tree.snapshot()
+        assert leaf is not None and container is not None and root is not None
+        self.assertIsNotNone(leaf.timestamp)
+        self.assertIsNone(container.timestamp)
+        self.assertIsNone(root.timestamp)
+        self.assertEqual(container.age_seconds, 0.0)
+        self.assertFalse(container.stale)
+
+    def test_maintenance_touch_stamps_an_otherwise_unwritten_node(self):
+        # The maintenance guard refreshes the check time without changing the code,
+        # so a pinned node keeps reporting a real observation.
+        tree = StatusTree()
+        tree.set_maintenance("/db", "planned",
+                             expires_at=datetime.now() + timedelta(days=1))
+        tree.upsert("/db", StatusCode.OK)
+        snap = tree.snapshot("/db")
+        assert snap is not None
+        self.assertIsNotNone(snap.timestamp)
+
     def test_history_periods(self):
         tree = StatusTree()
         tree.upsert("/db", StatusCode.OK)
@@ -207,25 +241,193 @@ class StatusTreeTests(TestCase):
         assert snap is not None
         self.assertEqual(periods[-1].until, snap.timestamp)
 
-    def test_maintenance_is_sticky(self):
+    def test_a_pin_silences_a_node_without_overwriting_its_reading(self):
+        """The keystone (ADR-0032 rule 3): a pin is **recorded, never written**.
+
+        Point for point the inverse of what this case asserted before, when the pin
+        was stamped into ``Status.code`` — it used to check that the node's reason
+        *became* the pin's text and that the engine could no longer write. Both were
+        the deviation. The last block is the bug that made the slice urgent: clearing
+        used to drop the node to ``UNDEFINED`` with an empty reason list, so it sat
+        blank for up to a full check interval, and on the un-polled leaf page it came
+        back only on a reload.
+        """
         tree = StatusTree()
-        tree.upsert("/db", StatusCode.OK)
+        tree.upsert("/db", StatusCode.OK, "all good")
         tree.set_maintenance("/db", "planned",
                              expires_at=datetime.now() + timedelta(days=7))
-        self.assertEqual(tree.effective("/db"), StatusCode.MAINTENANCE)
         snap = tree.snapshot("/db")
         assert snap is not None
         self.assertTrue(snap.maintenance)
-        self.assertEqual(snap.reason, ("planned",))
-        # the engine's upsert must not override maintenance
-        self.assertFalse(tree.upsert("/db", StatusCode.ERROR, "boom"))
         self.assertEqual(tree.effective("/db"), StatusCode.MAINTENANCE)
-        # clearing reverts to UNDEFINED
-        self.assertTrue(tree.clear_maintenance("/db"))
-        self.assertEqual(tree.effective("/db"), StatusCode.UNDEFINED)
+        self.assertEqual(snap.own_code, StatusCode.MAINTENANCE)  # what it shows
+        self.assertEqual(snap.reported_code, StatusCode.OK)      # what the check said
+        self.assertEqual(snap.reason, ("all good",))             # kept, not replaced
+        entry = tree.maintenance_entry("/db")
+        assert entry is not None
+        self.assertEqual(entry.reason, "planned")   # the pin's own text lives here
+
+        # the check keeps reporting underneath the pin, and the tree keeps it
+        self.assertTrue(tree.upsert("/db", StatusCode.ERROR, "boom"))
+        during = tree.snapshot("/db")
+        assert during is not None
+        self.assertEqual(during.own_code, StatusCode.MAINTENANCE)   # still silenced
+        self.assertEqual(during.reported_code, StatusCode.ERROR)    # and still legible
+        self.assertEqual(during.reason, ("boom",))
+
+        # clearing restores the last known state *at once* — there is no blank window
+        # because there was never anything to restore
+        self.assertTrue(tree.clear_maintenance("/db").applied)
         after = tree.snapshot("/db")
         assert after is not None
         self.assertFalse(after.maintenance)
+        self.assertEqual(after.own_code, StatusCode.ERROR)
+        self.assertEqual(after.reason, ("boom",))
+
+    def test_a_pinned_check_that_dies_still_escalates(self):
+        """ADR-0032 rule 6: a suppression may not switch off the freshness path.
+
+        The one test that fails on either half of this slice alone. With the pin
+        still written into the node, ``_is_stale``'s ``node.maintenance`` exemption
+        was load-bearing — removing it sent a ``MAINTENANCE`` code into
+        ``worst_of``, which knows only OK/WARN/ERROR, and the snapshot raised. The
+        two deviations propped each other up; correcting rule 3 is what makes rule 6
+        free.
+        """
+        tree = StatusTree()
+        tree.upsert("/system/db", StatusCode.OK, frequency_seconds=60)
+        tree.set_maintenance("/system/db", "planned",
+                             expires_at=datetime.now() + timedelta(days=7))
+        fresh = tree.snapshot("/system/db")
+        assert fresh is not None
+        self.assertFalse(fresh.stale)
+        # The pinned child contributes nothing, and it is the only one — so its
+        # parent has nothing counted, and reads MAINTENANCE rather than UNDEFINED.
+        # That was the open edge case ADR-0032's amendment left for the ADR-0004
+        # split; this line asserted UNDEFINED while it was open, and changed with it.
+        self.assertEqual(tree.effective("/system"), StatusCode.MAINTENANCE)
+
+        # nobody writes it again; the clock moves past two intervals
+        later = datetime.now() + timedelta(seconds=200)
+        stale = tree.snapshot("/system/db", now=later)
+        assert stale is not None
+        self.assertTrue(stale.stale)
+        # it still *shows* maintenance — the card explains — but it stops
+        # contributing nothing: a dead check escalates past the pin that silenced it
+        self.assertEqual(stale.own_code, StatusCode.MAINTENANCE)
+        parent = tree.snapshot("/system", now=later)
+        assert parent is not None
+        self.assertEqual(parent.code, StatusCode.WARN)
+
+    def test_the_stale_escape_never_softens_a_known_failure(self):
+        # `worst_of(reported, WARN)`, not a flat WARN: a real ERROR under a pin that
+        # then goes stale must not be softened to amber because we stopped watching.
+        tree = StatusTree()
+        tree.upsert("/system/db", StatusCode.ERROR, "boom", frequency_seconds=60)
+        tree.set_maintenance("/system/db", "planned",
+                             expires_at=datetime.now() + timedelta(days=7))
+        later = datetime.now() + timedelta(seconds=200)
+        parent = tree.snapshot("/system", now=later)
+        assert parent is not None
+        self.assertEqual(parent.code, StatusCode.ERROR)
+
+    def test_a_check_reported_maintenance_is_exempt_from_staleness(self):
+        # the guard that replaced the pin exemption is on the **code**, and it closes
+        # a latent crash of its own: a check may report MAINTENANCE itself, and that
+        # carries no severity for the stale degrade to take the worst of.
+        tree = StatusTree()
+        tree.upsert("/db", StatusCode.MAINTENANCE, frequency_seconds=60)
+        later = datetime.now() + timedelta(seconds=200)
+        snap = tree.snapshot("/db", now=later)
+        assert snap is not None
+        self.assertFalse(snap.stale)
+
+    def test_pinning_and_clearing_are_recorded_as_transitions(self):
+        # A pin no longer changes `Status.code`, so these events are emitted
+        # deliberately rather than falling out of a write. They stay transitions of
+        # what the node *shows*, because that is the question history answers.
+        tree = StatusTree()
+        tree.upsert("/db", StatusCode.ERROR, "boom")
+        tree.set_maintenance("/db", "planned",
+                             expires_at=datetime.now() + timedelta(days=7))
+        pinned = tree.recent_events()[-1]
+        self.assertEqual((pinned.old, pinned.new),
+                         (StatusCode.ERROR, StatusCode.MAINTENANCE))
+        self.assertEqual(pinned.reason, ("planned",))   # why it moved, not the reading
+        tree.clear_maintenance("/db")
+        cleared = tree.recent_events()[-1]
+        self.assertEqual((cleared.old, cleared.new),
+                         (StatusCode.MAINTENANCE, StatusCode.ERROR))
+        self.assertEqual(cleared.reason, ("boom",))     # what it shows again
+
+    def test_a_transition_under_a_pin_is_recorded_and_marked(self):
+        """*An unmarked event is one that alarmed; a marked one is one that didn't.*
+
+        Before the keystone there was no event here at all — `upsert` returned early
+        under a pin — so *did it break during the window?* had no answer anywhere.
+        """
+        tree = StatusTree()
+        tree.upsert("/db", StatusCode.OK, "all good")
+        tree.set_maintenance("/db", "cutover",
+                             expires_at=datetime.now() + timedelta(days=7))
+        tree.upsert("/db", StatusCode.ERROR, "disk full")
+        broke = tree.recent_events()[-1]
+        self.assertEqual((broke.old, broke.new), (StatusCode.OK, StatusCode.ERROR))
+        self.assertEqual(broke.suppressed_by, "maintenance")
+
+    def test_the_pin_and_its_release_are_never_marked(self):
+        # they are what everybody saw; marking them would falsify the sentence
+        tree = StatusTree()
+        tree.upsert("/db", StatusCode.ERROR, "boom")
+        tree.set_maintenance("/db", "cutover",
+                             expires_at=datetime.now() + timedelta(days=7))
+        self.assertEqual(tree.recent_events()[-1].suppressed_by, "")
+        tree.clear_maintenance("/db")
+        self.assertEqual(tree.recent_events()[-1].suppressed_by, "")
+
+    def test_an_ordinary_transition_carries_no_marker(self):
+        tree = StatusTree()
+        tree.upsert("/db", StatusCode.OK)
+        tree.upsert("/db", StatusCode.ERROR, "boom")
+        self.assertEqual(tree.recent_events()[-1].suppressed_by, "")
+
+    def test_a_check_that_reports_maintenance_itself_is_not_marked(self):
+        # nothing suppressed it — it said so. The marker names a *rule* that acted.
+        tree = StatusTree()
+        tree.upsert("/db", StatusCode.OK)
+        tree.upsert("/db", StatusCode.MAINTENANCE)
+        self.assertEqual(tree.recent_events()[-1].suppressed_by, "")
+
+    def test_history_does_not_break_a_maintenance_window_into_phantoms(self):
+        """What the node *showed* was maintenance, the whole time.
+
+        The suppressed transitions stay in the event log — that is where *did it
+        break during the window?* is answered — but counting them as periods would
+        chop one window into ERROR stretches no surface ever displayed.
+        """
+        tree = StatusTree()
+        tree.upsert("/db", StatusCode.OK, "all good")
+        tree.set_maintenance("/db", "cutover",
+                             expires_at=datetime.now() + timedelta(days=7))
+        tree.upsert("/db", StatusCode.ERROR, "disk full")
+        tree.upsert("/db", StatusCode.OK, "recovered")
+        codes = [period.code for period in tree.history("/db")]
+        self.assertEqual(codes, [StatusCode.OK, StatusCode.MAINTENANCE])
+        # …and the breakage is still on the record
+        marked = [e for e in tree.recent_events() if e.suppressed_by]
+        self.assertEqual([e.new for e in marked],
+                         [StatusCode.ERROR, StatusCode.OK])
+
+    def test_a_pin_on_a_node_no_check_has_written_still_records(self):
+        # `_apply_maintenance` used to stamp the node through `update`; now it does
+        # not, so an event on a container that has never been observed has no
+        # observation time to borrow and carries the moment the admin acted.
+        tree = StatusTree()
+        tree.set_maintenance("/planned/window", "cutover",
+                             expires_at=datetime.now() + timedelta(hours=2))
+        event = tree.recent_events()[-1]
+        self.assertEqual(event.new, StatusCode.MAINTENANCE)
+        self.assertTrue(event.timestamp)
 
     def test_stale_node_degrades(self):
         tree = StatusTree()
@@ -265,6 +467,120 @@ class StatusTreeTests(TestCase):
         assert snap is not None
         self.assertFalse(snap.stale)
         self.assertEqual(snap.code, StatusCode.MAINTENANCE)
+
+
+class MountTimestampTests(TestCase):
+    """Sole-mount resolution of the published observation time (ADR-0027)."""
+
+    @staticmethod
+    def _stamp(tree, path=""):
+        snap = tree.snapshot(path)
+        assert snap is not None
+        return snap.timestamp
+
+    def test_sole_mount_stamps_every_unwritten_ancestor(self):
+        # The ADR's example: a deployment whose only check mounts at
+        # /system/node_a/host_metrics reports that check's run time on
+        # /system/node_a, /system and / alike.
+        tree = StatusTree()
+        tree.set_check_mount("/system/node_a/host_metrics")
+        tree.upsert("/system/node_a/host_metrics", StatusCode.OK)
+        mount = self._stamp(tree, "/system/node_a/host_metrics")
+        self.assertIsNotNone(mount)
+        self.assertEqual(self._stamp(tree, "/system/node_a"), mount)
+        self.assertEqual(self._stamp(tree, "/system"), mount)
+        self.assertEqual(self._stamp(tree), mount)
+
+    def test_second_mount_clears_the_shared_ancestors_only(self):
+        # A second mount makes any single value on a shared ancestor attribute one
+        # check's run time to another check's data, so the value disappears rather
+        # than changing meaning. Ancestors that still cover exactly one mount keep it.
+        tree = StatusTree()
+        for path in ("/system/node_a/host_metrics", "/system/node_b/host_metrics"):
+            tree.set_check_mount(path)
+            tree.upsert(path, StatusCode.OK)
+        self.assertIsNone(self._stamp(tree, "/system"))
+        self.assertIsNone(self._stamp(tree))
+        for host in ("/system/node_a", "/system/node_b"):
+            self.assertEqual(self._stamp(tree, host),
+                             self._stamp(tree, host + "/host_metrics"))
+
+    def test_two_checks_on_one_mount_stay_one_mount(self):
+        # host-metrics + a memory probe on one host node: they re-stamp the same
+        # mount in turn, so the question still has one answer and the ancestors
+        # inherit (the rule counts mounts, not checks).
+        tree = StatusTree()
+        tree.set_check_mount("/system/node_a/metrics")
+        tree.set_check_mount("/system/node_a/metrics")
+        tree.upsert("/system/node_a/metrics", StatusCode.OK)
+        mount = self._stamp(tree, "/system/node_a/metrics")
+        self.assertIsNotNone(mount)
+        self.assertEqual(self._stamp(tree), mount)
+
+    def test_never_run_sole_mount_yields_none(self):
+        # Registration alone is not an observation — and it does not create the node
+        # either; the tree's visible shape still grows only with results.
+        tree = StatusTree()
+        tree.set_check_mount("/system/node_a/host_metrics")
+        self.assertIsNone(self._stamp(tree))
+        self.assertIsNone(tree.snapshot("/system"))
+        self.assertEqual(tree.snapshot().children, ())
+
+    def test_heartbeat_neither_blocks_nor_feeds_the_rollup(self):
+        # The engine's heartbeat node is written every tick but is not a check
+        # mount: it must not count as a second mount (which would clear the root),
+        # and on its own it must not feed the root a stamp either.
+        tree = StatusTree()
+        tree.upsert(HEARTBEAT_PATH, StatusCode.OK)
+        self.assertIsNone(self._stamp(tree))
+        tree.set_check_mount("/system/node_a/host_metrics")
+        tree.upsert("/system/node_a/host_metrics", StatusCode.OK)
+        self.assertEqual(self._stamp(tree),
+                         self._stamp(tree, "/system/node_a/host_metrics"))
+
+    def test_branch_snapshot_resolves_from_its_own_subtree(self):
+        # A branch snapshot sees only its own subtree, so /a inherits from the one
+        # mount below it even though the whole tree holds two.
+        tree = StatusTree()
+        for path in ("/a/check_1", "/b/check_2"):
+            tree.set_check_mount(path)
+            tree.upsert(path, StatusCode.OK)
+        self.assertIsNone(self._stamp(tree))
+        self.assertEqual(self._stamp(tree, "/a"), self._stamp(tree, "/a/check_1"))
+        self.assertEqual(self._stamp(tree, "/b"), self._stamp(tree, "/b/check_2"))
+
+    def test_written_node_keeps_its_own_stamp_over_an_inherited_one(self):
+        # A branch check writes its container too, so that node answers for itself;
+        # the sole-mount value is only ever a fallback.
+        tree = StatusTree()
+        tree.set_check_mount("/system/node_a/host_metrics")
+        tree.upsert("/system/node_a/host_metrics", StatusCode.OK)
+        tree.upsert("/system/node_a/host_metrics/disk", StatusCode.OK)
+        tree.upsert("/system/node_a", StatusCode.OK)
+        node_a = tree.snapshot("/system/node_a")
+        assert node_a is not None
+        self.assertIsNotNone(node_a.timestamp)
+        mount = self._stamp(tree, "/system/node_a/host_metrics")
+        self.assertNotEqual(node_a.timestamp, mount)
+        # ... while the container that was *not* written inherits the **mount's**
+        # stamp — not the nearest written descendant's. Only a mount answers the
+        # question "when did the check behind this node run?".
+        self.assertEqual(self._stamp(tree, "/system"), mount)
+
+    def test_inheritance_does_not_leak_into_staleness_or_age(self):
+        # `stale` and `age_seconds` keep measuring the node's own stamp: an
+        # inherited time is a display value, not an observation of this node.
+        tree = StatusTree()
+        tree.set_check_mount("/system/node_a/host_metrics")
+        tree.upsert("/system/node_a/host_metrics", StatusCode.OK,
+                    frequency_seconds=60)
+        container = tree.snapshot("/system/node_a",
+                                  now=datetime.now() + timedelta(hours=1))
+        assert container is not None
+        self.assertIsNotNone(container.timestamp)
+        self.assertEqual(container.age_seconds, 0.0)
+        # The mount itself is long overdue, and that *does* roll up as `stale`.
+        self.assertTrue(container.stale)
 
 
 class SiblingOrderingTests(TestCase):
@@ -356,6 +672,322 @@ class MaintenancePersistenceTests(TestCase):
                          ["/gone/node"])
         self.assertEqual(tree.effective("/payments"), StatusCode.MAINTENANCE)
         self.assertEqual(tree.effective("/gone/node"), StatusCode.UNDEFINED)
+
+
+class MaintenanceEditTests(TestCase):
+    """Editing a pin in place, and the compare-and-set guard that keeps two admins
+    from silently overwriting one another (ADR-0014 amendment)."""
+
+    def setUp(self):
+        self.tree = StatusTree(maintenance_store=_RecordingStore())
+        self.far = datetime.now() + timedelta(days=1)
+
+    def _pin(self, reason="planned", by="ada", expires_at=None, token=None):
+        return self.tree.set_maintenance(
+            "/db", reason, expires_at=expires_at or self.far, set_by=by,
+            expected_set_at=token)
+
+    # ----- both dates -----
+
+    def test_a_fresh_pin_creates_and_sets_at_the_same_moment(self):
+        entry = self._pin().current
+        assert entry is not None
+        self.assertEqual(entry.created_at, entry.set_at)
+        self.assertEqual(entry.created_by, "ada")
+        self.assertEqual(entry.set_by, "ada")
+
+    def test_an_edit_keeps_the_creation_and_moves_the_set(self):
+        first = self._pin(by="ada").current
+        assert first is not None
+        second = self._pin("planned, extended", by="ben",
+                           token=first.set_at).current
+        assert second is not None
+        self.assertEqual(second.created_at, first.created_at)
+        self.assertEqual(second.created_by, "ada")     # who pinned it
+        self.assertEqual(second.set_by, "ben")         # who last touched it
+        self.assertNotEqual(second.set_at, first.set_at)
+
+    def test_clear_and_repin_starts_a_new_creation(self):
+        first = self._pin(by="ada").current
+        assert first is not None
+        self.tree.clear_maintenance("/db", expected_set_at=first.set_at)
+        again = self._pin(by="ben", token="").current
+        assert again is not None
+        self.assertEqual(again.created_by, "ben")
+        self.assertEqual(again.created_at, again.set_at)
+
+    # ----- the compare-and-set guard -----
+
+    def test_a_stale_token_writes_nothing(self):
+        first = self._pin("ada's words", by="ada").current
+        assert first is not None
+        self._pin("ben's words", by="ben", token=first.set_at)
+        # carla still holds the token she was served before ben wrote
+        refused = self._pin("carla's words", by="carla", token=first.set_at)
+        self.assertFalse(refused.applied)
+        self.assertTrue(refused.refused)
+        assert refused.current is not None
+        self.assertEqual(refused.current.reason, "ben's words")
+        self.assertEqual(refused.current.set_by, "ben")
+        # nothing was written: the stored pin is untouched
+        entry = self.tree.maintenance_entry("/db")
+        assert entry is not None
+        self.assertEqual(entry.reason, "ben's words")
+
+    def test_believing_nothing_is_pinned_when_something_is_is_refused(self):
+        self._pin(by="ada")
+        refused = self._pin("mine", by="ben", token="")
+        self.assertTrue(refused.refused)
+        assert refused.current is not None
+        self.assertEqual(refused.current.set_by, "ada")
+
+    def test_believing_a_pin_exists_when_it_is_gone_is_refused(self):
+        first = self._pin(by="ada").current
+        assert first is not None
+        self.tree.clear_maintenance("/db")
+        refused = self._pin("mine", by="ben", token=first.set_at)
+        self.assertTrue(refused.refused)
+        self.assertIsNone(refused.current)      # nothing to reckon with
+
+    def test_clearing_carries_the_same_guard(self):
+        first = self._pin(by="ada").current
+        assert first is not None
+        self._pin("ben's words", by="ben", token=first.set_at)
+        refused = self.tree.clear_maintenance("/db",
+                                              expected_set_at=first.set_at)
+        self.assertTrue(refused.refused)
+        self.assertEqual(self.tree.effective("/db"), StatusCode.MAINTENANCE)
+        # with the fresh token it goes through
+        current = self.tree.maintenance_entry("/db")
+        assert current is not None
+        ok = self.tree.clear_maintenance("/db", expected_set_at=current.set_at)
+        self.assertTrue(ok.applied)
+        self.assertEqual(self.tree.effective("/db"), StatusCode.UNDEFINED)
+
+    def test_clearing_nothing_is_not_a_conflict(self):
+        # the belief ("nothing is pinned") is correct, so there is no one to
+        # reckon with — it simply changed nothing
+        write = self.tree.clear_maintenance("/db", expected_set_at="")
+        self.assertFalse(write.applied)
+        self.assertFalse(write.refused)
+
+    def test_an_absent_token_writes_unguarded(self):
+        self._pin("ada's words", by="ada")
+        write = self._pin("ben's words", by="ben")     # expected_set_at=None
+        self.assertTrue(write.applied)
+        assert write.current is not None
+        self.assertEqual(write.current.reason, "ben's words")
+
+    # ----- the edit event -----
+
+    def _maintenance_events(self):
+        return [e for e in self.tree.recent_events() if e.path == "/db"]
+
+    def test_a_real_edit_emits_an_event(self):
+        first = self._pin("planned", by="ada").current
+        assert first is not None
+        self._pin("planned, one more day", by="ben", token=first.set_at)
+        events = self._maintenance_events()
+        self.assertEqual(len(events), 2)
+        # MAINTENANCE -> MAINTENANCE: the code cannot tell, the entry can
+        self.assertEqual(events[-1].old, StatusCode.MAINTENANCE)
+        self.assertEqual(events[-1].new, StatusCode.MAINTENANCE)
+        self.assertEqual(events[-1].reason, ("planned, one more day",))
+
+    def test_extending_the_window_alone_emits_an_event(self):
+        first = self._pin("planned", by="ada").current
+        assert first is not None
+        self._pin("planned", by="ada", token=first.set_at,
+                  expires_at=self.far + timedelta(days=1))
+        self.assertEqual(len(self._maintenance_events()), 2)
+
+    def test_a_no_op_resubmit_emits_nothing(self):
+        first = self._pin("planned", by="ada").current
+        assert first is not None
+        self._pin("planned", by="ada", token=first.set_at,
+                  expires_at=datetime.fromisoformat(first.expires_at))
+        self.assertEqual(len(self._maintenance_events()), 1)
+
+
+class EntryMaintenanceTests(TestCase):
+    """Per-entry pins and the virtual-children roll-up (ADR-0036; the ADR-0032
+    amendment)."""
+
+    def setUp(self):
+        self.tree = StatusTree(maintenance_store=_RecordingStore())
+        self.far = datetime.now() + timedelta(days=1)
+
+    def _findings(self, *slugs):
+        return {slug: f"finding {slug}" for slug in slugs}
+
+    def _pin(self, slug, path="/wiz", reason="working on it", token=None):
+        return self.tree.set_entry_maintenance(
+            path, slug, reason, expires_at=self.far, set_by="ada",
+            expected_set_at=token)
+
+    def _snap(self, path="/wiz", now=None):
+        snap = self.tree.snapshot(path, now=now)
+        assert snap is not None
+        return snap
+
+    # ----- the point of the whole feature -----
+
+    def test_pinning_one_finding_leaves_the_others_alarming(self):
+        self.tree.upsert("/wiz", StatusCode.ERROR, self._findings("a", "b", "c"))
+        self._pin("b")
+        snap = self._snap()
+        self.assertEqual(snap.own_code, StatusCode.ERROR)     # nineteen others
+        self.assertEqual(snap.quiet_reasons, 1)
+        quiet = [line.slug for line in snap.reasons if line.quiet]
+        self.assertEqual(quiet, ["b"])
+
+    def test_a_node_whose_members_are_all_pinned_reads_maintenance(self):
+        self.tree.upsert("/wiz", StatusCode.ERROR, self._findings("a", "b"))
+        self._pin("a")
+        self._pin("b")
+        snap = self._snap()
+        self.assertEqual(snap.own_code, StatusCode.MAINTENANCE)
+        self.assertEqual(snap.code, StatusCode.MAINTENANCE)
+        self.assertFalse(snap.maintenance)      # no *node* pin was ever set
+
+    def test_a_fully_pinned_node_contributes_nothing_to_its_parent(self):
+        self.tree.upsert("/site/wiz", StatusCode.ERROR, self._findings("a"))
+        self.tree.upsert("/site/disk", StatusCode.OK)
+        self._pin("a", path="/site/wiz")
+        self.assertEqual(self.tree.snapshot("/site").code, StatusCode.OK)
+
+    # ----- prose is the default -----
+
+    def test_prose_is_not_individually_suppressible(self):
+        # a failing check's `check error:` line and its stack trace are one
+        # condition in several paragraphs
+        self.tree.upsert("/db", StatusCode.ERROR,
+                         ["check error: boom", "Traceback…"])
+        slug = self._snap("/db").reasons[0].slug
+        self._pin(slug, path="/db")            # the side-table accepts it…
+        snap = self._snap("/db")
+        self.assertEqual(snap.own_code, StatusCode.ERROR)   # …the join ignores it
+        self.assertEqual(snap.quiet_reasons, 0)
+
+    def test_a_node_with_no_reasons_is_outside_the_rule(self):
+        self.tree.upsert("/db", StatusCode.OK)
+        self.assertEqual(self._snap("/db").own_code, StatusCode.OK)
+
+    # ----- absence suspends, only expiry disposes -----
+
+    def test_a_slug_the_run_did_not_report_simply_does_not_apply(self):
+        self.tree.upsert("/wiz", StatusCode.ERROR, self._findings("a", "b"))
+        self._pin("a")
+        # the finding is fixed and vanishes from the next run
+        self.tree.upsert("/wiz", StatusCode.ERROR, self._findings("b"))
+        snap = self._snap()
+        self.assertEqual(snap.quiet_reasons, 0)
+        self.assertEqual(snap.own_code, StatusCode.ERROR)
+        # but the pin is still there, so it applies again if the finding returns
+        self.assertIsNotNone(self.tree.entry_maintenance("/wiz", "a"))
+        self.tree.upsert("/wiz", StatusCode.ERROR, self._findings("a", "b"))
+        self.assertEqual(self._snap().quiet_reasons, 1)
+
+    def test_a_failing_check_does_not_throw_away_every_pin(self):
+        # the whole reason absence suspends rather than deletes: one bad minute
+        # replaces the map with `check error: …`
+        self.tree.upsert("/wiz", StatusCode.ERROR, self._findings("a", "b"))
+        self._pin("a")
+        self._pin("b")
+        self.tree.upsert("/wiz", StatusCode.ERROR, ["check error: unreachable"])
+        self.assertEqual(self._snap().own_code, StatusCode.ERROR)
+        self.assertEqual(len(self.tree.entry_maintenance_at("/wiz")), 2)
+
+    def test_expiry_disposes_of_an_entry_pin(self):
+        self.tree.upsert("/wiz", StatusCode.ERROR, self._findings("a"))
+        self.tree.set_entry_maintenance(
+            "/wiz", "a", "brief", expires_at=datetime.now() - timedelta(seconds=1))
+        self.assertEqual(self._snap().quiet_reasons, 1)
+        self.tree.sweep_expired()
+        self.assertIsNone(self.tree.entry_maintenance("/wiz", "a"))
+        self.assertEqual(self._snap().own_code, StatusCode.ERROR)
+
+    def test_reap_drops_entry_pins_no_check_covers(self):
+        self.tree.upsert("/wiz", StatusCode.ERROR, self._findings("a"))
+        self._pin("a")
+        self._pin("x", path="/gone")
+        self.tree.reap_uncovered(["/wiz"])
+        self.assertIsNotNone(self.tree.entry_maintenance("/wiz", "a"))
+        self.assertIsNone(self.tree.entry_maintenance("/gone", "x"))
+
+    # ----- liveness is not switched off -----
+
+    def test_a_dead_check_escalates_even_when_every_entry_is_pinned(self):
+        # otherwise the suppression meant to quiet a known state silently covers
+        # a check that stopped running (ADR-0032 rule 6, ADR-0036 decision 9)
+        self.tree.upsert("/wiz", StatusCode.OK, self._findings("a"),
+                         frequency_seconds=60)
+        self._pin("a")
+        later = datetime.now() + timedelta(hours=1)
+        snap = self._snap(now=later)
+        self.assertTrue(snap.stale)
+        self.assertEqual(snap.own_code, StatusCode.MAINTENANCE)  # nothing reports
+        self.assertEqual(snap.code, StatusCode.WARN)             # but it escalates
+
+    def test_a_pinned_entry_does_not_exempt_the_node_from_staleness(self):
+        self.tree.upsert("/wiz", StatusCode.ERROR, self._findings("a", "b"),
+                         frequency_seconds=60)
+        self._pin("a")
+        self.assertTrue(self._snap(now=datetime.now() + timedelta(hours=1)).stale)
+
+    # ----- the guard, one key deeper -----
+
+    def test_an_entry_pin_carries_the_compare_and_set_token(self):
+        self.tree.upsert("/wiz", StatusCode.ERROR, self._findings("a"))
+        first = self._pin("a").current
+        assert first is not None
+        self._pin("a", reason="ben's turn", token=first.set_at)
+        refused = self._pin("a", reason="mine", token=first.set_at)
+        self.assertTrue(refused.refused)
+        assert refused.current is not None
+        self.assertEqual(refused.current.reason, "ben's turn")
+
+    def test_clearing_an_entry_pin(self):
+        self.tree.upsert("/wiz", StatusCode.ERROR, self._findings("a"))
+        entry = self._pin("a").current
+        assert entry is not None
+        self.assertTrue(
+            self.tree.clear_entry_maintenance(
+                "/wiz", "a", expected_set_at=entry.set_at).applied)
+        self.assertEqual(self._snap().quiet_reasons, 0)
+
+    def test_an_entry_pin_writes_no_status_and_emits_no_event(self):
+        # the pin was never in the tree; the node's own code is derived at
+        # snapshot time (ADR-0032 rule 3), so there is no transition to record
+        self.tree.upsert("/wiz", StatusCode.ERROR, self._findings("a"))
+        before = len(self.tree.recent_events())
+        self._pin("a")
+        self.assertEqual(len(self.tree.recent_events()), before)
+        # "nothing was written" is now a statement about `reported_code` — the
+        # check's own answer, untouched. `effective` reads what the node *shows*,
+        # and with its one member pinned there is nothing left reporting.
+        snap = self.tree.snapshot("/wiz")
+        assert snap is not None
+        self.assertEqual(snap.reported_code, StatusCode.ERROR)
+        self.assertEqual(snap.own_code, StatusCode.MAINTENANCE)
+
+    def test_entry_pins_are_written_through(self):
+        store = self.tree._maintenance_store
+        self.tree.upsert("/wiz", StatusCode.ERROR, self._findings("a"))
+        self._pin("a")
+        self.assertIn(("/wiz", "a"), store.saved_entries)
+
+    def test_restore_replays_entry_pins_without_touching_the_tree(self):
+        tree = StatusTree()
+        live = MaintenanceEntry("working on it", datetime.now().isoformat(),
+                                (datetime.now() + timedelta(days=1)).isoformat())
+        dead = MaintenanceEntry("stale", datetime.now().isoformat(),
+                                (datetime.now() - timedelta(days=1)).isoformat())
+        tree.restore_maintenance({}, entry_pins={("/wiz", "a"): live,
+                                                 ("/wiz", "b"): dead})
+        self.assertIsNotNone(tree.entry_maintenance("/wiz", "a"))
+        self.assertIsNone(tree.entry_maintenance("/wiz", "b"))
+        self.assertIsNone(tree.snapshot("/wiz"))     # no node was created
 
 
 if __name__ == '__main__':

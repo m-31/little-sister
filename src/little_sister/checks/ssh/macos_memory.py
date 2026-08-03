@@ -31,6 +31,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, NamedTuple
 
+from little_sister import values
 from little_sister.checks.base import (
     CheckError,
     CheckResult,
@@ -279,13 +280,10 @@ def _parse_thresholds(raw: Any) -> dict[str, tuple[float, float]]:
         spec = raw.get(aspect) or {}
         if not isinstance(spec, dict):
             raise CheckError(f"thresholds.{aspect} must be a mapping")
-        try:
-            warn = float(spec.get("warn", default_warn))
-            error = float(spec.get("error", default_error))
-        except (TypeError, ValueError) as exc:
-            raise CheckError(
-                f"thresholds.{aspect}: warn/error must be numbers") from exc
-        parsed[aspect] = (warn, error)
+        where = f"thresholds.{aspect}"
+        parsed[aspect] = (
+            values.real(spec, "warn", default=default_warn, where=where),
+            values.real(spec, "error", default=default_error, where=where))
     return parsed
 
 
@@ -304,8 +302,8 @@ def _parse_processes(raw: Any,
     for i, item in enumerate(raw, 1):
         if not isinstance(item, dict):
             raise CheckError(f"processes[{i}] must be a mapping")
-        name = str(item.get("name") or "").strip()
-        pattern = str(item.get("pattern") or "").strip()
+        name = values.text(item, "name").strip()
+        pattern = values.text(item, "pattern").strip()
         if not name or not pattern:
             raise CheckError(
                 f"processes[{i}] needs both 'name' (the leaf) and 'pattern' "

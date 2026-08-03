@@ -48,7 +48,7 @@
                     </td>
                     <td>
                         {{ c.next_run_at | localtime("%H:%M:%S") }}
-                        <span class="text-muted">· in {{ (c.next_in_seconds | round | int) }}s</span>
+                        <span class="text-muted">· in {{ (c.next_in_seconds | round | int) }}s{% if c.retrying %} · retry {{ c.retry_attempt }}/{{ c.retry_attempts }}{% endif %}</span>
                     </td>
                     <td>
                         {% if c.last_run_at %}

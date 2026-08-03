@@ -3,7 +3,7 @@ per-node status history.
 
 One process owns one :class:`StatusTree` (ADR-0001). Writers and readers share a
 single ``RLock``; reads copy an immutable snapshot under the lock and render it
-outside (ADR-0002). Roll-up follows ADR-0004 via ``Status.get_status_code``.
+outside (ADR-0002). Roll-up follows ADR-0039 via ``Status.get_status_code``.
 
 Two histories are kept:
 - the **event log** — every status transition, newest appended (the source); and
@@ -18,7 +18,12 @@ from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
 
-from little_sister.maintenance import MaintenanceEntry, MaintenanceStore
+from little_sister.maintenance import (
+    MaintenanceEntry,
+    MaintenanceStore,
+    MaintenanceWrite,
+)
+from little_sister.reasons import ReasonInput
 from little_sister.status import (
     Status,
     StatusCode,
@@ -36,24 +41,66 @@ DEFAULT_EVENT_LOG_SIZE = 1000
 # "stale", and its status is shown degraded to at least WARN (worse-of, so a real
 # ERROR is never softened). Computed at snapshot time; never an event.
 STALE_DEGRADE = StatusCode.WARN
+
+#: The contribution rule that maintenance is — the value :attr:`Event.suppressed_by`
+#: carries when a pin (on the node, or on every one of its entries) is what kept a
+#: transition from alarming. The first member of a vocabulary ADR-0032 rule 2
+#: anticipates: `aggregation`, `dependency` and `damping` join it as those land.
+MAINTENANCE_RULE = "maintenance"
 STALE_MIN_GRACE_SECONDS = 30.0
+
+
+@dataclass(frozen=True)
+class ReasonLine:
+    """One of a node's reasons, with its key and whatever is pinned on it.
+
+    The **virtual child** of [ADR-0036] decision 7 and the ADR-0032 amendment: an
+    entry with a pin contributes nothing to its node, the rest contribute the
+    node's reported status. It carries no severity of its own — an entry is a line
+    of one check's result, not a thing that is separately red.
+    """
+    slug: str
+    text: str
+    maintenance: MaintenanceEntry | None = None
+
+    @property
+    def quiet(self) -> bool:
+        """Whether this entry is suppressed. Quiet is **shown**, not hidden
+        (ADR-0032 rule 5) — the surfaces render it in the maintenance color."""
+        return self.maintenance is not None
 
 
 @dataclass(frozen=True)
 class StatusSnapshot:
     """Immutable copy of a node and its subtree, safe to read outside the lock.
 
-    ``own_code`` is the node's reported code; ``code`` is the effective, rolled-up
-    status (ADR-0004). ``description`` and ``frequency_seconds`` are inherited from
+    ``own_code`` is the node's own status; ``code`` is the effective, rolled-up
+    status (ADR-0039). ``description`` and ``frequency_seconds`` are inherited from
     the check; ``config`` is the curated parameters it ran with (Markdown, ADR-0013);
     ``maintenance`` marks an admin override.
+
+    ``own_code`` is a **derived** value, not simply what the check reported: an
+    admin pin on the node reads ``MAINTENANCE`` (ADR-0014), and so does a node whose
+    reasons are individually suppressible ``members`` and every one of them is
+    pinned (ADR-0036). ``reported_code`` is what the check actually said, kept
+    beside it — the row [ADR-0032](../docs/adr/0032-status-contribution-boundary.md)
+    names as *the value the tree stores*, promoted to a field the moment ``own_code``
+    stopped being it. Without it a silenced node's real answer would have nowhere to
+    live, and "we are silencing an **error**" is exactly the transform rule 5 says a
+    surface must show. ``reason`` stays the plain texts every existing surface reads;
+    ``reasons`` carries the same lines with their keys and pins.
+
+    ``timestamp`` is the observation time — ``None`` when no check has written this
+    node (ADR-0027), while ``stale`` and ``age_seconds`` always measure the node's
+    **own** stamp.
     """
     path: str
     name: str
     own_code: StatusCode
     code: StatusCode
+    reported_code: StatusCode
     reason: tuple[str, ...]
-    timestamp: str
+    timestamp: str | None
     description: str = ""
     frequency_seconds: int | None = None
     config: str = ""
@@ -64,17 +111,45 @@ class StatusSnapshot:
     stale: bool = False
     age_seconds: float = 0.0
     children: tuple[StatusSnapshot, ...] = ()
+    reasons: tuple[ReasonLine, ...] = ()
+    members: bool = False
+
+    @property
+    def quiet_reasons(self) -> int:
+        """How many of this node's entries are pinned. The card clamps its reasons
+        to ``reason_cap``, so the pinned line may sit below the fold and this count
+        is the only thing that always shows (ADR-0032 rule 5)."""
+        return sum(1 for line in self.reasons if line.quiet)
 
 
 @dataclass(frozen=True)
 class Event:
-    """A recorded transition of a node's own status code."""
+    """A recorded transition of a node's own status code.
+
+    ``suppressed_by`` names the **contribution rule** that kept this transition from
+    reaching anybody, and is empty when nothing did. One crisp sentence defines it,
+    and it is worth holding the field to: *an unmarked event is one that alarmed; a
+    marked one is one that didn't.* If an event ever falsifies that, the marker is
+    wrong rather than the sentence.
+
+    It is a **name, not a boolean**. `maintenance: bool` would have been smaller
+    today and wrong by the third policy: the aggregation clamp, the dependency shield
+    and the damping counter each withhold a transition too, and four booleans would
+    be four spellings of one property (ADR-0032 rule 2 puts them all at one point,
+    and rule 5 says a surface names the rule that acted). One nullable string is also
+    the shape the client-contract round will publish.
+
+    Before the keystone this could not exist at all: a pinned node was not written,
+    so there was no transition to mark. Recording them is what makes *did it break
+    during the window?* answerable.
+    """
     path: str
     name: str
     old: StatusCode
     new: StatusCode
     reason: tuple[str, ...]
     timestamp: str
+    suppressed_by: str = ""
 
 
 @dataclass(frozen=True)
@@ -99,14 +174,25 @@ class StatusTree:
         # ``maintenance`` bool and written through to ``maintenance_store`` on every
         # change (ADR-0014). No store (the default) means in-memory only.
         self._maintenance: dict[str, MaintenanceEntry] = {}
+        # Per-entry pins (ADR-0036): the same side-table, keyed one level deeper —
+        # ``(path, slug)``. Deliberately **outside** the check's output: the check
+        # emits `slug -> text` and nothing else, and the snapshot joins the two, so
+        # the next run cannot destroy a pin and nothing derived is written into the
+        # tree (ADR-0032 rule 3).
+        self._entry_maintenance: dict[tuple[str, str], MaintenanceEntry] = {}
         self._maintenance_store = maintenance_store
+        # Check mounts: the nodes a check writes its result root to, seeded at
+        # startup. Read only by the snapshot's timestamp roll-up (ADR-0027); the
+        # tree itself stays check-agnostic and derives nothing into the nodes.
+        self._check_mounts: set[str] = set()
 
     def use_maintenance_store(self, store: MaintenanceStore) -> None:
         """Attach the persistence store (once, at startup, before restore)."""
         self._maintenance_store = store
 
     def upsert(self, path: str, code: StatusCode | str,
-               reason: list[str] | str | None = None, *,
+               reason: ReasonInput = None, *,
+               members: bool = False,
                description: str | None = None,
                frequency_seconds: int | None = None,
                config: str | None = None,
@@ -117,6 +203,12 @@ class StatusTree:
         (inherited from the check) are stored when given — ``config`` is static
         display metadata, never a transition (ADR-0013).
 
+        ``reason`` is keyed (ADR-0036) and accepts any of the check-facing forms —
+        a string, a list of strings, a ``{slug: text}`` mapping, ``(slug, text)``
+        pairs, or already-normalized ``ReasonEntry`` values, which is what the
+        engine passes. ``members`` marks the entries individually suppressible; a
+        mapping or pairs list says so by its shape.
+
         ``about`` / ``title`` are the check-provided subnode labels (ADR-0025) and
         differ from the three above: where those write through, these **fill an
         empty field only** — a non-empty value seeds the node when its field is
@@ -125,8 +217,10 @@ class StatusTree:
         so it always wins; and once a label is filled it stays put (a later tick
         never rewrites it). Metadata, so no event either.
 
-        A node under **maintenance** keeps its admin-set status — only its check
-        time is refreshed; its metadata still updates. Thread-safe.
+        A node under **maintenance** is written like any other: the pin is a
+        contribution rule evaluated in the snapshot (ADR-0032 rule 3), not a value
+        stamped into the tree, so the check keeps reporting and the tree keeps
+        remembering. Thread-safe.
         """
         with self._lock:
             node = self._ensure_node(path)
@@ -140,11 +234,8 @@ class StatusTree:
                 node.about = about
             if title and not node.title:
                 node.title = title
-            if node.maintenance:
-                node.touch()
-                return False
             old = node.code
-            node.update(code, reason)
+            node.update(code, reason, members)
             if node.code == old:
                 return False
             self._emit(node, old)
@@ -163,41 +254,104 @@ class StatusTree:
         with self._lock:
             self._ensure_node(path).title = title
 
+    def set_check_mount(self, path: str) -> None:
+        """Register ``path`` as a **check mount** — the node a check writes its
+        result root to, re-stamped on every run. Seeded at startup (the engine knows
+        its checks; the tree stays check-agnostic) and read only by the snapshot's
+        timestamp roll-up: an unwritten container above exactly one mount publishes
+        that mount's observation time (ADR-0027).
+
+        Unlike :meth:`set_about` this is **registry-only** — deliberately no
+        ``_ensure_node``, so the tree's visible shape still grows only with results.
+        Two checks sharing one mount register one entry, which is the point: the
+        ambiguity rule counts mounts, not checks. Thread-safe."""
+        with self._lock:
+            self._check_mounts.add(join_path(path))
+
     def set_maintenance(self, path: str, reason: str | None = None, *,
-                        expires_at: datetime, set_by: str = "") -> None:
+                        expires_at: datetime, set_by: str = "",
+                        expected_set_at: str | None = None) -> MaintenanceWrite:
         """Pin the node at ``path`` to maintenance (a sticky admin override) until
         ``expires_at``, recording who set it. Stores the entry and writes it through
-        (ADR-0014). Thread-safe."""
-        entry = MaintenanceEntry(
-            reason=reason or "maintenance",
-            set_at=datetime.now().isoformat(),
-            expires_at=expires_at.isoformat(),
-            set_by=set_by)
-        with self._lock:
-            self._apply_maintenance(path, entry)
-            self._persist()
+        (ADR-0014). Thread-safe.
 
-    def clear_maintenance(self, path: str) -> bool:
-        """Release maintenance; the node reverts to ``UNDEFINED`` until the next
-        check. Returns ``False`` if it wasn't in maintenance."""
+        Setting a node that is **already pinned** is an edit: it keeps the entry's
+        ``created_at`` / ``created_by`` and replaces the rest, so "one more day"
+        keeps the original explanation and the original author.
+
+        ``expected_set_at`` is the **compare-and-set token** (ADR-0014 amendment):
+        the ``set_at`` the caller believes it is replacing, or ``""`` for *"I
+        believe nothing is pinned"*. When it does not match what the table holds,
+        **nothing is written** and the refusal carries the stored entry. ``None``
+        — the default, and what the startup replay uses — writes unguarded.
+        """
+        moment = datetime.now().isoformat()
         with self._lock:
+            key = join_path(path)
+            stored = self._maintenance.get(key)
+            if not self._token_matches(stored, expected_set_at):
+                return MaintenanceWrite(False, stored, refused=True)
+            entry = MaintenanceEntry(
+                reason=reason or "maintenance",
+                set_at=moment,
+                expires_at=expires_at.isoformat(),
+                set_by=set_by,
+                created_at=stored.created_at if stored else moment,
+                created_by=stored.created_by if stored else set_by)
+            self._apply_maintenance(key, entry)
+            self._persist()
+            return MaintenanceWrite(True, entry)
+
+    def clear_maintenance(self, path: str, *,
+                          expected_set_at: str | None = None) -> MaintenanceWrite:
+        """Release maintenance; the node reverts to ``UNDEFINED`` until the next
+        check. ``applied`` is ``False`` when it wasn't in maintenance.
+
+        Clearing carries the same ``expected_set_at`` token as
+        :meth:`set_maintenance` — clearing someone else's pin should not be the one
+        write that stays silent (ADR-0014 amendment).
+        """
+        with self._lock:
+            stored = self._maintenance.get(join_path(path))
+            if not self._token_matches(stored, expected_set_at):
+                return MaintenanceWrite(False, stored, refused=True)
             cleared = self._clear_node(path)
             if cleared:
                 self._persist()
-            return cleared
+            return MaintenanceWrite(cleared, None)
+
+    @staticmethod
+    def _token_matches(stored: MaintenanceEntry | None,
+                       expected_set_at: str | None) -> bool:
+        """Whether a guarded write may proceed. ``None`` means unguarded; otherwise
+        the token must equal the stored entry's ``set_at``, with ``""`` standing for
+        *"nothing is pinned"*."""
+        if expected_set_at is None:
+            return True
+        return (stored.set_at if stored is not None else "") == expected_set_at
 
     def restore_maintenance(self, entries: dict[str, MaintenanceEntry],
-                            now: datetime | None = None) -> None:
+                            now: datetime | None = None,
+                            entry_pins: dict[tuple[str, str],
+                                             MaintenanceEntry] | None = None
+                            ) -> None:
         """Replay persisted maintenance at startup (single worker, so once —
         ADR-0001): re-pin each **non-expired** entry, preserving its original
         ``set_at`` / ``expires_at``, and drop the rest, rewriting the file once.
         Replaying before any check has run is safe — the ``upsert`` guard keeps the
-        pin (ADR-0014)."""
+        pin (ADR-0014).
+
+        ``entry_pins`` are the per-entry pins (ADR-0036). They restore into the
+        side-table only — there is no node to pin and no status to write, and a
+        slug the next run does not report simply does not apply."""
         moment = now or datetime.now()
         with self._lock:
             for entry_path, entry in entries.items():
                 if not entry.is_expired(moment):
                     self._apply_maintenance(entry_path, entry)
+            for key, entry in (entry_pins or {}).items():
+                if not entry.is_expired(moment):
+                    self._entry_maintenance[key] = entry
             self._persist()
 
     def sweep_expired(self, now: datetime | None = None) -> list[str]:
@@ -210,7 +364,15 @@ class StatusTree:
                        if entry.is_expired(moment)]
             for path in expired:
                 self._clear_node(path)
-            if expired:
+            # Expiry is the *only* thing that disposes of a per-entry pin, so this
+            # sweep is its whole lifecycle end (ADR-0036 decision 6). It writes no
+            # status and emits no event: the pin was never in the tree, and the
+            # node's own code is derived at snapshot time (ADR-0032 rule 3).
+            stale_entries = [key for key, entry in self._entry_maintenance.items()
+                             if entry.is_expired(moment)]
+            for key in stale_entries:
+                del self._entry_maintenance[key]
+            if expired or stale_entries:
                 self._persist()
             return expired
 
@@ -220,12 +382,17 @@ class StatusTree:
         static check set (ADR-0014/0015); expiry is the backstop. Returns the reaped
         paths."""
         with self._lock:
-            uncovered = [path for path in self._maintenance
-                         if not any(on_same_line(path, root)
-                                    for root in check_roots)]
+            def covered(path: str) -> bool:
+                return any(on_same_line(path, root) for root in check_roots)
+
+            uncovered = [path for path in self._maintenance if not covered(path)]
             for path in uncovered:
                 self._clear_node(path)
-            if uncovered:
+            orphan_entries = [key for key in self._entry_maintenance
+                              if not covered(key[0])]
+            for key in orphan_entries:
+                del self._entry_maintenance[key]
+            if uncovered or orphan_entries:
                 self._persist()
             return uncovered
 
@@ -234,11 +401,77 @@ class StatusTree:
         with self._lock:
             return self._maintenance.get(path)
 
+    # --- per-entry pins (ADR-0036) ---
+
+    def set_entry_maintenance(self, path: str, slug: str,
+                              reason: str | None = None, *,
+                              expires_at: datetime, set_by: str = "",
+                              expected_set_at: str | None = None
+                              ) -> MaintenanceWrite:
+        """Pin **one reason** of the node at ``path`` — the finding somebody is
+        working on — leaving its siblings alarming, which is the entire point
+        (ADR-0036).
+
+        No status is written: the pin lives in the side-table under ``(path,
+        slug)`` and the snapshot joins it, so the check's next run cannot destroy
+        it. Carries the same compare-and-set token as the node pin (ADR-0014
+        amendment), and the same expiry rules. Thread-safe.
+        """
+        moment = datetime.now().isoformat()
+        with self._lock:
+            key = (join_path(path), slug)
+            stored = self._entry_maintenance.get(key)
+            if not self._token_matches(stored, expected_set_at):
+                return MaintenanceWrite(False, stored, refused=True)
+            entry = MaintenanceEntry(
+                reason=reason or "maintenance",
+                set_at=moment,
+                expires_at=expires_at.isoformat(),
+                set_by=set_by,
+                created_at=stored.created_at if stored else moment,
+                created_by=stored.created_by if stored else set_by)
+            self._entry_maintenance[key] = entry
+            self._persist()
+            return MaintenanceWrite(True, entry)
+
+    def clear_entry_maintenance(self, path: str, slug: str, *,
+                                expected_set_at: str | None = None
+                                ) -> MaintenanceWrite:
+        """Release a per-entry pin. ``applied`` is ``False`` when there was none."""
+        with self._lock:
+            key = (join_path(path), slug)
+            stored = self._entry_maintenance.get(key)
+            if not self._token_matches(stored, expected_set_at):
+                return MaintenanceWrite(False, stored, refused=True)
+            existed = self._entry_maintenance.pop(key, None) is not None
+            if existed:
+                self._persist()
+            return MaintenanceWrite(existed, None)
+
+    def entry_maintenance(self, path: str, slug: str) -> MaintenanceEntry | None:
+        """The pin on one reason of ``path``, if any."""
+        with self._lock:
+            return self._entry_maintenance.get((join_path(path), slug))
+
+    def entry_maintenance_at(self, path: str) -> dict[str, MaintenanceEntry]:
+        """Every per-entry pin held against ``path``, by slug — including slugs the
+        current run did not report. **Absence suspends a pin; only expiry disposes
+        of it** (ADR-0036 decision 6): a failed check replaces its whole reason map
+        with ``check error: …``, so a delete-on-absence rule would throw away every
+        pin on the node the moment the check has a bad minute."""
+        node = join_path(path)
+        with self._lock:
+            return {slug: entry
+                    for (entry_path, slug), entry in self._entry_maintenance.items()
+                    if entry_path == node}
+
     def snapshot(self, path: str = "",
                  now: datetime | None = None) -> StatusSnapshot | None:
         """An immutable snapshot of the subtree at ``path`` (root by default), or
         ``None`` if no such node exists. Staleness is computed against ``now``
-        (defaults to the current time). Thread-safe.
+        (defaults to the current time), and each node's published ``timestamp`` is
+        resolved against **this** subtree (ADR-0027) — so a branch never inherits
+        from a check outside it. Thread-safe.
         """
         moment = now or datetime.now()
         with self._lock:
@@ -246,10 +479,23 @@ class StatusTree:
             return None if node is None else self._snapshot(node, moment)
 
     def effective(self, path: str = "") -> StatusCode | None:
-        """The rolled-up status at ``path`` (root by default), or ``None``."""
-        with self._lock:
-            node = self._find_node(path)
-            return None if node is None else node.get_status_code()
+        """The **effective** status at ``path`` (root by default), or ``None`` — what
+        the node *is*, given its own status and its subtree.
+
+        That is [ADR-0032](../docs/adr/0032-status-contribution-boundary.md)'s own
+        definition, and its table names the field that holds it: ``StatusSnapshot``'s
+        ``code``. So this reads the snapshot, and the contribution rules apply.
+
+        Until the keystone that was a distinction without a difference — a pin was
+        written into ``Status.code``, so the pure ADR-0039 walk and the effective
+        status agreed by construction and this method could take the cheaper one. Now
+        that a pin is *derived*, they answer different questions, and the two names
+        the ADR gave them turn out to have been the right ones all along:
+        :meth:`Status.get_status_code` stays the pure roll-up over stored readings
+        (rule 3 requires exactly that of it), and this is what the node shows.
+        """
+        snapshot = self.snapshot(path)
+        return None if snapshot is None else snapshot.code
 
     def recent_events(self, limit: int | None = None) -> tuple[Event, ...]:
         """Recorded transitions, oldest first (optionally only the last
@@ -262,12 +508,25 @@ class StatusTree:
         """The status history of the node at ``path`` — one period per status it
         has held, oldest first — derived from the event log. The current period's
         ``until`` is the last check time and its reason is the current one.
+
+        **Suppressed transitions do not start a period.** History answers *what did
+        this node show over time*, and a check that went red underneath a pin did not
+        change what the node showed — it stayed in maintenance. Counting those would
+        chop one maintenance window into a dozen phantom ERROR periods that no
+        surface ever displayed. They stay in the event log, where they are exactly
+        the answer to the other question: *did it break during the window?*
         """
         with self._lock:
             node = self._find_node(path)
             if node is None:
                 return []
-            events = [event for event in self._events if event.path == node.path]
+            events = [event for event in self._events
+                      if event.path == node.path and not event.suppressed_by]
+            if not events:
+                return []
+            # A node with a transition behind it was written, so it is stamped
+            # (ADR-0027) — history only ever describes observed nodes.
+            assert node.timestamp is not None
             periods: list[StatusPeriod] = []
             for index, event in enumerate(events):
                 is_current = index == len(events) - 1
@@ -280,38 +539,102 @@ class StatusTree:
 
     # --- internals; call only while holding the lock ---
 
-    def _emit(self, node: Status, old: StatusCode) -> None:
+    def _emit(self, node: Status, old: StatusCode,
+              new: StatusCode | None = None, *,
+              reason: tuple[str, ...] | None = None,
+              when: str | None = None) -> None:
+        """Record a transition of what this node **shows**.
+
+        ``new`` defaults to the node's reported code, which is the whole story for a
+        check's own write. An admin pin needs the other two: it moves the *derived*
+        status without touching the reading (ADR-0032 rule 3), and it can land on a
+        container no check has ever written — so it passes ``new`` explicitly and
+        stamps the event with the moment the admin acted rather than with an
+        observation time that may not exist.
+        """
+        stamp = when or node.timestamp
+        # A check's event is never about an unobserved node (ADR-0027); an admin's
+        # carries its own stamp, so one of the two is always there.
+        assert stamp is not None
         self._events.append(Event(
-            path=node.path, name=node.name, old=old, new=node.code,
-            reason=tuple(node.reason), timestamp=node.timestamp))
+            path=node.path, name=node.name, old=old,
+            new=node.code if new is None else new,
+            reason=tuple(node.reason) if reason is None else reason,
+            timestamp=stamp,
+            # An admin's own write (`new` given) is never suppressed: setting or
+            # clearing a pin *is* the change, and it is what everyone sees.
+            suppressed_by="" if new is not None else self._suppressing_rule(node)))
+
+    def _suppressing_rule(self, node: Status) -> str:
+        """Which contribution rule, if any, keeps this node's reading from reaching
+        anybody right now — the value :attr:`Event.suppressed_by` carries.
+
+        Both flavors of maintenance answer to the same name, because they are the
+        same rule at two grains: a pin on the node, and a pin on every one of its
+        entries so that nothing is left reporting (ADR-0036 decision 7). A node whose
+        *check* reported ``MAINTENANCE`` is **not** marked — nothing suppressed it,
+        it said so itself — and neither is a partly pinned node, whose unpinned
+        entries still alarm.
+        """
+        if node.maintenance:
+            return MAINTENANCE_RULE
+        if node.members and node.reason_entries and all(
+                (node.path, entry.slug) in self._entry_maintenance
+                for entry in node.reason_entries):
+            return MAINTENANCE_RULE
+        return ""
 
     def _apply_maintenance(self, path: str, entry: MaintenanceEntry) -> None:
-        """Pin a node and record its entry, emitting a transition on change."""
+        """Pin a node and record its entry, emitting a transition on change — and on
+        an **edit**, which the code alone cannot see.
+
+        The pin is **recorded, never written** (ADR-0032 rule 3): the node keeps the
+        check's reading and ``snapshot`` derives ``MAINTENANCE`` from the side table,
+        exactly as it already does for a node whose entries are all pinned. That is
+        what lets a silenced node still say what it is doing, lets clearing restore
+        the last known state with nothing to restore, and lets the freshness path
+        keep working underneath a pin.
+
+        Editing a pin is ``MAINTENANCE -> MAINTENANCE``, so the code test is silent
+        and an extended window or a rewritten reason would leave no trace anywhere.
+        A changed reason or expiry therefore emits too; a re-submit that changes
+        neither does not, so a double-click is not history (ADR-0014 amendment).
+        """
         node = self._ensure_node(path)
-        old = node.code
+        previous = self._maintenance.get(node.path)
+        # What the node was showing: its existing pin, or the reading it reported.
+        old = StatusCode.MAINTENANCE if previous is not None else node.code
         node.maintenance = True
-        node.update(StatusCode.MAINTENANCE, entry.reason)
         self._maintenance[node.path] = entry
-        if node.code != old:
-            self._emit(node, old)
+        edited = previous is not None and not previous.same_pin_as(entry)
+        if old != StatusCode.MAINTENANCE or edited:
+            # The event's reason is the pin's own explanation — *why* it moved — not
+            # the check's reading, which did not change and is still on the node.
+            self._emit(node, old, StatusCode.MAINTENANCE,
+                       reason=(entry.reason,) if entry.reason else (),
+                       when=datetime.now().isoformat())
 
     def _clear_node(self, path: str) -> bool:
-        """Unpin a node and drop its entry. Returns whether anything was cleared."""
+        """Unpin a node and drop its entry. Returns whether anything was cleared.
+
+        Nothing is restored because nothing was destroyed: the node has been holding
+        the check's real reading the whole time, so releasing the pin simply lets it
+        show again — immediately, not at the next run.
+        """
         node = self._find_node(path)
         key = node.path if node is not None else join_path(path)
         existed = self._maintenance.pop(key, None) is not None
         if node is None or not node.maintenance:
             return existed
-        old = node.code
         node.maintenance = False
-        node.update(StatusCode.UNDEFINED, None)
-        if node.code != old:
-            self._emit(node, old)
+        self._emit(node, StatusCode.MAINTENANCE, node.code,
+                   when=datetime.now().isoformat())
         return True
 
     def _persist(self) -> None:
         if self._maintenance_store is not None:
-            self._maintenance_store.save(self._maintenance)
+            self._maintenance_store.save(self._maintenance,
+                                         self._entry_maintenance)
 
     def _ensure_node(self, path: str) -> Status:
         node = self._root
@@ -333,27 +656,109 @@ class StatusTree:
         return node
 
     def _snapshot(self, node: Status, now: datetime) -> StatusSnapshot:
+        snapshot, _mounts, _mount_stamp = self._snapshot_subtree(node, now)
+        return snapshot
+
+    def _snapshot_subtree(self, node: Status, now: datetime
+                          ) -> tuple[StatusSnapshot, int, str | None]:
+        """``node``'s snapshot, plus the two values its parent needs to resolve its
+        own observation time (ADR-0027): how many **check mounts** this subtree holds
+        and, when that count is exactly one, that sole mount's own stamp.
+
+        One recursion computes all three roll-ups — effective code, staleness and the
+        published timestamp — under the one lock (ADR-0002). Nothing derived is stored
+        on the nodes, so a topology change can never leave a stale roll-up behind.
+        """
         # Siblings render in natural, case-insensitive name order at every level —
         # deterministic, independent of check/discovery order (decisions.md). The
         # live tree keeps insertion order; only the snapshot is sorted.
-        children = tuple(
-            self._snapshot(child, now)
+        results = tuple(
+            self._snapshot_subtree(child, now)
             for child in sorted(node.get_children(), key=lambda c: _sort_key(c.name))
         )
+        children = tuple(result[0] for result in results)
+        # Count the mounts below and keep the candidate stamp of the one that is
+        # alone in its own subtree; a second mount anywhere makes any single value an
+        # attribution of one check's run time to another check's data, so the
+        # candidate is dropped rather than chosen.
+        mounts = 0
+        mount_stamp: str | None = None
+        for _child, child_mounts, child_stamp in results:
+            mounts += child_mounts
+            if child_mounts == 1:
+                mount_stamp = child_stamp
+        if node.path in self._check_mounts:
+            mounts += 1
+            mount_stamp = node.timestamp
+        if mounts != 1:
+            mount_stamp = None
+        # Own stamp when a check has written this node; otherwise the sole mount's,
+        # if the subtree holds exactly one. Staleness and `age_seconds` deliberately
+        # keep reading the **own** stamp — an inherited time is a display value, not
+        # an observation of this node (ADR-0005 stays untouched).
         age = _age_seconds(node.timestamp, now)
         stale_self = _is_stale(node, age)
-        # A stale status degrades to at least WARN (worse-of) before rolling up.
-        own = worst_of((node.code, STALE_DEGRADE)) if stale_self else node.code
-        code = effective_code(own, (child.code for child in children))
+        timestamp = node.timestamp if node.timestamp is not None else mount_stamp
+        # The reasons, joined with whatever is pinned on them (ADR-0036 decision 5).
+        # A pin whose slug this run did not report simply does not appear — it is
+        # suspended, not deleted (decision 6, ADR-0032 rule 7).
+        pins = self._entry_maintenance
+        lines = tuple(
+            ReasonLine(entry.slug, entry.text,
+                       pins.get((node.path, entry.slug)) if node.members else None)
+            for entry in node.reason_entries)
+        # Own status is now a **derived** value: the entries are virtual children,
+        # and a node whose members are all pinned has nothing left reporting.
+        own = _own_code(node.code, lines, node.members, node.maintenance)
+        # Staleness judges the **raw** reading and is never suppressed — a check
+        # that stopped running escalates whichever policy is holding its result
+        # back (ADR-0032 rule 6, ADR-0036 decision 9), so what a stale node gives
+        # its parent is its degraded raw code, not its quieted own status.
+        rollup = worst_of((node.code, STALE_DEGRADE)) if stale_self else own
+        code = effective_code(rollup, (child.code for child in children))
         stale = stale_self or any(child.stale for child in children)
-        return StatusSnapshot(
-            path=node.path, name=node.name, own_code=node.code, code=code,
-            reason=tuple(node.reason), timestamp=node.timestamp,
+        snapshot = StatusSnapshot(
+            path=node.path, name=node.name, own_code=own, code=code,
+            reported_code=node.code,
+            reason=tuple(node.reason), timestamp=timestamp,
             description=node.description, frequency_seconds=node.frequency_seconds,
             config=node.config, about=node.about, title=node.title,
             maintenance=node.maintenance,
             maintenance_entry=self._maintenance.get(node.path), stale=stale,
-            age_seconds=age, children=children)
+            age_seconds=age, children=children,
+            reasons=lines, members=node.members)
+        return snapshot, mounts, mount_stamp
+
+
+def _own_code(reported: StatusCode, lines: tuple[ReasonLine, ...],
+              members: bool, pinned: bool) -> StatusCode:
+    """A node's **own** status: the one transform that turns a stored reading into
+    what the node shows (ADR-0032 rule 3). Both suppressions live here, which is the
+    point — they are one model at one evaluation point, not two mechanisms.
+
+    A **node pin** wins outright. It is an admin saying *do not count this node*,
+    and it covers the node whole, so nothing below the pin can change the answer.
+
+    Otherwise the node's entries are its **virtual children** (ADR-0036 decision 7;
+    the ADR-0032 amendment). Each unsuppressed entry contributes the node's reported
+    status — an entry has no severity of its own — so the worst of what is left *is*
+    the reported code until nothing is left, at which point the node presents
+    ``MAINTENANCE``. Two kinds of node stay outside that rule entirely and read
+    exactly what they reported: one with **no** reasons (a check with a code and
+    nothing to say), and one whose reasons are **prose**, which has no individually
+    suppressible parts.
+
+    What this function must never do is *lose* ``reported``. It is the check's real
+    answer, it stays on the node, and it travels to the surfaces beside the derived
+    value — so a silenced node can still say what it is silencing.
+    """
+    if pinned:
+        return StatusCode.MAINTENANCE
+    if not members or not lines:
+        return reported
+    if any(not line.quiet for line in lines):
+        return reported
+    return StatusCode.MAINTENANCE
 
 
 def _sort_key(name: str) -> str:
@@ -371,8 +776,12 @@ def _child_by_name(node: Status, name: str) -> Status | None:
     return None
 
 
-def _age_seconds(timestamp: str, now: datetime) -> float:
-    """Seconds since ``timestamp`` (an ISO-8601 string), never negative."""
+def _age_seconds(timestamp: str | None, now: datetime) -> float:
+    """Seconds since ``timestamp`` (an ISO-8601 string), never negative. An
+    unobserved node (``None``, ADR-0027) has no age — 0.0, and ``_is_stale`` exempts
+    it anyway, since a node with a real code was necessarily stamped."""
+    if timestamp is None:
+        return 0.0
     try:
         observed = datetime.fromisoformat(timestamp)
     except ValueError:
@@ -382,9 +791,24 @@ def _age_seconds(timestamp: str, now: datetime) -> float:
 
 def _is_stale(node: Status, age: float) -> bool:
     """A node is stale if it reports a real status on a schedule but hasn't been
-    observed within roughly two of its intervals (ADR-0005)."""
+    observed within roughly two of its intervals (ADR-0005).
+
+    **A pin does not exempt a node from this.** ADR-0032 rule 6 is explicit that a
+    suppression may not also switch off the freshness path, or the pin that was meant
+    to quiet a known state silently covers a dead check. This used to test
+    ``node.maintenance`` and return ``False``, and that exemption was **load-bearing**
+    while a pin still overwrote the reading: the caller degrades a stale node with
+    ``worst_of((node.code, WARN))``, and ``worst_of`` knows only OK/WARN/ERROR, so a
+    node holding a written-in ``MAINTENANCE`` reached it and raised. The two
+    deviations propped each other up — correcting rule 3 is what makes rule 6 free.
+
+    What replaces it is a guard on the **code**, which is what the arithmetic below
+    actually requires: a node that never reported (``UNDEFINED``) has nothing to age,
+    and one whose *check* reported ``MAINTENANCE`` carries no severity to degrade.
+    That second case was never guarded before and could raise the same way.
+    """
     frequency = node.frequency_seconds
-    if not frequency or node.maintenance or node.code == StatusCode.UNDEFINED:
+    if not frequency or node.code in (StatusCode.UNDEFINED, StatusCode.MAINTENANCE):
         return False
     return age > frequency + max(float(frequency), STALE_MIN_GRACE_SECONDS)
 

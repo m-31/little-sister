@@ -1,18 +1,346 @@
 @charset "UTF-8";
 
+/* Design tokens (ADR-0028).
+   Every color the dashboard paints is named here, so a scheme -- dark, the
+   theme roster, later deployment theming -- becomes a variable override rather
+   than a fork of the rules below.
+
+   The model is the one the surfaces already use: per status a **vivid** fill
+   (a node reporting its own problem -- the culprit) and a **pale tint**
+   (healthy, or a status only derived from a visible child), each with the ink
+   that reads on it. Borders are mixed from the matching ink, so a theme that
+   moves an ink moves its edges with it. `ok` has no vivid entry: a healthy box
+   is pale at every depth. */
 :root {
+    /* vivid fills -- the culprit's surface, and the ink that reads on it.
+       Warn is the one status whose fill is light enough to need dark ink
+       (white measures ~2:1 on it, #2f2405 ~8.6:1). */
+    --ls-error: #f0635a;
+    --ls-warn: #efc93f;
+    --ls-maintenance: #5a8fd6;
+    --ls-undefined: #9aa0a6;
+    --ls-vivid-ink: #fff;
+    /* Dark, not white: white measures 3.16:1 on this red and the bar is 4.5.
+       The same call the warn surface made, applied to the one
+       status that still carried the flaw — #2b0a06 measures 5.78:1. */
+    --ls-error-ink: #2b0a06;
+    --ls-warn-ink: #2f2405;
+    --ls-maintenance-ink: var(--ls-vivid-ink);
+    --ls-undefined-ink: var(--ls-vivid-ink);
+    /* The translucent edge that keeps a vivid box readable against a
+       same-colored parent — the only separator when a culprit sits inside a
+       parent of its own status. Drawn from `currentColor` so it follows each
+       surface's final ink instead of assuming white: identical to the old
+       literal wherever that ink *is* white (error, maintenance, undefined),
+       and a readable dark hairline on the warn yellow, where a white edge had
+       nearly vanished. Same pattern as the reason dividers below, and it means
+       a theme's inks re-ink their own edges for free. */
+    --ls-vivid-edge: color-mix(in srgb, currentColor 45%, transparent);
+
     /* pale status tints, shared by the dashboard's dimmed boxes and the
-       events / history table rows so the two always match */
-    --tint-ok: #e7f4e8;
-    --tint-warn: #fcf3d6;
-    --tint-error: #fbe1de;
-    --tint-maintenance: #e2edfb;
-    --tint-undefined: #f0f0f0;
+       events / history table rows so the two always match, each with its ink */
+    --ls-tint-ok: #e7f4e8;
+    --ls-tint-ok-ink: #2c6a3f;
+    --ls-tint-warn: #fcf3d6;
+    --ls-tint-warn-ink: #6d5012;
+    --ls-tint-error: #fbe1de;
+    --ls-tint-error-ink: #9a3b32;
+    --ls-tint-maintenance: #e2edfb;
+    --ls-tint-maintenance-ink: #244a77;
+    --ls-tint-undefined: #f0f0f0;
+    --ls-tint-undefined-ink: #54585c;
+
+    /* The Y3 warn accent. Defined, and deliberately applied nowhere yet: it is
+       a surface-weight yellow that dies as text (~1.8:1 on the warn tint), and
+       the accessibility rule outranks the swatch -- a status word keeps its
+       dark ink in every light theme. A later slice may use it decoratively
+       where computed contrast reaches >=3:1; if none does, it retires unused. */
+    --ls-warn-accent: #dfae14;
+
+    /* The brand. --ls-accent is the brand accent: the
+       wordmark's deep rose, and the user's name beside it in the bar. The
+       mark's own inks are named too, so a theme re-inks the eye by overriding
+       variables instead of forking the SVG -- the sclera and the glint are the
+       same white, and the iris keeps its two tones. */
+    --ls-accent: #d63384;
+    --ls-brand-ink: #343a40;
+    --ls-brand-sclera: #fff;
+    --ls-brand-iris: #48a374;
+    --ls-brand-iris-rim: #2f7d5b;
+    --ls-brand-pupil: #212529;
+
+    /* chrome */
+    --ls-canvas: #fff;          /* the page itself, so a dark theme has a canvas */
+    --ls-ink: #212529;
+    --ls-muted: #6c757d;
+    --ls-nav: #f8f9fa;
+    --ls-line: #dee2e6;
+    --ls-rail-active: #e9ecef;
+    /* What a hovered menu row is washed with, at the alpha the rule picks.
+       `currentColor` here, so a row tints in its own hue — and on a light canvas
+       that mix always darkens, which is the direction a highlight wants to go.
+       On a dark canvas the same mix goes the other way, lifting the surface
+       toward the ink and eating the row's contrast (the logout item measured
+       4.42:1 that way), so the dark blocks re-home this to black instead. */
+    --ls-menu-hover: currentColor;
+    /* Danger, and the ink is the whole of it — there is deliberately no raw
+       `--ls-danger` beside it. The Bootstrap red this was drawn from (#dc3545)
+       cannot be text: 4.53:1 on white, 3.89:1 on the dark canvas, and 3.41:1 on
+       the dropdown surface the logout link actually sits on. Keeping it as a
+       token only invites the next rule to reach for it, which is how the logout
+       link came to fail. This shade is that red taken far enough to hold the bar
+       on every canvas — 6.5:1 here — and the dark blocks re-home it rather than
+       dim this one. */
+    --ls-danger-ink: #b02a37;
+    --ls-panel: #fff;
+    --ls-panel-line: rgba(0, 0, 0, 0.15);
+    --ls-panel-shadow: rgba(0, 0, 0, 0.18);
+    --ls-code-bg: rgba(0, 0, 0, 0.05);
+    /* The links page's icon chip. Deliberately **theme-invariant** — no theme
+       block overrides these two — because it is the floor under a single-file
+       mark: a logo does not theme, and a chip that followed the canvas would
+       stop being the one background such a file is guaranteed to be legible on.
+       An icon that ships a light/dark pair has solved that itself and renders
+       bare, without a chip. */
+    --ls-chip: #fff;
+    --ls-chip-line: rgba(0, 0, 0, 0.14);
+    /* The two swatches behind the empty state's roster, theme-invariant for the
+       same reason and by the same argument one step further: a pair is drawn for
+       a light background and for a dark one, so a table that showed both on the
+       current canvas would hide one of them under every theme. The dark swatch is
+       the dark theme's own canvas and the light one is the chip, which is exactly
+       what each file was inked against -- #212529 and #e9edf1, the two --ls-ink
+       values -- so both columns read at better than 14:1 wherever the page sits. */
+    --ls-chip-dark: #16191d;
+    --ls-chip-dark-line: rgba(255, 255, 255, 0.16);
+    --ls-toggle-on: #57b369;
+    --ls-maintenance-strong: #497fce;
+    --ls-maintenance-shadow: rgba(20, 40, 70, 0.18);
 }
 
-.text-pink {
-    color: pink;
+.ls-accent {
+    color: var(--ls-accent);
 }
+
+/* ----- the brand -----
+
+   The bar reads one sentence — mark, lowercase wordmark, muted tagline —
+   assembled in _brand.html so the name is written in exactly one place.
+
+   The figure is an eye, so it winks when you point at the brand: two SVG groups
+   swap, an open eye for a closed one. Nothing animates a layout property and no
+   image is fetched, and it is the only motion the dashboard has — spent under
+   the pointer, never on its own. The login page shows the gaze instead, which
+   blinks by itself because a first impression is allowed to. Both go still when
+   the visitor has asked for reduced motion. */
+.ls-brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.55rem;
+    font-size: 1.1875rem;
+    line-height: 1.3;
+    color: inherit;
+    text-decoration: none;
+}
+.ls-brand:hover,
+.ls-brand:focus { text-decoration: none; }
+.ls-brand__mark { flex: 0 0 auto; display: block; }
+.ls-brand__wordmark { font-weight: 600; color: var(--ls-accent); }
+.ls-brand__tagline {
+    color: var(--ls-muted);
+    font-style: italic;
+    font-size: 0.90625rem;
+}
+/* the sentence gives up its tail first: on a narrow screen the tagline steps
+   out and the mark + wordmark carry the brand alone */
+@media (max-width: 575.98px) {
+    .ls-brand__tagline { display: none; }
+}
+
+/* the login page's full brand moment — the gaze, then the sentence beneath it */
+.ls-brand--stacked {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.1rem;
+    font-size: 1.375rem;
+    text-align: center;
+}
+.ls-brand--stacked .ls-brand__tagline { font-size: 0.84375rem; }
+.ls-gaze { display: block; max-width: 100%; height: auto; }
+
+/* the closed eye is the hidden one at rest, on both figures */
+.ls-eye-shut { opacity: 0; }
+
+@media (prefers-reduced-motion: no-preference) {
+    .ls-brand:hover .ls-eye-open,
+    .ls-brand:focus-visible .ls-eye-open { opacity: 0; }
+    .ls-brand:hover .ls-eye-shut,
+    .ls-brand:focus-visible .ls-eye-shut { opacity: 1; }
+
+    /* both eyes together, never one — a single closing eye is the wink */
+    .ls-gaze .ls-eye-open { animation: ls-blink-open 7s infinite; }
+    .ls-gaze .ls-eye-shut { animation: ls-blink-shut 7s infinite; }
+}
+
+@keyframes ls-blink-open { 0%, 90%, 98%, 100% { opacity: 1 } 92%, 96% { opacity: 0 } }
+@keyframes ls-blink-shut { 0%, 90%, 98%, 100% { opacity: 0 } 92%, 96% { opacity: 1 } }
+
+/* ----- the shell: bar, rail, page -----
+
+   One markup, two layouts. `body[data-ls-layout]` decides where the sections
+   are shown — down the **rail** (the default) or across the **top bar** (what
+   this surface looked like before) — and the copy the layout does not use is
+   `display: none`, which also removes it from the accessibility tree, so no
+   section is announced twice. Slice 4 turns that attribute into a per-user
+   choice read from a cookie; nothing here has to move for it.
+
+   The pages are still standalone documents, so the shell is opened by
+   _header.html and closed by _page_end.html rather than by a base layout. */
+body[data-ls-layout] {
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;      /* so the rail's edge runs the full window, not just the content */
+}
+/* The canvas is a token so a theme owns it too. At the default values these are
+   exactly what Bootstrap already paints, so nothing moves until a theme says so. */
+body[data-ls-theme] {
+    background-color: var(--ls-canvas);
+    color: var(--ls-ink);
+}
+/* The bar takes its color from the same token the rail does, rather than from
+   Bootstrap's `.bg-light` — which is a light value even under `data-bs-theme:
+   dark`, so a dark theme would otherwise wear a white bar. `!important` because
+   that is how the utility it replaces is written. */
+.ls-bar { background-color: var(--ls-nav) !important; }
+.ls-shell {
+    display: flex;
+    align-items: stretch;
+    flex: 1 1 auto;
+    min-height: 0;
+}
+.ls-page {
+    flex: 1 1 auto;
+    min-width: 0;           /* lets the status grid shrink instead of overflowing the row */
+}
+
+/* brand and user are what the bar keeps in every layout */
+.ls-bar__who { display: flex; align-items: center; margin-left: auto; }
+
+/* A centered, max-width bar sitting over full-width page content leaves the
+   brand floating inboard of everything below it — which the rail only made more
+   obvious. The bar runs the full width in **both** layouts instead, on the same
+   1.5rem gutter the pages use (Bootstrap's `px-4`): under the top bar the brand
+   lines up with the content beneath it, and under the rail it sits at the
+   window's edge, above the rail. */
+.ls-bar > .container {
+    max-width: none;
+    padding-left: 1.5rem;
+    padding-right: 1.5rem;
+}
+
+/* The rail: 52px of icons, each with its name as a tooltip; the burger swaps in
+   the labels (rail.js) and the foot is reserved for the about eye. */
+.ls-rail {
+    flex: 0 0 auto;
+    width: 52px;
+    padding: 10px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    background: var(--ls-nav);
+    border-right: 1px solid var(--ls-line);
+}
+.ls-rail.is-expanded { width: 12rem; }
+.ls-rail__burger,
+.ls-rail__item {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.6rem;
+    padding: 8px 0;
+    border-radius: 7px;
+    color: var(--ls-muted);
+    text-decoration: none;
+}
+.ls-rail__burger {
+    -webkit-appearance: none;
+            appearance: none;
+    border: 0;
+    background: none;
+    cursor: pointer;
+    margin-bottom: 8px;
+}
+.ls-rail__burger:hover { color: var(--ls-ink); }
+.ls-rail__item:hover {
+    color: var(--ls-ink);
+    text-decoration: none;
+    background: color-mix(in srgb, var(--ls-rail-active) 55%, transparent);
+}
+.ls-rail__item.is-on { background: var(--ls-rail-active); color: var(--ls-ink); }
+.ls-rail__icon { flex: 0 0 auto; }
+.ls-rail__label { display: none; white-space: nowrap; }
+.ls-rail.is-expanded .ls-rail__burger,
+.ls-rail.is-expanded .ls-rail__item {
+    justify-content: flex-start;
+    padding-left: 10px;
+    padding-right: 10px;
+}
+.ls-rail.is-expanded .ls-rail__label { display: inline; }
+.ls-rail__spacer { flex: 1 1 auto; }
+
+/* Which copy of the sections is showing. The `!important` is not decoration:
+   Bootstrap's `.navbar-expand-lg .navbar-collapse` is itself `display: flex
+   !important` above the breakpoint, so a plain rule here would lose and the
+   sections would appear in both places at once. */
+body[data-ls-layout="rail"] .ls-bar__nav,
+body[data-ls-layout="rail"] .ls-bar__toggler { display: none !important; }
+body[data-ls-layout="topbar"] .ls-rail { display: none; }
+
+/* ----- the page band -----
+
+   Breadcrumb/title on the left; the freshness line and the filters gathered to
+   the right; the node's about beneath. One block with one rule under it,
+   instead of three things stacked loose down the page. */
+.ls-band {
+    padding-bottom: 0.35rem;
+    margin-bottom: 0.7rem;
+    border-bottom: 1px solid var(--ls-line);
+}
+.ls-band__row {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 0.35rem 0.9rem;
+}
+.ls-band__title {
+    display: flex;
+    align-items: baseline;
+    column-gap: 0.4rem;
+    min-width: 0;
+    margin: 0;
+    font-size: 1.3125rem;
+    font-weight: 600;
+}
+.ls-band__meta {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.9rem;
+    font-size: 0.8125rem;
+}
+/* The freshness line reads as the measurement it is (ADR-0005): tabular figures
+   so the digits do not dance on each poll, and a rule marking it off from the
+   controls it is not one of. Deliberately no `color` — poll.js swaps
+   `.text-muted` for `.text-danger`, both `!important` in Bootstrap, so a color
+   of ours would be overridden and a failed poll could still read muted. */
+.ls-band__updated {
+    font-variant-numeric: tabular-nums;
+    padding-right: 0.9rem;
+    border-right: 1px solid var(--ls-line);
+}
+.ls-band__about { margin-top: 0.35rem; }
 
 /* ----- /status dashboard ----- */
 
@@ -27,7 +355,7 @@
 .status-card {
     border-radius: 8px;
     padding: 8px 10px;
-    color: #fff;
+    color: var(--ls-vivid-ink);
     /* Bound card heights (ADR-0024): the shipped reason caps (#9) bound growth from
        above; this floors a sparse card (a bare heartbeat-less leaf, or an
        all-green host that shrank to a chip row) so the everyday grid keeps a
@@ -71,6 +399,17 @@
     vertical-align: -0.13em;
     margin-right: 0.3em;
 }
+/* Observation time on a card (ADR-0027): the card_time macro's time of day, sitting
+   just before the cue + status word. Tabular figures so a column of cards lines up,
+   a touch quieter than the state text around it, and never bolded with a warn/error
+   card's state — the emphasis belongs to the status, not to when it was seen. */
+.status-card__time {
+    font-variant-numeric: tabular-nums;
+    font-weight: 400;
+    opacity: 0.75;
+    margin-right: 0.45em;
+}
+
 /* lift the problem word out of the muted 0.8 state text (the cue carries a quiet OK) */
 .status-card.s-warn  > .status-card__head > .status-card__state,
 .status-card.s-error > .status-card__head > .status-card__state,
@@ -80,9 +419,9 @@
     font-weight: 600;
 }
 
-/* Maintenance surfacing (slice 9/10, ADR-0014): the persisted maintenance set, surfaced
+/* Maintenance surfacing (ADR-0014): the persisted maintenance set, surfaced
    so a pin the roll-up and a shallow depth hide is still findable — a count **pill** in
-   the strip (folding slice 9's always-visible index), a **pip** on each ancestor card,
+   the strip (folding the always-visible index it replaced), a **pip** on each ancestor card,
    and the click **popover** both open. All maintenance-tinted, reading as maintenance
    whatever the surrounding status colors. */
 
@@ -99,13 +438,13 @@
 /* the maintenance pill: a compact count. A link to /maintenance (the no-JS fallback)
    that JS upgrades to the whole-set popover on click. */
 .maintenance-pill {
-    border: 1px solid rgba(36, 74, 119, 0.25);
+    border: 1px solid color-mix(in srgb, var(--ls-tint-maintenance-ink) 25%, transparent);
     cursor: pointer;
     display: inline-flex;
     align-items: center;
     gap: 0.35em;
-    background: var(--tint-maintenance);
-    color: #244a77;
+    background: var(--ls-tint-maintenance);
+    color: var(--ls-tint-maintenance-ink);
     text-decoration: none;
     border-radius: 8px;
     padding: 2px 10px;
@@ -113,8 +452,8 @@
     font-weight: 600;
     white-space: nowrap;
 }
-.maintenance-pill:hover { border-color: rgba(36, 74, 119, 0.5); text-decoration: none; }
-.maintenance-pill:focus-visible { outline: 2px solid #244a77; outline-offset: 1px; }
+.maintenance-pill:hover { border-color: color-mix(in srgb, var(--ls-tint-maintenance-ink) 50%, transparent); text-decoration: none; }
+.maintenance-pill:focus-visible { outline: 2px solid var(--ls-tint-maintenance-ink); outline-offset: 1px; }
 .maintenance-pill__glyph { flex: 0 0 auto; }
 .maintenance-pill__count { font-variant-numeric: tabular-nums; }
 
@@ -129,8 +468,8 @@
     cursor: pointer;
     display: inline-flex;
     align-items: center;
-    color: #fff;
-    background: #5a8fd6;
+    color: var(--ls-maintenance-ink);
+    background: var(--ls-maintenance);
     border-radius: 4px;
     padding: 2px 3px;
     margin-left: 0.4em;
@@ -138,8 +477,8 @@
     vertical-align: -0.28em;
     line-height: 0;
 }
-.maintenance-pip:hover { background: #497fce; }
-.maintenance-pip:focus-visible { outline: 2px solid #244a77; outline-offset: 1px; }
+.maintenance-pip:hover { background: var(--ls-maintenance-strong); }
+.maintenance-pip:focus-visible { outline: 2px solid var(--ls-tint-maintenance-ink); outline-offset: 1px; }
 .maintenance-pip > svg { width: 14px; height: 14px; display: block; }
 
 /* the popover the pip opens (maintenance.js): that card's pins as links, floated over
@@ -149,11 +488,11 @@
     z-index: 60;
     width: 22rem;
     max-width: calc(100vw - 1.5rem);
-    background: #fff;
-    color: #244a77;
-    border: 1px solid rgba(36, 74, 119, 0.28);
+    background: var(--ls-panel);
+    color: var(--ls-tint-maintenance-ink);
+    border: 1px solid color-mix(in srgb, var(--ls-tint-maintenance-ink) 28%, transparent);
     border-radius: 8px;
-    box-shadow: 0 6px 20px rgba(20, 40, 70, 0.18);
+    box-shadow: 0 6px 20px var(--ls-maintenance-shadow);
     padding: 6px 10px;
     font-size: 0.8rem;
 }
@@ -183,13 +522,74 @@
     white-space: nowrap;
     opacity: 0.85;
 }
+/* How many of a node's *reasons* are pinned (ADR-0036). The popover lists one row
+   per node, never one per line — twenty pinned findings would otherwise evict every
+   other node from a capped list — so this count is what keeps "maintenance under
+   this card" honest: without it the row would read as a node pin, which it is not.
+   Quieter than the path, louder than the time left, because it is the part of the
+   row that says which kind of pin this is. */
+.maintenance-pop__lines {
+    font-size: 0.75rem;
+    white-space: nowrap;
+    opacity: 0.8;
+}
+
+/* The admin pin control in a card head (backlog #35): an outline pause-bars
+   button-link, quiet until the card is hovered — a wall of cards must not grow
+   a wall of buttons — but always visible to keyboard focus, and simply shown
+   where there is no hover to reveal it (touch). Muted, not maintenance-blue:
+   blue is the *state*; this is the door to it. pin.js upgrades the click to
+   the #pin-card dialog; without JavaScript it is a link to the node's page. */
+.pin-control {
+    display: inline-flex;
+    align-items: center;
+    color: inherit;
+    opacity: 0;
+    margin-left: 0.45em;
+    padding: 1px 2px;
+    border-radius: 4px;
+    line-height: 0;
+    vertical-align: -0.2em;
+    transition: opacity 0.15s ease;
+}
+.status-card:hover .pin-control,
+.pin-control[aria-expanded="true"] { opacity: 0.75; }
+.pin-control:hover { opacity: 1; }
+.pin-control:focus-visible {
+    outline: 2px solid var(--ls-tint-maintenance-ink);
+    outline-offset: 1px;
+    opacity: 1;
+}
+@media (hover: none) {
+    .pin-control { opacity: 0.55; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .pin-control { transition: none; }
+}
+
+/* The pin dialog (#pin-card): the maintenance popover chrome carrying a small
+   form instead of a list (pin.js). */
+.pin-card { width: 24rem; }
+.pin-card__title { color: inherit; }
+.pin-card__path { font-size: 0.75rem; word-break: break-all; }
+.pin-card__promise { opacity: 0.9; }
+.pin-card__pinned { opacity: 0.9; }
 .maintenance-pop__reason {
     padding-left: 0.2rem;      /* its own line under the pin's row, never an orphan */
     opacity: 0.7;
 }
-/* the "+N more" row links to the full /maintenance page (slice 10). */
+/* Who set the pin (ADR-0014 amendment): the popover has room for one name, so
+   it names the *last writer* — whose words the reason above it is. Quieter than
+   the reason and on its own line, so it never competes with the path. */
+.maintenance-pop__by {
+    display: block;
+    padding-left: 0.2rem;
+    font-size: 0.75rem;
+    opacity: 0.6;
+}
+/* the "+N more" row links to the full /maintenance page. */
 .maintenance-pop__more { margin-top: 0.2rem; }
-.maintenance-pop__more a { color: #244a77; font-weight: 600; }
+.maintenance-pop__more a { color: var(--ls-tint-maintenance-ink); font-weight: 600; }
 
 /* A node's short title (ADR-0017) follows its name; ellipsed when too long. */
 .node-title {
@@ -227,7 +627,7 @@
 .md-body pre {
     margin: 0.3rem 0;
     padding: 0.4rem 0.55rem;
-    background: rgba(0, 0, 0, 0.05);
+    background: var(--ls-code-bg);
     border-radius: 4px;
     font-size: 0.85em;
     white-space: pre-wrap;       /* wrap long log lines instead of overflowing */
@@ -249,9 +649,9 @@
     border-radius: 6px;
     padding: 6px 8px;
     margin-bottom: 6px;
-    color: #fff;
+    color: var(--ls-vivid-ink);
     /* a translucent edge so a box still reads against a same-color parent */
-    border: 1px solid rgba(255, 255, 255, 0.45);
+    border: 1px solid var(--ls-vivid-edge);
 }
 
 .status-node:last-child {
@@ -287,6 +687,286 @@
     opacity: 0.95;
     margin-left: 0.5rem;
 }
+
+/* A silenced reason (ADR-0036). Quiet is **shown**, never hidden (ADR-0032 rule 5):
+   a suppression that covered its own tracks is exactly the failure the contribution
+   boundary exists to prevent. So the line stays where it was and is **tinted
+   maintenance** — the one signal, no strikethrough — with the count beside it
+   surviving the reason clamp, which can put the pinned line below the fold.
+
+   It paints its **own surface**, which is what makes the colour safe to rely on. The
+   rule used to set the maintenance ink and leave the background to whatever it landed
+   on, and it lands on four different things: our pale `--ls-tint-*` card fills, our
+   vivid `--ls-error` / `--ls-maintenance` fills (a node reporting its own problem is
+   not `dim`), and Bootstrap's `.alert-*` on the leaf page. Measured, the ink was
+   7.3-8.4:1 on the pale ones and **2.7-2.9:1 on the vivid ones** — nowhere near AA —
+   and an `opacity: 0.75` on top dragged even the good pairs to 3.9-4.4. A tint of its
+   own removes every one of those variables at once: the pair is
+   `--ls-tint-maintenance` + `--ls-tint-maintenance-ink`, 7.1-9.1:1 in every theme,
+   independent of what is underneath. That is what the maintenance pill, the pip and
+   the maintenance leaf chip already do; these three rules were the stragglers.
+
+   Two rules follow, and `test_contrast.py` now enforces both: **no rule dims an ink
+   it also sets** (that was the whole defect — a token picked and measured undimmed,
+   composited by a later rule that nothing re-measured), and the quiet block's ink is
+   measured as the composite it is, at whatever opacity applies inside it. */
+.status-node__reason.is-quiet,
+.check-reason.is-quiet {
+    background: var(--ls-tint-maintenance);
+    color: var(--ls-tint-maintenance-ink);
+    border-radius: 3px;
+    padding: 1px 0.35rem;
+}
+.reason-quiet-count {
+    display: inline-block;
+    font-size: 0.75rem;
+    margin-left: 0.5rem;
+    padding: 0 0.35rem;
+    border-radius: 3px;
+    background: var(--ls-tint-maintenance);
+    color: var(--ls-tint-maintenance-ink);
+}
+/* Sits inside the tinted line, so it takes that surface and that ink. Smaller and
+   a shade quieter — by opacity, which is measured here rather than assumed, because
+   dimming an ink nobody re-measured is the defect above. */
+.reason-quiet-note {
+    font-size: 0.75rem;
+    opacity: 0.85;
+}
+/* The line named by `?reason=<slug>` (ADR-0036 decision 12): the maintenance index
+   links to one line of a node that may have 150 of them, and arriving at the right
+   page is not the same as arriving at the line. A ring rather than a fill — a fill
+   would be a second status color on a line that already carries one, and a ring is
+   not text, so it owes the contrast gate nothing. `scroll-margin-top` keeps the
+   anchored line clear of the band above it. */
+.check-reason.is-focused {
+    outline: 2px solid var(--ls-vivid-edge);
+    outline-offset: 3px;
+    border-radius: 2px;
+    scroll-margin-top: 5rem;
+}
+/* Why a node is blue, and what it is silencing (the maintenance keystone).
+
+   `.pin-banner` sits above the reason block and outside its clamp: the explanation
+   for the colour must not be the line that gets cut. Like every other maintenance
+   surface it paints its own tint, so it reads the same on a vivid card, on a pale
+   one and inside Bootstrap's alert on the leaf page.
+
+   `.status-reported` is the other half — the reading the pin is covering, printed
+   beside the status word as `maintenance · error`. It takes the *card's* ink, not
+   the maintenance one: it is a gloss on the status word it follows, and it has to
+   stay legible on whatever fill that word is on. Slightly quieter by weight rather
+   than by opacity, because dimming an ink nobody re-measured is how the last
+   contrast defect happened. */
+.pin-banner {
+    font-size: 0.75rem;
+    margin: 0 0 0.35rem 0.5rem;
+    padding: 0.15rem 0.4rem;
+    border-radius: 3px;
+    background: var(--ls-tint-maintenance);
+    color: var(--ls-tint-maintenance-ink);
+}
+.status-reported {
+    font-weight: 400;
+    white-space: nowrap;
+}
+/* An event that did not reach anybody, and the rule that held it back. Paints its
+   own maintenance tint like every other maintenance surface — the row it sits in
+   carries a status wash of its own, which is not ours to measure against. */
+.event-suppressed {
+    font-size: 0.7rem;
+    padding: 0 0.3rem;
+    border-radius: 3px;
+    background: var(--ls-tint-maintenance);
+    color: var(--ls-tint-maintenance-ink);
+    white-space: nowrap;
+}
+/* The viewed node's own state, above its children on a subtree page. A `status-node`
+   for the fill and ink, full width rather than a grid cell, because it is not one of
+   the children — it is the node whose page this is. Its status word sits right, like
+   a card's, so the eye reads name-then-state on both surfaces. */
+.viewed-head {
+    margin-bottom: 0.75rem;
+}
+.viewed-head .status-node__self {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+}
+.viewed-head__state {
+    margin-left: auto;
+    font-size: 0.8rem;
+}
+.viewed-head .pin-banner,
+.viewed-head .reason-block {
+    flex-basis: 100%;
+    margin-left: 0;
+}
+/* /maintenance's "Silenced" column: what an entry pin covers (ADR-0036). Clamped
+   here rather than by shortening the string, because a member's text is often a
+   link and cutting it mid-link puts the raw Markdown on the page. One line, an
+   ellipsis, and the `title` attribute carries the whole of it; the node page is
+   where it is read in full. */
+.maintenance-page .maintenance-line {
+    max-width: 34rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+/* A pin whose line the current run did not report: suspended, not deleted (ADR-0036
+   decision 6). The pin is real and there is nothing to anchor to, so the page says
+   so in words — the one thing a fragment could never have done.
+
+   It sits inside the leaf page's `.alert alert-*`, whose fill is **Bootstrap's** and
+   changes with the node's status — so, like the quiet line above, it paints its own
+   maintenance tint rather than inking onto a surface we do not own. Inheriting
+   Bootstrap's ink would have been safe too, but this is both safe *and* measurable
+   from our own tokens, which is the better of the two. */
+.reason-orphan {
+    font-size: 0.8rem;
+    margin-bottom: 0.5rem;
+    padding: 0.4rem 0.6rem;
+    border-radius: 3px;
+    background: var(--ls-tint-maintenance);
+    color: var(--ls-tint-maintenance-ink);
+    scroll-margin-top: 5rem;
+}
+
+/* The per-line pin control on the leaf detail page: a small inline form, folded
+   away until the line is hovered or focused — a node with twenty findings must not
+   read as a wall of forms, and merely making it transparent would reserve twenty
+   empty rows. It **collapses** rather than being `display: none`, so a keyboard can
+   still reach it: tabbing into the form fires `:focus-within` and unfolds it. Where
+   there is no hover to reveal it (touch), it is simply always open. */
+.reason-pin {
+    display: flex;
+    gap: 0.35rem;
+    align-items: center;
+    max-height: 0;
+    opacity: 0;
+    overflow: hidden;
+    transition: max-height 0.15s ease, opacity 0.15s ease, margin-top 0.15s ease;
+}
+.check-reason:hover > .reason-pin,
+.reason-pin:focus-within {
+    max-height: 3rem;
+    opacity: 1;
+    margin-top: 0.25rem;
+}
+.reason-pin__reason { max-width: 18rem; }
+.reason-pin__duration { max-width: 7rem; }
+@media (hover: none) {
+    .reason-pin { max-height: 3rem; opacity: 1; margin-top: 0.25rem; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .reason-pin { transition: none; }
+}
+
+/* Slot actions on a reason line (ADR-0034). The frame is ours, the contents are a
+   dependent package's: core emits the `.reason-actions` rail on every reason line
+   and a filler puts `.reason-action` chips in it, so two extensions installed side
+   by side look like one product rather than two. The rail floats to the line's end
+   — the action reads as *belonging to this reason*, and the reason's own text keeps
+   flowing under it instead of being pushed down a line. It collapses when nothing
+   filled it, which is the usual case: a deployment with no extension pays one empty
+   span per reason and no pixels.
+
+   Quiet until the card is hovered, like `.pin-control` above, for the same reason —
+   a wall of reasons must not become a wall of buttons — and always visible to
+   keyboard focus and where there is no hover to reveal it (touch). The detail page
+   shows them outright: one node, one decision, nothing to keep calm. Drawn in
+   `currentColor` so a chip is readable on a vivid card, a dim tint and the pale
+   alert alike, with no per-status color of its own. */
+.reason-actions {
+    float: right;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.15rem;
+    margin-left: 0.4rem;
+}
+.reason-actions:empty { display: none; }
+.reason-action {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25em;
+    padding: 0 0.4em;
+    border: 1px solid color-mix(in srgb, currentColor 35%, transparent);
+    border-radius: 999px;
+    color: inherit;
+    text-decoration: none;
+    font-size: 0.7rem;
+    line-height: 1.5;
+    white-space: nowrap;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+}
+.status-card:hover .reason-action,
+.check-reason .reason-action { opacity: 0.75; }
+.reason-action:hover { opacity: 1; text-decoration: none; color: inherit; }
+.reason-action:focus-visible {
+    outline: 2px solid currentColor;
+    outline-offset: 1px;
+    opacity: 1;
+}
+@media (hover: none) {
+    .reason-action { opacity: 0.6; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .reason-action { transition: none; }
+}
+
+/* Slot actions on a whole node (ADR-0034's second slot). Same split as the reason
+   rail: the frame is ours, the contents are a dependent package's — core emits the
+   `.node-actions` rail and a filler puts `.node-action` chips in it, so two
+   extensions installed side by side look like one product.
+
+   It sits **inline after the node's name**, before the status cluster on the right,
+   because that is where the reader is already looking for what this node *is*; the
+   status cluster keeps its own end of the head. Reusing the `.reason-action` chip
+   shape deliberately — an action is an action, and a second visual language for the
+   same gesture would be the extension seam leaking into the design. Quiet until the
+   card is hovered for the same reason as everything else in a card head, and shown
+   outright on the detail page, where there is one node and nothing to keep calm. */
+.node-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.15rem;
+    margin-left: 0.4rem;
+}
+.node-actions:empty { display: none; }
+.node-action {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25em;
+    padding: 0 0.4em;
+    border: 1px solid color-mix(in srgb, currentColor 35%, transparent);
+    border-radius: 999px;
+    color: inherit;
+    text-decoration: none;
+    font-size: 0.7rem;
+    line-height: 1.5;
+    white-space: nowrap;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+}
+.status-card:hover .node-action { opacity: 0.75; }
+.alert .node-action { opacity: 0.75; }
+.node-action:hover { opacity: 1; text-decoration: none; color: inherit; }
+.node-action:focus-visible {
+    outline: 2px solid currentColor;
+    outline-offset: 1px;
+    opacity: 1;
+}
+@media (hover: none) {
+    .node-action { opacity: 0.6; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .node-action { transition: none; }
+}
+/* On the detail page the rail sits with the status word, so it floats to the far
+   end of that line rather than crowding it. */
+.alert > .node-actions { float: right; }
 
 /* Reason separation (tight rows + rule). Stacked reasons blur together: each reason is a
    block whose wrapped lines share the body leading (ADR-0018 keeps them compact), so with
@@ -399,9 +1079,12 @@
 .leaf-chip:hover { text-decoration: underline; }
 .leaf-chip.inspect-trigger { cursor: help; }
 .leaf-chip .node-title { max-width: 16ch; margin-left: 0; }
-.leaf-chip.s-ok          { background: var(--tint-ok);          color: #2c6a3f; border-color: rgba(44, 106, 63, 0.28); }
-.leaf-chip.s-undefined   { background: var(--tint-undefined);   color: #54585c; border-color: rgba(84, 88, 92, 0.28); }
-.leaf-chip.s-maintenance { background: var(--tint-maintenance); color: #244a77; border-color: rgba(36, 74, 119, 0.28); }
+.leaf-chip.s-ok          { background: var(--ls-tint-ok); color: var(--ls-tint-ok-ink);
+                           border-color: color-mix(in srgb, var(--ls-tint-ok-ink) 28%, transparent); }
+.leaf-chip.s-undefined   { background: var(--ls-tint-undefined); color: var(--ls-tint-undefined-ink);
+                           border-color: color-mix(in srgb, var(--ls-tint-undefined-ink) 28%, transparent); }
+.leaf-chip.s-maintenance { background: var(--ls-tint-maintenance); color: var(--ls-tint-maintenance-ink);
+                           border-color: color-mix(in srgb, var(--ls-tint-maintenance-ink) 28%, transparent); }
 
 /* Branch density (ADR-0024): in the dense view a branch caps the quiet
    (non-warn/error) child boxes it shows to config.yaml ``branch_cap``; the surplus are
@@ -434,7 +1117,7 @@
 .node-children:not(.is-expanded) > .branch-more .branch-more__hide,
 .node-children.is-expanded > .branch-more .branch-more__show { display: none; }
 
-/* Status strip (ADR-0024; slice 3): the engine self-heartbeat (ADR-0005), lifted
+/* Status strip (ADR-0024): the engine self-heartbeat (ADR-0005), lifted
    out of the grid into a compact pill — now a right-aligned band at the top of
    #status-grid, beneath the hide/depth controls, reading as its own element rather
    than the grid's first row. A side note, not a summary banner (fit-content width
@@ -463,46 +1146,53 @@
 .ls-strip__name { font-weight: 600; color: inherit; text-decoration: none; }
 .ls-strip__name:hover { text-decoration: underline; }
 .ls-strip__state { margin-left: 0.15rem; opacity: 0.8; }
-.ls-strip.s-error       { background: #f0635a; color: #fff; }
-.ls-strip.s-warn        { background: #e0a836; color: #fff; }
-.ls-strip.s-maintenance { background: #5a8fd6; color: #fff; }
-.ls-strip.s-undefined   { background: #9aa0a6; color: #fff; }
+.ls-strip.s-error       { background: var(--ls-error); color: var(--ls-error-ink); }
+.ls-strip.s-warn        { background: var(--ls-warn); color: var(--ls-warn-ink); }
+.ls-strip.s-maintenance { background: var(--ls-maintenance); color: var(--ls-maintenance-ink); }
+.ls-strip.s-undefined   { background: var(--ls-undefined); color: var(--ls-undefined-ink); }
 .ls-strip.s-ok {
-    background: var(--tint-ok); color: #2c6a3f; border-color: rgba(44, 106, 63, 0.22);
+    background: var(--ls-tint-ok); color: var(--ls-tint-ok-ink);
+    border-color: color-mix(in srgb, var(--ls-tint-ok-ink) 22%, transparent);
 }
 
 /* status colors.
-   Vivid (white text) = a node reporting its own problem — the culprit.
+   Vivid (light text, dark on the warn yellow) = a node reporting its own
+   problem — the culprit.
    Dim (pale fill, dark text) = healthy, or a status only *derived* from a
    visible child — so the culprit pops and its parents fade into a trail. */
-.status-card.s-error,       .status-node.s-error       { background: #f0635a; }
-.status-card.s-warn,        .status-node.s-warn        { background: #e0a836; }
-.status-card.s-maintenance, .status-node.s-maintenance { background: #5a8fd6; }
-.status-card.s-undefined,   .status-node.s-undefined   { background: #9aa0a6; }
+.status-card.s-error,       .status-node.s-error       { background: var(--ls-error); color: var(--ls-error-ink); }
+.status-card.s-warn,        .status-node.s-warn        { background: var(--ls-warn); color: var(--ls-warn-ink); }
+.status-card.s-maintenance, .status-node.s-maintenance { background: var(--ls-maintenance); color: var(--ls-maintenance-ink); }
+.status-card.s-undefined,   .status-node.s-undefined   { background: var(--ls-undefined); color: var(--ls-undefined-ink); }
 
 .status-card.s-ok,              .status-node.s-ok,
 .status-card.dim.s-ok,          .status-node.dim.s-ok {
-    background: var(--tint-ok); color: #2c6a3f; border-color: rgba(44, 106, 63, 0.22);
+    background: var(--ls-tint-ok); color: var(--ls-tint-ok-ink);
+    border-color: color-mix(in srgb, var(--ls-tint-ok-ink) 22%, transparent);
 }
 .status-card.dim.s-error,       .status-node.dim.s-error {
-    background: var(--tint-error); color: #9a3b32; border-color: rgba(154, 59, 50, 0.22);
+    background: var(--ls-tint-error); color: var(--ls-tint-error-ink);
+    border-color: color-mix(in srgb, var(--ls-tint-error-ink) 22%, transparent);
 }
 .status-card.dim.s-warn,        .status-node.dim.s-warn {
-    background: var(--tint-warn); color: #6d5012; border-color: rgba(109, 80, 18, 0.22);
+    background: var(--ls-tint-warn); color: var(--ls-tint-warn-ink);
+    border-color: color-mix(in srgb, var(--ls-tint-warn-ink) 22%, transparent);
 }
 .status-card.dim.s-maintenance, .status-node.dim.s-maintenance {
-    background: var(--tint-maintenance); color: #244a77; border-color: rgba(36, 74, 119, 0.22);
+    background: var(--ls-tint-maintenance); color: var(--ls-tint-maintenance-ink);
+    border-color: color-mix(in srgb, var(--ls-tint-maintenance-ink) 22%, transparent);
 }
 .status-card.dim.s-undefined,   .status-node.dim.s-undefined {
-    background: var(--tint-undefined); color: #54585c; border-color: rgba(84, 88, 92, 0.22);
+    background: var(--ls-tint-undefined); color: var(--ls-tint-undefined-ink);
+    border-color: color-mix(in srgb, var(--ls-tint-undefined-ink) 22%, transparent);
 }
 
 /* history / events table row tints (same pale palette as the dimmed boxes) */
-.row-ok          > td { background: var(--tint-ok); }
-.row-warn        > td { background: var(--tint-warn); }
-.row-error       > td { background: var(--tint-error); }
-.row-maintenance > td { background: var(--tint-maintenance); }
-.row-undefined   > td { background: var(--tint-undefined); }
+.row-ok          > td { background: var(--ls-tint-ok); }
+.row-warn        > td { background: var(--ls-tint-warn); }
+.row-error       > td { background: var(--ls-tint-error); }
+.row-maintenance > td { background: var(--ls-tint-maintenance); }
+.row-undefined   > td { background: var(--ls-tint-undefined); }
 
 /* filter toggles */
 .status-filters {
@@ -519,8 +1209,8 @@
 }
 
 .status-filters #hide_ok:checked {
-    background-color: #57b369;
-    border-color: #57b369;
+    background-color: var(--ls-toggle-on);
+    border-color: var(--ls-toggle-on);
 }
 
 .status-filters__depth {
@@ -542,11 +1232,11 @@
     z-index: 1080;
     max-width: min(38ch, 92vw);
     padding: 0.5rem 0.7rem;
-    background: #fff;
-    color: #212529;
-    border: 1px solid rgba(0, 0, 0, 0.15);
+    background: var(--ls-panel);
+    color: var(--ls-ink);
+    border: 1px solid var(--ls-panel-line);
     border-radius: 6px;
-    box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.18);
+    box-shadow: 0 0.5rem 1rem var(--ls-panel-shadow);
     font-size: 0.875rem;
     line-height: 1.4;
 }
@@ -562,3 +1252,798 @@
 /* Sustained poll failure (ADR-0005 update note): poll.js dims the frozen
    content under its banner — still readable, no longer mistakable for live. */
 .poll-stale { opacity: 0.45; transition: opacity 0.3s ease; }
+
+/* ----- the settings menu (ADR-0029) -----
+
+   The user's name opens it; inside are the choices that belong to this browser
+   rather than to the data — theme, layout — and the way out. Radio circles, not
+   check marks, because these are exclusive. */
+.ls-menu__trigger {
+    -webkit-appearance: none;
+            appearance: none;
+    border: 0;
+    background: none;
+    cursor: pointer;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    color: var(--ls-muted);
+}
+.ls-menu__trigger:hover { color: var(--ls-ink); }
+.ls-menu__gear { flex: 0 0 auto; }
+.ls-menu__panel { min-width: 14rem; padding: 0.35rem 0; }
+.ls-menu__heading {
+    padding: 0.3rem 0.9rem 0.15rem;
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--ls-muted);
+}
+.ls-menu__item {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    margin: 0;
+    padding: 0.25rem 0.9rem;
+    font-size: 0.875rem;
+    color: inherit;
+    text-decoration: none;
+    cursor: pointer;
+}
+.ls-menu__item:hover {
+    background: color-mix(in srgb, var(--ls-menu-hover) 8%, transparent);
+    text-decoration: none;
+}
+.ls-menu__item.is-disabled { color: var(--ls-muted); cursor: default; }
+.ls-menu__item.is-disabled:hover { background: none; }
+/* the ink, never the raw red: this item sits on Bootstrap's dropdown surface,
+   which our --ls-panel does not reach, and there the red measured 3.41:1 */
+.ls-menu__logout { color: var(--ls-danger-ink); }
+.ls-menu__apply { padding: 0.4rem 0.9rem 0.2rem; }
+
+/* the circle itself: the native radio, restyled rather than replaced, so it
+   keeps its keyboard behavior and its place in the form */
+.ls-menu__radio {
+    -webkit-appearance: none;
+            appearance: none;
+    flex: 0 0 auto;
+    margin: 0;
+    width: 0.85rem;
+    height: 0.85rem;
+    border-radius: 50%;
+    border: 1px solid color-mix(in srgb, currentColor 45%, transparent);
+    display: inline-grid;
+    place-content: center;
+}
+.ls-menu__radio:checked { border-color: var(--ls-accent); }
+.ls-menu__radio:checked::after {
+    content: "";
+    width: 0.45rem;
+    height: 0.45rem;
+    border-radius: 50%;
+    background: var(--ls-accent);
+}
+.ls-menu__radio:disabled { opacity: 0.45; }
+
+/* ================= themes (ADR-0028) =================
+
+   A theme is an override block, never a fork of the rules above: it restates
+   `--ls-*` on <body>, which wins over the `:root` defaults for everything
+   inside it. Adding a scheme means adding variables — and a deployment's own
+   theme (the web-customization phase) arrives through this same seam.
+
+   The accessibility rule governs the roster: status text holds AA in default,
+   vivid, pastel and dark. Light themes render status words in their dark state
+   inks — the yellow lives on surfaces, never as words there — while dark themes
+   may use bright words, which clear the bar on a dark canvas. Cyberpunk is
+   declared a fun theme: checked, not AA-gated. */
+
+/* vivid — saturated ok and warn, a hotter accent; every other family default */
+body[data-ls-theme="vivid"] {
+    --ls-tint-ok: #a9e3b8;
+    --ls-tint-ok-ink: #0d5426;
+    --ls-tint-warn: #ffe9a8;
+    --ls-tint-warn-ink: #5c4708;
+    --ls-warn: #f7c832;
+    --ls-warn-accent: #ecb800;
+    --ls-accent: #e01477;
+}
+
+/* pastel — softer still */
+body[data-ls-theme="pastel"] {
+    --ls-tint-ok: #e9f4ec;
+    --ls-tint-ok-ink: #3f6b4d;
+    --ls-tint-warn: #fbf6e7;
+    --ls-tint-warn-ink: #7c6a3a;
+    --ls-warn: #f0d391;
+    --ls-warn-ink: #4a3c14;
+    --ls-warn-accent: #d9b148;
+    /* the sheet picked #e083ac; at 2.49:1 on the bar the wordmark was not
+       readable, so the pick moved to the nearest shade that clears it */
+    --ls-accent: #ce6c98;
+}
+
+/* dark — its own canvas, not a dimmed light one */
+body[data-ls-theme="dark"] {
+    --ls-canvas: #16191d;
+    --ls-ink: #e9edf1;
+    --ls-muted: #9aa4ad;
+    --ls-line: #343b42;
+    --ls-nav: #1e2226;
+    --ls-panel: #23282d;
+    --ls-panel-line: rgba(255, 255, 255, 0.14);
+    --ls-panel-shadow: rgba(0, 0, 0, 0.55);
+    --ls-code-bg: rgba(255, 255, 255, 0.07);
+    --ls-rail-active: #272e35;
+    /* on this canvas the currentColor wash would lift the row toward the ink;
+       black keeps a hovered row going the same direction it does in the light
+       themes, and keeps the logout item at 5.05:1 instead of 4.42:1 */
+    --ls-menu-hover: #000;
+    --ls-accent: #ff4d94;
+    --ls-brand-ink: #e9ecef;
+    /* the light canvas's danger ink measures 2.7:1 here; this one is 5.57:1 on
+       the canvas, and 4.88:1 on the dropdown surface Bootstrap paints */
+    --ls-danger-ink: #f0635a;
+    --ls-tint-ok: #174632;
+    --ls-tint-ok-ink: #6fe8a3;
+    --ls-tint-warn: #453a0e;
+    --ls-tint-warn-ink: #ffdf70;
+    --ls-tint-error: #4a211d;
+    --ls-tint-error-ink: #ffb4a8;
+    --ls-tint-maintenance: #1e3350;
+    --ls-tint-maintenance-ink: #9dc4f5;
+    --ls-tint-undefined: #2a2e33;
+    --ls-tint-undefined-ink: #b6bcc2;
+    --ls-warn: #c28c0e;
+    /* no --ls-warn-ink override: the dark ink from :root measures 5.13:1 on
+       this amber, where the sheet's cream sat at 2.75:1. The surface is the
+       pick; the ink is the vehicle, and the accessibility bar outranks it. */
+    --ls-warn-accent: #ffc426;
+}
+
+/* auto — the OS chooses between default and dark. The stylesheet follows it
+   here; Bootstrap's own chrome is switched by the three-line script in
+   _header.html, which is the one part a server cannot know. These declarations
+   must stay identical to the dark block above, and a test compares the two. */
+@media (prefers-color-scheme: dark) {
+    body[data-ls-theme="auto"] {
+        --ls-canvas: #16191d;
+        --ls-ink: #e9edf1;
+        --ls-muted: #9aa4ad;
+        --ls-line: #343b42;
+        --ls-nav: #1e2226;
+        --ls-panel: #23282d;
+        --ls-panel-line: rgba(255, 255, 255, 0.14);
+        --ls-panel-shadow: rgba(0, 0, 0, 0.55);
+        --ls-code-bg: rgba(255, 255, 255, 0.07);
+        --ls-rail-active: #272e35;
+        /* on this canvas the currentColor wash would lift the row toward the ink;
+       black keeps a hovered row going the same direction it does in the light
+       themes, and keeps the logout item at 5.05:1 instead of 4.42:1 */
+        --ls-menu-hover: #000;
+        --ls-accent: #ff4d94;
+        --ls-brand-ink: #e9ecef;
+        /* the light canvas's danger ink measures 2.7:1 here; this one is 5.57:1 on
+       the canvas, and 4.88:1 on the dropdown surface Bootstrap paints */
+        --ls-danger-ink: #f0635a;
+        --ls-tint-ok: #174632;
+        --ls-tint-ok-ink: #6fe8a3;
+        --ls-tint-warn: #453a0e;
+        --ls-tint-warn-ink: #ffdf70;
+        --ls-tint-error: #4a211d;
+        --ls-tint-error-ink: #ffb4a8;
+        --ls-tint-maintenance: #1e3350;
+        --ls-tint-maintenance-ink: #9dc4f5;
+        --ls-tint-undefined: #2a2e33;
+        --ls-tint-undefined-ink: #b6bcc2;
+        --ls-warn: #c28c0e;
+        /* no --ls-warn-ink override: the dark ink from :root measures 5.13:1 on
+       this amber, where the sheet's cream sat at 2.75:1. The surface is the
+       pick; the ink is the vehicle, and the accessibility bar outranks it. */
+        --ls-warn-accent: #ffc426;
+    }
+}
+
+/* cyberpunk — the fun one: neon on near-black, monospace, a little glow. Checked
+   for legibility but deliberately not held to the AA bar the others are. */
+body[data-ls-theme="cyberpunk"] {
+    --ls-canvas: #070b12;
+    --ls-ink: #c4f3ff;
+    --ls-muted: #5f8b9c;
+    --ls-line: #13324a;
+    --ls-nav: #0a1220;
+    --ls-panel: #0c1420;
+    --ls-panel-line: rgba(57, 255, 160, 0.25);
+    --ls-panel-shadow: rgba(0, 170, 255, 0.25);
+    --ls-code-bg: rgba(57, 255, 160, 0.08);
+    --ls-rail-active: #0c1a26;
+    --ls-menu-hover: #000;
+    --ls-accent: #ff2ea6;
+    --ls-brand-ink: #c4f3ff;
+    --ls-danger-ink: #f0635a;
+    --ls-tint-ok: #062b1e;
+    --ls-tint-ok-ink: #39ffa0;
+    --ls-tint-warn: #332309;
+    --ls-tint-warn-ink: #ffc266;
+    --ls-tint-error: #2b0a12;
+    --ls-tint-error-ink: #ff6b9a;
+    --ls-tint-maintenance: #071c2e;
+    --ls-tint-maintenance-ink: #56c8ff;
+    --ls-tint-undefined: #0d141c;
+    --ls-tint-undefined-ink: #7f98a6;
+    --ls-warn: #b36a00;
+    --ls-warn-ink: #fff0c0;
+    --ls-warn-accent: #ffb020;
+    font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+}
+body[data-ls-theme="cyberpunk"] .status-card__state,
+body[data-ls-theme="cyberpunk"] .ls-strip__state { text-shadow: 0 0 7px currentColor; }
+body[data-ls-theme="cyberpunk"] .ls-brand__wordmark { text-shadow: 0 0 9px var(--ls-accent); }
+
+/* ----- the kiosk line -----
+
+   The wall-display header: one slim line — the brand sentence, the time the data
+   is from, and the way out — and then the strip and the grid, unchanged. Nobody
+   is standing at a kiosk, so everything that existed to be clicked is gone; what
+   is left is what a passer-by needs to read from across the room. */
+.ls-kiosk {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--ls-line);
+}
+.ls-kiosk .ls-brand { font-size: 1.03125rem; }
+.ls-kiosk .ls-brand__tagline { font-size: 0.8125rem; }
+.ls-kiosk .ls-brand__mark { width: 24px; height: 24px; }
+.ls-kiosk__right {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 0.875rem;
+}
+/* The stamp again, with its own rule rather than the band's: on the dashboard it
+   is ruled off from the filters beside it, and here there are no filters for a
+   rule to separate it from. Same discipline though — tabular figures so the
+   digits do not dance on each poll, and **no `color`**, because poll.js swaps
+   `.text-muted` for `.text-danger` and both are `!important` in Bootstrap. */
+.ls-kiosk__updated {
+    font-variant-numeric: tabular-nums;
+    font-size: 0.8125rem;
+}
+.ls-kiosk__form { margin: 0; }
+.ls-kiosk__exit {
+    -webkit-appearance: none;
+            appearance: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 3px 10px;
+    border: 1px solid var(--ls-line);
+    border-radius: 7px;
+    background: none;
+    color: var(--ls-muted);
+    font-size: 0.75rem;
+    cursor: pointer;
+}
+.ls-kiosk__exit:hover { color: var(--ls-ink); border-color: var(--ls-muted); }
+
+/* ----- /about -----
+
+   The identity page, and the one place motion is allowed. The dashboard is
+   deliberately still — anything moving there competes with the single signal
+   that should — so the gaze blinks here and the hero watches here, and the grid
+   never does either. Both stop for `prefers-reduced-motion`. */
+.ls-about {
+    max-width: 44rem;
+    padding-bottom: 2rem;
+}
+.ls-about__story {
+    max-width: 34rem;
+    margin: 0 auto 1.5rem;
+    line-height: 1.65;
+}
+.ls-about__story p:first-child {
+    font-size: 1.125rem;
+    font-weight: 600;
+}
+.ls-about__story p:last-child { margin-bottom: 0; }
+/* The story ends on an epigram rather than another paragraph, so it gets a rule
+   and some air — and keeps the body ink, because a punchline should not
+   whisper. */
+.ls-about__coda {
+    margin-top: 1.5rem;
+    padding-top: 1.1rem;
+    border-top: 1px solid var(--ls-line);
+    font-style: italic;
+    text-align: center;
+}
+/* A footnote, under the story rather than between it and what follows. */
+.ls-about__repo {
+    text-align: center;
+    font-size: 0.875rem;
+    margin: 1.75rem 0 2rem;
+    color: var(--ls-muted);
+}
+
+/* ----- /about: the hero -----
+
+   The identity block **is** the animation. It used to be told three times over —
+   the bar, this block, and an eye of its own inside a dark panel below the story
+   — so the panel is gone and its terms now orbit the gaze that was already here.
+   Nothing paints a background: the hero sits on the page's canvas in every
+   theme, which is also what settles the light themes, where a near-black panel
+   read as a hole cut in the page.
+
+   Colour carries one meaning each. **Green is seen** — spent only on the term
+   passing the eyes and on the phrase in the paragraph that term names, which is
+   what makes *my eyes stay on the things you care about* literal. **Pink is
+   her**, and nothing else takes it. Everything else is muted, because a page
+   where everything is emphasised has no emphasis.
+
+   Monospace is for the **signals** only: a term is a machine's word and a
+   sentence is hers, and the two should not be set in one face.
+
+   And it **settles**. The rings fade back and the lines stop on the last one, so
+   the prose begins on a quiet page rather than under a running demo. */
+/* The page is a poster, not a document: one hero and four short paragraphs
+   leave a wide window mostly empty, and all of that emptiness used to pile up
+   underneath. Centring the column in the page spends it evenly above and below,
+   and `padding-block` keeps a short window from clipping the top. */
+.ls-about {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    min-height: calc(100vh - 8rem);
+    padding-block: 2rem;
+}
+/* The hero's geometry is **computed, not chosen**. A flat ring reaches past the
+   eyes by a fixed amount, top and bottom, and everything else follows from that
+   one number: the padding that keeps the topmost term off the bar, the air under
+   the gaze that keeps the lowest term off her name, and where the field's centre
+   sits. Change a ring's height or the size of the gaze and the rest re-solves
+   itself — which is the point, because every version of this laid out by hand
+   put a label somewhere it did not belong. */
+.ls-hero {
+    /* the gaze as it is drawn: 210 × 105 px */
+    --ls-eye-height: 6.6rem;
+    /* the outer ring decides the clearances; the inner one is inside it */
+    --ls-ring-height: 9.4rem;
+    --ls-inner-height: 8.6rem;
+    --ls-label-height: 1.2rem;
+    /* the air we insist on above the highest term and below the lowest */
+    --ls-field-clear: 1.6rem;
+    /* how far a term reaches beyond the eyes, plus that air */
+    --ls-field-reach: calc((var(--ls-ring-height) - var(--ls-eye-height)) / 2
+                           + var(--ls-label-height) / 2
+                           + var(--ls-field-clear));
+    position: relative;
+    display: grid;
+    justify-items: center;
+    margin-bottom: 1.25rem;
+    padding-top: var(--ls-field-reach);
+}
+/* The field of view: two rings around the eyes, on the page's own canvas. It is
+   pinned to the gaze rather than to the block, so the wordmark below never
+   arrives inside the orbit. */
+/* Centred on the **eyes**, not on the block: everything below them is text, and
+   the field belongs to the gaze. */
+.ls-hero__field {
+    position: absolute;
+    top: calc(var(--ls-field-reach) + var(--ls-eye-height) / 2);
+    left: 50%;
+    width: 100%;
+    height: 0;
+    transform: translateX(-50%);
+}
+.ls-hero__ring {
+    position: absolute;
+    top: 0;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    border: 1px solid color-mix(in srgb, var(--ls-line) 90%, transparent);
+    border-radius: 50%;
+}
+/* Two orbits, the outer one wider, slower and fainter — depth without a shadow.
+   Heights are in rem rather than percentages because the field has none. */
+/* Flat on purpose — an orbital plane seen almost edge-on. It also keeps every
+   station above the wordmark: a label that swings down through her name is the
+   one collision this composition can produce.
+
+   Deliberately **wider than the prose**: the terms are the page's air and the
+   paragraphs are its content, and a field squeezed into the reading column is a
+   crowd. Nothing here is a box, so there is no edge to line up with the text —
+   only the eyes, which stay in the middle of both. */
+/* The heights are a pair of clearances rather than a look: half the inner ring
+   has to sit **outside the eyes** (they are 6.5rem tall, so ±3.3rem), and half
+   the outer ring has to stay **above the wordmark**, which is why the gaze
+   carries the margin below. Between those two numbers there is about a rem of
+   room, and that rem is the whole composition. */
+.ls-hero__ring--1 {
+    width: min(58rem, 94vw);
+    height: var(--ls-ring-height);
+    border-color: color-mix(in srgb, var(--ls-line) 50%, transparent);
+}
+.ls-hero__ring--2 {
+    width: min(38rem, 74vw);
+    height: var(--ls-inner-height);
+}
+/* A station travels **along** its ellipse rather than the ring turning under it,
+   and that is not a preference: a rotating ellipse sweeps its labels through a
+   circle of its own major axis, so a flat ring thirty rem wide would fling them
+   fifteen rem above the eyes. Animating the angle instead keeps every term on
+   the line it was placed on, however flat that line is — and it means nothing
+   rotates, so no label needs turning back upright.
+
+   `--spin` is registered below, because a custom property can only be animated
+   if the browser knows it is an angle. */
+/* A narrow window has room for one orbit, not two: the outer ring's drawn terms
+   step out and the four the story names stay, because those are the ones the
+   paragraph answers to — the same rule the brand sentence uses when it gives up
+   its tagline. */
+@media (max-width: 575.98px) {
+    .ls-hero__ring--1 { display: none; }
+    .ls-hero__ring--2 { width: min(18rem, 62vw); }
+}
+.ls-hero__signal {
+    position: absolute;
+    --angle: calc((var(--i) / var(--n)) * 1turn - 0.25turn + var(--spin));
+    left: calc(50% + 50% * cos(var(--angle)));
+    top: calc(50% + 50% * sin(var(--angle)));
+    transform: translate(-50%, -50%);
+    white-space: nowrap;
+}
+/* The plate belongs to the label, not to its station: the station turns with the
+   ring and the label turns back, so a background on the station would drag a
+   tilting rectangle round the page. It is the canvas, so a ring passes behind a
+   word rather than through it. */
+.ls-hero__signal b {
+    display: inline-block;
+    padding: 0.1rem 0.45rem;
+    background: var(--ls-canvas);
+    /* A quiet signal is **information**, so it sits between the body ink and the
+       muted furniture rather than at either end: in cyberpunk that lands on the
+       cyan the theme already speaks, and in the light themes it is a gray one
+       step firmer than the ring it rides. */
+    color: color-mix(in srgb, var(--ls-ink) 55%, var(--ls-muted));
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.75rem;
+    font-weight: 400;
+    letter-spacing: 0.02em;
+    transition: color 0.7s ease, text-shadow 0.7s ease;
+}
+/* Seen: the one term the eyes are on. Restrained on purpose — this is the only
+   green on the page, and it means *watched*, not *alarmed*. */
+.ls-hero__signal.is-seen b,
+.ls-topic.is-seen {
+    color: var(--ls-tint-ok-ink);
+    text-shadow: 0 0 0.7rem color-mix(in srgb, var(--ls-tint-ok-ink) 40%,
+                                      transparent);
+}
+/* The phrase in the story lights with the term that names it, which is the whole
+   point of the composition: the paragraph is the legend for the orbit. */
+.ls-topic {
+    transition: color 0.7s ease, text-shadow 0.7s ease;
+}
+.ls-hero__brand {
+    position: relative;
+    z-index: 1;
+    margin: 0;
+}
+/* The air under the eyes is structural — the same reach the padding above uses,
+   so the lowest term on the widest ring clears her name by exactly the air we
+   asked for, at every ring size. */
+.ls-hero__brand .ls-gaze {
+    margin-bottom: var(--ls-field-reach);
+}
+.ls-hero__version {
+    color: var(--ls-muted);
+    font-variant-numeric: tabular-nums;
+    font-size: 0.8125rem;
+    margin: 0.15rem 0 0;
+}
+/* What she says while she watches: one line at a time in a single cell, so
+   nothing below it moves as the sequence runs. It ends on the last line and
+   stays there — a page that never stops talking is a page nobody finishes. */
+.ls-hero__says {
+    display: grid;
+    place-items: center;
+    margin: 0.9rem 0 0;
+    min-height: 2.6em;
+    text-align: center;
+    color: var(--ls-muted);
+    font-size: 0.9375rem;
+    line-height: 1.3;
+}
+.ls-hero__line {
+    grid-area: 1 / 1;
+    opacity: 0;
+}
+.ls-hero__line:last-child { opacity: 1; }
+
+@media (prefers-reduced-motion: no-preference) {
+    /* The settling: the rings arrive at full strength and fade back to a
+       background over a quarter of a minute, so what the reader is left with is
+       a page that happens to be watching rather than a page performing. */
+    .ls-hero__field {
+        animation: ls-hero-settle 22s ease-out forwards;
+    }
+    /* Slow: one turn a minute for the outer ring. This is the background of a
+       page about watching, and a glance at it should catch almost nothing
+       moving. The two rings run at different rates and in opposite directions,
+       which is what keeps the field from reading as one rotating object. */
+    .ls-hero__ring--1 .ls-hero__signal {
+        animation: ls-hero-orbit 58s linear infinite reverse;
+    }
+    .ls-hero__ring--2 .ls-hero__signal {
+        animation: ls-hero-orbit 41s linear infinite;
+    }
+    /* One line at a time, then silence on the last. `both` keeps the first line
+       hidden through its delay and the last one visible after its run. */
+    .ls-hero__line {
+        --step: 2.4s;
+        animation: ls-hero-say var(--step) ease-out both;
+        animation-delay: calc(var(--step) * var(--i));
+    }
+    .ls-hero__line:last-child {
+        animation-name: ls-hero-stay;
+    }
+}
+/* The angle a station has travelled from where the markup put it. Registered so
+   it can be animated at all: an unregistered custom property is a string to the
+   browser, and a string cannot be interpolated. */
+@property --spin {
+    syntax: "<angle>";
+    inherits: false;
+    initial-value: 0turn;
+}
+@keyframes ls-hero-orbit {
+    to { --spin: 1turn; }
+}
+@keyframes ls-hero-settle {
+    from { opacity: 1; }
+    to   { opacity: 0.55; }
+}
+@keyframes ls-hero-say {
+    0%   { opacity: 0; }
+    12%  { opacity: 1; }
+    82%  { opacity: 1; }
+    100% { opacity: 0; }
+}
+@keyframes ls-hero-stay {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+}
+
+/* ----- /links: the filter -----
+
+   Pinned above the columns and focused on arrival, because past a few dozen
+   entries this *is* how the page is navigated (ADR-0030). Narrow on purpose: it
+   matches one short field, so a full-width box would promise a search it does
+   not perform. */
+.ls-links__filter {
+    display: flex;
+    align-items: baseline;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+}
+.ls-links__search {
+    max-width: 20rem;
+}
+/* Only while filtering, and never a layout shift: the count sits beside the box
+   rather than under it, so nothing below moves as it changes per keystroke. */
+.ls-links__count {
+    color: var(--ls-muted);
+    font-size: 0.8125rem;
+    font-variant-numeric: tabular-nums;
+}
+.ls-links__none {
+    margin-bottom: 1.5rem;
+}
+/* How fresh the reachability answers are (ADR-0030 §9). One line for the whole
+   page rather than a mark on sixty healthy rows: only a failure is drawn beside
+   its entry, so this is what tells a reader that a page showing none was actually
+   asked. `margin-left: auto` puts it at the far end of the filter row — the
+   opposite end from the search box, since it is a fact about the page rather than
+   about what was typed. */
+.ls-links__probe {
+    color: var(--ls-muted);
+    font-size: 0.8125rem;
+    margin-left: auto;
+}
+/* Every answer came back alive — the one state this page can report as *good*,
+   and it reports it in the status family's own green rather than a new one. That
+   ink is declared for the ok **tint**, and it is used here on the canvas because
+   it was measured there: 6.14:1 in the weakest theme (pastel), and higher in the
+   other five. `tests/test_contrast.py` keeps that true. Nothing turns this line
+   red: a failure is drawn on the row it belongs to, and a second red up here
+   would compete with it. */
+.ls-links__probe--ok {
+    color: var(--ls-tint-ok-ink);
+}
+.ls-links__tick {
+    vertical-align: -0.125em;
+}
+/* A pass that gave up on a host still holding the connection open (ADR-0030,
+   amended). It takes **weight and not colour**: the rule two comments up — nothing
+   turns this line red — is about not competing with the failures drawn on the rows
+   themselves, and a stalled pass is a fact about the page's own machinery rather
+   than about any entry on it. Inheriting the muted ink also means it needs no
+   contrast row of its own; `.ls-links__probe` already measures that pair. */
+.ls-links__stalled {
+    font-weight: 600;
+}
+/* *Check now*, at the far end of the row beside the line it refreshes. The form
+   is a flex item like everything else here, so it carries no width of its own and
+   the button decides the size. Secondary weight on purpose: the filter is this
+   page's primary control, and this one is the only thing on the instance a reader
+   can spend outbound requests with.
+
+   The **ink is ours**, and `btn-outline-secondary` is deliberately not used:
+   Bootstrap paints that #6c757d whatever the canvas, which measures 3.76:1 on the
+   dark one — the same trap the logout link fell into, and the accessibility bar
+   outranks the shade (ADR-0028). `btn btn-sm` keeps the shape and the metrics;
+   every colour below comes from a token, so `tests/test_contrast.py` can measure
+   this row without a browser. */
+.ls-links__recheck {
+    margin: 0;
+    flex: 0 0 auto;
+}
+.ls-links__recheck .btn {
+    color: var(--ls-ink);
+    background: none;
+    border: 1px solid var(--ls-line);
+}
+.ls-links__recheck .btn:hover,
+.ls-links__recheck .btn:focus-visible {
+    color: var(--ls-ink);
+    background: var(--ls-rail-active);
+    border-color: var(--ls-muted);
+}
+
+/* ----- /links -----
+
+   The shared toolbox: a launcher, not documentation. One flat level of groups
+   flowed into columns, each entry a mark and a title in the order the operator
+   wrote them (ADR-0030). The reference implementation this was drawn from had
+   three failures worth not repeating — broken-image glyphs where an icon 404'd,
+   a wrapped title running back under the icon, and a black mark invisible on a
+   dark page. The glyph fallback is links.js, the hanging indent is the flex row
+   below, and the pair/chip rules are the two `__mark` classes. */
+.ls-links {
+    columns: 4 17rem;
+    column-gap: 2.25rem;
+    padding-bottom: 2rem;
+}
+/* A category is one block: it may end a column, but it never breaks across two
+   — a heading stranded at the foot of a column belongs to nothing. */
+.ls-links__group {
+    break-inside: avoid;
+    margin-bottom: 1.5rem;
+}
+.ls-links__title {
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--ls-muted);
+    margin: 0 0 0.4rem;
+    padding-bottom: 0.3rem;
+    border-bottom: 1px solid var(--ls-line);
+}
+.ls-links__list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+/* The row: mark, then the text column. `align-items: flex-start` plus a text
+   column that owns its own width is the hanging indent — a title that wraps
+   continues under the first line of text, not under the icon. */
+.ls-links__link {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.55rem;
+    padding: 0.25rem 0.4rem;
+    border-radius: 6px;
+    color: inherit;
+    text-decoration: none;
+}
+.ls-links__link:hover,
+.ls-links__link:focus-visible {
+    background: var(--ls-rail-active);
+    text-decoration: none;
+    color: inherit;
+}
+.ls-links__mark {
+    flex: 0 0 auto;
+    width: 24px;
+    height: 24px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+.ls-links__mark--chip {
+    background: var(--ls-chip);
+    border: 1px solid var(--ls-chip-line);
+    border-radius: 5px;
+}
+.ls-links__icon {
+    display: block;
+    width: 20px;
+    height: 20px;
+    /* A favicon arrives at whatever aspect ratio its site felt like; `contain`
+       is what keeps one wide one from setting the row rhythm for the column. */
+    object-fit: contain;
+}
+.ls-links__mark--chip .ls-links__icon {
+    width: 16px;
+    height: 16px;
+}
+/* The pair, chosen here rather than in Jinja: under the `auto` theme the server
+   cannot know what the OS will resolve to, and `data-bs-theme` is set for every
+   dark theme server-side *and* for auto by the pre-paint script (ADR-0029). Both
+   files are emitted and one is hidden. */
+.ls-links__icon--dark { display: none; }
+body[data-bs-theme="dark"] .ls-links__icon--light { display: none; }
+body[data-bs-theme="dark"] .ls-links__icon--dark { display: block; }
+
+.ls-links__text { min-width: 0; }
+.ls-links__name {
+    display: block;
+    line-height: 1.35;
+}
+/* One line of Markdown under the title — room for "page the ISP before touching
+   this". Muted and smaller, so it never competes with the entry it annotates. */
+.ls-links__note {
+    display: block;
+    font-size: 0.8125rem;
+    line-height: 1.3;
+    color: var(--ls-muted);
+}
+/* A reachability failure, under the title it belongs to. It sits where the note
+   sits and reads at the note's size, because it is the same kind of aside — but
+   `dead` gets the danger ink, the one place on this page that is not muted: a
+   moved link is the failure the page exists to surface. *No answer* stays muted
+   on purpose, since a timeout or a 500 is this instance failing to find out
+   rather than a fact about the entry (ADR-0030 §10). */
+.ls-links__verdict {
+    display: block;
+    font-size: 0.8125rem;
+    line-height: 1.3;
+    color: var(--ls-muted);
+}
+.ls-links__verdict--dead {
+    color: var(--ls-danger-ink);
+}
+.ls-links__problems,
+.ls-links__empty { max-width: 46rem; }
+.ls-links__sample {
+    background: var(--ls-code-bg);
+    border-radius: 6px;
+    padding: 0.75rem 1rem;
+    font-size: 0.8125rem;
+}
+/* The roster of installed marks. Narrow: three short columns, and a table that
+   stretched to the prose width would put an icon a hand's width from its name. */
+.ls-links__pack {
+    width: auto;
+    font-size: 0.8125rem;
+    vertical-align: middle;
+}
+.ls-links__pack th,
+.ls-links__pack td { padding: 0.3rem 0.75rem; }
+/* Both selectors carry the table's class as well, deliberately: Bootstrap paints
+   every cell from `.table > :not(caption) > * > *` -- a background-color *and* an
+   inset shadow, at one class plus one type. A bare `.ls-links__swatch--light`
+   loses to it and the swatch silently becomes the canvas again, which is the one
+   failure this column exists to prevent. */
+.ls-links__pack td.ls-links__swatch--light {
+    background: var(--ls-chip);
+    box-shadow: inset 0 0 0 1px var(--ls-chip-line);
+}
+.ls-links__pack td.ls-links__swatch--dark {
+    background: var(--ls-chip-dark);
+    box-shadow: inset 0 0 0 1px var(--ls-chip-dark-line);
+}

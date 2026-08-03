@@ -1,17 +1,59 @@
 """Shared test setup.
 
 The web/api tests import ``little_sister.app``, which loads the user list at
-import time (ADR-0020). Point it at a committed fixture so the suite is
-self-contained — independent of any deployment ``users.yaml`` and of the current
-working directory. These run at collection time, before the test modules import
-the app, and use ``setdefault`` so an explicit override still wins.
+import time (ADR-0020) — and importing ``little_sister.config`` resolves the
+configuration directory (ADR-0031). Point both at committed paths so the suite is
+self-contained: independent of any deployment's files and of the current working
+directory. These run at collection time, before the test modules import the app,
+and use ``setdefault`` so an explicit override still wins.
 """
 
 import os
+
+import pytest
+
+from little_sister.actions import forget_actions
+from little_sister.config_dir import forget_aspects, forget_scanned_roots
+from little_sister.icons import forget_packs
+from little_sister.link_probe import forget_probe_results
+from little_sister.links import forget_cached_links
+from little_sister.slots import forget_fillers
+
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 os.environ.setdefault(
     "LITTLE_SISTER_USERS",
     os.path.join(os.path.dirname(__file__), "fixtures", "users.yaml"),
 )
+os.environ.setdefault("LITTLE_SISTER_CONFIG_DIR",
+                      os.path.join(_REPO_ROOT, "config"))
 os.environ.setdefault("LITTLE_SISTER_ENGINE", "0")
 os.environ.setdefault("SECRET_KEY", "test-key")
+
+
+@pytest.fixture(autouse=True)
+def _forget_process_caches():
+    """Reset the caches a running process keeps and a test suite must not share.
+
+    The once-per-root candidate warning
+    (:func:`little_sister.config_dir.forget_scanned_roots`) would otherwise depend
+    on which test resolved a root first; the links parse cache
+    (:func:`little_sister.links.forget_cached_links`) is keyed on size and mtime,
+    which a test rewriting a file within one filesystem tick can defeat; the icon
+    registry (:func:`little_sister.icons.forget_packs`) would otherwise let a pack
+    one test registers decide another test's resolution; the slot registry
+    (:func:`little_sister.slots.forget_fillers`) and the registered configuration
+    aspects (:func:`little_sister.config_dir.forget_aspects`) are the same story for
+    the two extension seams (ADR-0034 / ADR-0035) — a filler one test registers
+    would otherwise put its button on every later test's page. The reachability
+    answers (:func:`little_sister.link_probe.forget_probe_results`) are the same
+    story once more: a verdict one test seeded is a verdict the next test's page
+    would render.
+    """
+    forget_scanned_roots()
+    forget_actions()
+    forget_cached_links()
+    forget_packs()
+    forget_fillers()
+    forget_aspects()
+    forget_probe_results()

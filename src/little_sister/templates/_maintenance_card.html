@@ -1,0 +1,89 @@
+{#- The node's maintenance card (ADR-0014): the current pin, and the admin
+    set/clear form. Shared by the leaf detail page (check.html) and the subtree
+    page (status.html) — backlog #35: the model, POST /maintenance, persistence
+    and the reaper always accepted a container pin; this partial is the surface
+    for it. The caller gates on `is_admin`; `maintenance_default` is the
+    deployment's default window (settings.yaml), shown so a blank field says
+    what it means. The wording carries the feature: today's pin silences
+    *everything*, so the sentence says exactly that — and stays honest about
+    what keeps running underneath.
+
+    A **pinned** node offers the set form too, prefilled with its reason
+    (ADR-0014 amendment): extending a window used to mean clearing and
+    re-setting, which alarmed in the gap and — because a blank reason falls back
+    to the literal `maintenance` — usually threw the explanation away. Duration
+    is *not* prefilled: blank means the configured default here exactly as it
+    does on an unpinned node, so there is one rule to know.
+
+    This is also where the pin's full four-field reading lives — pinned by whom
+    and when, last changed by whom and when — because there is room for it here
+    and not in the popover.
+
+    Both forms carry the entry's `set_at` as the compare-and-set token; empty
+    says "I believe nothing is pinned". A write whose token no longer matches is
+    refused whole and comes back as the conflict page. -#}
+{% set entry = node.maintenance_entry %}
+<div class="card mb-3">
+    <div class="card-body">
+        <h3 class="h6 text-muted text-uppercase">Maintenance</h3>
+        {% if node.maintenance %}
+            <p class="text-muted mb-2">
+                This node is in maintenance.
+                {%- if entry %}
+                    Pinned by <strong>{{ entry.created_by or 'unknown' }}</strong>
+                    {{ entry.created_at | localtime }}.
+                    {%- if entry.set_at != entry.created_at %}
+                        Last changed by <strong>{{ entry.set_by or 'unknown' }}</strong>
+                        {{ entry.set_at | localtime }}.
+                    {%- endif %}
+                    Expires {{ entry.expires_at | localtime }}.
+                {%- endif %}
+            </p>
+            <form method="post" action="{{ url_for('maintenance') }}">
+                <input type="hidden" name="path" value="{{ branch }}">
+                <input type="hidden" name="action" value="set">
+                <input type="hidden" name="set_at" value="{{ entry.set_at if entry else '' }}">
+                <div class="mb-2">
+                    <label class="form-label" for="reason">Reason</label>
+                    <input class="form-control" id="reason" name="reason" placeholder="why?" value="{{ entry.reason if entry else '' }}">
+                </div>
+                <div class="mb-2">
+                    <label class="form-label" for="duration">New window, from now</label>
+                    <input class="form-control" id="duration" name="duration" placeholder="e.g. 2h, 3d — default {{ maintenance_default }}">
+                </div>
+                <button class="btn btn-primary" type="submit">Save changes</button>
+            </form>
+            <form method="post" action="{{ url_for('maintenance') }}" class="mt-2">
+                <input type="hidden" name="path" value="{{ branch }}">
+                <input type="hidden" name="action" value="clear">
+                <input type="hidden" name="set_at" value="{{ entry.set_at if entry else '' }}">
+                <button class="btn btn-outline-secondary" type="submit">Clear maintenance</button>
+            </form>
+        {% else %}
+            {% if node.children %}
+                <p class="text-muted mb-2">Silences <strong>{{ node.path }}</strong> and everything
+                    beneath it: nothing under here will alarm before the pin expires. Its checks
+                    keep running — their colors stay visible here — and count again when the
+                    pin clears.</p>
+            {% else %}
+                <p class="text-muted mb-2">Silences <strong>{{ node.path }}</strong>: it will not
+                    alarm before the pin expires. The check keeps running and counts again when
+                    the pin clears.</p>
+            {% endif %}
+            <form method="post" action="{{ url_for('maintenance') }}">
+                <input type="hidden" name="path" value="{{ branch }}">
+                <input type="hidden" name="action" value="set">
+                <input type="hidden" name="set_at" value="">
+                <div class="mb-2">
+                    <label class="form-label" for="reason">Reason</label>
+                    <input class="form-control" id="reason" name="reason" placeholder="why?">
+                </div>
+                <div class="mb-2">
+                    <label class="form-label" for="duration">Duration</label>
+                    <input class="form-control" id="duration" name="duration" placeholder="e.g. 2h, 3d — default {{ maintenance_default }}">
+                </div>
+                <button class="btn btn-primary" type="submit">Set maintenance</button>
+            </form>
+        {% endif %}
+    </div>
+</div>

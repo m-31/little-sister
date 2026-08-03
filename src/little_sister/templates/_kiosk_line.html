@@ -1,0 +1,43 @@
+{#- The kiosk header: one slim line, and then the strip and
+    the grid. Nothing else — no bar, no rail, no filters, no user chrome. This is
+    the wall-display mode: nobody is standing at it, so everything that exists to
+    be clicked has been taken away, and what is left is the sentence, the time the
+    data is from, and the way out.
+
+    Deliberately no breadcrumb: round 5 drew brand · updated · exit and that is
+    what ships at every depth.
+
+    The stamp is the same element the dashboard has — same id, same server-seeded
+    `data-rendered-at`, same class the poller swaps for the red one — so the ~10s
+    poll, the sustained-outage banner and the "(stale)" title prefix all behave
+    exactly as they do on the dashboard. A kiosk nobody is watching is precisely
+    where a frozen screen must announce itself (ADR-0005).
+
+    "Exit" is not a mode switch: it writes the default layout back to the one
+    presentation cookie (ADR-0029) and goes home, so leaving a kiosk is the same
+    act as choosing a layout from the settings menu. -#}
+<div class="ls-kiosk">
+    <span class="ls-brand ls-brand--kiosk">{% include '_brand.html' %}</span>
+    <div class="ls-kiosk__right">
+        {%- if rendered_at is defined %}
+        <div class="text-muted ls-kiosk__updated" id="status-updated"
+             data-rendered-at="{{ rendered_at }}">updated {{ rendered_at }}</div>
+        {%- endif %}
+        <form class="ls-kiosk__form" method="post" action="{{ url_for('preferences') }}">
+            <input type="hidden" name="layout" value="{{ default_layout }}">
+            <input type="hidden" name="next" value="/status">
+            <button class="ls-kiosk__exit" type="submit"
+                    title="exit kiosk — back to the default layout">
+                <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"
+                     aria-hidden="true" focusable="false">
+                    <path d="M9.5 2.5 H13.5 V6.5 M13.5 2.5 L8 8" fill="none"
+                          stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                    <path d="M12 9.5 V13 a1 1 0 0 1-1 1 H3 a1 1 0 0 1-1-1 V5 a1 1 0 0 1 1-1 H6.5"
+                          fill="none" stroke="currentColor" stroke-width="1.8"
+                          stroke-linecap="round"/>
+                </svg>
+                exit
+            </button>
+        </form>
+    </div>
+</div>

@@ -61,14 +61,43 @@ Production: ERROR
 No screenshots, no reformatting — the status drops cleanly into chat and the
 ticket, and everyone's looking at the same picture.
 
-## 6. Runbook links at hand
+## 6. The shared toolbox, one click away
 
-While firefighting, Robin clicks **Links** — a short, curated set of the runbooks
-and dashboards that actually matter for what's on fire. (The team affectionately
-calls whoever's on call "the capybara of the day," and this page exists to help
-that person move fast.)
+Mid-incident, Robin reaches for the load-test console. Not a runbook for the thing
+that is broken — that one is already on the node, in its `about`, right where they
+drilled in. What is missing is everything *around* the failure: the team Grafana,
+the ticket queue, the URL shortener, the big red stop button for the load
+generator. Robin clicks **Links** and finds them in a handful of curated
+categories, each entry wearing a mark so the row is recognizable before it is
+read; typing "grafana" narrows the page to the ones that matter. (The team
+affectionately calls whoever's on call "the capybara of the day," and this page
+exists to help that person move fast.)
 
-## 7. A glance from the menu bar
+## 7. Custom link curation
+
+The toolbox belongs to the team, not to us. Dana is moving sixty entries off the
+tool they used before, and the shape matters as much as the list: **EMERGENCY
+STOP** has to sit first under *Loadtest Live*, because that is where a hand goes
+at three in the morning, and no alphabetical sort would ever put it there. The
+file is read in the order it was written, and nothing re-sorts it.
+
+Most entries need nothing more — Grafana, Jenkins, Jira and the rest already have
+a mark, and an entry whose site serves a decent favicon simply wears that. What is
+left is the in-house half: the deploy console, the firewall admin, the two
+dashboards nobody outside the building has heard of. Dana drops `deployer.svg`
+into `config/links/icons/` and writes `icon: deployer` — the file *is* the name,
+so there is nothing else to declare, and where a mark has to hold up on every
+theme a `-on-light` / `-on-dark` pair beside it does that too. The tools only this
+team uses end up as recognizable at a glance as the ones the whole world knows.
+
+The base list lives with the shared configuration and each site adds to it: a
+group with the same title concatenates rather than colliding, so the colo appends
+its two consoles to *Toolbox* without copying the other fifty-eight. And a typo
+never costs the monitor — the bad entry is dropped and the page itself says what
+was wrong with it, because the person who maintains the file is the person looking
+at the page.
+
+## 8. A glance from the menu bar
 
 Robin's teammate Sam rarely keeps a browser tab open. Instead, a small native
 **macOS app**, written in **Swift**, sits in the menu bar. It periodically asks a
@@ -95,7 +124,7 @@ many clients reading the same JSON.
 }
 ```
 
-## 8. One screen across many sites
+## 9. One screen across many sites
 
 The company runs systems in three places: the office, a colo, and a cloud region.
 Each site runs its **own** little-sister as a **satellite**, watching the machines
@@ -106,13 +135,13 @@ the entire company, assembled from instances that each only know their own
 corner. Because every instance speaks the same JSON, the output of one is simply
 the input of the next.
 
-## 9. Why it lives on a Mac
+## 10. Why it lives on a Mac
 little-sister itself runs on **macOS**. From there a check can reach into the
 **Apple ecosystem**, ping the **Linux** boxes on the local network, and call out
 to **remote servers** — the same uniform `Status` regardless of what was actually
 checked or where it lives.
 
-## 10. The wall everyone glances at
+## 11. The wall everyone glances at
 
 A spare monitor hangs in the team room, driven by a Raspberry Pi in kiosk mode
 showing little-sister's status grid in big, read-at-a-distance type — a monitor

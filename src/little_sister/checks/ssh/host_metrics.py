@@ -8,7 +8,7 @@ emits raw numbers); this check applies the OK/WARN/ERROR thresholds and reports 
 **branch**: a peer ``ssh`` transport leaf plus a node per aspect (``disk``,
 ``memory``, ``cpu``, ``load``), all siblings, each carrying its number even when OK
 (project.md §2.7). The host node itself is OK once the host is reachable; the worst
-aspect rolls up to it (ADR-0004).
+aspect rolls up to it (ADR-0039).
 
 The basic metrics need no elevated rights; ``sudo: true`` runs the script under
 ``sudo -n`` for deployments that extend it with root-only insights.
@@ -19,6 +19,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from little_sister import values
 from little_sister.checks.base import (
     CheckError,
     CheckResult,
@@ -26,7 +27,7 @@ from little_sister.checks.base import (
     plain,
     register,
 )
-from little_sister.checks.metadata import parse_subnodes
+from little_sister.checks.metadata import parse_subnodes, resolve_text
 from little_sister.checks.ssh.base import SshScriptCheck, parse_descriptions
 from little_sister.checks.ssh.metrics import (
     grade,
@@ -169,15 +170,17 @@ class HostMetricsCheck(SshScriptCheck):
         return self.descriptions.get(leaf, default)
 
     def _about(self, aspect: str) -> str:
-        """A leaf's ``about``: the ``subnodes:`` config override, else the built-in
-        ``ABOUT`` default (ADR-0025). An empty config value falls back to the
-        default; ``nodes.yaml`` still wins over both, per field."""
-        return self.subnodes.get(aspect, {}).get("about") or ABOUT.get(aspect, "")
+        """A leaf's ``about``: the ``subnodes:`` config value over the built-in
+        ``ABOUT`` default (ADR-0025) — replacing it, or extending it where the config
+        writes ``{default}``. An empty config value falls back to the default;
+        ``nodes.yaml`` still wins over both, per field."""
+        return resolve_text(self.subnodes.get(aspect, {}).get("about", ""),
+                            ABOUT.get(aspect, ""))
 
     def _title(self, aspect: str) -> str:
-        """A leaf's ``title``: the ``subnodes:`` config override, else empty — this
-        family ships no title default (the names read fine)."""
-        return self.subnodes.get(aspect, {}).get("title", "")
+        """A leaf's ``title``: whatever the ``subnodes:`` config says, else empty —
+        this family ships no title default (the names read fine)."""
+        return resolve_text(self.subnodes.get(aspect, {}).get("title", ""), "")
 
     def _script_args(self) -> list[str]:
         # $1 = disk path to measure (empty → the script's per-OS default).
@@ -398,11 +401,8 @@ def _parse_thresholds(raw: Any) -> dict[str, tuple[float, float]]:
         spec = raw.get(aspect) or {}
         if not isinstance(spec, dict):
             raise CheckError(f"thresholds.{aspect} must be a mapping")
-        try:
-            warn = float(spec.get("warn", default_warn))
-            error = float(spec.get("error", default_error))
-        except (TypeError, ValueError) as exc:
-            raise CheckError(
-                f"thresholds.{aspect}: warn/error must be numbers") from exc
-        parsed[aspect] = (warn, error)
+        where = f"thresholds.{aspect}"
+        parsed[aspect] = (
+            values.real(spec, "warn", default=default_warn, where=where),
+            values.real(spec, "error", default=default_error, where=where))
     return parsed

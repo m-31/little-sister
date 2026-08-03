@@ -1,0 +1,6 @@
+{#- The live demo's own reason-level filler (ADR-0034), beside the configured chip
+    the action list renders. Same `.reason-action` class, because an action is an
+    action and the whole point of the rail is that you cannot tell who put a chip
+    there — only its provider knows, and only by declining. -#}
+<a class="reason-action" href="{{ url }}" target="_blank" rel="noopener noreferrer"
+   title="{{ summary }}" data-demo-review-action="review-filler">{{ label }}</a>

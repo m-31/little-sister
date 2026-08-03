@@ -1,4 +1,4 @@
-"""The UI-harness fixtures (backlog #25) double as test data.
+"""The UI-harness fixtures (testing-the-gui.md) double as test data.
 
 Rendering an extreme tree through the real templates is the cheapest guard that
 the dashboard survives it: a template error on a 200-line reason, a depth-8 tree
@@ -145,3 +145,21 @@ class WallFixtureTests(TestCase):
         self.assertIn("artifacts.example/build/", html)
         self.assertIn("sha256:", html)
         self.assertIn("part33", html)                       # ident tail intact
+
+    def test_fixture_observation_times_are_pinned(self):
+        # ADR-0027 put an observation time on the cards, so the sheet must pin it like
+        # `_RENDERED_AT`: a build-time `now` would make every re-run — and every
+        # machine — diff. The stamp carries an offset, so the rendered time of day is
+        # the configured timezone's wherever the harness runs.
+        html = self._render("hosts_ok_10")
+        self.assertIn('<span class="status-card__time">11:59:31</span>', html)
+        self.assertEqual(html.count('class="status-card__time"'), 10)
+
+    def test_observation_times_fixture_contrasts_present_and_absent(self):
+        # Three cards, one time: `solo` covers exactly one check and inherits its run
+        # time; `pair` covers two, so no single value can answer for both; the
+        # `never-run` mount has not reported, and registration is not an observation.
+        html = self._render("observation_times")
+        for name in ("solo", "pair", "never-run"):
+            self.assertIn(f">{name}</a>", html)
+        self.assertEqual(html.count('class="status-card__time"'), 1)

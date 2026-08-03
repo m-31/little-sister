@@ -70,12 +70,17 @@ engine or tree learning where a value came from.
    `subnodes:` block, `name -> {title, about}`, in the same file its root's inline
    `about` / `title` live in, parsed by `little_sister.checks.metadata.parse_subnodes`
    (with `expand_tokens` for `{token}` placeholders a label wants to reuse, a plain
-   replace so Markdown is untouched). A check with both uses the config value when
-   present and falls back to its default — so `host-metrics` ships defaults every
-   deployment inherits yet lets one override an aspect's `about` in its config, while a
-   deployment-authored branch check can keep its labels wholly in config. This is
-   internal to the check: the tree still sees one *check-provided* value per field, below
-   `nodes.yaml`.
+   replace so Markdown is untouched). A check with both layers them via
+   `metadata.resolve_text`: the config value when present, the default otherwise — and
+   the config may **extend** rather than replace by writing `{default}` into its own
+   text, which is substituted in place (before token expansion, so tokens inside the
+   default still expand; an aspect with no default resolves it to nothing). So
+   `host-metrics` ships defaults every deployment inherits yet lets one retune or annotate
+   an aspect's `about` in its config, while a deployment-authored branch check can keep
+   its labels wholly in config. The extension form earns its keep when one check *type*
+   runs several times in a deployment — one per team — where config-only labels would put
+   the same paragraphs in every instance's file. This is internal to the check: the tree
+   still sees one *check-provided* value per field, below `nodes.yaml`.
 
 ## Consequences
 - A reusable branch check ships its subnode legend **once, in code**, and every
@@ -92,8 +97,6 @@ engine or tree learning where a value came from.
 - The tree and engine stay **provenance-free**: the fill-empty rule is the whole
   mechanism, two lines under the existing status-write lock. No `Status` grows a
   "source" field; no resolved-metadata map is plumbed into the engine.
-- The first external consumers are the stress deployment's repository checks, which
-  adopt from their own repo once a library tag carries this.
 
 ## Alternatives considered
 - **A yaml-aware engine** — plumb the resolved `nodes.yaml` metadata map into

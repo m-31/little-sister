@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>System</title>
+    {% set page_title = 'System' %}
     {% include '_header.html' %}
 
     <div class="container-fluid mt-3 px-4" style="max-width: 980px">
@@ -9,16 +9,68 @@
             <span class="text-muted small">· little-sister {{ version }}</span></h1>
         {# Server-seeded, same contract as the dashboard's stamp (ADR-0005):
            this page doesn't navigate on its own, so it always says from when
-           the information below actually is. #}
+           the information below actually is. Under the kiosk layout the slim
+           line already carries it — there must be exactly one #status-updated
+           on the page, because that is what the poller looks for. #}
+        {% if layout != 'kiosk' %}
         <div class="text-muted small mb-3" id="status-updated"
              data-rendered-at="{{ rendered_at }}">updated {{ rendered_at }}</div>
+        {% endif %}
 
         <div id="system-info">
             {% include '_system_info.html' %}
         </div>
+
+        {# The extension seams (ADR-0034 / ADR-0035), outside #system-info because
+           they are decided at import time and never move while the process runs —
+           re-fetching them on the ~10s poll would say nothing new. Shown only when
+           something registered, so a deployment with no extensions has no section
+           rather than an empty one. Registration is import-order sensitive and each
+           of its failures is a log warning, so the running instance has to be able
+           to answer "did my extension take?" without anyone opening a log file. #}
+        {% if slot_fillers or extra_aspects %}
+        <div class="card mb-3">
+            <div class="card-body">
+                <h3 class="h6 text-muted text-uppercase">Extensions</h3>
+                {% if slot_fillers %}
+                <table class="table table-sm align-middle mb-0">
+                    <thead>
+                        <tr><th>Slot</th><th>Package</th><th>Template</th><th>Context</th><th>From</th></tr>
+                    </thead>
+                    <tbody>
+                        {% for filler in slot_fillers %}
+                        <tr>
+                            <td><code>{{ filler.slot }}</code></td>
+                            <td>{{ filler.package }}</td>
+                            <td class="text-muted">{{ filler.template }}</td>
+                            <td class="text-muted">{% if filler.context %}provider{% else %}—{% endif %}</td>
+                            {#- Which kind: a dependent package's registration, or
+                                the library's own declarative action list, which
+                                fills the same slots through the same seam
+                                (ADR-0038). Worth naming, because an operator
+                                looking here after adding a config action needs to
+                                see the difference between "mine" and "theirs". -#}
+                            <td class="text-muted">{% if filler.builtin %}built-in{% else %}extension{% endif %}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                {% endif %}
+                {% if extra_aspects %}
+                <p class="text-muted small mb-0 mt-2">
+                    Registered configuration aspects:
+                    {% for name in extra_aspects %}<code>config/{{ name }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
+                </p>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
     </div>
 
+{% include '_page_end.html' %}
+
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="{{ url_for('static', filename='js/rail.js') }}"></script>
     <script src="{{ url_for('static', filename='js/poll.js') }}"
             data-target="system-info"></script>
 </body>

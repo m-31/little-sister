@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"
+     fill="none" stroke="#e9edf1" stroke-width="1.75" stroke-linecap="round"
+     stroke-linejoin="round" role="img" aria-label="backstage">
+  <title>backstage</title>
+  <!-- A deployment-supplied pair, named for the background each file goes on:
+       this one renders bare, having solved the theming itself. -->
+  <path d="M3.5 4.5h17"/>
+  <path d="M5.75 4.5v15c2.75-1 4.5-3.5 4.5-7.5V4.5"/>
+  <path d="M18.25 4.5v15c-2.75-1-4.5-3.5-4.5-7.5V4.5"/>
+</svg>

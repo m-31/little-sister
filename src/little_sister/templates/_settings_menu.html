@@ -1,0 +1,81 @@
+{#- The settings menu: the user's name opens it, and it
+    holds everything that is about *this browser's* view of the surface — the
+    theme, the layout, and the way out.
+
+    Radio circles rather than check marks, because these are exclusive choices,
+    and each one submits immediately: the same submit-on-change the filter
+    switches use, so nothing new has to ship to make the menu work. The post
+    goes to /preferences, which writes the cookie and sends the viewer back to
+    the page they were on; the server then renders the choice onto <body>, so
+    the next page never flashes the wrong scheme (ADR-0029).
+
+    Logout lives in here now — the bar has no room for a red button once it is
+    only brand and user, and a logout is a thing you do to a session, not a
+    piece of navigation. -#}
+{%- set theme_labels = {
+        'auto': 'auto (follow the OS)',
+        'default': 'default',
+        'vivid': 'vivid',
+        'pastel': 'pastel',
+        'dark': 'dark',
+        'cyberpunk': 'cyberpunk',
+    } -%}
+{%- set layout_labels = {
+        'rail': 'left rail',
+        'topbar': 'top bar',
+        'kiosk': 'kiosk',
+    } -%}
+<div class="dropdown ls-menu">
+    <button class="ls-menu__trigger" type="button" id="ls-settings"
+            data-bs-toggle="dropdown" aria-expanded="false">
+        <span class="ls-accent">{{ firstname }}</span>
+        <svg class="ls-menu__gear" width="15" height="15" viewBox="0 0 16 16"
+             fill="currentColor" aria-hidden="true" focusable="false">
+            <circle cx="8" cy="8" r="2.2"/>
+            <path d="M8 1.2 L9 3.6 L11.5 2.7 L11.9 5.2 L14.5 5.6 L13.2 7.9 L14.9 9.9 L12.5 10.9 L12.6 13.5 L10.1 13.1 L9 15.5 L7.2 13.6 L4.8 14.6 L4.5 12 L1.9 11.7 L3.1 9.4 L1.4 7.5 L3.8 6.4 L3.6 3.8 L6.1 4.1 L7 1.7 Z"
+                  fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+        </svg>
+        <span class="visually-hidden">Settings</span>
+    </button>
+    <div class="dropdown-menu dropdown-menu-end ls-menu__panel"
+         aria-labelledby="ls-settings">
+        <form method="post" action="{{ url_for('preferences') }}">
+            {# come back to the page this was opened from, filters and all #}
+            <input type="hidden" name="next" value="{{ request.full_path.rstrip('?') }}">
+
+            <div class="ls-menu__heading">Theme</div>
+            {% for value in themes %}
+            <label class="ls-menu__item">
+                <input class="ls-menu__radio" type="radio" name="theme" value="{{ value }}"
+                       {% if theme == value %}checked{% endif %} onchange="this.form.submit()">
+                <span>{{ theme_labels[value] }}</span>
+            </label>
+            {% endfor %}
+
+            <div class="dropdown-divider"></div>
+            <div class="ls-menu__heading">Layout</div>
+            {% for value in layouts %}
+            <label class="ls-menu__item">
+                <input class="ls-menu__radio" type="radio" name="layout" value="{{ value }}"
+                       {% if layout == value %}checked{% endif %} onchange="this.form.submit()">
+                <span>{{ layout_labels[value] }}</span>
+            </label>
+            {% endfor %}
+
+            <div class="dropdown-divider"></div>
+            {# Reserved: the per-user overrides of settings.yaml's defaults, which
+               need somewhere to persist that a cookie is not. #}
+            <span class="ls-menu__item is-disabled">settings&hellip;</span>
+
+            {# The menu submits on change; without JavaScript this button is the
+               way to apply a choice. #}
+            <noscript>
+                <div class="ls-menu__apply">
+                    <button class="btn btn-sm btn-primary" type="submit">Apply</button>
+                </div>
+            </noscript>
+        </form>
+        <div class="dropdown-divider"></div>
+        <a class="ls-menu__item ls-menu__logout" href="/logout">Logout</a>
+    </div>
+</div>

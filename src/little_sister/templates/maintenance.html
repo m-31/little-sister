@@ -1,27 +1,62 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Maintenance</title>
+    {% set page_title = 'Maintenance' %}
     {% include '_header.html' %}
 
-    {#- The full, uncapped maintenance overview (slice 10, ADR-0014): every pinned node
-        with its path, time left and reason, read from the whole snapshot so it is
-        depth- and filter-independent. Viewer-visible and bookmarkable; the strip pill's
-        popover "+N more" links here. A plain page (the check.html / events.html
-        pattern), not polled. -#}
+    {#- The full, uncapped maintenance overview (ADR-0014, ADR-0036): **one row per
+        pin** — a node's own, or one of its reasons' — with what it silences, how long
+        is left, why, and who is behind it, read from the whole snapshot so it is
+        depth- and filter-independent. Viewer-visible and bookmarkable; the strip
+        pill's popover "+N more" links here. A plain page (the check.html /
+        events.html pattern), not polled.
+
+        This page is what makes the popover's one-row-per-node summary safe: it is
+        where *"what is silenced right now?"* is answered completely, so the capped
+        surface is free to fold.
+
+        **Two texts, deliberately in two columns.** *Silenced* is what a pin covers —
+        the whole node, or one reason line — and *Why* is the admin's justification.
+        Both are called "reason" in the model and they are not the same kind of
+        thing; one heading over both would be the confusion this split exists to
+        prevent. The slug appears in neither: ADR-0036 makes it opaque, so it travels
+        only in the link's `?reason=` value.
+
+        This is also one of the two places with room for the pin's **whole** reading
+        (ADR-0014 amendment) — *pinned by Anna three days ago, last changed by Ben an
+        hour ago*. The second line appears only on a pin that has actually been
+        edited; on the common untouched pin it would just repeat the first. -#}
     <div class="container-fluid mt-3 px-4">
         <h1 class="h4 mb-3">Maintenance</h1>
         {% if pins %}
         <table class="table table-sm align-middle maintenance-page">
             <thead>
-                <tr><th>Node</th><th>Time left</th><th>Reason</th></tr>
+                <tr><th>Node</th><th>Silenced</th><th>Time left</th><th>Why</th><th>Who</th></tr>
             </thead>
             <tbody>
                 {% for pin in pins %}
                     <tr class="row-maintenance">
-                        <td><a href="{{ url_for('status', branch=pin.path | url_branch) }}">{{ pin.path }}</a>{% if pin.title %} <span class="node-title">{{ pin.title | markdown_inline }}</span>{% endif %}</td>
+                        <td><a href="{{ url_for('status', branch=pin.path | url_branch, reason=pin.slug) ~ '#pinned-reason' if pin.slug else url_for('status', branch=pin.path | url_branch) }}">{{ pin.path }}</a>{% if pin.title %} <span class="node-title">{{ pin.title | markdown_inline }}</span>{% endif %}</td>
+                        {#- The reason line an entry pin covers. Rendered as Markdown
+                            and clamped by **CSS**, not by `shorten`: a member's text is
+                            often a link, and cutting the string mid-link leaves the raw
+                            syntax on the page — `[#4821](https://forge.example.org/andro`
+                            is worse than no text at all. The cell is one line wide with
+                            an ellipsis, and `title` carries the whole of it. -#}
+                        <td class="maintenance-line"{% if pin.slug %} title="{{ pin.line }}"{% endif %}>{% if pin.slug %}{{ pin.line | markdown_inline }}{% else %}<span class="text-muted">the whole node</span>{% endif %}</td>
                         <td class="text-nowrap">{{ pin.remaining }}</td>
-                        <td>{% if pin.reason and pin.reason != 'maintenance' %}{{ pin.reason }}{% else %}<span class="text-muted">—</span>{% endif %}</td>
+                        <td>{% if pin.note and pin.note != 'maintenance' %}{{ pin.note }}{% else %}<span class="text-muted">—</span>{% endif %}</td>
+                        <td>
+                            {%- if pin.created_by or pin.created_at -%}
+                                pinned by <strong>{{ pin.created_by or 'unknown' }}</strong>
+                                <span class="text-muted text-nowrap">{{ pin.created_at | localtime }}</span>
+                                {%- if pin.edited %}<br><span class="text-muted">last changed by
+                                    <strong>{{ pin.set_by or 'unknown' }}</strong>
+                                    <span class="text-nowrap">{{ pin.set_at | localtime }}</span></span>{% endif -%}
+                            {%- else -%}
+                                <span class="text-muted">—</span>
+                            {%- endif -%}
+                        </td>
                     </tr>
                 {% endfor %}
             </tbody>
@@ -31,6 +66,9 @@
         {% endif %}
     </div>
 
+{% include '_page_end.html' %}
+
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="{{ url_for('static', filename='js/rail.js') }}"></script>
 </body>
 </html>

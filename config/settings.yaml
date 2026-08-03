@@ -27,3 +27,25 @@ maintenance_cap: 5
 # Default maintenance window when an admin sets maintenance without an explicit
 # duration (e.g. 12h, 7d). Maintenance always expires — there is no indefinite pin.
 maintenance_default_expiry: 7d
+
+# Show a failing check's stack trace on its node, not just the exception message:
+# a second reason carries the innermost frames as a code block. On by default —
+# this is an operator dashboard, and a deployment whose log is awkward to reach
+# should not have to go looking for the one thing that explains the failure. Set
+# false where the dashboard has a wider audience than its logs; the full trace is
+# written to the log either way.
+stacktrace: true
+
+# A faster second look on failure (ADR-0033): while a check's last result is not
+# OK, run it again after this interval instead of waiting out its frequency — at
+# most retry_attempts times per failure episode, then back to the normal
+# frequency until it recovers. A duration string (e.g. 30s, 2m) or bare seconds;
+# empty or 0 = no retry, which is the default. A check config can override both
+# fields, and a per-check retry_interval: 0 switches that one check off. The
+# retry is measured from the run's completion, so it can never outrun a check's
+# timeout.
+retry_interval: 0
+
+# Fast attempts per failure episode (the budget). A non-negative integer;
+# default 2.
+retry_attempts: 2

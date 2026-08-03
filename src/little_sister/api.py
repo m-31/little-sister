@@ -51,19 +51,33 @@ def _maintenance_details(entry: MaintenanceEntry | None) -> dict[str, str] | Non
 def snapshot_to_dict(snapshot: StatusSnapshot) -> dict[str, Any]:
     """Serialize a status snapshot subtree to the ADR-0008 JSON shape.
 
-    ``own_code`` is the node's raw reported code; ``code`` is the rolled-up,
-    stale-degraded effective status — a federating parent grafts ``own_code`` +
-    ``children`` and re-rolls locally. The node-metadata fields (``about``,
-    ``title``, ``config``) ship as **raw Markdown** — the client renders them
-    (ADR-0018) — and ``maintenance_details`` carries the override's who/why/expiry.
+    ``own_code`` is the node's own status and ``code`` the rolled-up,
+    stale-degraded effective one — a federating parent grafts ``own_code`` +
+    ``children`` and re-rolls locally. ``own_code`` is **derived**, not the raw
+    reading (ADR-0032 rule 3): a pin or an all-pinned member set reads
+    ``MAINTENANCE`` there. Its values are unchanged by the keystone — the
+    derivation reproduces exactly what used to be written into the tree — but the
+    reading it covers is now kept, and a **pinned node's ``reasons`` therefore carry
+    what the check is actually saying** instead of a copy of the pin's own text,
+    which has always also been in ``maintenance_details``. The raw code itself does
+    not ship yet: ADR-0032 puts a field for it in the client-contract round
+    ([backlog #33](../../docs/backlog.md)) rather than letting it arrive piecemeal,
+    so ``StatusSnapshot.reported_code`` stays server-side for now.
+
+    The node-metadata fields (``about``, ``title``, ``config``) ship as **raw
+    Markdown** — the client renders them (ADR-0018) — and ``maintenance_details``
+    carries the override's who/why/expiry.
+    ``timestamp`` is ``null`` where the observation time is not unambiguously
+    attributable (ADR-0027); ``_utc_z`` only ever sees a real stamp.
     """
+    stamp = snapshot.timestamp
     return {
         "path": snapshot.path,
         "name": snapshot.name,
         "own_code": snapshot.own_code.name,
         "code": snapshot.code.name,
         "reasons": list(snapshot.reason),
-        "timestamp": _utc_z(snapshot.timestamp),
+        "timestamp": None if stamp is None else _utc_z(stamp),
         "description": snapshot.description,
         "frequency_seconds": snapshot.frequency_seconds,
         "about": snapshot.about,

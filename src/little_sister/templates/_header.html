@@ -1,51 +1,96 @@
     <meta charset="utf-8">
+    {# The tab reads the brand too: the page first, so it survives a narrow tab,
+       and the name from the one place it is written. poll.js prefixes "(stale) "
+       to whatever this says, which is why the page belongs at the front. #}
+    <title>{% if page_title is defined %}{{ page_title }} · {% endif %}{{ brand_name | default('little sister') }}</title>
     <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png">
+    {# The SVG tab icon re-inks itself for a dark tab strip (the media query sits
+       inside the file); the .ico carries 16/32/48 for everything that ignores
+       SVG, including the places that ask for it by name — a bookmark, a pinned
+       tab — and the PNGs stay for browsers that prefer them. #}
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+    <link rel="icon" href="/static/favicon.ico" sizes="32x32">
     <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png">
     <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16x16.png">
     <link rel="manifest" href="/static/site.webmanifest">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="/static/css/overview.css" rel="stylesheet">
+    {#- What a dependent package ships for its slot fillers (ADR-0037). The
+        **library** emits these tags, never the extension: an extension writing a
+        tag into a page it does not own would be deciding load order and caching for
+        a document it cannot see. After our own stylesheet, so a filler builds on the
+        design tokens rather than fights them; `defer` so a script runs once the
+        document is parsed and after Bootstrap's end-of-body bundle, in registration
+        order. Each URL carries the asset's content hash, so a changed file is a
+        changed URL. Emitted here rather than per page, so no page can forget them —
+        and not at all in the kiosk, which renders no slot for them to serve. -#}
+    {%- for kind, href in extension_assets() %}
+        {%- if kind == 'css' %}
+    <link href="{{ href }}" rel="stylesheet">
+        {%- else %}
+    <script src="{{ href }}" defer></script>
+        {%- endif %}
+    {%- endfor %}
 </head>
-<body>
-<nav class="navbar navbar-expand-lg navbar-light bg-light">
+{#- The layout the server renders (ADR-0029). `rail` is the default and
+    `topbar` is the arrangement this surface had before it — the same markup
+    either way, with CSS showing the sections in the rail or in the bar. Which
+    of them arrives here is the viewer's own choice, read from the presentation
+    cookie; `kiosk` is the third, and the one this file branches on rather than
+    leaving to CSS. -#}
+<body data-ls-theme="{{ theme }}" data-ls-layout="{{ layout }}"
+      {%- if bs_theme %} data-bs-theme="{{ bs_theme }}"{% endif %}>
+{#- `auto` is the one theme the server cannot resolve: only the browser knows
+    what the OS is asking for. The stylesheet follows it through a
+    prefers-color-scheme query, but Bootstrap's own chrome needs a concrete
+    data-bs-theme, so these three lines set it — first thing inside <body>, so
+    it lands before anything paints and no page flashes light chrome on a dark
+    canvas. Every other theme is server-rendered above and needs no script. -#}
+<script>
+    if (document.body.dataset.lsTheme === 'auto' &&
+        window.matchMedia('(prefers-color-scheme: dark)').matches) {
+        document.body.setAttribute('data-bs-theme', 'dark');
+    }
+</script>
+{#- The kiosk takes the bar and the rail away entirely rather than restyling them
+    — a wall display has nothing to click — so this is the one layout the server
+    branches on instead of leaving to CSS. Its own line is emitted inside the page
+    below, and _kiosk_line.html carries the freshness stamp the bar has no room
+    for. -#}
+{% if layout != 'kiosk' %}
+{#- No `navbar-light`: it pins Bootstrap's navbar variables to light values, which
+    would survive `data-bs-theme: dark` and leave a dark theme with a light bar.
+    Without it the navbar follows the theme, and the light themes are unchanged. -#}
+<nav class="navbar navbar-expand-lg ls-bar">
     <div class="container">
-        <a class="navbar-brand" href="#"><span class="text-pink">Overview</span></a>
-        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav"
+        {# The bar reads the whole sentence — mark, wordmark, tagline — and it is
+           the way home. The name itself is written once, in _brand.html. #}
+        <a class="navbar-brand ls-brand" href="/">{% include '_brand.html' %}</a>
+        {# Top-bar layout only: the sections sit in the bar behind the usual
+           toggler. Under the rail they are hidden here and shown in the rail. #}
+        <button class="navbar-toggler ls-bar__toggler" type="button" data-bs-toggle="collapse"
+                data-bs-target="#navbarNav"
                 aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
             <span class="navbar-toggler-icon"></span>
         </button>
-        <div class="collapse navbar-collapse" id="navbarNav">
+        <div class="collapse navbar-collapse ls-bar__nav" id="navbarNav">
             <ul class="navbar-nav">
-                <li class="nav-item">
-                    <a class="nav-link" href="/status">Status</a>
-                </li>
-                <li class="nav-item">
-                    <a class="nav-link" href="/events">Events</a>
-                </li>
-                <li class="nav-item">
-                    <a class="nav-link" href="/maintenance">Maintenance</a>
-                </li>
-                <li class="nav-item">
-                    <a class="nav-link" href="/links">Links</a>
-                </li>
-                <li class="nav-item">
-                    <a class="nav-link" href="/copy">Copy</a>
-                </li>
-                {% if session.get('admin') %}
-                <li class="nav-item">
-                    <a class="nav-link" href="/system">System</a>
-                </li>
-                {% endif %}
+                {% set nav_style = 'bar' %}{% include '_nav_items.html' %}
+                {% include '_about_entry.html' %}
             </ul>
-            <div class="navbar-text ms-auto">
-                <span class="text-pink">{{ firstname }}</span>
-            </div>
-            <a class="btn btn-outline-danger ms-3" href="/logout">Logout</a>
+        </div>
+        {# Brand and user are what the bar keeps in every layout, so they sit
+           outside the collapse and stay visible at any width. The user's name
+           is now the settings menu, and Logout has moved inside it. #}
+        <div class="ls-bar__who">
+            {% include '_settings_menu.html' %}
         </div>
     </div>
 </nav>
+{% endif %}
 {# A failed engine start must not hide in the log: while the engine is down the
-   tree is empty, so this persistent alert is the page's only truthful signal. #}
+   tree is empty, so this persistent alert is the page's only truthful signal.
+   It reaches the kiosk too — an unattended screen is where it matters most. #}
 {% if engine_error %}
 <div class="container-fluid mt-3 px-4">
     <div class="alert alert-danger mb-0" role="alert">
@@ -53,3 +98,28 @@
     </div>
 </div>
 {% endif %}
+{#- The shell: the rail beside the page. Closed by _page_end.html, which every
+    page including this file must carry. -#}
+<div class="ls-shell">
+    {% if layout != 'kiosk' %}
+    <nav class="ls-rail" id="ls-rail" aria-label="sections">
+        <button class="ls-rail__burger" type="button" aria-expanded="false"
+                aria-controls="ls-rail" aria-label="Expand the section labels">
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor"
+                 aria-hidden="true" focusable="false">
+                <rect x="1" y="2.5" width="14" height="2" rx="1"/>
+                <rect x="1" y="7" width="14" height="2" rx="1"/>
+                <rect x="1" y="11.5" width="14" height="2" rx="1"/>
+            </svg>
+        </button>
+        {% set nav_style = 'rail' %}{% include '_nav_items.html' %}
+        {# The spacer pushes what follows to the rail's foot, which is where the
+           about eye belongs: reachable, but not among the places you go to work. #}
+        <div class="ls-rail__spacer"></div>
+        {% include '_about_entry.html' %}
+    </nav>
+    {% endif %}
+    <main class="ls-page">
+    {%- if layout == 'kiosk' %}
+    <div class="container-fluid px-4 pt-3">{% include '_kiosk_line.html' %}</div>
+    {%- endif %}

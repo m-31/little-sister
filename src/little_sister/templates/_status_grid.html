@@ -1,19 +1,81 @@
 {#- Reason overflow (#9): a node's reasons clamped to a *line budget*. The block
-    shows at most ``cap`` lines (config.yaml ``reason_cap``: short reasons ⇒ that
+    shows at most ``cap`` lines (settings.yaml ``reason_cap``: short reasons ⇒ that
     many reasons, a wrapped reason uses more of the budget); the overflow stays in
     the DOM, clipped by CSS (never cut mid-HTML, ADR-0018) and faded. A header
     chevron (reasons.js) reveals it in place and survives the ~10s fragment swap —
     ▼ when clipped, ▲ when open. The leaf detail page (check.html) stays full; the
     JSON envelope is untouched. -#}
+{#- Each line also carries the ``reason.actions`` slot (ADR-0034) — the place a
+    dependent package hangs a local interaction off *this* reason, e.g. "raise a
+    ticket for it". The slot is offered on every reason of every node and the filler
+    decides where it applies; core passes the **unshortened** reason, since the
+    400-character clamp is a display budget and an action wants the whole text.
+    Rendered server-side like the rest, so it survives the ~10s fragment swap. -#}
+{#- Reasons are keyed entries (ADR-0036), so a line can be pinned on its own. A
+    quiet line is **shown**, in the maintenance tint (ADR-0032 rule 5) — hiding it
+    would be the suppression covering its own tracks — and the node states how many
+    are quiet, because the clamp above can put the pinned line below the fold and
+    the count is then the only thing that always shows. -#}
+{#- What is being silenced (ADR-0032 rule 5: a transformed contribution is visible
+    and attributable). A card that says only "maintenance" hides the transform —
+    *we are silencing an error* is the thing worth knowing, and before the keystone
+    it was not merely hidden but destroyed. Shown wherever a node's own status has
+    been derived away from a countable reading, by a node pin or by every member
+    being pinned; a check that reported ``MAINTENANCE`` itself has nothing to add.
+    ``word`` includes the status word for surfaces that do not already print it. -#}
+{% macro reported_suffix(node, word=False) -%}
+{%- if node.own_code.name == 'MAINTENANCE' and node.reported_code.name not in ('MAINTENANCE', 'UNDEFINED') %} <span class="status-reported">{% if word %}maintenance {% endif %}· {{ node.reported_code.name.lower() }}</span>{% endif -%}
+{%- endmacro %}
+{#- Why the node is blue: who pinned it, until when, and their explanation. It sits
+    **above** the reason block and outside the ``reason_cap`` clamp, so the reason
+    for the colour can never be the thing that gets clipped — the placement rule the
+    quiet count already follows. Paints its own maintenance tint, like every other
+    maintenance surface, so it does not depend on the card fill under it. -#}
+{% macro pin_banner(node) -%}
+{%- if node.maintenance_entry %}<div class="pin-banner">Silenced by <strong>{{ node.maintenance_entry.set_by or 'an admin' }}</strong> until {{ node.maintenance_entry.expires_at | localtime }}{% if node.maintenance_entry.reason and node.maintenance_entry.reason != 'maintenance' %} — {{ node.maintenance_entry.reason | shorten(160) }}{% endif %}</div>{% endif -%}
+{%- endmacro %}
+{#- The **viewed** node's own state, above its children.
+
+    A subtree page is a dashboard *of the children*, which left the one node you
+    actually navigated to as the only one on the page that never said anything about
+    itself. A pin on it surfaced solely through the maintenance card at the foot of
+    the page — in different words, with the reason tucked inside a form field, and
+    `{% if is_admin %}`, so a viewer got nothing at all. `depth=0` already drew the
+    viewed node as a card; this is the same thing at every other depth, which also
+    ends the page disagreeing with itself as the depth control moves.
+
+    Silent when the node has nothing of its own to add: a container with no reading,
+    no reasons and no pin is exactly the page that should open with its children. It
+    reports **own** status, not the roll-up — the children are directly below and say
+    that themselves. Rendered as a `status-node` so it takes the same fill and ink as
+    any box, and kept **inside `#status-grid`** so it refreshes on the ~10s poll; the
+    maintenance card stays outside, deliberately, because it holds an open form. -#}
+{% macro viewed_head(node, reason_cap) -%}
+{%- if node.maintenance_entry or node.reason or node.stale
+       or node.own_code.name != 'UNDEFINED' %}
+<div class="status-node viewed-head s-{{ node.own_code | status_slug }}">
+    <div class="status-node__self" data-path="{{ node.path }}">
+        {{ status_cue(node.own_code) }}<span class="status-node__name">{{ node.name }}</span>
+        {%- if node.stale %} <span class="status-stale">stale{% if not node.children %} · {{ node.age_seconds | round | int | duration }} ago{% endif %}</span>{% endif %}
+        <span class="viewed-head__state">{{ node.own_code.name.lower() }}{{ reported_suffix(node) }}</span>
+        {{ pin_banner(node) }}{{ reason_block(node, reason_cap) }}
+    </div>
+</div>
+{%- endif -%}
+{%- endmacro %}
 {% macro reason_block(node, cap) -%}
-{%- if node.reason -%}
-{%- set total = node.reason | length -%}
+{%- if node.reasons -%}
+{%- set total = node.reasons | length -%}
 <div class="reason-block" style="--reason-lines: {{ cap }}"
      data-reason-node="{{ node.path }}" data-reason-total="{{ total }}">
-{%- for r in node.reason %}
-    <div class="status-node__reason md-body">{{ r | shorten(400) | markdown }}</div>
+{%- for line in node.reasons %}
+    <div class="status-node__reason md-body{% if line.quiet %} is-quiet{% endif %}"><span class="reason-actions">{{ slot('reason.actions', node=node, reason=line.text, index=loop.index0, surface='grid') }}</span>{{ line.text | shorten(400) | markdown }}</div>
 {%- endfor %}
 </div>
+{#- Under a **node** pin everything here is silenced already, so this count is not
+    the reason the card is blue — the banner is. It says what will still be quiet
+    once the node pin is cleared, which is the one thing the banner cannot. -#}
+{%- if node.quiet_reasons %}<div class="reason-quiet-count">{{ node.quiet_reasons }} of {{ total }} {% if node.maintenance %}also pinned individually{% else %}in maintenance{% endif %}</div>{% endif -%}
 {%- endif -%}
 {%- endmacro %}
 {#- Status not by color alone (ADR-0024): a small shape cue per state — a check (ok),
@@ -42,18 +104,63 @@
 {%- endif -%}
 </svg>
 {%- endmacro %}
-{#- Maintenance pip (slice 9): a click-to-open marker on a card whose subtree holds a
+{#- Maintenance pip: a click-to-open marker on a card whose subtree holds a
     pinned node but which is not itself pinned — a glance at any depth shows where to
     drill, and a click opens a popover (maintenance.js) listing that card's pins as
     links. A real <button> (keyboard-reachable, announced as a popup control); the
     hidden <template> carries the card-scoped pin list the popover clones. Solid
     maintenance-blue so it reads on any card fill. -#}
-{% macro maintenance_pip(card_path, pins) -%}
+{#- Observation time on a card (ADR-0027): *when* beside *what*. Shown only when the
+    card's node has an unambiguous answer to "when did the check behind this node
+    run?" — its own last write, or the run time of the single check below it — and
+    rendered as a time of day (the /system table's format), so a wall of cards stays
+    scannable. A container above two or more checks has no single answer, so it shows
+    **nothing** rather than a placeholder: absence is the signal. It sits inside the
+    poll fragment, so it refreshes with the grid; the freshness *alarm* stays the
+    stale badge (ADR-0005), which is normalized per check frequency. -#}
+{% macro card_time(node) -%}
+{%- if node.timestamp %}<span class="status-card__time">{{ node.timestamp | localtime("%H:%M:%S") }}</span>{% endif -%}
+{%- endmacro %}
+{#- One popover row: **one node**, never one line (ADR-0036). The popover is capped,
+    so a node with twenty pinned findings contributes one row carrying a count — the
+    same thing its card says in the grid — rather than twenty rows that would evict
+    every other node from the list. The count is what makes "maintenance under this
+    card" honest for an entry pin: without it the pip would claim a node is pinned
+    when it is not. `quiet` is zero on a plain node pin, and that picks the wording.
+
+    An entry row links with `?reason=<slug>` (ADR-0036 decision 12's addressing
+    shape) and the fixed `#pinned-reason` anchor the page puts on the line it was
+    asked for — one id, only when asked, and never the slug in a fragment, which is
+    not fragment-safe. Only a **sole** entry pin can carry it; several have no one
+    line to point at. -#}
+{% macro maintenance_row(row) -%}
+{%- set href = url_for('status', branch=row.path | url_branch, reason=row.slug) ~ '#pinned-reason' if row.slug else url_for('status', branch=row.path | url_branch) -%}
+<li class="maintenance-pop__item"><span class="maintenance-pop__row"><a class="maintenance-pop__path" href="{{ href }}">{{ row.path }}</a>{% if row.quiet %} <span class="maintenance-pop__lines">{% if row.pinned %}+ {{ row.quiet }} reason{{ 's' if row.quiet != 1 else '' }}{% elif row.quiet >= row.total %}all {{ row.total }} reason{{ 's' if row.total != 1 else '' }}{% else %}{{ row.quiet }} of {{ row.total }} reasons{% endif %}</span>{% endif %} <span class="maintenance-pop__left">{% if row.quiet > 1 and not row.pinned %}next {% endif %}{{ row.remaining }}</span></span>{% if row.note and row.note != 'maintenance' %}<span class="maintenance-pop__reason">{{ row.note | shorten(80) }}</span>{% endif %}{% if row.set_by %}<span class="maintenance-pop__by">{{ row.set_by }}</span>{% endif %}</li>
+{%- endmacro %}
+{% macro maintenance_pip(card_path, rows) -%}
 <button type="button" class="maintenance-pip" aria-haspopup="true" aria-expanded="false" aria-label="show maintenance under {{ card_path }}"><svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" focusable="false"><rect x="4" y="3.5" width="2.7" height="9" rx="0.7" fill="currentColor"/><rect x="9.3" y="3.5" width="2.7" height="9" rx="0.7" fill="currentColor"/></svg></button><template class="maintenance-pop-src" data-pop-for="{{ card_path }}"><ul class="maintenance-pop__list">
-{%- for pin in pins if pin.path.startswith(card_path ~ '/') %}
-<li class="maintenance-pop__item"><span class="maintenance-pop__row"><a class="maintenance-pop__path" href="{{ url_for('status', branch=pin.path | url_branch) }}">{{ pin.path }}</a> <span class="maintenance-pop__left">{{ pin.remaining }}</span></span>{% if pin.reason and pin.reason != 'maintenance' %}<span class="maintenance-pop__reason">{{ pin.reason | shorten(80) }}</span>{% endif %}</li>
+{%- for row in rows if row.path.startswith(card_path ~ '/') %}
+{{ maintenance_row(row) }}
 {%- endfor %}
 </ul></template>
+{%- endmacro %}
+{#- The admin pin control (backlog #35): a card head's door to maintenance — an
+    outline pause-bars link to the node's own page (the no-JS fallback carries the
+    form), upgraded by pin.js to the #pin-card dialog. Quiet until the card is
+    hovered (CSS), always visible to keyboard focus. Cards only, deliberately: a
+    deep box's subtree page carries the maintenance card, one drill-down away.
+    Data attributes carry what the dialog needs; a pinned card's control also
+    says when the pin ends, who pinned it, its stored reason and its `set_at` —
+    the reason so the dialog can prefill an edit rather than make the admin
+    retype it, and the `set_at` because it is the compare-and-set token the
+    write has to carry (ADR-0014 amendment). -#}
+{% macro pin_control(node) -%}
+<a class="pin-control" href="{{ url_for('status', branch=node.path | url_branch) }}"
+   role="button" aria-haspopup="dialog" aria-expanded="false"
+   aria-label="maintenance for {{ node.path }}"
+   data-pin-path="{{ node.path }}" data-pin-name="{{ node.name }}"
+   {%- if node.children %} data-pin-kids="1"{% endif %}
+   {%- if node.maintenance_entry %} data-pin-pinned="1" data-pin-expires="{{ node.maintenance_entry.expires_at | localtime }}" data-pin-by="{{ node.maintenance_entry.set_by }}" data-pin-reason="{{ node.maintenance_entry.reason }}" data-pin-token="{{ node.maintenance_entry.set_at }}"{% endif %}><svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" focusable="false"><rect x="4" y="3.5" width="2.7" height="9" rx="0.7" fill="none" stroke="currentColor" stroke-width="1.5"/><rect x="9.3" y="3.5" width="2.7" height="9" rx="0.7" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></a>
 {%- endmacro %}
 {#- Branch density (ADR-0024): render one level of a card's descendants — a quiet
     leaf as an inline chip, everything else as a box — and, in the dense view, cap the
@@ -85,8 +192,8 @@
             {{ status_cue(child.code, labeled=not is_quiet) }}<a class="status-node__name"
                href="{{ url_for('status', branch=child.path | url_branch) }}">{{ child.name }}</a>
             {% if child.title %}<span class="node-title">{{ child.title | markdown_inline }}</span>{% endif %}
-            {% if child.stale %}<span class="status-stale">stale{% if not child.children %} · {{ child.age_seconds | round | int | duration }} ago{% endif %}</span>{% endif %}
-            {{ reason_block(child, reason_cap) }}
+            {% if child.stale %}<span class="status-stale">stale{% if not child.children %} · {{ child.age_seconds | round | int | duration }} ago{% endif %}</span>{% endif %}{{ reported_suffix(child, word=True) }}
+            {{ pin_banner(child) }}{{ reason_block(child, reason_cap) }}
         </div>
         {%- if has_kids -%}
         <div class="status-node__children node-children" data-branch="{{ child.path }}">{{ render_nodes(child.children, depth0 + 1, child.path, dense, max_depth, branch_cap, reason_cap) }}</div>
@@ -102,23 +209,24 @@
             aria-expanded="false"><span class="branch-more__show">+{{ ns.quiet_boxes - branch_cap }} more</span><span class="branch-more__hide">show less</span></button>
 {%- endif -%}
 {%- endmacro %}
-{%- if maintenance_index or (heartbeat is defined and heartbeat) %}
-{#- Status-strip band (ADR-0024): the self-monitor heartbeat pill (slice 3) and, to its
-    left, the maintenance pill (slice 10) — a compact count that folds slice 9's
-    always-visible index. Both live in the poll fragment, right-aligned beneath the
+{%- if maintenance_rows or (heartbeat is defined and heartbeat) %}
+{#- Status-strip band (ADR-0024): the self-monitor heartbeat pill and, to its
+    left, the maintenance pill — a compact count that folds the always-visible
+    index it replaced. Both live in the poll fragment, right-aligned beneath the
     controls, refreshing on the ~10s poll. -#}
 <div class="strip-band">
-{%- if maintenance_index %}
-{#- Maintenance pill (slice 10): the always-visible index folded to a count. A click
+{%- if maintenance_rows %}
+{#- Maintenance pill: the always-visible index folded to a count. A click
     opens the shared popover (maintenance.js) over the whole set — the first
-    ``maintenance_cap`` pins, then a "+N more" to the /maintenance page. Only shown when
-    there are pins; maintenance-tinted, refreshed in the poll like the strip. -#}
-<a class="maintenance-pill" href="{{ url_for('maintenance_overview') }}" aria-haspopup="true" aria-expanded="false" aria-label="{{ maintenance_index | length }} nodes in maintenance"><svg class="maintenance-pill__glyph" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" focusable="false"><rect x="4" y="3.5" width="2.7" height="9" rx="0.7" fill="currentColor"/><rect x="9.3" y="3.5" width="2.7" height="9" rx="0.7" fill="currentColor"/></svg><span class="maintenance-pill__count">{{ maintenance_index | length }}</span> in maintenance</a><template class="maintenance-pop-src" data-pop-for="__all__"><ul class="maintenance-pop__list">
-{%- for pin in maintenance_index[:maintenance_cap] %}
-<li class="maintenance-pop__item"><span class="maintenance-pop__row"><a class="maintenance-pop__path" href="{{ url_for('status', branch=pin.path | url_branch) }}">{{ pin.path }}</a> <span class="maintenance-pop__left">{{ pin.remaining }}</span></span>{% if pin.reason and pin.reason != 'maintenance' %}<span class="maintenance-pop__reason">{{ pin.reason | shorten(80) }}</span>{% endif %}</li>
+    ``maintenance_cap`` nodes, then a "+N more" to the /maintenance page, which is
+    where every *pin* is listed one per row. Only shown when there are pins;
+    maintenance-tinted, refreshed in the poll like the strip. -#}
+<a class="maintenance-pill" href="{{ url_for('maintenance_overview') }}" aria-haspopup="true" aria-expanded="false" aria-label="{{ maintenance_rows | length }} nodes with maintenance"><svg class="maintenance-pill__glyph" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" focusable="false"><rect x="4" y="3.5" width="2.7" height="9" rx="0.7" fill="currentColor"/><rect x="9.3" y="3.5" width="2.7" height="9" rx="0.7" fill="currentColor"/></svg><span class="maintenance-pill__count">{{ maintenance_rows | length }}</span> in maintenance</a><template class="maintenance-pop-src" data-pop-for="__all__"><ul class="maintenance-pop__list">
+{%- for row in maintenance_rows[:maintenance_cap] %}
+{{ maintenance_row(row) }}
 {%- endfor %}
-{%- if maintenance_index | length > maintenance_cap %}
-<li class="maintenance-pop__more"><a href="{{ url_for('maintenance_overview') }}">+{{ maintenance_index | length - maintenance_cap }} more…</a></li>
+{%- if maintenance_rows | length > maintenance_cap %}
+<li class="maintenance-pop__more"><a href="{{ url_for('maintenance_overview') }}">+{{ maintenance_rows | length - maintenance_cap }} more…</a></li>
 {%- endif %}
 </ul></template>
 {%- endif %}
@@ -131,7 +239,7 @@
     at all — see _split_heartbeat. -#}
 <div class="ls-strip s-{{ heartbeat.code | status_slug }}"
      data-path="{{ heartbeat.path }}">
-    {#- Self-monitor identity (slice 3): a watching-eye glyph marks this as the
+    {#- Self-monitor identity: a watching-eye glyph marks this as the
         monitor observing itself, apart from the node pills. Decorative — the
         name carries the identity for screen readers. -#}
     <svg class="ls-strip__eye" viewBox="0 0 24 24" width="13" height="13"
@@ -161,6 +269,7 @@
         No checks{% if not branch %} reporting yet{% endif %}{% if hide_ok or hide_idle %} match the current filters{% endif %}.
     </p>
 {% else %}
+    {%- if branch and max_depth >= 1 %}{{ viewed_head(node, reason_cap) }}{% endif %}
     <div class="status-grid">
         {% if max_depth < 1 %}
             {# depth 0 — a single card for the viewed node: its rolled-up "overall" light #}
@@ -168,13 +277,23 @@
                 <div class="status-card__head" data-path="{{ node.path }}">
                     <span class="status-card__name">{{ node.name }}</span>
                     {% if node.title %}<span class="node-title">{{ node.title | markdown_inline }}</span>{% endif %}
+                    {#- The same `node.actions` slot the depth-1 cards carry. At
+                        depth 0 this card *is* the viewed node, so an action whose
+                        subject is the node belongs here more plainly than
+                        anywhere — and the panel below already renders the
+                        per-reason slot, so leaving this one out made a
+                        deployment's node action vanish at one depth setting while
+                        its reason action stayed. -#}
+                    <span class="node-actions">{{ slot('node.actions', node=node, surface='grid') }}</span>
                     <span class="status-card__state">
                         {% if node.stale %}<span class="status-stale">stale</span>{% endif %}
-                        {% if node.path in maintenance_ancestors %}{{ maintenance_pip(node.path, maintenance_index) }}{% endif %}{{ status_cue(node.code) }}{{ node.code.name.lower() }}<button type="button" class="reason-chevron" tabindex="-1" aria-hidden="true"></button>
+                        {% if node.path in maintenance_ancestors %}{{ maintenance_pip(node.path, maintenance_rows) }}{% endif %}{{ card_time(node) }}{{ status_cue(node.code) }}{{ node.code.name.lower() }}{{ reported_suffix(node) }}<button type="button" class="reason-chevron" tabindex="-1" aria-hidden="true"></button>
                     </span>
                 </div>
-                {% if node.reason %}
-                    <div class="status-panel">{{ reason_block(node, reason_cap) }}</div>
+                {#- The panel also carries the pin banner, so a pinned node that
+                    reports nothing at all still says who silenced it and why. -#}
+                {% if node.reason or node.maintenance_entry %}
+                    <div class="status-panel">{{ pin_banner(node) }}{{ reason_block(node, reason_cap) }}</div>
                 {% endif %}
             </div>
         {% else %}
@@ -187,13 +306,21 @@
                     <a class="status-card__name"
                        href="{{ url_for('status', branch=system.path | url_branch) }}">{{ system.name }}</a>
                     {% if system.title %}<span class="node-title">{{ system.title | markdown_inline }}</span>{% endif %}
+                    {#- The `node.actions` slot (ADR-0034, second slot): an action
+                        whose subject is the **whole node**, not one of its reason
+                        lines — which is where it belongs when a node's reasons are
+                        prose (ADR-0036). Offered on every card and declined by the
+                        filler, like every slot; it collapses to nothing when
+                        nobody fills it. Cards only, like the pin control: a deep
+                        box's own page carries it one drill-down away. -#}
+                    <span class="node-actions">{{ slot('node.actions', node=system, surface='grid') }}</span>
                     <span class="status-card__state">
                         {% if system.stale %}<span class="status-stale">stale</span>{% endif %}
-                        {% if system.path in maintenance_ancestors %}{{ maintenance_pip(system.path, maintenance_index) }}{% endif %}{{ status_cue(system.code) }}{{ system.code.name.lower() }}<button type="button" class="reason-chevron" tabindex="-1" aria-hidden="true"></button>
+                        {% if system.path in maintenance_ancestors %}{{ maintenance_pip(system.path, maintenance_rows) }}{% endif %}{{ card_time(system) }}{{ status_cue(system.code) }}{{ system.code.name.lower() }}{{ reported_suffix(system) }}<button type="button" class="reason-chevron" tabindex="-1" aria-hidden="true"></button>{% if is_admin and layout != 'kiosk' %}{{ pin_control(system) }}{% endif %}
                     </span>
                 </div>
                 <div class="status-panel">
-                    {{ reason_block(system, reason_cap) }}
+                    {{ pin_banner(system) }}{{ reason_block(system, reason_cap) }}
                     {% if card_has_kids %}
                     <div class="node-children" data-branch="{{ system.path }}">{{ render_nodes(system.children, 0, system.path, dense, max_depth, branch_cap, reason_cap) }}</div>
                     {% endif %}

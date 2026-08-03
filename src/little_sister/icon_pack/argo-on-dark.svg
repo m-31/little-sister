@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="#e9edf1" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="argo">
+  <title>argo</title>
+    <path d="M4.5 12a7.5 7.5 0 0 1 12.65-5.45"/>
+    <polyline points="17.4,2.9 17.4,6.9 13.4,6.9"/>
+    <path d="M19.5 12a7.5 7.5 0 0 1-12.65 5.45"/>
+    <polyline points="6.6,21.1 6.6,17.1 10.6,17.1"/>
+</svg>

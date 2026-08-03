@@ -1,13 +1,310 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Links</title>
+    {% set page_title = 'Links' %}
     {% include '_header.html' %}
 
-    <div class="container mt-5">
-        <h1>Links</h1>
-        <p>Here come a bunch of links to help whichever capybara is on call today.</p>
+{#- The shared toolbox (ADR-0030). Not documentation and not a runbook — a
+    subject's runbook lives on the check that watches it — but the two or three
+    dashboards and tools somebody mid-incident wants *now*, without hunting
+    through a wiki. So: a launcher. One flat level of groups flowed into columns,
+    each entry a mark and a title, curated order preserved exactly as written.
+
+    Everything on it comes from the deployment's own `config/links.yaml`; this
+    file owns only how it looks. -#}
+{%- macro icon_image(link, file, variant, favicon, side) -%}
+    {#- One image. `file` is what the search path resolved for this background;
+        where it resolved nothing we fall through to the entry's own origin
+        favicon, the step before the neutral glyph (ADR-0030 §3). A remote icon
+        keeps its own URL — the route never proxies one. -#}
+    {%- set source = (file.url or url_for('link_icon', variant=variant, name=link.icon))
+                     if file else favicon -%}
+    {%- if source %}<img class="ls-links__icon{{ ' ls-links__icon--' ~ side if side }}"
+         src="{{ source }}" alt="" width="20" height="20" loading="lazy">{% endif -%}
+{%- endmacro -%}
+
+{%- macro icon_mark(link, icon) -%}
+    {#- A brand logo does not theme: a black mark vanishes on the dark themes and
+        a white one on the light. So an icon that declared a **pair** emits both
+        files and CSS hides one — the choice cannot be made here, because under
+        the `auto` theme the server does not know what the OS will resolve to.
+        Anything else — one file, a favicon — rides a **theme-invariant light
+        chip**, which is what keeps a single-file mark legible in every theme.
+        The chip is the floor, the pair is the upgrade (ADR-0030 §4). -#}
+    {%- set live = icon if icon and not icon.suppressed else none -%}
+    {%- set light = live.file_for('on-light') if live else none -%}
+    {%- set dark = live.file_for('on-dark') if live else none -%}
+    {%- set paired = live and live.paired -%}
+    {%- set favicon = (link.url | site_origin) ~ '/favicon.ico'
+                      if link.url | site_origin else '' -%}
+    <span class="ls-links__mark{{ '' if paired and light and dark else ' ls-links__mark--chip' }}">
+        {%- if paired -%}
+            {{ icon_image(link, light, 'on-light', favicon, 'light') }}
+            {{ icon_image(link, dark, 'on-dark', favicon, 'dark') }}
+        {%- else -%}
+            {#- One file serves both backgrounds, so one image serves both: a
+                second copy would be the same bytes fetched twice. -#}
+            {{ icon_image(link, light, 'on-light', favicon, '') }}
+        {%- endif -%}
+    </span>
+{%- endmacro -%}
+
+    <div class="container-fluid mt-3 px-4" id="ls-links-page">
+        <h1 class="h4 mb-3">Links</h1>
+
+        {%- if links_config.problems or probe.icon_failures %}
+        {#- The audience for these is whoever maintains the file, and that person
+            is looking at this page, not at a service log. The structural ones are
+            logged too, and none of them stopped the page from loading. A remote
+            icon that stopped answering joins them: an icon is not a row on this
+            page, so its verdict has nowhere to sit beside — and a mark that rotted
+            is a problem with this file exactly as a misspelled key is. -#}
+        <div class="alert alert-warning ls-links__problems" role="alert">
+            <strong>Problems in this deployment's link configuration</strong>
+            <ul class="mb-0">
+                {%- for problem in links_config.problems %}
+                <li>{{ problem }}</li>
+                {%- endfor %}
+                {%- for failure in probe.icon_failures %}
+                <li>the icon named <code>{{ failure.name }}</code> did not answer:
+                    {{ failure.verdict.detail }} ({{ failure.verdict.url }},
+                    checked {{ failure.verdict.checked_at | since }})</li>
+                {%- endfor %}
+            </ul>
+        </div>
+        {%- endif %}
+
+        {%- if links_config.is_empty() %}
+        {#- The empty state keeps the page and its nav entry and says where the
+            file goes: an empty toolbox is a deployment that has not filled it
+            in yet, not a broken install. -#}
+        <div class="ls-links__empty">
+            <p>No links yet.</p>
+            <p>
+                They come from this deployment's own configuration — one flat
+                level of groups, each with an ordered list of entries:
+            </p>
+            <pre class="ls-links__sample"><code>groups:
+  - title: Toolbox
+    links:
+      - title: Grafana
+        url: https://grafana.example.org/
+        icon: grafana</code></pre>
+            <p>
+                Put that in <code>{{ links_file }}</code> and reload — the file is
+                re-read when it changes, so nothing needs restarting.
+            </p>
+            {%- if icon_names %}
+            <p>
+                <code>icon:</code> takes a <em>name</em>, never a URL — a dozen
+                entries for one tool cost one mark, one fetch, one probe. These
+                names are already installed. Each is drawn twice, once for a
+                light background and once for a dark one, and the page picks by
+                theme:
+            </p>
+            {#- The whole roster, not an example of one: the reader is choosing a
+                name, and a name they cannot see is one they will write wrong. The
+                list is the **registry** (built-in pack plus anything a dependent
+                package registered), so every row here is servable by the icon
+                route — the deployment's own map is not in it, since an entry
+                there may be a remote URL or a suppression, neither of which has
+                bytes to serve. The images are decorative: the name they belong to
+                is the row header beside them, so `alt` is empty rather than a
+                second reading of it. A file that fails to load still becomes the
+                neutral glyph — links.js delegates on `.ls-links__mark`, which is
+                why each one keeps that wrapper here too. -#}
+            <table class="table table-sm ls-links__pack">
+                <thead>
+                    <tr>
+                        <th scope="col">name</th>
+                        <th scope="col">on light</th>
+                        <th scope="col">on dark</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {%- for name in icon_names %}
+                    <tr>
+                        <th scope="row" class="fw-normal"><code>{{ name }}</code></th>
+                        {%- for variant, side in (('on-light', 'light'), ('on-dark', 'dark')) %}
+                        <td class="ls-links__swatch ls-links__swatch--{{ side }}">
+                            <span class="ls-links__mark">
+                                <img class="ls-links__icon"
+                                     src="{{ url_for('link_icon', variant=variant, name=name) }}"
+                                     alt="" width="20" height="20" loading="lazy">
+                            </span>
+                        </td>
+                        {%- endfor %}
+                    </tr>
+                    {%- endfor %}
+                </tbody>
+            </table>
+            {%- endif %}
+            <p>
+                To use a mark of your own, put an <code>icons/</code> directory
+                beside that file and drop the file in:
+                <code>firewall.svg</code> is the name <code>firewall</code>.
+                Name it after one of the marks above and it replaces that one.
+                A pair — <code>firewall-on-light.svg</code> and
+                <code>firewall-on-dark.svg</code> — is one name with a drawing
+                for each background; a single file rides a light chip instead, so
+                it stays legible under every theme.
+            </p>
+        </div>
+        {%- else %}
+        {#- The filter is the primary navigation once a page reaches sixty
+            entries, not a nicety — so it is pinned above everything, focused on
+            arrival, and costs no round trip. It matches **titles** (ADR-0030);
+            what the server puts in `data-ls-match` below is the whole of what it
+            searches: the entry's title **and its group's**, so typing a category
+            name pulls up that whole category. Notes stay out — a note is prose,
+            and a match the reader cannot see in the title it landed on is the
+            failure mode records were chosen to avoid. -#}
+        <div class="ls-links__filter">
+            <label class="visually-hidden" for="ls-links-filter">Filter links</label>
+            <input class="form-control form-control-sm ls-links__search"
+                   type="search" id="ls-links-filter" placeholder="Filter…"
+                   autocomplete="off" spellcheck="false" autofocus>
+            {#- Announced politely rather than shouted: it changes on every
+                keystroke, and it is a reassurance, not an event. -#}
+            <span class="ls-links__count" id="ls-links-count" role="status"
+                  aria-live="polite" hidden></span>
+            {#- One freshness line for the whole page, and only where a deployment
+                asked for probing at all: a `check:` block that switches everything
+                off must not leave a permanent "nothing checked yet" for a question
+                nobody asked. Sixty healthy rows stay undecorated — only a failure
+                is drawn beside its entry — so without this line a reader could not
+                tell a clean page from an unprobed one. The age is the newest answer
+                the page holds; a verdict older than that carries its own beside the
+                entry it belongs to. -#}
+            {%- if probe.active %}
+            {#- **Green when every answer came back alive**, and only then. A page
+                whose failures are all drawn in red rows still needs to say that the
+                clean ones were actually asked — and a reader mid-incident reads a
+                color before a sentence. Anything failing leaves the line muted
+                rather than turning it red: the failing rows already carry that, and
+                a second red would compete with them. The tick is drawn here in
+                `currentColor`, like every other mark this project draws itself. -#}
+            {%- set all_alive = probe.checked_at and not probe.failures %}
+            <span class="ls-links__probe{{ ' ls-links__probe--ok' if all_alive }}"
+                  {%- if probe.checked_at %} title="Checked {{ probe.checked_at | localtime }}"{% endif %}>
+                {%- if all_alive %}
+                <svg class="ls-links__tick" width="12" height="12" viewBox="0 0 16 16"
+                     fill="none" stroke="currentColor" stroke-width="2.2"
+                     stroke-linecap="round" stroke-linejoin="round"
+                     aria-hidden="true" focusable="false">
+                    <path d="M2.5 8.5 6.2 12.2 13.5 4"/>
+                </svg>
+                {%- endif %}
+                {%- if probe.checked_at %} Checked {{ probe.checked_at | since }}
+                {%- else %}Nothing checked yet{% endif -%}
+                {#- A pass still in flight as this response was built — after a
+                    *check now* that reached its deadline, or beside an open that
+                    started one. The page does not poll, so saying so is the
+                    difference between a control that looks broken and one whose
+                    remaining answers are one reload away. -#}
+                {%- if probe.running %} · still checking{% endif -%}
+                {#- A pass that reached its deadline and walked away from a host
+                    still holding the connection open (ADR-0030, amended). Said
+                    here rather than only in the log, because this is the one
+                    condition under which the age beside it stops meaning what it
+                    says: without this line, somebody pressing *check now* and
+                    watching nothing move would conclude the button is broken
+                    rather than that a target is refusing to answer. The plural
+                    form is the apology — at that point nothing is being probed at
+                    all until one of them lets go. -#}
+                {%- if probe.paused %} · <span class="ls-links__stalled">paused — {{ probe.stuck }} earlier passes are still waiting on a host that has not answered</span>
+                {%- elif probe.stuck %} · <span class="ls-links__stalled">{{ probe.stuck }} earlier pass{{ 'es are' if probe.stuck != 1 else ' is' }} still waiting on a host that has not answered</span>
+                {%- endif -%}
+            </span>
+            {#- *Check now*, because the time gate is exactly wrong in the one moment
+                somebody has just fixed a URL and wants to watch it go green. A form
+                POST answered with a redirect, like every other control here that
+                changes something: a GET would let a reload or a prefetch spend
+                outbound requests, and the redirect is what stops a refresh from
+                firing a second pass. It sits at the far end of the row, away from
+                the search box — this page is read mid-incident and the filter is
+                its primary navigation, so the one control that costs something must
+                not be reachable by a stray keystroke while typing. -#}
+            <form class="ls-links__recheck" method="post" action="{{ url_for('links_check') }}">
+                <input type="hidden" name="next" value="{{ request.full_path.rstrip('?') }}">
+                {#- `btn btn-sm` for the shape only: the colours come from our own
+                    tokens in overview.css, because Bootstrap's outline secondary
+                    paints one grey on every canvas and it is under the bar on the
+                    dark ones. -#}
+                <button class="btn btn-sm" type="submit">Check now</button>
+            </form>
+            {%- endif %}
+        </div>
+        <p class="ls-links__none text-muted" id="ls-links-none" hidden>
+            Nothing matches. <kbd>Esc</kbd> clears the filter.
+        </p>
+
+        <div class="ls-links">
+            {%- for group in links_config.groups %}{% if group.links %}
+            <section class="ls-links__group">
+                <h2 class="ls-links__title">{{ group.title }}</h2>
+                <ul class="ls-links__list">
+                    {%- for link in group.links %}
+                    {#- What the filter searches, lower-cased server-side so the
+                        client compares strings and nothing else. The group's title
+                        rides along on every entry: an operator who types the
+                        category means the category. -#}
+                    <li class="ls-links__entry"
+                        data-ls-match="{{ (link.title ~ ' ' ~ group.title) | lower }}">
+                        {#- A link leaves the page, so it opens in a new tab and
+                            the monitor stays where it was. -#}
+                        <a class="ls-links__link" href="{{ link.url }}"
+                           target="_blank" rel="noopener noreferrer">
+                            {{ icon_mark(link, links_config.icon_for(link.icon)) }}
+                            <span class="ls-links__text">
+                                <span class="ls-links__name">{{ link.title }}</span>
+                                {%- if link.note %}
+                                <span class="ls-links__note md-body">{{ link.note | markdown_inline }}</span>
+                                {%- endif %}
+                                {#- Only a **failure** is drawn, and only for an
+                                    entry that opted in: a launcher read mid-incident
+                                    must not grow a status light on every row, and a
+                                    verdict nobody asked for would be one. Each
+                                    carries its own age, because an answer kept from
+                                    an earlier pass is otherwise indistinguishable
+                                    from one taken just now. `dead` and `no answer`
+                                    are deliberately different words: only a 404, a
+                                    410, a name that does not resolve and a refused
+                                    port mean *gone* (ADR-0030 §10) — a timeout or a
+                                    500 is the page failing to find out. -#}
+                                {%- set verdict = probe.verdicts.get(link.url) if link.check else none %}
+                                {%- if verdict and verdict.failed %}
+                                {%- set dead = ' ls-links__verdict--dead' if verdict.alive is false else '' %}
+                                <span class="ls-links__verdict{{ dead }}">{{ verdict.detail }} · checked {{ verdict.checked_at | since }}</span>
+                                {%- endif %}
+                            </span>
+                        </a>
+                    </li>
+                    {%- endfor %}
+                </ul>
+            </section>
+            {%- endif %}{% endfor %}
+        </div>
+        {%- endif %}
     </div>
+
+{#- The last step of the search path. An icon that fails to load is replaced by
+    this, so the page never shows a browser's broken-image glyph — the failure
+    the reference implementation was showing three of. It is a template rather
+    than an `onerror` attribute because links.js wires the swap: an inline
+    handler would be the one reason a Content-Security-Policy could not be turned
+    on later. It draws in `currentColor`, so it needs neither a chip nor a pair. -#}
+<template id="ls-links-glyph">
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"
+         stroke-linecap="round" aria-hidden="true" focusable="false">
+        <path d="M6.2 9.8 9.8 6.2M4.4 8a3 3 0 0 1 0-4l1.6-1.6a3 3 0 0 1 4 4M11.6 8a3 3 0 0 1 0 4L10 13.6a3 3 0 0 1-4-4"/>
+    </svg>
+</template>
+
+{% include '_page_end.html' %}
+
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="{{ url_for('static', filename='js/rail.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/links.js') }}"></script>
 </body>
 </html>

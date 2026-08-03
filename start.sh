@@ -9,24 +9,28 @@
 #
 # The awkward part is the `nohup ... &` launch. A backgrounded process returns
 # success to the shell the instant it forks, so `set -e` never sees gunicorn die
-# when it fails to bind the port -- the script would "succeed" while nothing is
-# listening. We therefore (a) check the port *before* launching and (b) verify
-# gunicorn is actually alive *and* listening *after* launching, turning a silent
-# bind failure into a real, visible script failure.
+# when it fails to start -- the script would "succeed" while nothing is serving.
+# We therefore (a) check the port *before* launching and (b) wait for the app to
+# answer a real HTTP request *after* launching, turning a silent bind failure or
+# an import-time crash into a real, visible script failure. A listening port is
+# not enough on its own: the master listens before it forks the worker that
+# imports the app, so a worker that dies on import still leaves the port open
+# for a moment (see `responds` in lib.sh).
 
 set -euo pipefail
 cd "$(dirname "$0")"
 # shellcheck source=lib.sh
 . ./lib.sh
 require lsof
+require curl   # the readiness probe (see `responds` in lib.sh)
 
 # --- Config preflight: the files the app reads from this directory -----------
-# users.yaml is required (the login list); .env is recommended (session key + API
-# tokens). Point at ./setup.sh rather than failing deep inside gunicorn.
-users_file="${LITTLE_SISTER_USERS:-users.yaml}"
+# config/users.yaml is required (the login list); .env is recommended (session key
+# + API tokens). Point at ./setup.sh rather than failing deep inside gunicorn.
+users_file="${LITTLE_SISTER_USERS:-config/users.yaml}"
 if [ ! -f "$users_file" ]; then
   echo "ERROR: user list '$users_file' not found — it is required to log in." >&2
-  echo "Run ./setup.sh to create users.yaml and .env, then edit the values." >&2
+  echo "Run ./setup.sh to create config/users.yaml and .env, then edit the values." >&2
   exit 1
 fi
 if [ ! -f .env ]; then
@@ -81,19 +85,38 @@ app_pid=$!
 
 # Verify it really came up. Because the launch is backgrounded, this is the only
 # place a bind failure (or an import-time crash) becomes visible to the script.
+# "Came up" means the app answered a request -- not that the port is open; see
+# `responds` in lib.sh for why the two differ.
 for _ in $(seq 1 "$START_TIMEOUT"); do
   if ! kill -0 "$app_pid" 2>/dev/null; then
     echo "ERROR: gunicorn exited during startup. Recent log:" >&2
     tail -n 20 "$LOG" >&2
     exit 1
   fi
-  if listeners | grep -qx "$app_pid"; then
+  if fatal_in_log; then
+    echo "ERROR: gunicorn could not boot a worker. Recent log:" >&2
+    tail -n 20 "$LOG" >&2
+    exit 1
+  fi
+  if status="$(responds)"; then
+    engine_error="$(engine_error_in_log)"
+    if [ -n "$engine_error" ]; then
+      echo "ERROR: serving on :${PORT}, but the engine did not start — nothing is" >&2
+      echo "being monitored: ${engine_error}" >&2
+      echo "Fix the check config and run $0 again. The process (PID ${app_pid}) is" >&2
+      echo "left running: the dashboard shows the same message. ./stop.sh ends it." >&2
+      exit 1
+    fi
     echo "little-sister is up (PID ${app_pid}); logging to ${LOG}."
+    if [ "$status" -ge 500 ]; then
+      echo "WARNING: ${PROBE_PATH} answered HTTP ${status}: it is serving, but" >&2
+      echo "erroring -- check ${LOG}." >&2
+    fi
     exit 0
   fi
   sleep 0.2
 done
 
-echo "ERROR: gunicorn (PID ${app_pid}) is not listening on :${PORT} after startup." >&2
+echo "ERROR: gunicorn (PID ${app_pid}) did not answer on :${PORT} after startup." >&2
 tail -n 20 "$LOG" >&2
 exit 1

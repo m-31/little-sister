@@ -1,0 +1,23 @@
+# Live-demo check (Mode 2) — see tests/demo_check.py and docs/testing-the-gui.md.
+type: demo
+path: /security/audit
+title: Security audit
+about: |
+  A wiz-style audit leaf: stays **OK** while its findings list swells to
+  ~150 long lines, then clears — the growing-skyscraper layout case. Its findings
+  are **members** (`entries: true`), each keyed by a slug *derived* from its text.
+scenario: audit
+frequency: 5s
+period: 120s
+
+# Read the findings as members rather than prose (ADR-0036). It costs one line here
+# because the scenario's texts are already constant across runs — only the count
+# grows — so every derived slug keeps its identity and a pin set on finding 7
+# survives the list swelling to ~150 and back. That is the ergonomic claim the ADR
+# makes for derived slugs, demonstrated by data that does not change at all.
+#
+# Flip it off to compare the same node as prose: the per-line control disappears and
+# the node pin is the only unit left. Note what it costs when on — `check.html`
+# renders every reason, so ~150 lines means ~150 per-line forms on one page. Worth
+# seeing once; `/ci/reviews` is the pleasant everyday version.
+entries: true

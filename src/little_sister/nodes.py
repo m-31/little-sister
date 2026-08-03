@@ -1,11 +1,12 @@
-"""Node metadata: ``nodes.yaml`` declarations + the startup consistency pass.
+"""Node metadata: the ``nodes`` aspect's declarations + the startup consistency pass.
 
 A node's display metadata — ``about`` (subject metadata, what it *is*; ADR-0012) and
 ``title`` (a short display label; ADR-0017) — is fed by precedence: a ``nodes.yaml``
 declaration keyed by path **>** the inline value on the owning check **>** empty.
-``nodes.yaml`` is optional and lives in the checks directory — or each directory of
-the path-list union (ADR-0015) — so it can reach container / host nodes no single
-check owns. The consistency pass flags declarations no check feeds.
+The file is optional and is the ``nodes`` aspect of the configuration directory —
+``config/nodes.yaml`` in each root of the path-list (ADR-0031) — so it can reach
+container / host nodes no single check owns. The consistency pass flags declarations
+no check feeds.
 """
 from __future__ import annotations
 
@@ -16,7 +17,7 @@ from typing import Any
 import yaml
 
 from little_sister.checks import Check, CheckError
-from little_sister.checks.loader import NODES_FILENAME, resolve_dirs
+from little_sister.config_dir import aspect_files
 from little_sister.logger import logger
 from little_sister.status import (
     HEARTBEAT_PATH,
@@ -38,23 +39,33 @@ class NodeMeta:
                         title=self.title or base.title)
 
 
-def load_nodes(directory: str | Path | None = None) -> dict[str, NodeMeta]:
-    """Load node metadata from every ``nodes.yaml`` across the checks directories (a
-    path-list union; ADR-0015). Returns ``path -> NodeMeta``. The file is **optional**
-    — a missing one is fine; a path declared in two files is a hard error, like a
-    duplicate check."""
+NODES_ASPECT = "nodes"
+
+
+def load_nodes(config_dir: str | Path | None = None) -> dict[str, NodeMeta]:
+    """Load node metadata from the ``nodes`` aspect of every configuration root, in
+    path-list order (ADR-0031). Returns ``path -> NodeMeta``.
+
+    The aspect is **optional** — no root need carry it. Where two roots declare the
+    same node path, the **later** root wins, per field: that is what the layering is
+    for (a site root retitles one node the shared base declares) and it matches the
+    settings rule one table row up. Declaring only ``title`` leaves the base's
+    ``about`` standing, exactly as a ``nodes.yaml`` entry layers over a check's
+    inline value. An override is **logged with both files named**, because a silent
+    winner decided by root order is indistinguishable from a bug.
+    """
     meta: dict[str, NodeMeta] = {}
     source: dict[str, Path] = {}
-    for base in resolve_dirs(directory):
-        node_file = base / NODES_FILENAME
-        if not node_file.is_file():
-            continue
+    for node_file in aspect_files(NODES_ASPECT, config_dir):
         for node_path, entry in _read_nodes_file(node_file).items():
             if node_path in meta:
-                raise CheckError(
-                    f"duplicate node metadata for {node_path!r}: "
-                    f"{source[node_path]} and {node_file}")
-            meta[node_path] = entry
+                logger.info(
+                    "node metadata for %r overridden by a later configuration "
+                    "root: %s wins over %s (ADR-0031)",
+                    node_path, node_file, source[node_path])
+                meta[node_path] = entry.merged_over(meta[node_path])
+            else:
+                meta[node_path] = entry
             source[node_path] = node_file
     return meta
 

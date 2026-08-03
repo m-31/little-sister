@@ -1,4 +1,5 @@
 """Markdown rendering and the reason-assembly helpers (ADR-0018)."""
+from pathlib import Path
 from unittest import TestCase
 
 from pytest import mark
@@ -58,6 +59,18 @@ class PlainHelperTests(TestCase):
         for text in ("host.example", "MD0_DATA", "exit -1", "85% used on /"):
             self.assertEqual(plain(text), text)
 
+    def test_non_str_is_stringified_then_escaped(self):
+        # values read out of an untyped payload (JSON / YAML) arrive as int, Path,
+        # exception — the escaping must apply to the *stringified* form
+        self.assertEqual(plain(42), "42")
+        self.assertEqual(plain(Path("/srv/*data*")), "/srv/\\*data\\*")
+        self.assertEqual(plain(ValueError("bad `x`")), "bad \\`x\\`")
+
+    def test_none_stringifies_rather_than_raising(self):
+        # deliberate: a formatter on the untrusted-input boundary is total, so a
+        # missing field renders visibly instead of taking out the whole reason
+        self.assertEqual(plain(None), "None")
+
     def test_escaped_text_renders_literally(self):
         out = str(render_markdown_inline(plain("*no* and [no](link)")))
         self.assertNotIn("<em>", out)
@@ -74,6 +87,19 @@ class CodeHelperTests(TestCase):
         self.assertIn("<pre>", out)
         self.assertIn("**still**", out)       # inside the fence — not rendered
         self.assertNotIn("<strong>", out)
+
+    def test_non_str_is_stringified(self):
+        self.assertEqual(code(42), "```\n42\n```")
+
+    def test_fence_grows_past_backticks_inside_a_non_str(self):
+        # regression: the backtick scan used to walk the *argument*, so a non-str
+        # iterable was walked element-wise and its backticks never grew the fence —
+        # the block then broke out of itself when rendered
+        fenced = code(["a ``` b"])
+        self.assertTrue(fenced.startswith("````"))
+        out = str(render_markdown(fenced))
+        self.assertIn("<pre>", out)
+        self.assertIn("```", out)
 
     def test_fence_grows_past_inner_backticks(self):
         fenced = code("a ``` b")

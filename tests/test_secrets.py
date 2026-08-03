@@ -1,6 +1,8 @@
 """Secret references (ADR-0023): resolution and the resolver registry, the
-check base's resolve-at-construction split (malformed = loud ``CheckError``,
-unresolvable = recorded), and the engine's pinned-ERROR path."""
+``scheme://address``-always grammar that keeps a pasted secret out of the lookup,
+the ``secrets:`` config block, the check base's resolve-at-construction split
+(malformed = loud ``CheckError``, unresolvable = recorded), and the engine's
+pinned-ERROR path."""
 from __future__ import annotations
 
 import os
@@ -12,18 +14,19 @@ from unittest import TestCase, mock
 
 from little_sister import secrets
 from little_sister.checks import CheckError, CheckResult, load_checks
-from little_sister.checks.base import CHECK_TYPES, Check
+from little_sister.checks.base import CHECK_TYPES, Check, parse_secret_refs
 from little_sister.engine import Engine
 from little_sister.status import StatusCode
 from little_sister.tree import StatusTree
 
 TOKEN_ENV = "LS_TEST_SECRET"
+TOKEN_REF = f"env://{TOKEN_ENV}"
 
 
 class _SecretCheck(Check):
     """A check type that resolves one secret reference at construction."""
 
-    def __init__(self, *, token: str = TOKEN_ENV, **kwargs: Any) -> None:
+    def __init__(self, *, token: str = TOKEN_REF, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.token = self.resolve_secret(token)
         self.ran = False
@@ -31,7 +34,7 @@ class _SecretCheck(Check):
     @classmethod
     def _extra_from_config(cls, config: dict[str, Any],
                            base_dir: Path) -> dict[str, Any]:
-        return {"token": str(config.get("token", TOKEN_ENV))}
+        return {"token": str(config.get("token", TOKEN_REF))}
 
     def run(self) -> CheckResult:
         self.ran = True
@@ -50,23 +53,30 @@ class _IsolatedCase(TestCase):
 
 
 class ResolveTests(_IsolatedCase):
-    def test_bare_name_reads_the_environment(self):
+    def test_env_scheme_reads_the_environment(self):
         os.environ[TOKEN_ENV] = "s3cr3t"
-        self.assertEqual(secrets.resolve(TOKEN_ENV), "s3cr3t")
+        self.assertEqual(secrets.resolve(TOKEN_REF), "s3cr3t")
 
-    def test_bare_name_value_is_stripped(self):
+    def test_env_value_is_stripped(self):
         os.environ[TOKEN_ENV] = "  s3cr3t \n"
-        self.assertEqual(secrets.resolve(TOKEN_ENV), "s3cr3t")
+        self.assertEqual(secrets.resolve(TOKEN_REF), "s3cr3t")
+
+    def test_env_scheme_is_registered_like_any_other(self):
+        self.assertIn("env", secrets._resolvers)
 
     def test_missing_environment_variable_fails_resolution(self):
         with self.assertRaises(secrets.SecretError) as caught:
-            secrets.resolve(TOKEN_ENV)
+            secrets.resolve(TOKEN_REF)
         self.assertIn(TOKEN_ENV, str(caught.exception))
 
     def test_blank_environment_variable_fails_resolution(self):
         os.environ[TOKEN_ENV] = "   "
         with self.assertRaises(secrets.SecretError):
-            secrets.resolve(TOKEN_ENV)
+            secrets.resolve(TOKEN_REF)
+
+    def test_env_name_may_be_lower_case(self):
+        os.environ["ls_test_lower"] = "v"      # the scheme, not the shape, decides
+        self.assertEqual(secrets.resolve("env://ls_test_lower"), "v")
 
     def test_registered_scheme_resolves_by_address(self):
         secrets.register_resolver("fake", lambda address: f"value:{address}")
@@ -114,6 +124,97 @@ class ResolveTests(_IsolatedCase):
         secrets.register_resolver("fake", lambda address: "first")
         secrets.register_resolver("fake", lambda address: "second")
         self.assertEqual(secrets.resolve("fake://x"), "second")
+
+
+class MissingSchemeTests(_IsolatedCase):
+    """Every reference carries a scheme, so a string without one is malformed by
+    construction — which is exactly the shape of a credential pasted where its
+    reference belongs (ADR-0023, 2026-07-27 update). No shape guessing."""
+
+    def _malformed(self, reference: str) -> str:
+        with self.assertRaises(secrets.UnknownSchemeError) as caught:
+            secrets.resolve(reference)
+        return str(caught.exception)
+
+    def test_a_bare_name_is_no_longer_a_reference(self):
+        os.environ[TOKEN_ENV] = "s3cr3t"
+        self._malformed(TOKEN_ENV)      # would have resolved before the update
+
+    def test_pasted_github_token_is_rejected(self):
+        self._malformed("ghp_16C7e42F292c6912E7710c838347Ae178B4a")
+
+    def test_pasted_fine_grained_token_is_rejected(self):
+        self._malformed("github_pat_11ABCDEFG0abcdefghijklm")
+
+    def test_pasted_jwt_is_rejected(self):
+        self._malformed("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.e30.abc")
+
+    def test_message_never_quotes_the_value(self):
+        pasted = "ghp_16C7e42F292c6912E7710c838347Ae178B4a"
+        message = self._malformed(pasted)
+        self.assertNotIn(pasted, message)
+        self.assertIn("env://", message)     # ...but does say what was expected
+
+    def test_a_rejected_string_is_never_looked_up(self):
+        os.environ["ghp_secret"] = "would-have-resolved"
+        self._malformed("ghp_secret")
+
+    def test_scheme_without_an_address_is_malformed(self):
+        self.assertIn("address", self._malformed("env://"))
+
+
+class ParseSecretRefsTests(TestCase):
+    """The ``secrets:`` config block (ADR-0023 update note)."""
+
+    def test_returns_each_named_reference(self):
+        config = {"secrets": {"client_id": "env://WIZ_CLIENT_ID",
+                              "client_secret": "aws-sm://wiz/secret"}}
+        self.assertEqual(
+            parse_secret_refs(config, "client_id", "client_secret"),
+            {"client_id": "env://WIZ_CLIENT_ID",
+             "client_secret": "aws-sm://wiz/secret"})
+
+    def test_reference_is_stripped(self):
+        config = {"secrets": {"token": "  env://GITHUB_TOKEN\n"}}
+        self.assertEqual(parse_secret_refs(config, "token"),
+                         {"token": "env://GITHUB_TOKEN"})
+
+    def test_missing_block_names_what_is_required(self):
+        with self.assertRaises(CheckError) as caught:
+            parse_secret_refs({}, "token")
+        self.assertIn("token", str(caught.exception))
+
+    def test_block_must_be_a_mapping(self):
+        with self.assertRaises(CheckError):
+            parse_secret_refs({"secrets": "env://GITHUB_TOKEN"}, "token")
+
+    def test_missing_name_is_an_error(self):
+        with self.assertRaises(CheckError):
+            parse_secret_refs({"secrets": {"client_id": "env://WIZ_CLIENT_ID"}},
+                              "client_id", "client_secret")
+
+    def test_unknown_key_is_a_typo_not_a_silent_extra(self):
+        with self.assertRaises(CheckError) as caught:
+            parse_secret_refs({"secrets": {"token": "env://GITHUB_TOKEN",
+                                           "toekn": "env://GITHUB_TOKEN"}},
+                              "token")
+        self.assertIn("toekn", str(caught.exception))
+
+    def test_empty_reference_is_an_error(self):
+        with self.assertRaises(CheckError):
+            parse_secret_refs({"secrets": {"token": "  "}}, "token")
+
+    def test_non_string_reference_is_an_error(self):
+        with self.assertRaises(CheckError):
+            parse_secret_refs({"secrets": {"token": 42}}, "token")
+
+    def test_error_names_the_key_but_never_quotes_the_value(self):
+        pasted = "ghp_16C7e42F292c6912E7710c838347Ae178B4a"
+        with self.assertRaises(CheckError) as caught:
+            parse_secret_refs({"secrets": {"toekn": pasted}}, "token")
+        message = str(caught.exception)
+        self.assertIn("toekn", message)      # the mistyped key, so it is findable
+        self.assertNotIn(pasted, message)    # never what it held
 
 
 class ResolveSettingTests(_IsolatedCase):
@@ -194,7 +295,9 @@ class LoaderTests(_IsolatedCase):
 
     def _load(self, yaml_text: str) -> list[Check]:
         with TemporaryDirectory() as tmp:
-            Path(tmp, "check.yaml").write_text(yaml_text, encoding="utf-8")
+            checks = Path(tmp, "checks")
+            checks.mkdir()
+            (checks / "check.yaml").write_text(yaml_text, encoding="utf-8")
             return load_checks(Path(tmp))
 
     def test_malformed_reference_fails_the_load(self):

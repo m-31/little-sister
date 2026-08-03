@@ -5,6 +5,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from little_sister import values
 from little_sister.checks.base import (
     Check,
     CheckError,
@@ -25,7 +26,7 @@ class CommandCheck(Check):
     The reason/message is taken from the captured output (``capture``:
     ``stdout`` | ``stderr`` | ``both``) and shortened to ``max_chars`` characters
     kept from the ``tail`` (default) or ``head``. Scripts may live in the repo and
-    be referenced relative to the checks directory.
+    be referenced relative to the check config's own directory.
     """
 
     def __init__(self, *, command: str | list[str], working_dir: str,
@@ -47,10 +48,10 @@ class CommandCheck(Check):
         if not isinstance(command, (str, list)):
             raise CheckError("'command' must be a string or a list of strings")
 
-        capture = str(config.get("capture", "stdout")).lower()
+        capture = values.text(config, "capture", default="stdout").lower()
         if capture not in ("stdout", "stderr", "both"):
             raise CheckError(f"invalid 'capture': {capture!r} (stdout|stderr|both)")
-        keep = str(config.get("keep", "tail")).lower()
+        keep = values.text(config, "keep", default="tail").lower()
         if keep not in ("tail", "head"):
             raise CheckError(f"invalid 'keep': {keep!r} (tail|head)")
 

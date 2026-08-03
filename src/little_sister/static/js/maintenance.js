@@ -1,4 +1,4 @@
-/* Maintenance click-popover (slice 9/10; ADR-0019 machinery, ADR-0014 data).
+/* Maintenance click-popover (ADR-0019 machinery, ADR-0014 data).
  *
  * Two triggers open the same #maintenance-card popover, each cloning a hidden
  * <template class="maintenance-pop-src"> keyed by data-pop-for: a card's "contains

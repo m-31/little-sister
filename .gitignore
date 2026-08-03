@@ -17,8 +17,10 @@ dist/
 # Ignore virtual environment
 venv/
 .venv/
+# Ignore npm installs (the render matrix vendors Bootstrap into var/ instead)
+node_modules/
 # Ignore the deployment's real user list (the package ships users.example.yaml)
-/users.yaml
+/config/users.yaml
 # Ignore runtime artifacts (logs, pidfile)
 /var/
 # Ignore coverage reports

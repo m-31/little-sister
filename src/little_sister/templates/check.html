@@ -1,14 +1,17 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Status</title>
+    {# the node, not the section: three leaf tabs open at once should be
+       tellable apart #}
+    {% set page_title = node.name %}
     {% include '_header.html' %}
 
     <div class="container-fluid mt-3 px-4" style="max-width: 820px">
-        <h1 class="h4 mb-3 d-flex align-items-baseline" style="column-gap: .4rem; min-width: 0">
-            {% include '_breadcrumb.html' %}
-            {% if node.title %}<span class="node-title node-title--header">{{ node.title | markdown_inline }}</span>{% endif %}
-        </h1>
+        {# The same band as the dashboard — a deep breadcrumb and an ellipsed
+           title — minus the parts a detail page has no business showing: it is
+           not polled, so it carries no freshness stamp, and it has nothing to
+           filter. #}
+        {% include '_page_band.html' %}
 
         <div class="card mb-3">
             <div class="card-body">
@@ -20,10 +23,87 @@
                     <div class="md-body mb-2"><span class="text-muted">About:</span> {{ node.about | markdown }}</div>
                 {% endif %}
                 <div class="alert {{ node.code | status_alert }} mb-0">
-                    Status: <strong>{{ node.code.name.lower() }}</strong>
-                    {% for r in node.reason %}
-                        <div class="md-body small check-reason">{{ r | markdown }}</div>
+                    {#- The `node.actions` slot (ADR-0034, second slot): the same
+                        action as the card head's, on the page where the node is the
+                        subject. It sits with the status rather than with the reason
+                        lines, because that is precisely the distinction it exists
+                        for — this control is about the node, the per-line ones are
+                        about one finding (ADR-0036). -#}
+                    <span class="node-actions">{{ slot('node.actions', node=node, surface='check') }}</span>
+                    {#- "maintenance · error" rather than a bare "maintenance":
+                        naming what is being silenced is the transform being made
+                        visible (ADR-0032 rule 5), and before the keystone the
+                        reading it names was not merely hidden but overwritten. -#}
+                    Status: <strong>{{ node.code.name.lower() }}</strong>{% if node.own_code.name == 'MAINTENANCE' and node.reported_code.name not in ('MAINTENANCE', 'UNDEFINED') %} <span class="status-reported">· {{ node.reported_code.name.lower() }}</span>{% endif %}
+                    {%- if node.maintenance_entry %}
+                        <div class="pin-banner">Silenced by <strong>{{ node.maintenance_entry.set_by or 'an admin' }}</strong> until {{ node.maintenance_entry.expires_at | localtime }}{% if node.maintenance_entry.reason and node.maintenance_entry.reason != 'maintenance' %} — {{ node.maintenance_entry.reason }}{% endif %}</div>
+                    {%- endif %}
+                    {#- The dashboard's reason line, uncapped: every reason, and the
+                        same ``reason.actions`` slot (ADR-0034) beside each one, so a
+                        deployment's "raise a ticket" button is in both places the
+                        reason itself is. ``surface`` tells a filler which page it is
+                        on — this one is not polled.
+
+                        This is also the surface for **per-entry maintenance**
+                        (ADR-0036): where a check declared its reasons as members,
+                        an admin gets a pin control on each line, so the one finding
+                        somebody is working on can go quiet while its nineteen
+                        siblings keep alarming. A quiet line stays visible in the
+                        maintenance tint and says who silenced it and until when.
+                        Prose gets no per-line control — its unit of suppression is
+                        the node pin, and a per-line button there would offer to
+                        silence half of one condition.
+
+                        `?reason=<slug>` names one line (ADR-0036 decision 12): the
+                        maintenance index links here with it, because on a node with
+                        150 findings arriving at the right *page* is not the same as
+                        arriving at the *line*. The named line — and only it — gets
+                        the `pinned-reason` id, so one anchor exists instead of one
+                        per reason, and only when it was asked for. -#}
+                    {%- if focus_orphan %}
+                        {#- The pin is real and its line is absent: a slug the current
+                            run did not report is **suspended, not deleted** (decision
+                            6). Say so — this is the one surface that can, and an
+                            anchor that simply failed to scroll would have left the
+                            operator guessing. -#}
+                        <div class="reason-orphan" id="pinned-reason">The line this pin
+                            was set on is <strong>no longer reported</strong> by this
+                            check. The pin is still here and still expires
+                            {{ focus_orphan.expires_at | localtime }}; if the line comes
+                            back, it comes back silenced.</div>
+                    {%- endif %}
+                    {% for line in node.reasons %}
+                        {%- set focused = focus and line.slug == focus %}
+                        <div {% if focused %}id="pinned-reason" {% endif %}class="md-body small check-reason{% if line.quiet %} is-quiet{% endif %}{% if focused %} is-focused{% endif %}"><span class="reason-actions">{{ slot('reason.actions', node=node, reason=line.text, index=loop.index0, surface='check') }}</span>{{ line.text | markdown }}
+                            {%- if line.quiet %}
+                                <div class="reason-quiet-note">In maintenance{% if line.maintenance.set_by %}, set by <strong>{{ line.maintenance.set_by }}</strong>{% endif %} — expires {{ line.maintenance.expires_at | localtime }}.{% if line.maintenance.reason and line.maintenance.reason != 'maintenance' %} {{ line.maintenance.reason }}{% endif %}</div>
+                            {%- endif %}
+                            {%- if is_admin and node.members %}
+                                <form class="reason-pin" method="post" action="{{ url_for('maintenance') }}">
+                                    <input type="hidden" name="path" value="{{ branch }}">
+                                    <input type="hidden" name="slug" value="{{ line.slug }}">
+                                    <input type="hidden" name="set_at" value="{{ line.maintenance.set_at if line.quiet else '' }}">
+                                    {%- if line.quiet %}
+                                        <input type="hidden" name="action" value="clear">
+                                        <button class="btn btn-sm btn-outline-secondary" type="submit">Let this one alarm again</button>
+                                    {%- else %}
+                                        <input type="hidden" name="action" value="set">
+                                        <input class="form-control form-control-sm reason-pin__reason" name="reason" placeholder="why?" aria-label="why this line is being silenced">
+                                        <input class="form-control form-control-sm reason-pin__duration" name="duration" placeholder="{{ maintenance_default }}" aria-label="for how long">
+                                        <button class="btn btn-sm btn-outline-secondary" type="submit">Silence this one</button>
+                                    {%- endif %}
+                                </form>
+                            {%- endif %}
+                        </div>
                     {% endfor %}
+                    {% if node.quiet_reasons %}
+                        {#- "nothing here is reporting" explains a node that went blue
+                            because its last member was pinned. Under a **node** pin it
+                            would take credit for the wrong thing — the banner above
+                            already says why — so the count then reports only what
+                            stays quiet once that pin is cleared. -#}
+                        <div class="reason-quiet-count">{{ node.quiet_reasons }} of {{ node.reasons | length }} {% if node.maintenance %}also pinned individually{% else %}in maintenance{% if node.own_code.name == 'MAINTENANCE' %} — nothing here is reporting{% endif %}{% endif %}.</div>
+                    {% endif %}
                     {% if node.stale %}
                         <div><small>Stale — last checked {{ node.age_seconds | round | int | duration }} ago.</small></div>
                     {% endif %}
@@ -34,14 +114,28 @@
         <div class="card mb-3">
             <div class="card-body">
                 <h3 class="h6 text-muted text-uppercase">Time</h3>
-                <p class="mb-1">
-                    Status <strong>{{ node.code.name.lower() }}</strong>
-                    from {{ since | localtime }} until {{ node.timestamp | localtime }}
-                </p>
+                {#- Observation time (ADR-0027). No timestamp means no check has ever
+                    written this node — say so, rather than inventing an instant. With
+                    a timestamp but no recorded transition of its own (``since`` is
+                    None) there is no period to bound either, so report the single
+                    observation instead of a from/until of one moment. -#}
+                {% if node.timestamp is none %}
+                    <p class="mb-1 text-muted">Not yet observed.</p>
+                {% elif since %}
+                    <p class="mb-1">
+                        Status <strong>{{ node.code.name.lower() }}</strong>
+                        from {{ since | localtime }} until {{ node.timestamp | localtime }}
+                    </p>
+                {% else %}
+                    <p class="mb-1">Observed {{ node.timestamp | localtime }}.</p>
+                {% endif %}
                 {% if node.frequency_seconds %}
                     <p class="mb-2 text-muted">Checked every {{ node.frequency_seconds | duration }}</p>
                 {% endif %}
-                <a class="btn btn-info text-white" href="{{ url_for('history', path=branch) }}">History</a>
+                {# Secondary, like the maintenance buttons below it, rather than the
+                   off-palette `btn-info` cyan it used to wear — the one color on this
+                   page that belonged to no theme and followed none of them. #}
+                <a class="btn btn-outline-secondary" href="{{ url_for('history', path=branch) }}">History</a>
             </div>
         </div>
 
@@ -55,42 +149,12 @@
         {% endif %}
 
         {% if is_admin %}
-        <div class="card mb-3">
-            <div class="card-body">
-                <h3 class="h6 text-muted text-uppercase">Maintenance</h3>
-                {% if node.maintenance %}
-                    <p class="text-muted mb-2">
-                        This check is in maintenance.
-                        {% if node.maintenance_entry %}
-                            {% if node.maintenance_entry.set_by %}Set by <strong>{{ node.maintenance_entry.set_by }}</strong>.{% endif %}
-                            Expires {{ node.maintenance_entry.expires_at | localtime }}.
-                        {% endif %}
-                    </p>
-                    <form method="post" action="{{ url_for('maintenance') }}">
-                        <input type="hidden" name="path" value="{{ branch }}">
-                        <input type="hidden" name="action" value="clear">
-                        <button class="btn btn-outline-secondary" type="submit">Clear maintenance</button>
-                    </form>
-                {% else %}
-                    <form method="post" action="{{ url_for('maintenance') }}">
-                        <input type="hidden" name="path" value="{{ branch }}">
-                        <input type="hidden" name="action" value="set">
-                        <div class="mb-2">
-                            <label class="form-label" for="reason">Reason</label>
-                            <input class="form-control" id="reason" name="reason" placeholder="why?">
-                        </div>
-                        <div class="mb-2">
-                            <label class="form-label" for="duration">Duration</label>
-                            <input class="form-control" id="duration" name="duration" placeholder="e.g. 2h, 3d — default applies if blank">
-                        </div>
-                        <button class="btn btn-primary" type="submit">Set maintenance</button>
-                    </form>
-                {% endif %}
-            </div>
-        </div>
+        {% include '_maintenance_card.html' %}
         {% endif %}
     </div>
+{% include '_page_end.html' %}
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="{{ url_for('static', filename='js/rail.js') }}"></script>
 </body>
 </html>

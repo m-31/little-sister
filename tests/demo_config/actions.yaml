@@ -1,0 +1,52 @@
+# Live-demo actions (Mode 2) — see docs/testing-the-gui.md.
+#
+# The declarative action list (ADR-0038). This file alone makes **both** template
+# slots draw, with no Python and no change to the WSGI wrapper: `actions` is a
+# built-in configuration aspect and the library registers its own filler for both
+# slots at import. The demo also registers a *coded* filler beside it
+# (`tests/demo_wsgi.py`), so the two land in one rail and you can see whether the
+# promise that they wear the same chip is true.
+#
+# Every URL points at example.org: inert, no network, harmless to click.
+
+actions:
+  # --- one reason line -------------------------------------------------------
+  # Scoped hard with `under:`, and deliberately. `reason.actions` is offered on
+  # *every* reason of every node, so an unscoped entry would put a chip on each of
+  # the ~150 findings on /security/audit and turn the demo's most interesting page
+  # into a wall of chips. The review queue is five or six lines — the size a
+  # per-line control is actually for.
+  #
+  # `icon:` resolves through the links registry (ADR-0030 §3) rather than a second
+  # one, so this names a mark the demo deployment already ships in
+  # links/icons/phoenix.svg — the rung that proves a deployment's own file works
+  # here and not only on /links.
+  - label: Nudge
+    slot: reason.actions
+    under: /ci/reviews
+    icon: phoenix
+    url: "https://forge.example.org/andro-meda/little-sister/pulls?q={reason}&node={path}"
+
+  # --- the whole node --------------------------------------------------------
+  # The broad one: no `under:`, so it is offered everywhere. Where a node's reasons
+  # are prose — a message and its trace are one condition — this is the only unit
+  # there is to act on, which is the placement rule the two slots exist to express.
+  #
+  # It carries {reasons} as well as {reason}, so the body is the whole condition and
+  # not just the summary line. That also makes it the demo's percent-encoding case:
+  # open it on /security/audit and the body is ~150 findings full of parentheses,
+  # em dashes and ampersands, every one of them encoded on the way into the query
+  # string. A long href is the honest consequence — worth looking at once.
+  - label: File it
+    slot: node.actions
+    url: "https://tracker.example.org/new?title={name}%3A%20{reason}&body={reasons}&path={path}&code={code}"
+
+  # An action that appears on one subtree and nowhere else: `under:` is compared
+  # segment-wise, so this covers /security and /security/audit and would never
+  # reach a /securityscan. It is the half of the selector vocabulary that is
+  # settled; a `tag:` selector waits for tags to exist.
+  - label: Runbook
+    slot: node.actions
+    under: /security
+    icon: backstage
+    url: "https://wiki.example.org/runbooks/{name}"

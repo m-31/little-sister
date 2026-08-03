@@ -3,7 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-07-18
 - **Related:** [ADR-0003 — Configuration & secrets via a `.env` file](0003-config-and-secrets-via-env-file.md)
-  (extended here: the reference-by-name rule and the env default),
+  (extended here: the reference syntax and the `env://` scheme),
   [ADR-0001](0001-in-process-threaded-engine.md) ("no extra services" — unchanged for
   the core), [ADR-0015](0015-check-discovery-union.md) (config applies at startup, no
   live reload — the same stance governs secret rotation).
@@ -20,6 +20,28 @@
 > keeps decision §4's split: a malformed reference still fails startup loudly;
 > an unresolvable one degrades — random key / no API tokens — with a warning,
 > so the dashboard stays up while a store is down. Rules 1–4 are unchanged.
+
+> **Update (2026-07-27):** decision §1's **bare name is retired**. Every reference
+> now carries a scheme: an environment variable is `env://GITHUB_TOKEN`, and `env`
+> is a resolver `little_sister.secrets` registers for itself at import — so `resolve` has one
+> path for every scheme instead of a special case plus a general rule. The reason
+> is not symmetry but *safety*: with a bare name, a config field holding
+> `ghp_16C7…` is a syntactically valid reference, so a pasted **credential** is
+> looked up as if it were a name, fails, and echoes itself into the check's
+> visible ERROR reason. Requiring the scheme makes that a malformed reference —
+> caught by the grammar, exactly, with a message that deliberately does not quote
+> what it rejected. (The alternative, guessing from the *shape* of a bare string,
+> was tried and discarded: any rule tight enough to reject `ghp_…` also rejects
+> legitimate names, and a rule loose enough to accept every legitimate name
+> accepts most pasted secrets.) The break is real but its blast radius was one
+> deployment's two config files — no built-in check type takes a credential.
+>
+> The same update fixes the config **spelling**: a check's credentials are named
+> in a `secrets:` block (`secrets: {token: env://GITHUB_TOKEN}`), parsed by
+> `checks.base.parse_secret_refs`, and every name it declares is **required** —
+> no default reference baked into the check type, since that is exactly what ties
+> every instance of a type to one credential and prevents a deployment from
+> running the same check type twice, once per team, with a token each.
 
 ## Context
 [ADR-0003](0003-config-and-secrets-via-env-file.md) put all secrets in a git-ignored
@@ -40,10 +62,12 @@ almost never changes.
 ## Decision
 **The secret reference names its source, and the application registers the resolvers.**
 
-1. **Reference syntax.** A secret-consuming config field takes a string reference:
-   - a **bare name** (`GITHUB_TOKEN`) is an environment-variable lookup — exactly
-     ADR-0003's behavior, unchanged and the default;
-   - a **`scheme://address`** reference (`aws-sm://myteam/github-token`,
+1. **Reference syntax.** A secret-consuming config field takes a string reference,
+   always shaped `scheme://address` (see the 2026-07-27 update note, which retired
+   the bare-name form this rule originally allowed):
+   - **`env://GITHUB_TOKEN`** is an environment-variable lookup — ADR-0003's
+     behavior, now named explicitly; `env` is built in.
+   - any other **`scheme://address`** reference (`aws-sm://myteam/github-token`,
      `aws-ps://myteam/github/token`) is resolved by the resolver registered for its
      scheme. Different references may use different schemes — one deployment mixes
      stores per secret.
@@ -79,7 +103,9 @@ almost never changes.
 
 ## Consequences
 - A deployment moves a secret to a store by changing **one reference string** and
-  registering a resolver; existing bare-name configs keep working untouched.
+  registering a resolver — `env://NAME` to `aws-sm://path`, nothing else moves.
+- A credential pasted where its reference belongs cannot be mistaken for a name:
+  it has no scheme, so it fails the load without being quoted back.
 - A config-only deployment can name a store in YAML once a resolver for that scheme
   is registered (by a wrapper module today, an installed plugin later).
 - Store reads happen a handful of times per process start — the cost profile of a

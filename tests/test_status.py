@@ -67,7 +67,7 @@ class StatusTests(TestCase):
         parent.add_child(Status("/src/status", code=StatusCode.ERROR))
         self.assertEqual(parent.get_status_code(), StatusCode.ERROR)
 
-    # --- ADR-0004 roll-up semantics ---
+    # --- ADR-0039 roll-up semantics ---
 
     def test_warn_child_rolls_up_as_status_code(self):
         parent = Status("/app", code=StatusCode.OK)
@@ -112,19 +112,51 @@ class StatusTests(TestCase):
         leaf = Status("/app/cache", code=StatusCode.UNDEFINED)
         self.assertEqual(leaf.get_status_code(), StatusCode.UNDEFINED)
 
-    def test_all_ignored_children_yield_undefined(self):
+    def test_all_ignored_children_read_maintenance_when_one_was_silenced(self):
+        """The edge case ADR-0032's amendment left open, now answered.
+
+        This asserted ``UNDEFINED`` while it was open. The model already answers the
+        same question one level down — a node whose *virtual* children (its reason
+        entries) are all pinned reads ``MAINTENANCE`` — and real and virtual children
+        may not read differently in one model. "Nothing under here is reporting
+        because we silenced it" is a different fact from "nothing here has reported
+        yet".
+        """
         parent = Status("/app", code=StatusCode.UNDEFINED)
         parent.add_child(Status("/app/db", code=StatusCode.MAINTENANCE))
         parent.add_child(Status("/app/cache", code=StatusCode.UNDEFINED))
+        self.assertEqual(parent.get_status_code(), StatusCode.MAINTENANCE)
+
+    def test_children_that_never_reported_stay_undefined(self):
+        # the other half of the same rule, and why it is not simply "nothing counted
+        # means maintenance": an unreported subtree has not been silenced by anyone
+        parent = Status("/app", code=StatusCode.UNDEFINED)
+        parent.add_child(Status("/app/db", code=StatusCode.UNDEFINED))
         self.assertEqual(parent.get_status_code(), StatusCode.UNDEFINED)
+
+    def test_construction_leaves_the_timestamp_unset(self):
+        # Having a timestamp *means* a check has written the node (ADR-0027), so a
+        # node the tree just built — a container on the way down to a check — has
+        # none, whatever code it was constructed with.
+        self.assertIsNone(Status("/app/db").timestamp)
+        self.assertIsNone(Status("/app/db", code=StatusCode.OK).timestamp)
 
     def test_update_changes_code_reason_and_timestamp(self):
         status = Status("/app/db", code=StatusCode.OK)
-        before = status.timestamp
         status.update(StatusCode.ERROR, "connection refused")
         self.assertEqual(status.code, StatusCode.ERROR)
         self.assertEqual(status.reason, ["connection refused"])
+        before = status.timestamp
+        self.assertIsNotNone(before)
+        status.update(StatusCode.OK)
         self.assertGreaterEqual(status.timestamp, before)
+
+    def test_touch_stamps_without_changing_code_or_reason(self):
+        status = Status("/app/db", code=StatusCode.OK, reason="all good")
+        status.touch()
+        self.assertIsNotNone(status.timestamp)
+        self.assertEqual(status.code, StatusCode.OK)
+        self.assertEqual(status.reason, ["all good"])
 
     def test_update_accepts_string_code(self):
         status = Status("/app/db", code=StatusCode.OK)

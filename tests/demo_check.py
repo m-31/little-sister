@@ -1,4 +1,4 @@
-"""A scripted ``demo`` check type for the live-demo harness (backlog #25, Mode 2).
+"""A scripted ``demo`` check type for the live demo (testing-the-gui.md, Mode 2).
 
 Registered through the public ``CHECK_TYPES`` seam exactly as a deployment
 registers its own types (``implementing-checks.md`` §4): the dev WSGI wrapper
@@ -10,15 +10,36 @@ dashboard's ~10s poll. The scenarios drive the dynamics the static render harnes
 can't show: poll/swap, a growing reason list, an eruption's layout shift,
 server-side staleness, and multi-node roll-up.
 
+They also carry the demo's **member** producers, and they have to: membership is
+declared in code (a mapping, or the ``entries`` flag beside a sequence), so no
+amount of YAML could express it, and the library deliberately publishes no
+member-shaped built-in — a demo type inside the package would be exactly the thing
+ADR-0036 says not to ship. Both promises of decision 4 are demonstrated, and each
+by the scenario that shows it cheapest:
+
+* **derived** — ``audit`` with ``entries: true`` in its check config. Its finding
+  texts are constant across runs and only the *count* grows, so each hash keeps its
+  identity and a pin set on finding 7 survives the list swelling to 150 and back.
+  That is the ergonomic claim — return a stable string and per-entry pins just work
+  — proven by data that does not change at all.
+* **declared** — ``reviews``, a mapping keyed by pull-request number, whose text
+  re-words on *every run* while the key does not. A pin held across that re-wording
+  is the identity claim; under a derived slug the same edit would drop it.
+
+``eruption`` stays prose on purpose, so one dashboard carries a members node and a
+prose node whose reason lists look alike and behave differently.
+
 Dev-only: lives under ``tests/`` and never ships in the package.
 """
 from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+from little_sister import values
 from little_sister.checks.base import (
     Check,
     CheckError,
@@ -114,6 +135,58 @@ def _audit(t: float, period: float) -> CheckResult:
     return CheckResult(StatusCode.OK, reasons)
 
 
+#: The review queue ``reviews`` replays: ``slug -> (title, hours already waited at
+#: the top of the cycle)``. The slug is the pull request's own number, which is what
+#: makes it a **declared** identity rather than a hash of the sentence: the line is
+#: rebuilt with a new waiting time on every run and the key does not move.
+_QUEUE: tuple[tuple[str, str, int], ...] = (
+    ("pr-4821", "Bump ruff to 0.6.9", 5),
+    ("pr-4830", "Retry budget: cap the fast attempts", 19),
+    ("pr-4833", "Kiosk: keep the exit control reachable", 31),
+    ("pr-4841", "Vendor Bootstrap for the render matrix", 52),
+)
+
+_FORGE = "https://forge.example.org/andro-meda/little-sister/pulls"
+
+
+def _waiting(number: str, title: str, hours: int) -> str:
+    """One queue line: waiting on a **reviewer**, and so actionable."""
+    return f"[#{number}]({_FORGE}/{number}) {title} — waiting {hours}h for a reviewer"
+
+
+@_scenario("reviews")
+def _reviews(t: float, period: float) -> CheckResult:
+    """A review queue with **declared** slugs — the identity half of ADR-0036
+    decision 4, and the one thing no other scenario can show.
+
+    Every line is rebuilt with a fresh waiting time each run, so the *text* changes
+    on more or less every poll while the *key* — the pull request's number — stays
+    put. A pin set on ``pr-4833`` holds straight through that; under a derived slug
+    it could not, because there the slug **is** the wording. ``audit`` proves the
+    other half from the other side (see the module docstring).
+
+    Two more things are deliberate. The queue is **never empty**, because a per-line
+    control that vanishes between polls is not clickable; and the set churns anyway
+    — one entry arrives mid-cycle, another is merged near the end — so an entry pin
+    can be watched through both. It is small enough (five or six lines) to pin every
+    member and see what the node does then.
+    """
+    f = t / period
+    aged = int(f * 24)
+    reason = {slug: _waiting(slug.removeprefix("pr-"), title, hours + aged)
+              for slug, title, hours in _QUEUE}
+    if f < 0.85:            # merged near the end of the cycle, back next time
+        # Not waiting on a *reviewer* — the demo extension's per-line provider
+        # declines this one line and fills the rest, which is placement policy no
+        # configured action could express (ADR-0034).
+        reason["pr-4846"] = (f"[#4846]({_FORGE}/4846) Docs: name the two slug "
+                             f"promises — changes requested, waiting on the author")
+    if f >= 0.55:           # …and one opened mid-cycle
+        reason["pr-4852"] = _waiting(
+            "4852", "Demo: a members-declaring scenario", 1 + aged)
+    return CheckResult(StatusCode.WARN, reason)
+
+
 @_scenario("children")
 def _children(t: float, period: float) -> CheckResult:
     """A host with disk/memory/load children in a shifting mix — a multi-node card
@@ -133,9 +206,16 @@ class DemoCheck(Check):
     status for the live-demo harness. See the module docstring."""
 
     def __init__(self, *, scenario: str = "escalate",
-                 period: float = _DEFAULT_PERIOD, **kwargs: Any) -> None:
+                 period: float = _DEFAULT_PERIOD, entries: bool = False,
+                 **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.scenario = scenario
+        # `entries: true` reads a prose scenario's reason list as **members**
+        # instead (ADR-0036) — a harness knob, not a model change: it exists so one
+        # node can be compared both ways without editing code, and a real check
+        # decides this where it builds its result. It cannot make a scenario that
+        # already hands over a mapping any more member-shaped than it is.
+        self.entries = entries
         self._period = period
         self._start = time.monotonic()
 
@@ -150,12 +230,21 @@ class DemoCheck(Check):
         period = parse_duration(config.get("period"), int(_DEFAULT_PERIOD))
         if period <= 0:
             raise CheckError("demo 'period' must be positive")
-        return {"scenario": scenario, "period": float(period)}
+        return {"scenario": scenario, "period": float(period),
+                "entries": values.flag(config, "entries")}
 
     def config_summary(self) -> str:
-        return config_markdown(
-            {"scenario": self.scenario, "period": f"{int(self._period)}s"})
+        summary = {"scenario": self.scenario, "period": f"{int(self._period)}s"}
+        if self.entries:
+            summary["entries"] = "true"
+        return config_markdown(summary)
 
     def run(self) -> CheckResult:
         elapsed = (time.monotonic() - self._start) % self._period
-        return SCENARIOS[self.scenario](elapsed, self._period)
+        result = SCENARIOS[self.scenario](elapsed, self._period)
+        if self.entries and not result.members:
+            # `replace` re-runs `__post_init__`, which is where the reason list is
+            # keyed — so this is the same normalization the check would have got by
+            # passing `entries=True` in the first place, not a second code path.
+            result = replace(result, entries=True)
+        return result

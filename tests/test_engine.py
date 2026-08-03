@@ -1,10 +1,16 @@
+import tempfile
 import threading
 import time
 import unittest
+from dataclasses import replace
 from datetime import datetime, timedelta
+from pathlib import Path
 from unittest import TestCase
+from unittest.mock import patch
 
+from little_sister import engine as engine_module
 from little_sister.checks.base import Check, CheckResult
+from little_sister.config import config
 from little_sister.engine import Engine
 from little_sister.status import StatusCode
 from little_sister.tree import StatusTree
@@ -92,6 +98,62 @@ class EngineTests(TestCase):
         assert node is not None
         self.assertEqual(node.own_code, StatusCode.ERROR)
         self.assertIn("check error", node.reason[0])
+
+    def test_exception_message_is_escaped(self):
+        # the message carries whatever the failure carried — a captured line, a
+        # path, an API error body — so it is folded in like any untrusted text
+        # (ADR-0018) rather than rendering as Markdown on the dashboard
+        tree = StatusTree()
+        check = _FakeCheck(path="/boom",
+                           raises=RuntimeError("bad *value* in [x](y)"))
+        Engine([check], tree).run_once()
+        node = tree.snapshot("/boom")
+        assert node is not None
+        self.assertIn(r"bad \*value\* in \[x\](y)", node.reason[0])
+
+    def test_stacktrace_is_shown_as_a_code_block(self):
+        tree = StatusTree()
+        check = _FakeCheck(path="/boom", raises=RuntimeError("nope"))
+        with patch.object(engine_module, "config",
+                          replace(config, stacktrace=True)):
+            Engine([check], tree).run_once()
+        node = tree.snapshot("/boom")
+        assert node is not None
+        self.assertEqual(len(node.reason), 2)
+        trace = node.reason[1]
+        self.assertTrue(trace.startswith("```"))     # inert, verbatim (ADR-0018)
+        self.assertIn("RuntimeError: nope", trace)
+        self.assertIn("Traceback (most recent call last)", trace)
+
+    def test_stacktrace_can_be_switched_off(self):
+        tree = StatusTree()
+        check = _FakeCheck(path="/boom", raises=RuntimeError("nope"))
+        with patch.object(engine_module, "config",
+                          replace(config, stacktrace=False)):
+            Engine([check], tree).run_once()
+        node = tree.snapshot("/boom")
+        assert node is not None
+        self.assertEqual(len(node.reason), 1)
+        self.assertNotIn("Traceback", node.reason[0])
+
+    def test_stacktrace_keeps_the_innermost_frames_and_the_cause(self):
+        def _boom() -> None:
+            try:
+                raise ValueError("root cause")
+            except ValueError as error:
+                raise RuntimeError("wrapped") from error
+
+        tree = StatusTree()
+        check = _FakeCheck(path="/boom", raises=None)
+        check.run = _boom                              # type: ignore[method-assign]
+        with patch.object(engine_module, "config",
+                          replace(config, stacktrace=True)):
+            Engine([check], tree).run_once()
+        node = tree.snapshot("/boom")
+        assert node is not None
+        trace = node.reason[1]
+        self.assertIn("ValueError: root cause", trace)   # the chained __cause__
+        self.assertIn("RuntimeError: wrapped", trace)
 
     def test_tick_sweeps_expired_maintenance(self):
         tree = StatusTree()
@@ -360,6 +422,110 @@ class EngineTests(TestCase):
         self.assertIn("scheduler", snap.about)
         tree.set_about(HEARTBEAT_PATH, "custom note")
         self.assertEqual(tree.snapshot(HEARTBEAT_PATH).about, "custom note")
+
+    def test_construction_registers_each_check_as_a_mount(self):
+        # ADR-0027: the engine knows where its checks write, so the containers above
+        # a sole check can publish its run time. Registration happens at
+        # construction — before the first tick — and creates no nodes (only the
+        # heartbeat's `about` seed does, and that is not a mount).
+        from little_sister.engine import HEARTBEAT_PATH
+        tree = StatusTree()
+        Engine([_FakeCheck(path="/system/node_a/host_metrics")], tree)
+        root = tree.snapshot()
+        assert root is not None
+        self.assertEqual([child.path for child in root.children], [HEARTBEAT_PATH])
+        self.assertIsNone(tree.snapshot("/system"))   # registration is not a node
+        self.assertIsNone(root.timestamp)             # nor an observation
+
+    def test_a_sole_check_stamps_the_root_after_one_sweep(self):
+        # End to end: one check, one run — the mount's time climbs to the root.
+        tree = StatusTree()
+        Engine([_FakeCheck(path="/system/node_a/host_metrics")], tree).run_once()
+        mount = tree.snapshot("/system/node_a/host_metrics")
+        root = tree.snapshot()
+        assert mount is not None and root is not None
+        self.assertIsNotNone(mount.timestamp)
+        self.assertEqual(root.timestamp, mount.timestamp)
+
+    def test_two_checks_leave_the_root_without_a_timestamp(self):
+        tree = StatusTree()
+        Engine([_FakeCheck(path="/system/node_a/host_metrics"),
+                _FakeCheck(path="/system/node_b/host_metrics")], tree).run_once()
+        root = tree.snapshot()
+        assert root is not None
+        self.assertIsNone(root.timestamp)
+
+    def test_branch_check_children_do_not_count_as_mounts(self):
+        # Only the check's own path is a mount; the result subtree it writes below
+        # that path is one check's data, so the mount node still answers for it.
+        tree = StatusTree()
+        result = CheckResult(StatusCode.OK, children=(
+            CheckResult(StatusCode.OK, name="disk"),
+            CheckResult(StatusCode.OK, name="memory"),
+        ))
+        Engine([_FakeCheck(path="/system/node_a/host_metrics", result=result)],
+               tree).run_once()
+        mount = tree.snapshot("/system/node_a/host_metrics")
+        root = tree.snapshot()
+        assert mount is not None and root is not None
+        self.assertEqual(len(mount.children), 2)
+        self.assertEqual(root.timestamp, mount.timestamp)
+
+
+class EmptyConfigurationTests(TestCase):
+    """A configured deployment with no checks in it *yet* is a real, temporary
+    state — so the engine runs and the heartbeat says so (ADR-0031 §7 / ADR-0005).
+    Having nowhere to look for checks is a different thing and refuses to start;
+    that lives in the loader's tests."""
+
+    def _root(self, directory: str) -> Path:
+        (Path(directory) / "checks").mkdir()
+        return Path(directory)
+
+    def test_empty_checks_aspect_starts_and_warns_on_the_heartbeat(self):
+        from little_sister.engine import HEARTBEAT_PATH, create_engine
+        tree = StatusTree()
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._root(directory)
+            with self.assertLogs(level="WARNING"):
+                engine = create_engine(str(root), tree=tree)
+            # The scheduler runs with nothing scheduled — the heartbeat is the
+            # one thing it still has to publish.
+            engine.start()
+            try:
+                self.assertTrue(_wait_for(
+                    lambda: tree.snapshot(HEARTBEAT_PATH) is not None
+                    and tree.snapshot(HEARTBEAT_PATH).code is StatusCode.WARN))
+            finally:
+                engine.stop()
+            snap = tree.snapshot(HEARTBEAT_PATH)
+            assert snap is not None
+            # WARN, not OK: with zero checks the tree is *only* the heartbeat, so
+            # an OK here would roll up to an all-green root while nothing at all is
+            # being watched.
+            self.assertIn("no checks configured", " ".join(snap.reason))
+            # The searched paths ride in a code block, not loose in the prose:
+            # a reason is Markdown and a path with underscores would italicize.
+            self.assertIn(str(root.resolve()), " ".join(snap.reason))
+            self.assertTrue(any(part.startswith("```") for part in snap.reason))
+            root_snap = tree.snapshot()
+            assert root_snap is not None
+            self.assertEqual(root_snap.code, StatusCode.WARN)
+
+    def test_a_configured_check_keeps_the_heartbeat_ok(self):
+        from little_sister.engine import HEARTBEAT_PATH
+        tree = StatusTree()
+        engine = Engine([_FakeCheck(path="/web")], tree)
+        engine.start()
+        try:
+            self.assertTrue(_wait_for(
+                lambda: tree.snapshot(HEARTBEAT_PATH) is not None))
+        finally:
+            engine.stop()
+        snap = tree.snapshot(HEARTBEAT_PATH)
+        assert snap is not None
+        self.assertEqual(snap.code, StatusCode.OK)
+        self.assertEqual(snap.reason, ())
 
 
 if __name__ == '__main__':

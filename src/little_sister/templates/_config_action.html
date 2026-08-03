@@ -1,0 +1,11 @@
+{#- The declarative action list's chip (ADR-0038), rendered through the slot seam
+    like any other filler — so a configured action and a deployment's coded one land
+    in the same rail, in one order, wearing the same chip.
+
+    The provider computed every href in Python, percent-encoding each substituted
+    value, and this template only places them. `class` is chosen by the surface: the
+    two slots have different rails and the chip belongs to the one it is in. -#}
+{%- for entry in actions %}
+<a class="{{ chip }}" href="{{ entry.href }}" target="_blank" rel="noopener noreferrer"
+   title="{{ entry.title }}">{%- if entry.icon %}<img class="action-icon" src="{{ entry.icon }}" alt="" width="12" height="12">{% endif %}{{ entry.label }}</a>
+{%- endfor %}

@@ -1,0 +1,10 @@
+{#- Closes the shell opened by _header.html: the page column
+    and the row that holds it beside the rail. Every page that includes
+    _header.html must include this once, before its scripts and `</body>` — the
+    pages are still standalone documents, so there is no base layout to close
+    them automatically (that arrives with the web-customization phase, together
+    with the Jinja ChoiceLoader). Overlays that position themselves against the
+    viewport — the inspect card, the maintenance popover — belong *after* this,
+    as direct children of <body>. -#}
+    </main>
+</div>

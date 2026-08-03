@@ -1,8 +1,8 @@
-"""Extreme-case status-tree fixtures for the UI prototyping harness (backlog #25).
+"""Extreme-case status-tree fixtures for the UI harness (testing-the-gui.md).
 
-The local deployment's tree is friendly — a dozen hosts, mostly green. The layout,
-overflow and header work of the dashboard-polish phase must be judged against
-*extremes*, so this module hand-builds the hard cases: an eruption of linked
+The local deployment's tree is friendly — a dozen hosts, mostly green. Layout,
+overflow and header work has to be judged against *extremes*, so this module
+hand-builds the hard cases: an eruption of linked
 reasons, a huge ``code()`` reason, deep and wide trees, long names/titles, a
 staleness/maintenance/idle mix, and the empty engine-down tree — plus a
 "realistic wall" tier that embeds the extremes in a *populated* overview: an
@@ -25,7 +25,7 @@ Dev-only: this module lives under ``tests/`` and never ships in the package.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 
 from little_sister.checks import code
@@ -59,13 +59,33 @@ class Fixture:
     engine_error: str | None = None
 
 
+# The sheet is a static artifact, so the *observation* times the cards now carry
+# (ADR-0027) must be fixed like ``_RENDERED_AT`` — a build-time ``now`` would make
+# every re-run diff. Carries an explicit offset so the rendered time of day is the
+# configured timezone's whatever the renderer's own clock is set to, which keeps the
+# sheet (and the tests reading it) identical on any machine.
+_PINNED_STAMP = "2026-07-20T11:59:31+02:00"
+
+
+def _pin_stamps(snap: StatusSnapshot) -> StatusSnapshot:
+    """Replace every *present* observation time in the subtree with
+    :data:`_PINNED_STAMP`. ``None`` is left alone: a node no check has written — and a
+    container above two or more checks — must still render no time at all, which is
+    the case the layout has to look right in (ADR-0027)."""
+    return replace(
+        snap,
+        timestamp=None if snap.timestamp is None else _PINNED_STAMP,
+        children=tuple(_pin_stamps(child) for child in snap.children))
+
+
 def _snapshot(tree: StatusTree, branch: str = "",
               now: datetime | None = None) -> StatusSnapshot:
-    """Snapshot ``branch`` (root by default); the node always exists here."""
+    """Snapshot ``branch`` (root by default); the node always exists here. Every
+    fixture funnels through here, so pinning the stamps once covers the whole sheet."""
     snap = tree.snapshot(branch, now=now)
     if snap is None:  # pragma: no cover - fixtures always address a real node
         raise AssertionError(f"fixture built no node at {branch!r}")
-    return snap
+    return _pin_stamps(snap)
 
 
 def _hosts_ok(count: int) -> StatusSnapshot:
@@ -216,9 +236,26 @@ def _idle_mix() -> StatusSnapshot:
     return _snapshot(tree, now=built + timedelta(minutes=20))
 
 
+def _observation_times() -> StatusSnapshot:
+    """The observation-time roll-up as the cards show it (ADR-0027), both outcomes
+    side by side: ``solo`` covers exactly **one** check, so the container inherits that
+    check's run time and its card carries a time; ``pair`` covers **two**, so no single
+    value could answer for both and its card carries **none**. ``never-run`` is a
+    registered mount that has not reported yet — registration is not an observation, so
+    that card is bare too. The absence is the point, and this is the layout case where
+    a card in the wall has no time while its neighbours do."""
+    tree = StatusTree()
+    for path in ("/solo/host_metrics", "/pair/host_metrics", "/pair/audit"):
+        tree.set_check_mount(path)
+        tree.upsert(path, StatusCode.OK, frequency_seconds=3600)
+    tree.set_check_mount("/never-run/host_metrics")
+    tree.set_about("/never-run", "a host whose only check has not reported yet")
+    return _snapshot(tree)
+
+
 def _maintenance_deep() -> StatusSnapshot:
     """An admin pin sits **deep** in a card (``nexus/disk/smart/bay-7``), where the
-    roll-up and a shallow depth hide it — the maintenance-surfacing case (slice 9/10):
+    roll-up and a shallow depth hide it — the maintenance-surfacing case (ADR-0014):
     the strip **pill**'s popover lists it by path with time left, and the ``nexus`` card
     gains a "contains maintenance" pip. Beside two calm hosts."""
     tree = StatusTree()
@@ -234,12 +271,13 @@ def _maintenance_deep() -> StatusSnapshot:
 
 def _maintenance_many() -> StatusSnapshot:
     """Twelve admin pins scattered across the tree — past the popover's
-    ``maintenance_cap`` (5 by default), the case slice 10 folds away: the strip **pill**
-    reads "12 in maintenance", its popover lists the first five and folds the rest
-    behind a "+7 more" link to the dedicated **/maintenance page**. Varied depths,
-    reasons and expiries exercise the page's path column and the coarse "time left"
-    (days, hours, minutes). Beside the ``little-sister`` heartbeat and a few calm hosts,
-    so the pill's place in the strip band — just left of the heartbeat — is visible."""
+    ``maintenance_cap`` (5 by default), the case the count folds away: the strip
+    **pill** reads "12 in maintenance", its popover lists the first five and folds
+    the rest behind a "+7 more" link to the dedicated **/maintenance page**. Varied
+    depths, reasons and expiries exercise the page's path column and the coarse
+    "time left" (days, hours, minutes). Beside the ``little-sister`` heartbeat and
+    a few calm hosts, so the pill's place in the strip band — just left of the
+    heartbeat — is visible."""
     tree = StatusTree()
     built = datetime.now()
     tree.upsert("/little-sister", StatusCode.OK, frequency_seconds=3600)
@@ -441,6 +479,10 @@ FIXTURES: tuple[Fixture, ...] = (
             _long_text, branch=_LONG_HOST),
     Fixture("idle_maintenance_stale_mix",
             "live + stale + idle (UNDEFINED) + maintenance", _idle_mix),
+    Fixture("observation_times",
+            "the card time under the ADR-0027 roll-up: a container over one check "
+            "shows it, over two shows none, a never-run mount shows none",
+            _observation_times),
     Fixture("maintenance_deep_pin",
             "an admin pin deep in a card — the strip pill's popover + ancestor pip",
             _maintenance_deep),

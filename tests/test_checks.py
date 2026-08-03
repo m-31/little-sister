@@ -16,6 +16,7 @@ from little_sister.checks.ssh.connect import ConnectCheck
 from little_sister.checks.ssh.host_metrics import DEFAULT_THRESHOLDS, HostMetricsCheck
 from little_sister.checks.ssh.qnap_metrics import QnapMetricsCheck
 from little_sister.checks.ssh.script import ScriptCheck
+from little_sister.errors import ConfigError
 from little_sister.status import StatusCode
 
 HERE = Path(".")
@@ -198,14 +199,28 @@ class CheckResultTreeTests(TestCase):
         self.assertEqual(child.title, "Disk")
 
 
+def _root(directory: str, **files: str) -> Path:
+    """A configuration root (ADR-0031) whose ``checks/`` holds ``files``.
+
+    Checks live one level down now — ``config/checks/*.yaml`` — so the loader tests
+    build the tree the loader actually reads rather than a bare directory.
+    """
+    root = Path(directory)
+    checks = root / "checks"
+    checks.mkdir(exist_ok=True)
+    for name, text in files.items():
+        (checks / name.replace("__", ".")).write_text(text)
+    return root
+
+
 class LoaderTests(TestCase):
     def test_loads_configs_by_type(self):
         with tempfile.TemporaryDirectory() as directory:
-            base = Path(directory)
-            (base / "a.yaml").write_text(
-                "type: http\npath: /web\nurl: http://x\nfrequency: 5m\n")
-            (base / "b.yml").write_text("type: command\npath: /c\ncommand: 'true'\n")
-            checks = load_checks(base)
+            root = _root(
+                directory,
+                a__yaml="type: http\npath: /web\nurl: http://x\nfrequency: 5m\n",
+                b__yml="type: command\npath: /c\ncommand: 'true'\n")
+            checks = load_checks(root)
             self.assertEqual(len(checks), 2)
             by_name = {c.name: c for c in checks}
             self.assertIsInstance(by_name["web"], HttpCheck)
@@ -214,40 +229,77 @@ class LoaderTests(TestCase):
 
     def test_unknown_type_raises(self):
         with tempfile.TemporaryDirectory() as directory:
-            base = Path(directory)
-            (base / "bad.yaml").write_text("type: nope\npath: /x\n")
+            root = _root(directory, bad__yaml="type: nope\npath: /x\n")
             with self.assertRaises(CheckError):
-                load_checks(base)
+                load_checks(root)
 
-    def test_missing_directory_raises(self):
-        with self.assertRaises(CheckError):
+    def test_missing_config_root_raises(self):
+        # A named root that is not there is a typo in a unit file, not an empty
+        # layer — and fatal rather than a CheckError, so nothing catches it into
+        # the engine_error banner (ADR-0031 §7).
+        with self.assertRaises(ConfigError):
             load_checks(Path(tempfile.gettempdir()) / "little-sister-does-not-exist")
 
-    def test_loads_union_across_directories(self):
+    def test_root_without_a_checks_aspect_raises(self):
+        # Nowhere to look for checks: misconfigured, not empty.
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaises(ConfigError) as caught:
+                load_checks(Path(directory))
+            self.assertIn("checks/", str(caught.exception))
+            # The message names the **resolved** path, which is the promise
+            # ADR-0031 §7 makes. On macOS a temporary directory lives under /var,
+            # itself a symlink to /private/var, so the two spellings differ there
+            # and nowhere else — assert against the one the code sets out to print.
+            self.assertIn(str(Path(directory).resolve()), str(caught.exception))
+
+    def test_empty_checks_aspect_loads_nothing(self):
+        # Configured to watch nothing *yet* is survivable — the loader returns an
+        # empty list and create_engine turns it into the heartbeat's WARN.
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertEqual(load_checks(_root(directory)), [])
+
+    def test_loads_union_across_roots(self):
         with tempfile.TemporaryDirectory() as d1, tempfile.TemporaryDirectory() as d2:
-            base, host = Path(d1), Path(d2)
-            (base / "one.yaml").write_text("type: http\npath: /one\nurl: http://x\n")
-            (host / "two.yml").write_text(
-                "type: command\npath: /two\ncommand: 'true'\n")
+            base = _root(d1, one__yaml="type: http\npath: /one\nurl: http://x\n")
+            host = _root(d2, two__yml="type: command\npath: /two\ncommand: 'true'\n")
             sep = os.pathsep
             # blank segments (a doubled / trailing separator, stray whitespace)
             # are ignored, so a path-list stays forgiving.
             checks = load_checks(f" {base}{sep}{sep}{host}{sep}")
             self.assertEqual({c.name for c in checks}, {"one", "two"})
 
-    def test_missing_directory_in_list_raises(self):
+    def test_one_root_may_carry_the_checks(self):
+        # A site root with no checks of its own is normal; only *no* root
+        # providing the aspect is fatal.
+        with tempfile.TemporaryDirectory() as d1, tempfile.TemporaryDirectory() as d2:
+            base = _root(d1, one__yaml="type: http\npath: /one\nurl: http://x\n")
+            site = Path(d2)
+            (site / "nodes.yaml").write_text("/one: {title: One}\n")
+            checks = load_checks(f"{base}{os.pathsep}{site}")
+            self.assertEqual([c.name for c in checks], ["one"])
+
+    def test_missing_root_in_list_raises(self):
         with tempfile.TemporaryDirectory() as directory:
-            present = Path(directory)
-            (present / "ok.yaml").write_text("type: http\npath: /ok\nurl: http://x\n")
+            present = _root(directory,
+                            ok__yaml="type: http\npath: /ok\nurl: http://x\n")
             missing = Path(tempfile.gettempdir()) / "little-sister-missing-dir"
-            with self.assertRaises(CheckError):
+            with self.assertRaises(ConfigError):
                 load_checks(f"{present}{os.pathsep}{missing}")
 
-    def test_duplicate_owned_node_across_dirs_is_rejected(self):
+    def test_checks_as_a_file_is_rejected(self):
+        # `checks` is always a directory (ADR-0031 §2). A checks.yaml is the
+        # operator plainly meaning checks, so it refuses rather than being ignored.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "checks.yaml").write_text("type: http\npath: /x\nurl: http://x\n")
+            with self.assertRaises(ConfigError) as caught:
+                load_checks(root)
+            self.assertIn("directory", str(caught.exception))
+
+    def test_duplicate_owned_node_across_roots_is_rejected(self):
         with tempfile.TemporaryDirectory() as d1, tempfile.TemporaryDirectory() as d2:
-            base, host = Path(d1), Path(d2)
-            (base / "web.yaml").write_text("type: http\npath: /web\nurl: http://x\n")
-            (host / "web.yaml").write_text("type: http\npath: /web\nurl: http://y\n")
+            base = _root(d1, web__yaml="type: http\npath: /web\nurl: http://x\n")
+            host = _root(d2, web__yaml="type: http\npath: /web\nurl: http://y\n")
             with self.assertRaises(CheckError) as caught:
                 load_checks(f"{base}{os.pathsep}{host}")
             self.assertIn("web", str(caught.exception))
@@ -256,44 +308,45 @@ class LoaderTests(TestCase):
         # /little-sister is the engine's own line (ADR-0005): the dashboard
         # lifts it into the status strip, so no custom check may own nodes on it.
         with tempfile.TemporaryDirectory() as directory:
-            base = Path(directory)
-            (base / "sneaky.yaml").write_text(
-                "type: command\npath: /little-sister/backups\ncommand: 'true'\n")
+            root = _root(
+                directory,
+                sneaky__yaml=("type: command\npath: /little-sister/backups\n"
+                              "command: 'true'\n"))
             with self.assertRaises(CheckError) as caught:
-                load_checks(base)
+                load_checks(root)
             self.assertIn("reserved", str(caught.exception))
             self.assertIn("little-sister", str(caught.exception))
 
     def test_leaf_owning_a_parent_node_is_rejected(self):
         # A leaf owns its subtree, so a check on `db` collides with one on `db.replica`.
         with tempfile.TemporaryDirectory() as directory:
-            base = Path(directory)
-            (base / "parent.yaml").write_text("type: http\npath: /db\nurl: http://x\n")
-            (base / "child.yaml").write_text(
-                "type: http\npath: /db/replica\nurl: http://y\n")
+            root = _root(directory,
+                         parent__yaml="type: http\npath: /db\nurl: http://x\n",
+                         child__yaml="type: http\npath: /db/replica\nurl: http://y\n")
             with self.assertRaises(CheckError):
-                load_checks(base)
+                load_checks(root)
 
     def test_metrics_pair_shares_a_host_node(self):
         # host-metrics + qnap-metrics own disjoint child subtrees of one host node,
         # so the union loads both (architecture.md §4.5, ADR-0015).
         with tempfile.TemporaryDirectory() as d1, tempfile.TemporaryDirectory() as d2:
-            base, host = Path(d1), Path(d2)
-            (base / "probe.sh").write_text("echo hi\n")
-            (host / "probe.sh").write_text("echo hi\n")
-            (base / "metrics.yaml").write_text(
-                "type: host-metrics\npath: /nas\nhost: h\nscript: probe.sh\n")
-            (host / "qnap.yaml").write_text(
-                "type: qnap-metrics\npath: /nas\nhost: h\nscript: probe.sh\n")
+            base = _root(d1, metrics__yaml=(
+                "type: host-metrics\npath: /nas\nhost: h\nscript: probe.sh\n"))
+            host = _root(d2, qnap__yaml=(
+                "type: qnap-metrics\npath: /nas\nhost: h\nscript: probe.sh\n"))
+            (base / "checks" / "probe.sh").write_text("echo hi\n")
+            (host / "checks" / "probe.sh").write_text("echo hi\n")
             checks = load_checks(f"{base}{os.pathsep}{host}")
             self.assertEqual(len(checks), 2)
 
-    def test_nodes_yaml_is_not_loaded_as_a_check(self):
+    def test_nodes_aspect_is_not_loaded_as_a_check(self):
+        # nodes.yaml sits beside checks/ now, not inside it, so the loader needs
+        # no skip-list: config/checks/ holds checks and nothing else.
         with tempfile.TemporaryDirectory() as directory:
-            base = Path(directory)
-            (base / "nodes.yaml").write_text("system: {about: hi}\n")
-            (base / "web.yaml").write_text("type: http\npath: /web\nurl: http://x\n")
-            checks = load_checks(base)
+            root = _root(directory,
+                         web__yaml="type: http\npath: /web\nurl: http://x\n")
+            (root / "nodes.yaml").write_text("/web: {about: hi}\n")
+            checks = load_checks(root)
             self.assertEqual([c.name for c in checks], ["web"])
 
 

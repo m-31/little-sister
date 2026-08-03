@@ -1,0 +1,49 @@
+# Live-demo node metadata (Mode 2) — see docs/testing-the-gui.md.
+#
+# The `nodes` aspect is the only way to label a node **no check owns** (ADR-0012 /
+# ADR-0017): every demo check carries its own `title` and `about`, but the container
+# nodes they hang under — /ci, /hosts, /security … — are created by the tree from the
+# check paths and have nobody to describe them. Without this file the demo dashboard
+# is a wall of bare path segments, which is exactly the gap the aspect exists for.
+#
+# Precedence is per field: nodes.yaml > the check's inline value > empty. Declaring a
+# path no check covers is a startup warning, so the entries below all sit on a real
+# branch of the demo tree.
+
+/services:
+  title: Public services
+  about: Everything a visitor from outside touches.
+
+/ci:
+  title: Delivery
+  about: |
+    The build and review pipeline. Carries the demo's two **members** neighbors —
+    a prose eruption beside a keyed review queue — so a dashboard shows reason
+    lists that look alike and behave differently.
+
+/network:
+  title: Network
+  about: Links between sites, and the tunnels over them.
+
+/storage:
+  title: Storage
+  about: Where the bytes live, and whether they were copied anywhere else.
+
+/hosts:
+  title: Hosts
+  about: Machines, and the aspects a host check reports beneath each one.
+
+/security:
+  title: Security
+  about: |
+    Posture findings. The audit leaf below stays **OK** while its list swells —
+    severity is the leaf's own business, and a long list is not by itself an alarm.
+
+# The engine's heartbeat (ADR-0005). It owns no check, yet it is a fair metadata
+# target and never an orphan: what lands here feeds the status strip and its hover
+# card (ADR-0024), which is otherwise the one node on the page with no prose at all.
+/little-sister:
+  title: Little Sister
+  about: |
+    The monitor watching all of this — its own first-class node. If this one is
+    quiet, nothing else on the page means anything.

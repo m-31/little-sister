@@ -39,6 +39,13 @@ can grow into **installable packages**; distribution follows the same arc, from 
 repository toward **PyPI**. The core stays simple — every extension is opt-in, and a
 plain internal install needs none of it.
 
+**The name** is the inversion it sounds like. Big Brother watches *you*; little
+sister watches *for* you — her eyes stay on the things her operators asked her to
+watch, and she speaks up when one of them needs attention. That is the product
+stance in one line, too: the surface is quiet by default, because silence is the
+normal report. She tells it herself at the top of [`README.md`](../README.md),
+and on a running instance's about page.
+
 ---
 
 ## 2. Domain concepts
@@ -51,6 +58,9 @@ system. It carries:
 - `code` — a `StatusCode` (§2.2).
 - `reason` — zero or more human-readable strings explaining the code (§2.7).
 - `timestamp` — when the status was last **observed** (set by the check on each run).
+  A node no check writes has **none** — unless exactly one check sits below it, whose
+  run time it then reports; where two or more do, no single value could answer for
+  them all, so there is no timestamp.
 - `description` and `frequency` — inherited from the check that owns the node.
 - `maintenance` — whether an admin has pinned the node (§2.6).
 - `children` — child `Status` objects.
@@ -116,7 +126,13 @@ Besides the current status, little-sister records **status changes**:
   (status, since, until, reason).
 - An **admin** can put a node into **maintenance** with a reason. Maintenance is a
   sticky override: it pins the node to `MAINTENANCE` (canceling its subtree) until
-  an admin clears it.
+  an admin clears it, and it can be edited in place — extending a window keeps the
+  explanation and never lets the node alarm in a gap.
+- An admin can also silence **one reason** of a node instead of the whole node. A
+  check that discovers many findings puts many of them under one node; an operator
+  works on one at a time, and the other findings must keep alarming while they do.
+  A silenced reason stays visible, says who silenced it, and the node says how many
+  of its reasons are quiet.
 
 Durable storage and retention of this history is a later concern.
 
@@ -124,6 +140,12 @@ Durable storage and retention of this history is a later concern.
 Free-text explanation(s) attached to a status (e.g. "HTTP 503 from /health"). A
 status that is **not `OK` must carry a reason**; an `OK` status may also carry one,
 read there as an informational note rather than a problem.
+
+A reason is **addressable**, so an admin can act on one of them (§2.6). Where a
+check's reasons are independent things it discovered — findings, waiting pull
+requests, jobs — it says so, and each becomes separately suppressible. Where they
+are one condition told in several paragraphs — a failure message and its stack
+trace — they are not: the unit of suppression stays the node.
 
 ### 2.8 The monitoring engine
 The **engine** is the background runner that drives the checks: it discovers them,
@@ -172,6 +194,8 @@ The app is gated behind a small user list (login/logout) and offers:
   history. An admin can set/clear **maintenance** here.
 - **Status history** (`/history/<path>`) — a node's status periods over time.
 - **Events** (`/events`) — the transition log across all checks, newest first.
+- **About** (`/about`) — who this is, why it is called that, and the version of the
+  instance in front of you.
 - **System** (`/system`, admin) — engine uptime, worker-pool size, check counts,
   and per-check next-run.
 - **Text** and **Links** — a clipboard-friendly plain-text rendering, and a
@@ -180,7 +204,10 @@ The app is gated behind a small user list (login/logout) and offers:
 
 Visual style is Bootstrap 5; status colors are green/ok, amber/warn, red/error,
 blue/maintenance, gray/undefined. Displayed timestamps use a configurable timezone
-(`config.yaml`, default `Europe/Berlin`).
+(`config/settings.yaml`, default `Europe/Berlin`). **How** a viewer sees all this is theirs
+to choose: a **theme** (including one that follows the operating system) and a
+**layout** — a left rail, the older top bar, or a **kiosk** line for an unattended
+wall display. The choice is presentation only and is remembered per browser.
 
 **Roles:** there are **viewer** and **admin** roles; some actions (notably setting
 maintenance) are admin-only.

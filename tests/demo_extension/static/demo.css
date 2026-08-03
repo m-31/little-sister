@@ -1,0 +1,2 @@
+/* A stand-in for a slot filler's own stylesheet (ADR-0037). */
+.node-action[data-demo-node-action] { font-style: italic; }

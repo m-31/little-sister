@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 #
 # First-time setup: create the git-ignored config the app needs to run —
-# users.yaml (the login list) and .env (a session signing key + JSON-API tokens).
+# config/users.yaml (the login list) and .env (a session signing key + JSON-API
+# tokens). The user list is an aspect of the configuration directory (ADR-0031);
+# .env stays beside it, deliberately outside — it is secrets, not authored config.
 # Existing files are kept unless you confirm overwriting. Edit the values after.
 
 set -euo pipefail
@@ -19,8 +21,9 @@ confirm_write() {
   esac
 }
 
-if confirm_write users.yaml; then
-  cat > users.yaml <<'EOF'
+mkdir -p config
+if confirm_write config/users.yaml; then
+  cat > config/users.yaml <<'EOF'
 # Login list (git-ignored). `admin: true` grants the admin-only actions.
 # Passwords are plaintext for now — change these before real use.
 admin:
@@ -29,7 +32,7 @@ admin:
   password: "change-me"
   admin: true
 EOF
-  echo "  wrote users.yaml (default login: admin / change-me)"
+  echo "  wrote config/users.yaml (default login: admin / change-me)"
 fi
 
 if confirm_write .env; then
@@ -44,4 +47,4 @@ EOF
   echo "  wrote .env (random SECRET_KEY; edit LITTLE_SISTER_API_TOKENS)"
 fi
 
-echo "Done — review users.yaml and .env, then run ./start.sh"
+echo "Done — review config/users.yaml and .env, then run ./start.sh"

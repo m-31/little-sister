@@ -28,7 +28,7 @@ load5=0.30
 load15=0.20
 """
 
-CHECKS_DIR = Path(__file__).resolve().parent.parent / "checks"
+CONFIG_CHECKS_DIR = Path(__file__).resolve().parent.parent / "config" / "checks"
 
 
 class HostMetricsCheckTests(TestCase):
@@ -381,21 +381,21 @@ class HostMetricsCheckTests(TestCase):
 
     def test_default_profile_is_linux(self):
         check = HostMetricsCheck.from_config(
-            {"type": "host-metrics", "path": "/x", "host": "h"}, CHECKS_DIR)
+            {"type": "host-metrics", "path": "/x", "host": "h"}, CONFIG_CHECKS_DIR)
         self.assertEqual((check.profile, check.interpreter), ("linux", "bash"))
         self.assertTrue(check.script_path.endswith("host-metrics-linux.sh"))
 
     def test_macos_profile_selects_bash_and_script(self):
         check = HostMetricsCheck.from_config(
             {"type": "host-metrics", "path": "/x", "host": "h", "profile": "macos"},
-            CHECKS_DIR)
+            CONFIG_CHECKS_DIR)
         self.assertEqual(check.interpreter, "bash")
         self.assertTrue(check.script_path.endswith("host-metrics-macos.sh"))
 
     def test_busybox_profile_selects_sh_and_script(self):
         check = HostMetricsCheck.from_config(
             {"type": "host-metrics", "path": "/x", "host": "h", "profile": "busybox"},
-            CHECKS_DIR)
+            CONFIG_CHECKS_DIR)
         self.assertEqual(check.interpreter, "sh")
         self.assertTrue(check.script_path.endswith("host-metrics-busybox.sh"))
 
@@ -410,7 +410,7 @@ class HostMetricsCheckTests(TestCase):
             HostMetricsCheck.from_config(
                 {"type": "host-metrics", "path": "/x", "host": "h",
                  "profile": "freebsd"},
-                CHECKS_DIR)
+                CONFIG_CHECKS_DIR)
 
     def test_profile_mismatch_is_warn_without_metrics(self):
         # the remote guard rejected the profile (wrong OS family): a config error,

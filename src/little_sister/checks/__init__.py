@@ -16,14 +16,15 @@ from little_sister.checks.base import (
     parse_duration,
     plain,
 )
-from little_sister.checks.loader import DEFAULT_CHECKS_DIR, load_checks
+from little_sister.checks.loader import CHECKS_ASPECT, checks_dirs, load_checks
 
 __all__ = [
+    "CHECKS_ASPECT",
     "CHECK_TYPES",
-    "DEFAULT_CHECKS_DIR",
     "Check",
     "CheckError",
     "CheckResult",
+    "checks_dirs",
     "code",
     "load_checks",
     "parse_duration",

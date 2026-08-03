@@ -4,9 +4,9 @@ import unittest
 from pathlib import Path
 from unittest import TestCase
 
-from little_sister.checks import CheckError
 from little_sister.checks.http import HttpCheck
 from little_sister.checks.ssh.host_metrics import DEFAULT_THRESHOLDS, HostMetricsCheck
+from little_sister.errors import ConfigError
 from little_sister.nodes import (
     NodeMeta,
     load_nodes,
@@ -39,7 +39,7 @@ class LoadNodesTests(TestCase):
             self.assertEqual(load_nodes(Path(directory)),
                              {"/nexus": NodeMeta(title="Nexus NAS")})
 
-    def test_unions_across_directories(self):
+    def test_unions_across_roots(self):
         with tempfile.TemporaryDirectory() as d1, tempfile.TemporaryDirectory() as d2:
             (Path(d1) / "nodes.yaml").write_text("/a: {about: from base}\n")
             (Path(d2) / "nodes.yaml").write_text("/b: {title: from host}\n")
@@ -47,12 +47,20 @@ class LoadNodesTests(TestCase):
             self.assertEqual(meta["/a"].about, "from base")
             self.assertEqual(meta["/b"].title, "from host")
 
-    def test_duplicate_path_is_rejected(self):
+    def test_later_root_wins_per_field(self):
+        # Layering is the point (ADR-0031): a site root retitles a node the shared
+        # base declares, and the fields it stays quiet about keep the base's values.
         with tempfile.TemporaryDirectory() as d1, tempfile.TemporaryDirectory() as d2:
-            (Path(d1) / "nodes.yaml").write_text("/a: {about: one}\n")
-            (Path(d2) / "nodes.yaml").write_text("/a: {title: two}\n")
-            with self.assertRaises(CheckError):
-                load_nodes(f"{d1}{os.pathsep}{d2}")
+            (Path(d1) / "nodes.yaml").write_text(
+                "/a: {about: from base, title: base title}\n")
+            (Path(d2) / "nodes.yaml").write_text("/a: {title: site title}\n")
+            meta = load_nodes(f"{d1}{os.pathsep}{d2}")
+            self.assertEqual(meta["/a"],
+                             NodeMeta(about="from base", title="site title"))
+
+    def test_missing_root_is_fatal(self):
+        with self.assertRaises(ConfigError):
+            load_nodes(Path(tempfile.gettempdir()) / "little-sister-no-such-root")
 
     def test_missing_nodes_file_is_fine(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -3,7 +3,7 @@
 One process runs one engine (ADR-0001). A scheduler thread submits *due* checks
 to a bounded thread pool; each run produces a result that is upserted into the
 shared status tree. A check that raises or times out becomes ``ERROR``
-(ADR-0004); one whose secret references failed to resolve at construction is
+(ADR-0040); one whose secret references failed to resolve at construction is
 **pinned** to ERROR without running (ADR-0023). Threads are daemons;
 ``start``/``stop`` are idempotent.
 """
@@ -11,16 +11,32 @@ from __future__ import annotations
 
 import threading
 import time
+import traceback
 import zlib
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from little_sister.checks import Check, CheckResult, load_checks, plain
+from little_sister.checks import (
+    Check,
+    CheckError,
+    CheckResult,
+    checks_dirs,
+    code,
+    load_checks,
+    parse_duration,
+    plain,
+)
+from little_sister.config import config
 from little_sister.logger import logger
 from little_sister.status import HEARTBEAT_PATH, StatusCode, join_path
 from little_sister.tree import StatusTree, status_tree
+
+# Innermost frames kept when a failing check's trace goes onto its node
+# (`stacktrace` in config/settings.yaml). The cause is almost always in the last
+# few, and a node reason is not a log file — the whole trace stays in the log.
+TRACEBACK_FRAMES = 5
 
 DEFAULT_MAX_WORKERS = 8
 DEFAULT_POLL_INTERVAL = 1.0
@@ -57,6 +73,26 @@ def _stagger(check: Check) -> float:
     return (digest % 1000) / 1000.0 * window
 
 
+def _retry_settings(check: Check) -> tuple[int, int]:
+    """The effective failure-retry settings for ``check`` (ADR-0033): the
+    per-check fields when set, else the ``settings.yaml`` defaults. The
+    settings-level interval is a duration string parsed here, where a bad value
+    can fall back with a warning instead of failing engine construction —
+    ``config.py`` stays free of the duration parser on purpose."""
+    interval = check.retry_interval_seconds
+    if interval is None:
+        try:
+            interval = parse_duration(config.retry_interval or None, 0)
+        except CheckError:
+            logger.warning(
+                "config: invalid retry_interval %r; the failure retry stays "
+                "off", config.retry_interval)
+            interval = 0
+    attempts = (check.retry_attempts if check.retry_attempts is not None
+                else config.retry_attempts)
+    return max(0, interval), max(0, attempts)
+
+
 @dataclass
 class _Scheduled:
     check: Check
@@ -64,6 +100,16 @@ class _Scheduled:
     running: bool = False
     # One-time schedule offset (see _stagger), spent at the first re-arm.
     stagger: float = 0.0
+    # The budgeted failure retry (ADR-0033), resolved per check at engine
+    # construction: the fast interval (0 = off) and the per-episode budget.
+    # `retry_used` counts the fast attempts of the current failure episode
+    # (an OK result re-arms it); `retrying` marks that the currently armed
+    # slot is a retry slot, for the system page. In-memory only — a restart
+    # forgets an episode, like the rest of the schedule.
+    retry_interval_seconds: int = 0
+    retry_attempts: int = 0
+    retry_used: int = 0
+    retrying: bool = False
     # The in-flight run: its wall-clock start and the monotonic mate, set when
     # execution begins (queue wait excluded), cleared when it finishes.
     run_started_at: str | None = None
@@ -84,7 +130,10 @@ class CheckInfo:
     ``next_run_at`` / ``next_in_seconds`` the armed next slot (a running check's
     next slot is already scheduled); ``last_run_at`` / ``elapsed_seconds`` the
     last completed run — ``None`` until one finishes, and always for a
-    secret-pinned check (it never runs).
+    secret-pinned check (it never runs). ``retrying`` marks a check whose armed
+    slot is a failure-retry slot (ADR-0033) — fast attempt ``retry_attempt`` of
+    ``retry_attempts`` — so the system page can explain a next run that
+    contradicts the frequency column.
     """
     path: str
     type_name: str
@@ -96,6 +145,9 @@ class CheckInfo:
     next_in_seconds: float
     last_run_at: str | None
     elapsed_seconds: float | None
+    retrying: bool = False
+    retry_attempt: int = 0
+    retry_attempts: int = 0
 
 
 @dataclass(frozen=True)
@@ -115,21 +167,40 @@ class Engine:
     def __init__(self, checks: list[Check], tree: StatusTree, *,
                  max_workers: int = DEFAULT_MAX_WORKERS,
                  poll_interval: float = DEFAULT_POLL_INTERVAL,
-                 clock: Callable[[], float] = time.monotonic) -> None:
+                 clock: Callable[[], float] = time.monotonic,
+                 heartbeat_warning: list[str] | None = None) -> None:
         self._tree = tree
+        # A configured-but-empty deployment: the engine runs, and every beat
+        # carries these reasons at WARN instead of OK (see _tick / ADR-0031 §7).
+        self._heartbeat_warning = heartbeat_warning
         # Make the self-monitor legible before it ever beats: the strip's
         # hover card can always say what /little-sister is (the nodes.yaml
         # pass runs later at startup and overrides this default).
         tree.set_about(HEARTBEAT_PATH, HEARTBEAT_ABOUT)
+        # Tell the tree where each check writes its result root, so a container above
+        # exactly one of them can publish that check's run time as its own observation
+        # (ADR-0027). Registration only — a node still appears when its result does.
+        # The heartbeat above is deliberately *not* a mount: it is the engine's own
+        # liveness rather than a check, so it neither blocks nor feeds that roll-up
+        # (and the dashboard lifts it out of the grid anyway, ADR-0024).
+        for check in checks:
+            tree.set_check_mount(check.path)
         self._clock = clock
         self._poll_interval = poll_interval
         self._max_workers = max(1, min(max_workers, max(1, len(checks))))
         now = clock()
         # Every check is due immediately, so the first sweep populates the
         # tree; the stagger then phase-shifts each schedule once so the
-        # lockstep doesn't outlive the start.
-        self._scheduled = [_Scheduled(check, now, stagger=_stagger(check))
-                           for check in checks]
+        # lockstep doesn't outlive the start. The failure-retry settings
+        # (ADR-0033) resolve per check here — the per-check fields first, then
+        # the settings defaults — so _execute reads two ints, never the config.
+        self._scheduled: list[_Scheduled] = []
+        for check in checks:
+            retry_interval, retry_attempts = _retry_settings(check)
+            self._scheduled.append(_Scheduled(
+                check, now, stagger=_stagger(check),
+                retry_interval_seconds=retry_interval,
+                retry_attempts=retry_attempts))
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._executor: ThreadPoolExecutor | None = None
@@ -172,7 +243,10 @@ class Engine:
                           ).isoformat(),
                           next_in_seconds=max(0.0, item.next_due - now),
                           last_run_at=item.last_run_at,
-                          elapsed_seconds=item.elapsed_seconds)
+                          elapsed_seconds=item.elapsed_seconds,
+                          retrying=item.retrying,
+                          retry_attempt=item.retry_used,
+                          retry_attempts=item.retry_attempts)
                 for item in self._scheduled)
             running = sum(1 for item in self._scheduled if item.running)
         uptime = (now - self._started_monotonic
@@ -183,11 +257,15 @@ class Engine:
             running=running, checks=checks)
 
     def start(self) -> None:
-        """Start the scheduler and worker pool (idempotent)."""
+        """Start the scheduler and worker pool (idempotent).
+
+        Started even with **no checks scheduled**: the scheduler still has its own
+        heartbeat to publish, and that beat is the whole point of the empty case —
+        a deployment configured to watch nothing yet must say so on the dashboard,
+        not only in the log (ADR-0005 / ADR-0031 §7). A loop with nothing due does
+        exactly one thing per tick, which is what it is there for.
+        """
         if self._scheduler is not None:
-            return
-        if not self._scheduled:
-            logger.info("engine: no checks configured; nothing to run")
             return
         self._started_at = datetime.now().isoformat()
         self._started_monotonic = self._clock()
@@ -240,13 +318,22 @@ class Engine:
                 item.next_due = (now + item.check.frequency_seconds
                                  + item.stagger)
                 item.stagger = 0.0
+                # the armed slot is the nominal one again; a non-OK completion
+                # may pull it earlier (ADR-0033)
+                item.retrying = False
                 executor.submit(self._execute, item)
         # The engine reports its own liveness as the heartbeat node (the
         # dashboard's status strip); if the scheduler stalls it goes stale and
-        # degrades to at least WARN (ADR-0005).
-        self._tree.upsert(HEARTBEAT_PATH, StatusCode.OK,
-                          description=HEARTBEAT_DESCRIPTION,
-                          frequency_seconds=max(1, round(self._poll_interval)))
+        # degrades to at least WARN (ADR-0005). With nothing configured to watch,
+        # the beat itself carries the WARN: the tree is *only* the heartbeat then,
+        # so an OK here would roll up to an all-green root while nothing at all is
+        # being monitored — the exact lie ADR-0005 exists to prevent.
+        self._tree.upsert(
+            HEARTBEAT_PATH,
+            StatusCode.OK if self._heartbeat_warning is None else StatusCode.WARN,
+            self._heartbeat_warning,
+            description=HEARTBEAT_DESCRIPTION,
+            frequency_seconds=max(1, round(self._poll_interval)))
         # Expire maintenance pins past their window (ADR-0014); a real transition,
         # so the next check refills the node.
         self._tree.sweep_expired()
@@ -270,9 +357,16 @@ class Engine:
                 if not isinstance(result, CheckResult):
                     result = CheckResult(
                         StatusCode.ERROR, ["check returned no result"])
-        except Exception as error:  # any failure becomes an ERROR (ADR-0004)
+        except Exception as error:  # any failure becomes an ERROR (ADR-0040)
             logger.exception("engine: check %s raised", check.path)
-            result = CheckResult(StatusCode.ERROR, [f"check error: {error}"])
+            # The message is untrusted — it routinely carries a captured line, a
+            # path or an API error body — so it is escaped like any other folded-in
+            # text (ADR-0018). The trace is a code block: verbatim and inert.
+            reason = [plain(f"check error: {error}")]
+            if config.stacktrace:
+                reason.append(code("".join(traceback.format_exception(
+                    error, limit=-TRACEBACK_FRAMES)).rstrip()))
+            result = CheckResult(StatusCode.ERROR, reason)
         finally:
             elapsed = time.monotonic() - started
             with self._lock:
@@ -286,10 +380,27 @@ class Engine:
                 item.run_started_mono = None
         elapsed_ms = elapsed * 1000
         detail = ""
-        if result.reason:
-            detail = " — " + result.reason[0].replace("\n", " ")[:120]
+        texts = result.reason_texts
+        if texts:
+            detail = " — " + texts[0].replace("\n", " ")[:120]
         logger.info("check %s: %s (%.0f ms)%s", check.path,
                     result.code.name, elapsed_ms, detail)
+        # A faster second look on failure (ADR-0033): a non-OK completion pulls
+        # the armed slot earlier — never later — to the retry interval, at most
+        # `retry_attempts` times per failure episode; an OK ends the episode
+        # and re-arms the budget. A secret-pinned check (`ran` False) is
+        # excluded: it is pinned until restart (ADR-0023), so a fast retry
+        # would burn the pool confirming a result that cannot change.
+        if ran and item.retry_interval_seconds > 0 and item.retry_attempts > 0:
+            with self._lock:
+                if result.code is StatusCode.OK:
+                    item.retry_used = 0
+                elif item.retry_used < item.retry_attempts:
+                    pulled = self._clock() + item.retry_interval_seconds
+                    if pulled < item.next_due:
+                        item.retry_used += 1
+                        item.retrying = True
+                        item.next_due = pulled
         try:
             self._store(check.path, result, check, is_root=True)
         except Exception:
@@ -319,7 +430,11 @@ class Engine:
         config = (check.config_summary() or None) if is_root else result.config
         about = None if is_root else (result.about or None)
         title = None if is_root else (result.title or None)
-        self._tree.upsert(path, result.code, result.reason,
+        # The pre-normalized entries travel, not the raw input: the check has
+        # already been through the one normalization (ADR-0036), and re-deriving
+        # slugs here would be the same work done twice.
+        self._tree.upsert(path, result.code, result.reason_entries,
+                          members=result.members,
                           description=description,
                           frequency_seconds=check.frequency_seconds,
                           config=config, about=about, title=title)
@@ -327,10 +442,33 @@ class Engine:
             self._store(join_path(path, child.name), child, check)
 
 
-def create_engine(checks_dir: str | None = None, *,
+def create_engine(config_dir: str | None = None, *,
                   tree: StatusTree = status_tree,
                   max_workers: int = DEFAULT_MAX_WORKERS) -> Engine:
-    """Load checks from ``checks_dir`` (default ``checks/``) into a new engine
-    bound to ``tree`` (the shared :data:`status_tree` by default)."""
-    checks = load_checks(checks_dir)
-    return Engine(checks, tree, max_workers=max_workers)
+    """Load checks from the ``checks`` aspect of ``config_dir`` (default
+    ``config``, ADR-0031) into a new engine bound to ``tree`` (the shared
+    :data:`status_tree` by default).
+
+    A configuration tree with **no checks in it yet** is a real and temporary
+    state — a fresh install, a deployment mid-bring-up — so the engine starts, a
+    warning names the directories it searched, and that same sentence rides the
+    heartbeat at WARN so the dashboard says it too, not just the log. (Having
+    nowhere to *look* is a different thing entirely and already refused, in
+    :func:`~little_sister.checks.loader.checks_dirs`.)
+    """
+    checks = load_checks(config_dir)
+    warning: list[str] | None = None
+    if not checks:
+        searched = [str(directory.resolve())
+                    for directory in checks_dirs(config_dir)]
+        logger.warning("engine: no checks configured — nothing is being watched. "
+                       "Searched: %s", ", ".join(searched))
+        # A reason is Markdown (ADR-0018): a path is external text and must not be
+        # read as emphasis — `/srv/ls_prod/config_dir/checks` would italicize
+        # between its underscores. Same shape the check-error path two functions
+        # up uses: the sentence through `plain`, the captured text through `code`.
+        warning = [plain("no checks configured — nothing is being watched. "
+                         "Searched:"),
+                   code("\n".join(searched))]
+    return Engine(checks, tree, max_workers=max_workers,
+                  heartbeat_warning=warning)

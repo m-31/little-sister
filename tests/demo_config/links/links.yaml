@@ -1,0 +1,136 @@
+# The demo deployment's curated links (ADR-0030), for the live harness in
+# demo_wsgi.py — a page with enough shape to judge the real thing against: many
+# groups, long titles that have to wrap, notes, every icon rung, and the failures
+# (an icon nobody defines, a host that serves no favicon) that the page has to
+# survive without a broken-image glyph.
+#
+# It takes the **directory** form — `links/links.yaml` with `links/icons/` beside
+# it — which is the shape ADR-0031 point 2 reserves for an aspect that carries
+# assets. That is not decoration: an `icons/` directory sitting next to a
+# `config/links.yaml` is a directory in a configuration root, so the loader would
+# rightly warn that `icons` is not a known aspect. An aspect that ships files
+# grows into a directory, and this is what that looks like.
+#
+# Dev-only: lives under tests/ and never ships in the package.
+
+# Reachability, so the harness has something to draw. A pass starts when somebody
+# opens the page and the newest answer is older than `interval:` — never on a timer
+# (ADR-0030 §9). Links are switched **on** here, which they are not by default; the
+# entries opt in one at a time below. Nothing in this file resolves, so what the
+# harness shows is a failure — which is the only thing the page draws, a healthy
+# row being deliberately undecorated.
+check:
+  icons: true
+  links: true
+  interval: 6h
+
+icons:
+  # A deployment's own file, beside this document — one file, so it rides the
+  # theme-invariant chip.
+  phoenix: icons/phoenix.svg
+  # A pair the deployment supplies, named for the background each goes on: this
+  # one renders bare, having solved the theming itself.
+  backstage:
+    on_light: icons/backstage.svg
+    on_dark: icons/backstage-inverted.svg
+  # A built-in switched off entirely, rather than swapped.
+  pagerduty: none
+
+groups:
+  - title: Loadtest Live
+    links:
+      # Curated order: no alphabetical sort would ever put this first, and that
+      # is the point.
+      - title: EMERGENCY STOP
+        url: https://stop.example.org/loadtest
+        icon: argo
+        # Opted into probing: the one entry nobody may click to find out.
+        check: true
+        note: pulls the generators off **live** — tell the channel first
+      - title: Console
+        url: https://console.example.org/loadtest
+        icon: grafana
+      - title: Generator fleet health and per-region throughput dashboard
+        url: https://grafana.example.org/d/fleet
+        icon: grafana
+
+  - title: Dashboards
+    links:
+      - title: Grafana
+        url: https://grafana.example.org/
+        icon: grafana
+      - title: Prometheus
+        url: https://prometheus.example.org/
+        icon: prometheus
+      - title: Kibana
+        url: https://kibana.example.org/
+        icon: kibana
+        check: true
+        note: log retention is 14 days
+      - title: Phoenix
+        url: https://phoenix.example.org/
+        icon: phoenix
+
+  - title: Delivery
+    links:
+      - title: Jenkins
+        url: https://ci.example.org/
+        icon: jenkins
+      - title: Argo CD
+        url: https://argo.example.org/
+        icon: argo
+      - title: Nexus
+        url: https://nexus.example.org/
+        icon: nexus
+      - title: SonarQube
+        url: https://sonar.example.org/
+        icon: sonar
+
+  - title: Source
+    links:
+      - title: GitHub
+        url: https://github.com/
+        icon: github
+      - title: GitLab
+        url: https://gitlab.example.org/
+        icon: gitlab
+      - title: Backstage
+        url: https://backstage.example.org/
+        icon: backstage
+
+  - title: Toolbox
+    links:
+      - title: Cyber Chef
+        url: https://gchq.github.io/CyberChef/
+        # No rung defines this name: the entry falls through to the site's own
+        # favicon, and then to the neutral glyph. The page says so once, above.
+        icon: cyberchef
+        note: offline-capable, safe for production data
+      - title: Jira
+        url: https://jira.example.org/
+        icon: jira
+      - title: Confluence
+        url: https://confluence.example.org/
+        icon: confluence
+      - title: Keycloak
+        url: https://keycloak.example.org/
+        icon: keycloak
+      - title: PagerDuty
+        url: https://pagerduty.example.org/
+        # Its built-in is switched off above, so this one falls through too.
+        icon: pagerduty
+
+  - title: Platform
+    links:
+      - title: Kubernetes
+        url: https://k8s.example.org/
+        icon: kubernetes
+      - title: Docker registry
+        url: https://registry.example.org/
+        icon: docker
+      - title: Elasticsearch
+        url: https://elastic.example.org/
+        icon: elastic
+      - title: AWS console
+        url: https://console.aws.amazon.com/
+        icon: aws

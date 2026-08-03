@@ -14,6 +14,7 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
+from little_sister import values
 from little_sister.checks.base import Check, CheckError, CheckResult, code, plain
 from little_sister.checks.ssh.metrics import oneline, strip_ssh_notices
 from little_sister.checks.ssh.transport import RemoteResult, SshConnection
@@ -246,14 +247,15 @@ def parse_descriptions(raw: Any) -> dict[str, str]:
 def parse_output_config(config: dict[str, Any]) -> dict[str, Any]:
     """Parse the ``capture`` / ``max_chars`` / ``keep`` output options shared by
     ``ssh-command`` and ``ssh-script`` (mirroring the local ``command`` check)."""
-    capture = str(config.get("capture", "stdout")).lower()
+    capture = values.text(config, "capture", default="stdout").lower()
     if capture not in ("stdout", "stderr", "both"):
         raise CheckError(f"invalid 'capture': {capture!r} (stdout|stderr|both)")
-    keep = str(config.get("keep", "tail")).lower()
+    keep = values.text(config, "keep", default="tail").lower()
     if keep not in ("tail", "head"):
         raise CheckError(f"invalid 'keep': {keep!r} (tail|head)")
     return {
         "capture": capture,
-        "max_chars": int(config.get("max_chars", DEFAULT_MAX_CHARS)),
+        "max_chars": values.number(config, "max_chars",
+                                   default=DEFAULT_MAX_CHARS),
         "keep": keep,
     }

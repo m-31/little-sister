@@ -1,0 +1,46 @@
+# Deployment actions (ADR-0038) — a chip on a node, or on one of its reasons,
+# linking into whatever this deployment uses. Configuration only: no code.
+#
+# This file is an example and is inert as it stands (every entry is commented out).
+# `slot` says what the action is *about*, and the two slots already mean different
+# things (ADR-0036):
+#
+#   node.actions     the whole node — the right place when its reasons are prose
+#                    (a failure message and its stack trace are one condition)
+#   reason.actions   one reason line — the right place when a check declares its
+#                    findings as members, so each is separately actionable
+#
+# The url is a template. It may interpolate:
+#
+#   {path}      the node's absolute path, e.g. /system/alpha/disk
+#   {name}      its last segment, e.g. disk
+#   {code}      its status, e.g. ERROR
+#   {reason}    the reason line (on a node action: the node's first line)
+#   {reasons}   every reason line, newline-separated (a node action's body)
+#
+# Every value is percent-encoded on the way in, so a reason full of ampersands and
+# quotes survives intact. A template naming anything else is refused at load, with
+# the accepted names in the log — a button that lies is worse than no button.
+#
+# `icon` is optional and names an icon the links registry already knows
+# (config/links/icons/, a registered pack, or the built-in one); an unknown name
+# simply renders no icon. `under` is optional and limits the action to one subtree,
+# compared segment-wise, so /system/alpha covers /system/alpha/disk and never
+# /system/alphaville. Omit it and the action is offered everywhere.
+
+actions: []
+
+# actions:
+#   - label: Raise a ticket
+#     slot: reason.actions
+#     icon: jira
+#     url: "https://jira.example.org/secure/CreateIssueDetails!init.jspa?pid=10001&summary={reason}&description={path}"
+#
+#   - label: File it
+#     slot: node.actions
+#     url: "https://jira.example.org/secure/CreateIssueDetails!init.jspa?pid=10001&summary={name}%3A%20{reason}&description={reasons}"
+#
+#   - label: Runbook
+#     slot: node.actions
+#     under: /system
+#     url: "https://wiki.example.org/runbooks/{name}"

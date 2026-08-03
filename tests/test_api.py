@@ -72,6 +72,16 @@ class JsonApiTests(TestCase):
         self.assertTrue(body["status"]["timestamp"].endswith("Z"))
         self.assertTrue(body["generated_at"].endswith("Z"))
 
+    def test_unwritten_node_serializes_a_null_timestamp(self):
+        # ADR-0027: no check has written the container, so the wire carries `null`
+        # rather than an invented instant. The field stays present (required, but
+        # nullable) — only its value is gone.
+        self.tree.upsert("/svc/api", StatusCode.OK)
+        node = self.client.get("/status/svc", headers=JSON).get_json()["status"]
+        self.assertIn("timestamp", node)
+        self.assertIsNone(node["timestamp"])
+        self.assertIsNotNone(node["children"][0]["timestamp"])
+
     def test_maintenance_serialized(self):
         self.tree.upsert("/db", StatusCode.OK)
         self.tree.set_maintenance("/db", "planned", set_by="ada",

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="#212529" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="kibana">
+  <title>kibana</title>
+    <path d="M3.75 20.5V16M7.25 20.5v-7M10.75 20.5v-3.75"/>
+    <circle cx="15.75" cy="8.5" r="4.25"/>
+    <path d="M18.85 11.6 21.5 14.25"/>
+</svg>

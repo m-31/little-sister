@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Events</title>
+    {% set page_title = 'Events' %}
     {% include '_header.html' %}
 
     <div class="container-fluid mt-3 px-4">
@@ -11,10 +11,19 @@
                 <tr><th>When</th><th>Status</th><th>Service</th><th>Reason</th></tr>
             </thead>
             <tbody>
+                {#- A transition that did **not** reach anybody says which rule held
+                    it back (ADR-0032 rule 5: a transformed contribution names the
+                    rule that transformed it). These only exist since a pin stopped
+                    overwriting the reading — before, there was no transition under a
+                    pin to record — and they are the answer to *did it break during
+                    the window?* The row keeps the status color it would have had,
+                    because that is what it would have alarmed as; the chip is what
+                    says it did not. Defaulting the page to hide them, with a toggle,
+                    is questions.md §4.2 and rides its own change, not this one. -#}
                 {% for e in events %}
                     <tr class="row-{{ e.new | status_slug }}">
                         <td class="text-nowrap">{{ e.timestamp | localtime }}</td>
-                        <td>{{ e.new.name.lower() }}</td>
+                        <td>{{ e.new.name.lower() }}{% if e.suppressed_by %} <span class="event-suppressed">{{ e.suppressed_by }}</span>{% endif %}</td>
                         <td class="text-muted">{{ e.path }}</td>
                         <td class="md-body">{{ e.reason | join('; ') | markdown_inline }}</td>
                     </tr>
@@ -25,6 +34,9 @@
         </table>
     </div>
 
+{% include '_page_end.html' %}
+
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="{{ url_for('static', filename='js/rail.js') }}"></script>
 </body>
 </html>

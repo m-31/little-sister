@@ -1,0 +1,15 @@
+# Live-demo check (Mode 2) — see tests/demo_check.py and docs/testing-the-gui.md.
+# The demo's **declared-slug** members node: its reason list is a mapping keyed by
+# pull-request number, so each line is separately pinnable and keeps its pin while
+# the text is re-worded (ADR-0036). Small on purpose — pin every member and watch
+# what the node reads then.
+type: demo
+path: /ci/reviews
+title: Review queue
+about: |
+  Pull requests waiting for a reviewer (a *synthetic* demo node). Each line is a
+  **member** keyed by its PR number, so a pin names one review; the waiting time
+  in the text moves on every run and the pin does not.
+scenario: reviews
+frequency: 5s
+period: 90s

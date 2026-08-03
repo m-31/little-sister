@@ -9,7 +9,7 @@ openapi: 3.1.0
 # Field provenance (maintainers — ADRs in docs/adr/): node addressing ADR-0016;
 # about + leaf description ADR-0012; title ADR-0017; config ADR-0013; Markdown text
 # fields ADR-0018; maintenance + maintenance_details ADR-0014; roll-up & staleness
-# ADR-0004 / ADR-0005; bearer token ADR-0003. Consumer-facing `description:` text is
+# ADR-0039 / ADR-0005; observation timestamp ADR-0027; bearer token ADR-0003. Consumer-facing `description:` text is
 # kept self-contained; rationale lives in those ADRs and docs/api/README.md.
 
 info:
@@ -35,11 +35,13 @@ info:
     change bumps `info.version` (major) and `schema_version`, and is offered through a
     versioned media type — never a versioned URL. v1.1 added the node-metadata fields
     (`about`, `title`, `config`) and `maintenance_details`, additively
-    (`schema_version` unchanged).
+    (`schema_version` unchanged). v1.2 made `timestamp` nullable — strictly an
+    incompatible change; `schema_version` stays **1** and the formal bump is
+    consolidated into a later, client-facing enrichment of this contract (ADR-0027).
 
     See `docs/api/README.md` (linked below) for auth, `curl` examples and how tokens
     are provisioned.
-  version: 1.1.0
+  version: 1.2.0
   contact:
     name: little-sister
     url: https://github.com/m-31/little-sister
@@ -211,9 +213,16 @@ components:
             type: string
           examples: [["HTTP 503 from /health"]]
         timestamp:
-          type: string
+          type: [string, "null"]
           format: date-time
-          description: When the node was last observed (RFC 3339, UTC).
+          description: >-
+            When the check behind this node last ran (RFC 3339, UTC). Present only
+            where that question has exactly one answer: a node a check writes carries
+            its own last write, and a container with exactly one check below it
+            inherits that check's run time. Null otherwise — a container above two or
+            more checks (notably the root of any multi-check deployment), or a node no
+            check has run yet. Observation times are never aggregated; `stale` is the
+            freshness signal, and it does roll up.
           examples: ["2026-06-25T18:04:55Z"]
         description:
           type: string

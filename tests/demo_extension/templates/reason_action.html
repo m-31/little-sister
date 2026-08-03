@@ -1,0 +1,6 @@
+{#- A slot filler's template (ADR-0034): the library's `.reason-action` chip, filled
+    with values its provider computed in Python. Rendered by little-sister's own
+    Jinja environment, so `summary` is autoescaped — which is what the escaping test
+    proves. -#}
+<a class="reason-action" href="{{ url }}" target="_blank" rel="noopener noreferrer"
+   title="{{ summary }}" data-demo-action="first-filler">{{ label }}</a>

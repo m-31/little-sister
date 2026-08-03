@@ -1,0 +1,42 @@
+# Live-demo settings (Mode 2) — see docs/testing-the-gui.md.
+#
+# The demo tree ran without a settings file for a long time, which meant it proved
+# only the defaults. Everything below is here to be *seen*: the values are picked
+# for a tree whose checks run every four or five seconds, not for a deployment.
+
+# The demo is synthetic, so the wall clock only has to be legible.
+timezone: Europe/Berlin
+time_format: "%Y-%m-%d %H:%M:%S"
+
+# Left at the library defaults on purpose — the fixture sheet (Mode 1) renders the
+# cap boundaries deliberately, and the live demo should show what a fresh install
+# shows. Raise `reason_cap` here to watch the eruption card stop folding.
+reason_cap: 6
+branch_cap: 3
+maintenance_cap: 5
+
+# Short, because a demo pin should expire while you are still watching: set
+# maintenance without naming a duration and the entry is gone in an hour rather
+# than in a week. There is no indefinite pin either way.
+maintenance_default_expiry: 1h
+
+# The `demo` type never raises, so no scenario reaches this — it is on because a
+# demo that quietly differed from the shipped default would be misleading.
+stacktrace: true
+
+# The budgeted failure retry (ADR-0033), on so that `/system` has a retry marker to
+# show. Two seconds is shorter than every demo frequency (4-5s), which is what makes
+# it visible at all: the retry only ever pulls a check's next run *earlier*, so an
+# interval longer than the frequency would be a no-op.
+#
+# Two things to watch, and the tree was arranged so both are on one page:
+#
+#   /network/vpn   flaps ok/error every ten seconds, so its budget is re-armed by
+#                  each recovery — it is in `retry 1/6`, `2/6`, … for the whole of
+#                  every red window.
+#   /ci/reviews    is warn forever and never recovers, so it spends its six fast
+#                  attempts once and then settles back to its ordinary frequency.
+#                  That is the *budget* in the name: a failure that will not clear
+#                  does not get re-checked at retry speed indefinitely.
+retry_interval: 2s
+retry_attempts: 6

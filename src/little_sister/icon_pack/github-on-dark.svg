@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="#e9edf1" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="github">
+  <title>github</title>
+    <circle cx="7" cy="5.75" r="2.25"/>
+    <circle cx="7" cy="18.25" r="2.25"/>
+    <circle cx="17" cy="12" r="2.25"/>
+    <path d="M7 8v8"/>
+    <path d="M7 12h7.75"/>
+</svg>

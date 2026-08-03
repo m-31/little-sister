@@ -1,7 +1,7 @@
 # Little Sister — Implementing a check type
 
 How to implement a **new check _type_** — a Python class the engine can schedule.
-This is the developer-side companion to [`checks/README.md`](../checks/README.md),
+This is the developer-side companion to [`checks/README.md`](../config/checks/README.md),
 which covers the other half: how to _author_ a check (write the YAML for a type
 that already exists).
 
@@ -30,7 +30,7 @@ tree ([ADR-0007](adr/0007-check-result-branches.md)).
 Two things that sound alike but aren't:
 
 - **Authoring** a check — writing a `checks/*.yaml` that configures an existing type.
-  That's [`checks/README.md`](../checks/README.md).
+  That's [`checks/README.md`](../config/checks/README.md).
 - **Implementing** a check type — writing the Python class behind a `type:`. That's
   this document.
 
@@ -203,11 +203,13 @@ them under a deployment.
 
 ## 5. Configuration (YAML → your check)
 
-- One `checks/*.yaml` = one check; `type:` selects your class, the rest are your
-  fields plus the common ones. Configs are read **once at startup** across the
-  path-list union in `LITTLE_SISTER_CHECKS_DIR` (default `checks`); sub-directories
-  are ignored and `nodes.yaml` is skipped
-  ([ADR-0015](adr/0015-check-discovery-union.md)). A restart re-reads them.
+- One `config/checks/*.yaml` = one check; `type:` selects your class, the rest are
+  your fields plus the common ones. Configs are read **once at startup** across the
+  path-list union of `checks/` directories under `LITTLE_SISTER_CONFIG_DIR` (default
+  `config`); sub-directories are ignored, and nothing is skipped by name because
+  `config/checks/` holds checks and nothing else
+  ([ADR-0015](adr/0015-check-discovery-union.md),
+  [ADR-0031](adr/0031-deployment-config-directory.md)). A restart re-reads them.
 - **Relative paths resolve against the config file's own directory** (`base_dir` in
   `_extra_from_config`) — e.g. a bundled script sits next to its YAML.
 - **Node metadata** (`title`, `about`) resolves **per field** by precedence:
@@ -224,9 +226,14 @@ them under a deployment.
   `subnodes:` block, `name → {title, about}`, sitting beside the root's inline metadata.
   `little_sister.checks.metadata` provides the reader: `parse_subnodes(config)` →
   `{name: {title, about}}`, and `expand_tokens(text, {…})` to fill `{token}` placeholders
-  (a plain replace, never `str.format`, so backticks / braces in the Markdown survive). A
-  check with both uses the config value when present and falls back to its default (so a
-  deployment can retune one aspect's label without touching code or `nodes.yaml`).
+  (a plain replace, never `str.format`, so backticks / braces in the Markdown survive).
+  `resolve_text(configured, default, tokens)` layers a check that has both: the config
+  value when present, the default otherwise, and config text containing `{default}`
+  **extends** the default rather than replacing it — before, after or around it. Ship
+  defaults in code for anything true of the check *type*: a deployment can still retune or
+  annotate one aspect without touching code or `nodes.yaml`, and a type that runs several
+  times in one deployment (one check per team) then carries its prose once instead of once
+  per config file.
 - **Ownership** — two checks may not own overlapping nodes; the loader rejects the
   whole load with a named conflict. A branch check overrides `owned_nodes()` to own
   its child subtrees (not the shared container) so peers can coexist (ADR-0015).
@@ -235,11 +242,18 @@ them under a deployment.
 
 ## 6. Secrets & credentials
 
-A check credential in YAML is a **secret reference**
-([ADR-0023](adr/0023-secret-references.md)). A **bare name** (`GITHUB_TOKEN`) reads
-that environment variable — fed by the git-ignored `.env`, which little-sister loads
-into `os.environ` at import with `setdefault`, so a real environment variable
-overrides the file ([ADR-0003](adr/0003-config-and-secrets-via-env-file.md)). A
+A check names its credentials in a **`secrets:` block**, each value a **secret
+reference** ([ADR-0023](adr/0023-secret-references.md)):
+
+```yaml
+secrets:
+  token: env://GITHUB_TOKEN        # or aws-sm://myteam/github-token
+```
+
+**`env://NAME`** reads that environment variable — fed by the git-ignored `.env`,
+which little-sister loads into `os.environ` at import with `setdefault`, so a real
+environment variable overrides the file
+([ADR-0003](adr/0003-config-and-secrets-via-env-file.md)). Any other
 **`scheme://address`** reference (`aws-sm://team/github-token`) goes through the
 resolver the application registered for that scheme
 (`little_sister.secrets.register_resolver`) — registered in the same
@@ -255,9 +269,12 @@ import-before-app slot as the check types (§4); the library ships no store clie
   *"secret unresolvable: …"*, `run()` is never called, and there is no retry until
   restart. Don't wrap `resolve_secret` in your own try/except — the return value and
   the pinning already do the right thing.
-- **Make the reference a config field** with a sensible bare-name default
-  (`token:` defaulting to `GITHUB_TOKEN`), so a deployment moves that one secret to a
-  store by editing one YAML line — no code change.
+- **Parse the block with `parse_secret_refs(config, "token", …)`** in
+  `_extra_from_config`, and resolve what it returns in the constructor. Every name
+  you list is required — deliberately: a default reference baked into the check type
+  ties every instance of it to the same credential, which is what stops a deployment
+  running the type twice, once per team, with a token each. A deployment then moves
+  that one secret to a store by editing one YAML line — no code change.
 - Secrets **never** reach the repo, `config_summary()` or a reason. `.env` stays
   git-ignored; only the *address* of a secret may appear in YAML.
 
@@ -307,3 +324,23 @@ and credentials behind **secret references** (§6). Then packaging it as an
 installable `little-sister-<x>` with an entry point is "an evolution of this, not a
 rewrite" ([`architecture.md`](architecture.md) §11). Until then a deployment's checks
 are an integral part of its repo.
+
+The line to build against is **type vs deployment**: what is true of the check *type*
+travels inside the package, what is true of one installation stays in that
+deployment's YAML — and being explicit there is a feature, not duplication, because a
+plugin user should be able to read their own choices without knowing the type's
+defaults.
+
+| Travels with the plugin | Stays in the deployment's config |
+|-------------------------|----------------------------------|
+| subnode `title` / `about` prose, its `{token}` grammar, severity legends (§3) | which org / team / host, and every threshold, ignore list and tuning knob |
+| the default for each optional knob | the value this installation actually chose |
+| the code that reads a credential | the **reference** naming where that credential lives (§6) |
+
+Two consequences are worth designing for before the plugin exists. A credential
+reference is **required, never defaulted**: a type that bakes in `GITHUB_TOKEN` ties
+every instance to one secret, so a deployment cannot run it twice with different
+credentials — one check per team. And the type's prose stops being a file the
+deployment can edit, so a label must be **extendable**, not only replaceable: that is
+what `{default}` in a `subnodes:` value buys (§3), letting a deployment append its own
+note to shipped text and still inherit the next version of it.

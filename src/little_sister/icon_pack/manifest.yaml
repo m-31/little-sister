@@ -1,0 +1,36 @@
+# little-sister's built-in icon pack — provenance and terms (ADR-0030 §3).
+#
+# Every file here was drawn for little-sister. None is a vendor's mark, and none was
+# taken from an icon aggregator, where provenance is exactly what is missing. A name
+# below identifies a *product* the deployment links to; the glyph shows what that kind
+# of product does, so the pack carries no redistribution question and no trademark
+# question — and a deployment that wants the real mark points its own `icons:` map at
+# a file it holds.
+#
+# Each name ships a pair: `<name>-on-light.svg` and `<name>-on-dark.svg`, named for the
+# background the file goes on. The two differ only in ink — #212529 and #e9edf1, the
+# `--ls-ink` of the light and dark themes (ADR-0028) — so both stay legible across the
+# theme roster without the page having to know which one it is on. All are 24×24,
+# stroke-drawn at 1.75 with round caps and joins, so the set reads as one hand.
+
+source: drawn for little-sister
+license: MIT — the project's own license, see LICENSE
+
+icons:
+  grafana:    a rising line chart in its axes
+  prometheus: a gauge with its needle
+  jenkins:    a gear — the automation glyph
+  github:     a commit on a branch line
+  gitlab:     two branches merging back
+  kibana:     a magnifier over bars — reading the logs
+  elastic:    three stacked index layers
+  jira:       an issue card, resolved
+  confluence: a written page
+  keycloak:   a key
+  docker:     stacked containers on the quay
+  kubernetes: pods inside one cluster boundary
+  argo:       a delivery loop
+  sonar:      a sweep going out from a source
+  nexus:      a package in the repository
+  pagerduty:  a bell — somebody is being woken
+  aws:        a cloud

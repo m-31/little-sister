@@ -1,22 +1,29 @@
 # Checks
 
-Each `*.yaml` / `*.yml` file in a checks directory defines one check. The
+Each `*.yaml` / `*.yml` file in a `config/checks/` directory defines one check. The
 monitoring engine loads them and schedules each at its own `frequency`.
 (This page is about *authoring* checks in YAML; implementing a new check **type** —
 the Python class behind `type:` — is
-[`../docs/implementing-checks.md`](../docs/implementing-checks.md).)
+[`../docs/implementing-checks.md`](../../docs/implementing-checks.md).)
 
-- Put your check configs directly in `checks/`.
+- Put your check configs directly in `config/checks/`. `checks` is one **aspect** of
+  the deployment's configuration directory, alongside `nodes.yaml`, `settings.yaml`
+  and `users.yaml` ([ADR-0031](../../docs/adr/0031-deployment-config-directory.md));
+  it is always a directory, because its unit of data is the file — one check per
+  `*.yaml`.
 - The built-in SSH / metrics checks ship their scripts **inside the package**
-  ([ADR-0021](../docs/adr/0021-script-resolution.md)); you only add a `script:` to
+  ([ADR-0021](../../docs/adr/0021-script-resolution.md)); you only add a `script:` to
   point at **your own** script (resolved relative to the config file's directory).
   `LITTLE_SISTER_SCRIPTS_DIR` relocates where a built-in default is looked up.
-- `checks/examples/` holds copy-me templates and is **not** loaded (sub-folders
-  are ignored).
-- `LITTLE_SISTER_CHECKS_DIR` selects the directory — or a **path-list** of
-  directories joined by your OS path separator (e.g. `base:hosts/alpha`), loaded
-  as a **union** (a shared base plus host-specific adds). Every listed directory
-  must exist; the set is read once at **startup** (a restart re-reads it).
+- `config/checks/examples/` holds copy-me templates and is **not** loaded
+  (sub-folders are ignored).
+- `LITTLE_SISTER_CONFIG_DIR` selects the configuration directory — or a **path-list**
+  of them joined by your OS path separator (e.g. `base:sites/alpha`), whose
+  `checks/` directories load as a **union** (a shared base plus site-specific adds).
+  Every listed root must exist and **at least one** must provide `checks/`, or the
+  process refuses to start; a `checks/` that exists but is still empty is allowed and
+  says so on the dashboard. The set is read once at **startup** (a restart re-reads
+  it).
 - Two checks may share a host node only if they own **disjoint** subtrees — e.g.
   `host-metrics` + `qnap-metrics` on one host, or a `file` heartbeat as a sibling
   child. Two checks that own the **same** node (or one nested inside another's) are
@@ -36,17 +43,18 @@ the Python class behind `type:` — is
 | `timeout` | per-run timeout (same duration format) | `30s` |
 
 A non-`OK` result always carries a reason. A failed or timed-out run becomes
-`ERROR` (ADR-0004 / ADR-0001).
+`ERROR` (ADR-0040 / ADR-0001).
 
-## Node metadata — `nodes.yaml`
+## Node metadata — `config/nodes.yaml`
 
-An **optional** `nodes.yaml` in this directory (or any directory of the path-list)
-declares each node's `about` and `title` keyed by its absolute path — so it can reach
-**container / host** nodes that no single check owns. It is unioned across the
-directories and seeded at startup; a `nodes.yaml` value wins over the inline value on
-a check (per field). A bare string is shorthand for `about`. A declared path that no
-check covers is warned about at startup
-([ADR-0012](../docs/adr/0012-node-metadata.md) / [ADR-0017](../docs/adr/0017-node-title.md)).
+An **optional** `nodes.yaml` **beside** this directory — one per configuration root,
+not inside `checks/` — declares each node's `about` and `title` keyed by its absolute
+path, so it can reach **container / host** nodes that no single check owns. It is
+layered across the roots and seeded at startup: a later root wins **per field** over
+an earlier one (the override is logged, naming both files), and a `nodes.yaml` value
+wins over the inline value on a check, also per field. A bare string is shorthand for
+`about`. A declared path that no check covers is warned about at startup
+([ADR-0012](../../docs/adr/0012-node-metadata.md) / [ADR-0017](../../docs/adr/0017-node-title.md)).
 
 ```yaml
 /system/alpha:
@@ -89,7 +97,7 @@ command: bash check-disk-space.sh   # your script (cwd = working_dir); or a list
 capture: both          # stdout | stderr | both
 max_chars: 1000        # shorten captured output…
 keep: tail             # …from the tail (default) or head
-working_dir: .         # optional; defaults to the checks directory
+working_dir: .         # optional; defaults to the check config's directory
 ```
 
 ## The SSH check family
@@ -194,7 +202,7 @@ frequency: 2m
 
 Each leaf's `description` comes from the `descriptions:` map (by leaf name —
 `ssh`, `disk`, `memory`, `cpu`, `load`) or a built-in default; the shared host node's
-own description stays empty so two checks can share it ([ADR-0012](../docs/adr/0012-node-metadata.md)).
+own description stays empty so two checks can share it ([ADR-0012](../../docs/adr/0012-node-metadata.md)).
 
 Each leaf also ships a built-in **`about`** — a short note on what the aspect
 (`ssh` / `disk` / `memory` / `cpu` / `load`) measures and how it grades — shown in the
@@ -202,11 +210,11 @@ dashboard hover card. To retune one for your hosts, add a **`subnodes:`** block 
 leaf name (`subnodes: {disk: {about: "…", title: "…"}}`): a config entry overrides the
 built-in default per field; an omitted field keeps the default, and `nodes.yaml` still
 overrides above both, per node path
-([ADR-0025](../docs/adr/0025-check-provided-subnode-metadata.md)).
+([ADR-0025](../../docs/adr/0025-check-provided-subnode-metadata.md)).
 
 A check that reports several nodes like this returns a small tree of results
 (`CheckResult.children`); the engine writes each as a node under the check's node
-([ADR-0007](../docs/adr/0007-check-result-branches.md)).
+([ADR-0007](../../docs/adr/0007-check-result-branches.md)).
 
 ## Several metrics checks on the same host
 

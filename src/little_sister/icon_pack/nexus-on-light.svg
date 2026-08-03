@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="#212529" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="nexus">
+  <title>nexus</title>
+    <path d="M12 3.5l8.25 4.25v8.5L12 20.5 3.75 16.25v-8.5z"/>
+    <path d="M3.75 7.75 12 12l8.25-4.25"/>
+    <path d="M12 12v8.5"/>
+</svg>

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"
+     fill="none" stroke="#d9480f" stroke-width="1.75" stroke-linecap="round"
+     stroke-linejoin="round" role="img" aria-label="phoenix">
+  <title>phoenix</title>
+  <!-- A deployment's own mark: one file, deliberately colored, so the harness
+       shows what the theme-invariant chip has to hold. -->
+  <path d="M12 3.25c2.5 3 2.5 5.5 0 8.25-2.5-2.75-2.5-5.25 0-8.25z"/>
+  <path d="M12 11.5c3.5-1.5 6.25-.5 7.25 2.25-3 1.75-5.5 1.25-7.25-2.25z"/>
+  <path d="M12 11.5c-3.5-1.5-6.25-.5-7.25 2.25 3 1.75 5.5 1.25 7.25-2.25z"/>
+  <path d="M12 11.5v9.25"/>
+</svg>

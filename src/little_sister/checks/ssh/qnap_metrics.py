@@ -20,6 +20,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from little_sister import values
 from little_sister.checks.base import (
     CheckError,
     CheckResult,
@@ -190,8 +191,6 @@ def _parse_temp_thresholds(raw: Any) -> tuple[float, float]:
     spec = raw.get("temperature") or {}
     if not isinstance(spec, dict):
         raise CheckError("thresholds.temperature must be a mapping")
-    try:
-        return float(spec.get("warn", warn)), float(spec.get("error", error))
-    except (TypeError, ValueError) as exc:
-        raise CheckError(
-            "thresholds.temperature: warn/error must be numbers") from exc
+    where = "thresholds.temperature"
+    return (values.real(spec, "warn", default=warn, where=where),
+            values.real(spec, "error", default=error, where=where))

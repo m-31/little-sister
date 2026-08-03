@@ -1,0 +1,80 @@
+{#- The page band: what used to be a title row, a loose
+    about paragraph and a freshness caption stacked down the page, gathered into
+    one aligned block — breadcrumb/title on the left, the updated-line and the
+    filters on the right, the node's about beneath.
+
+    The freshness line is not chrome. It is the ADR-0005 promise that the page
+    dates its own data, so it reads as a measurement: tabular figures so the
+    digits do not dance on each poll, and a rule separating it from the controls
+    it is not one of. It keeps `id="status-updated"`, its server-seeded
+    `data-rendered-at`, and the `text-muted` class **poll.js swaps for
+    `text-danger`** — that swap is why nothing here may set a `color` on it
+    (both Bootstrap utilities are `!important`; a color of our own would be
+    beaten by them and a stale line could read muted instead of red).
+
+    `band_stamp` and `band_filters` say which parts this page has: the dashboard
+    takes both, a detail page neither. They default to off — the Jinja env is
+    StrictUndefined, so a page that wants a part has to say so. -#}
+{%- set band_stamp = band_stamp | default(false) -%}
+{%- set band_filters = band_filters | default(false) -%}
+{#- The kiosk has no band: its slim line already carries the sentence, the stamp
+    and the exit, and a wall display has no use for a title or for filters it
+    cannot be clicked. The stamp lives in that line instead, so there is still
+    exactly one of it on the page. -#}
+{%- if layout != 'kiosk' %}
+<div class="ls-band">
+    <div class="ls-band__row">
+        <h1 class="ls-band__title">
+            {% include '_breadcrumb.html' %}
+            {%- if node and node.title %}
+            <span class="node-title node-title--header">{{ node.title | markdown_inline }}</span>
+            {%- endif %}
+        </h1>
+        {%- if band_stamp or band_filters %}
+        <div class="ls-band__meta">
+            {%- if band_stamp %}
+            <div class="text-muted ls-band__updated" id="status-updated"
+                 data-rendered-at="{{ rendered_at }}">updated {{ rendered_at }}</div>
+            {%- endif %}
+            {%- if band_filters %}
+            <form method="get" class="status-filters mb-0"
+                  action="{{ url_for('status', branch=branch) if branch else url_for('status') }}">
+                {# A form submit carries this marker, so an unchecked switch (which
+                   sends nothing) is told apart from a fresh visit — lets the switches
+                   persist and a default-on switch turn off. #}
+                <input type="hidden" name="view" value="1">
+                <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" role="switch"
+                           id="hide_ok" name="hide_ok" value="1"
+                           {% if hide_ok %}checked{% endif %} onchange="this.form.submit()">
+                    <label class="form-check-label" for="hide_ok">hide ok</label>
+                </div>
+                <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" role="switch"
+                           id="hide_idle" name="hide_idle" value="1"
+                           {% if hide_idle %}checked{% endif %} onchange="this.form.submit()">
+                    <label class="form-check-label" for="hide_idle">hide idle</label>
+                </div>
+                <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" role="switch"
+                           id="dense" name="dense" value="1"
+                           {% if dense %}checked{% endif %} onchange="this.form.submit()">
+                    <label class="form-check-label" for="dense">chips</label>
+                </div>
+                <div class="status-filters__depth">
+                    <label class="form-check-label" for="depth">depth</label>
+                    <input class="form-control form-control-sm status-depth"
+                           type="number" id="depth" name="depth"
+                           min="0" max="{{ depth_limit }}" value="{{ max_depth }}"
+                           onchange="this.form.submit()">
+                </div>
+            </form>
+            {%- endif %}
+        </div>
+        {%- endif %}
+    </div>
+    {%- if node and node.about %}
+    <div class="ls-band__about md-body text-muted">{{ node.about | markdown }}</div>
+    {%- endif %}
+</div>
+{%- endif %}

@@ -1,0 +1,63 @@
+{#- The sections, written once.
+
+    Two layouts show them differently — the rail as icons (plus labels once the
+    burger expands it), the top bar as plain links — so this renders whichever
+    `nav_style` asks for. Both are emitted into the page and CSS hides the one
+    the current layout does not use; `display: none` also takes it out of the
+    accessibility tree, so nothing is announced twice. Which layout the body
+    attribute carries is the viewer's own choice (ADR-0029), so both copies
+    have to be right.
+
+    The entry list is the single source: adding a section here reaches both
+    layouts at once. -#}
+{%- set entries = [
+        ('/status',      'Status',      'grid'),
+        ('/events',      'Events',      'rows'),
+        ('/maintenance', 'Maintenance', 'pause'),
+        ('/links',       'Links',       'link'),
+        ('/copy',        'Copy',        'copy'),
+    ] -%}
+{%- set entries = entries + [('/system', 'System', 'dial')]
+        if session.get('admin') else entries -%}
+
+{%- macro nav_icon(name) -%}
+<svg class="ls-rail__icon" width="15" height="15" viewBox="0 0 16 16"
+     fill="currentColor" aria-hidden="true" focusable="false">
+    {%- if name == 'grid' -%}
+        <rect x="1" y="1" width="6" height="6" rx="1"/><rect x="9" y="1" width="6" height="6" rx="1"/>
+        <rect x="1" y="9" width="6" height="6" rx="1"/><rect x="9" y="9" width="6" height="6" rx="1"/>
+    {%- elif name == 'rows' -%}
+        <rect x="1" y="2" width="14" height="2" rx="1"/><rect x="1" y="7" width="14" height="2" rx="1"/>
+        <rect x="1" y="12" width="10" height="2" rx="1"/>
+    {%- elif name == 'pause' -%}
+        <circle cx="8" cy="8" r="3" fill="none" stroke="currentColor" stroke-width="2"/>
+        <rect x="7" y="0" width="2" height="4"/><rect x="7" y="12" width="2" height="4"/>
+        <rect x="0" y="7" width="4" height="2"/><rect x="12" y="7" width="4" height="2"/>
+    {%- elif name == 'link' -%}
+        <path d="M6 10 L10 6 M4 8 a3 3 0 0 1 0-4 l2-2 a3 3 0 0 1 4 4 M12 8 a3 3 0 0 1 0 4 l-2 2 a3 3 0 0 1-4-4"
+              fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+    {%- elif name == 'copy' -%}
+        <rect x="1" y="4" width="9" height="11" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/>
+        <rect x="5" y="1" width="9" height="11" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/>
+    {%- elif name == 'dial' -%}
+        <circle cx="8" cy="8" r="2.5"/>
+        <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-dasharray="2.5 2.2"/>
+    {%- endif -%}
+</svg>
+{%- endmacro -%}
+
+{% for href, label, icon in entries %}
+    {%- set is_on = request.path == href or request.path.startswith(href ~ '/') -%}
+    {%- if nav_style | default('bar') == 'rail' %}
+        {#- collapsed, the label is hidden and `title` carries it as a tooltip -#}
+        <a class="ls-rail__item{{ ' is-on' if is_on }}" href="{{ href }}" title="{{ label }}"
+           {% if is_on %}aria-current="page"{% endif %}>
+            {{ nav_icon(icon) }}<span class="ls-rail__label">{{ label }}</span>
+        </a>
+    {%- else %}
+        <li class="nav-item">
+            <a class="nav-link{{ ' active' if is_on }}" href="{{ href }}"
+               {% if is_on %}aria-current="page"{% endif %}>{{ label }}</a>
+        </li>
+    {%- endif %}
+{% endfor %}
