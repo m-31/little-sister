@@ -17,6 +17,12 @@ uv run ruff check
 echo "pre-commit: mypy"
 uv run mypy
 
+# Against the floor `requires-python` promises, not against the interpreter this is
+# developed on (ADR-0054). Static and about a second, so it belongs on every commit;
+# the floor *test* run is heavier and rides the release gate instead.
+echo "pre-commit: mypy (floor 3.11)"
+uv run mypy --python-version 3.11
+
 echo "pre-commit: pytest"
 uv run pytest -q
 

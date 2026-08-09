@@ -239,7 +239,7 @@ replacement is resolving from a tag.
 3. **Green on its own gate** — `ruff`, `mypy --strict`, `pytest`. Anything that fails
    here is something the module was borrowing from the deployment.
 4. **Tag `v0.1.0`** and release it through the pipeline
-   ([`create_a_release.md`](create_a_release.md)), private-strings scan included.
+   ([ADR-0022](adr/0022-generated-release-branch.md)), private-strings scan included.
 5. **The deployment adds the dependency** — `little-sister-<x>` in its
    `dependencies`, with a `[tool.uv.sources]` entry naming the tag — and changes its
    import from the local module to the package.

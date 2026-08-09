@@ -26,7 +26,7 @@ class _FakeResponse:
     def __init__(self, status: int) -> None:
         self.status = status
 
-    def __enter__(self) -> _FakeResponse:
+    def __enter__(self) -> "_FakeResponse":
         return self
 
     def __exit__(self, *args: object) -> bool:

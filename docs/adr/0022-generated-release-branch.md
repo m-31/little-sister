@@ -62,10 +62,8 @@ by tooling, fix-forward only — nothing on `main` is ever edited by hand:
 - Contributions arrive as issues and PRs against `main`; an accepted PR is
   absorbed into the working branch and lands in the next release squash,
   credited with `Co-authored-by`.
-- The process is repo-agnostic — the how-to is
-  [`../create_a_release.md`](../create_a_release.md) — and the client-app
-  repository runs the same tooling with its own lists and its own
-  (`xcodebuild`) gate.
+- The process is repo-agnostic, and the client-app repository runs the same
+  tooling with its own lists and its own (`xcodebuild`) gate.
 
 ## Alternatives considered
 - **Publish everything, scrubbed.** Rejected: a string denylist cannot catch

@@ -127,7 +127,7 @@ visible config error, not garbage.
 
 → Full record: [`adr/0009-per-profile-metrics-scripts.md`](adr/0009-per-profile-metrics-scripts.md)
 
-### ADR-0010 — Target Python 3.14
+### ADR-0010 — Target Python 3.14 *(superseded by ADR-0054)*
 **Q:** Keep `requires-python` at 3.14, or loosen to 3.12+?
 
 **A:** Keep **`>=3.14`** as a deliberate single modern target. The code needs only
@@ -136,7 +136,9 @@ distro's), so a high floor is cheap; it simplifies the toolchain and keeps the
 free-threading door open (locking is GIL-independent — ADR-0002). No external
 contract depends on the runtime version.
 
-→ Full record: [`adr/0010-python-version.md`](adr/0010-python-version.md)
+→ Full record: [`adr/0010-python-version.md`](adr/0010-python-version.md) — superseded
+by [ADR-0054](adr/0054-python-floor-and-development-version.md), which restates what
+still stands and lowers the floor to 3.11.
 
 ### ADR-0011 — SSH check family
 **Q:** How should the SSH checks be structured and named — `ssh.py` has become the
@@ -1425,8 +1427,10 @@ rather than a migration. One word in three spellings: distribution
 dependency name and every `import` are the same whether the wheel came from a tag or
 an index — so publishing deletes a table from the consumers' configuration and changes
 no code, on the one condition that the git era already used the published name. The
-name is therefore **reserved on the index when the repository is cut**, not when it is
-published. No `little_sister.` sub-namespace: the library is an ordinary package with
+name is therefore **checked when the repository is cut and claimed by its own first
+release** — every package has code and a version to cut, so nothing has to be invented
+to hold a name early, and an empty placeholder release would not hold one anyway (PEP
+541 calls that squatting). No `little_sister.` sub-namespace: the library is an ordinary package with
 its own `__init__.py`, so a separate distribution cannot add submodules to it, and a
 plugin importing as part of the library would read as *inside* the version contract it
 is explicitly outside. The type name is the package's suffix, which makes a collision

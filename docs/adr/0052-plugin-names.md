@@ -39,9 +39,14 @@ that to hold.
    changes no code, no configuration and no import — *provided* the git era already
    uses the published name. That proviso is this record's reason to exist.
 
-3. **The name is claimed on the index when the repository is cut**, not when it is
-   published. A git dependency claims nothing; a name discovered to be taken after
-   deployments pin it is a rename in every consumer, which decision 1 exists to avoid.
+3. **The name is *checked* when the repository is cut, and claimed by its own first
+   release.** A git dependency claims nothing, and a name discovered to be taken after
+   deployments pin it is a rename in every consumer — which decision 1 exists to avoid.
+   What avoiding it costs is a **check**, not an upload: every package in the family has
+   working code and a version to cut, so its claim is its own first publication and
+   nothing has to be invented to hold a name ahead of time. The window between the check
+   and the claim is accepted knowingly, and what bounds it is publishing the family
+   close together rather than one package a year.
 
 4. **No `little_sister.` sub-namespace.** `little_sister.plugins.<x>` reads better and
    cannot be had: `little_sister` is an ordinary package with its own `__init__.py`,
@@ -70,8 +75,20 @@ that to hold.
   type name that differs from its package — is not forbidden, but it gives up the
   derivation: the roster will show its distribution as unknown. That is a fair price
   and a visible one.
-- **Reserving names costs a placeholder release each.** Cheap, and unlike everything
-  else in this record it has to be done by a human at a specific moment.
+- **A reservation that holds is a real minimal release, not a placeholder.** PEP 541
+  names "package has no functionality or is empty" as exactly the condition under which
+  a project may be removed from the index on request — its own definition of name
+  squatting — so a name held with an empty shell can be taken back by a determined
+  claimant, which is the opposite of what a reservation is for. The distinction only
+  ever bites for a name agreed *ahead* of its code, a fifth plugin agreed but unwritten
+  say; every name here has code behind it, so each is claimed by its own first release
+  (decision 3) and none of them needs a reservation at all.
+- **The four names are free, and the one near name is not a collision.**
+  `little-sister` and the three plugin names are unclaimed on the index. `littlesis` is
+  taken — a wrapper for an unrelated public-interest database whose own name makes the
+  same joke this project's does — and it normalizes differently, so it is a confusion
+  rather than a conflict; what tells the two apart where a reader meets them is the
+  `description`.
 
 ## Alternatives considered
 

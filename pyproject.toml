@@ -1,6 +1,6 @@
 [project]
 name = "little-sister"
-version = "0.3.0"
+version = "0.3.11"
 description = "Self-hosted status monitoring — checks are plain Python, from a homelab to a team"
 authors = [
     { name = "Michael Meyling" }
@@ -20,11 +20,14 @@ classifiers = [
     "Intended Audience :: System Administrators",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
     "Topic :: System :: Monitoring",
     "Typing :: Typed",
 ]
-requires-python = ">=3.14"
+requires-python = ">=3.11"
 dependencies = [
     "flask>=3.0",
     "gunicorn>=22.0",
@@ -50,7 +53,10 @@ dev = [
 ]
 
 [tool.ruff]
-target-version = "py314"
+# The **floor**, not the interpreter this is developed on: the `UP` rules exist to
+# propose modern idioms, and one the floor cannot run is a proposal to break the
+# promise in `requires-python` (ADR-0054).
+target-version = "py311"
 
 [tool.ruff.lint]
 # Beyond ruff's default (E, F): import sorting (I), pyupgrade (UP — the 3.14
@@ -67,5 +73,14 @@ strict = true
 addopts = "--cov=little_sister --cov-report=term-missing"
 
 [build-system]
-requires = ["uv_build>=0.11.14,<0.12.0"]
+# The upper bound is one **major** line rather than one minor: uv generates
+# `<0.12.0` because it pins the minor it shipped with, which turns every uv upgrade
+# into a release-blocking edit — and the backend's own contract here is one sentence
+# long (a `src/<import package>` layout), so a minor bump has nothing to break.
+# Verified rather than assumed: the wheel and the sdist built by 0.11 and by 0.12
+# carry byte-identical file lists. Widened deliberately, and re-narrowed the day a
+# minor actually changes what it produces — and what would notice is not vigilance
+# but the publish step, which opens the wheel and the sdist and refuses anything the
+# release tree drops. A backend that started shipping extra files would fail there.
+requires = ["uv_build>=0.11.14,<1.0.0"]
 build-backend = "uv_build"

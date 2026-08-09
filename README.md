@@ -56,7 +56,11 @@ lives in its own repository,
 ### Prerequisites
 
 #### Software
-Python 3.14 or later. No external services are required — all state is kept in memory.
+Python **3.11 or later** ([ADR-0054](docs/adr/0054-python-floor-and-development-version.md)).
+Development and the quality gate run on 3.14, so that is the best-tested interpreter; the
+floor is checked rather than assumed — the type check runs against it on every commit and
+the whole test suite runs against it on every release. No external services are required —
+all state is kept in memory.
 
 #### Users
 The allowed users are defined by the `users` aspect of the configuration roots: either
@@ -252,9 +256,9 @@ with every entry commented out.
 
 #### From the package index
 
-For running little sister. It needs **Python 3.14 or later**
-([ADR-0010](docs/adr/0010-python-version.md)) — on anything older the resolver declines
-to install, which is the intent rather than a packaging mistake.
+For running little sister. It needs **Python 3.11 or later**
+([ADR-0054](docs/adr/0054-python-floor-and-development-version.md)) — on anything older
+the resolver declines to install, which is the intent rather than a packaging mistake.
 
 ```bash
 pip install little-sister            # or: uv pip install little-sister

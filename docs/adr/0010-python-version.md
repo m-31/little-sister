@@ -1,6 +1,19 @@
 # ADR-0010 — Target Python 3.14
 
-- **Status:** Accepted
+> **Superseded 2026-08-09 by [ADR-0054](0054-python-floor-and-development-version.md).**
+> Its decisions that still stand — development on one modern interpreter, pinned by uv;
+> the free-threading door kept open with correctness never depending on it; no external
+> contract touched by the runtime version — are restated there with this record's date.
+> What changed is the **floor**: `requires-python` is `>=3.11`, the measured minimum,
+> because this library is now published to people whose interpreter we do not provision.
+> Its consequence "the app won't run on a stock 3.10–3.13 interpreter" is what stopped
+> being true.
+>
+> Kept for the history. Everything below describes the decision as it stood; where it
+> disagrees with ADR-0054, that record wins.
+
+- **Status:** Superseded by
+  [ADR-0054](0054-python-floor-and-development-version.md)
 - **Date:** 2026-06-25
 - **Related:** [ADR-0001](0001-in-process-threaded-engine.md) (single-host threaded
   engine), [ADR-0002](0002-rlock-snapshot-synchronization.md) (locking is

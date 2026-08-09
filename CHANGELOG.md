@@ -2,11 +2,26 @@
 
 All notable changes to little-sister, newest first. The format follows
 [Keep a Changelog](https://keepachangelog.com/); releases are cut with the release
-pipeline (see [`docs/create_a_release.md`](docs/create_a_release.md)), which rolls
-the **[Unreleased]** notes below into the tagged version. The JSON API
+pipeline ([ADR-0022](docs/adr/0022-generated-release-branch.md)), which rolls the
+**[Unreleased]** notes below into the tagged version. The JSON API
 contract versions **separately** — see `docs/api/openapi.yaml` `info.version`.
 
 ## [Unreleased]
+
+## [0.3.11] - 2026-08-09
+
+### Changed
+
+- **`requires-python` is now `>=3.11`**, down from `>=3.14`. Nothing in the library ever
+  needed 3.14: the high floor was a deliberate choice made while the only consumer was a
+  host whose interpreter we provisioned, and that arithmetic changes as soon as the
+  library is installed by people who choose their own
+  ([ADR-0054](docs/adr/0054-python-floor-and-development-version.md)). 3.11 is the
+  **measured** minimum, not an estimate — every interpreter from 3.9 up was fetched and
+  the suite run against it. Development and the everyday quality gate stay on 3.14, so
+  that remains the best-tested interpreter, and the floor is checked rather than
+  declared: the type check runs against 3.11 on every commit and the whole suite runs
+  against 3.11 on every release. The version number is that floor, on purpose.
 
 ## [0.3.0] - 2026-08-09
 
