@@ -31,6 +31,13 @@
     <script src="{{ href }}" defer></script>
         {%- endif %}
     {%- endfor %}
+    {#- Submit-on-change for the presentation controls. Emitted from the header, for
+        the reason the extension assets above are: the settings menu ships from this
+        file, so the behavior that makes it work ships with it and no page can forget
+        it — and the dashboard's filter switches, which carry the same marker, are
+        covered by the same one delegated listener. `defer` because a delegated
+        listener has nothing to do before the document is parsed. -#}
+    <script src="{{ url_for('static', filename='js/prefs.js') }}" defer></script>
 </head>
 {#- The layout the server renders (ADR-0029). `rail` is the default and
     `topbar` is the arrangement this surface had before it — the same markup
@@ -39,19 +46,12 @@
     cookie; `kiosk` is the third, and the one this file branches on rather than
     leaving to CSS. -#}
 <body data-ls-theme="{{ theme }}" data-ls-layout="{{ layout }}"
+      {%- if card_status_line == 'below' %} data-ls-card-state="below"{% endif %}
       {%- if bs_theme %} data-bs-theme="{{ bs_theme }}"{% endif %}>
-{#- `auto` is the one theme the server cannot resolve: only the browser knows
-    what the OS is asking for. The stylesheet follows it through a
-    prefers-color-scheme query, but Bootstrap's own chrome needs a concrete
-    data-bs-theme, so these three lines set it — first thing inside <body>, so
-    it lands before anything paints and no page flashes light chrome on a dark
-    canvas. Every other theme is server-rendered above and needs no script. -#}
-<script>
-    if (document.body.dataset.lsTheme === 'auto' &&
-        window.matchMedia('(prefers-color-scheme: dark)').matches) {
-        document.body.setAttribute('data-bs-theme', 'dark');
-    }
-</script>
+{#- Resolving the `auto` theme before first paint. Why it exists and why it has to
+    be inline are in the partial; it is shared with the login page, which includes no
+    header, so the two documents spend one hash between them rather than two. -#}
+{% include '_theme_bootstrap.html' %}
 {#- The kiosk takes the bar and the rail away entirely rather than restyling them
     — a wall display has nothing to click — so this is the one layout the server
     branches on instead of leaving to CSS. Its own line is emitted inside the page

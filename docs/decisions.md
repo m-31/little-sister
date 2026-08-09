@@ -9,9 +9,9 @@
 
 ---
 
-### ADR-0001 — Process & threading model (phase 1)
+### ADR-0001 — Process & threading model (the in-memory baseline)
 **Q:** How do the checks, the shared status tree, and the web server run together
-when phase 1 has no persistence?
+when there is no persistence?
 
 **A:** In **one process** — `gunicorn --workers 1 --threads N` (`gthread`) — with
 the engine running checks on **background threads** that share a single
@@ -32,8 +32,8 @@ it **outside** the lock.
 → Full record: [`adr/0002-rlock-snapshot-synchronization.md`](adr/0002-rlock-snapshot-synchronization.md)
 
 ### ADR-0003 — Configuration & secrets via a `.env` file
-**Q:** Where do the Flask secret key and check/API credentials come from in
-phase 1, with no secret store?
+**Q:** Where do the Flask secret key and check/API credentials come from with
+no secret store?
 
 **A:** From a single **`.env`** file (already git-ignored), read via the process
 environment — no secrets in code or version control. Hashing the user passwords
@@ -79,6 +79,11 @@ timestamps shown in it?
 far: `timezone` (default `Europe/Berlin`) and `time_format`. Timestamps are stored
 as server-local and **converted at display** to the configured zone via a
 `localtime` Jinja filter (`zoneinfo` + `tzdata`).
+
+*Amended 2026-08-08.* The same zone interprets an admin's **unzoned maintenance
+expiry**. Explicit `Z` / numeric offsets win; a DST hole or fold is refused. The
+resolved instant returns to the existing naive server-local storage convention, so
+the persistence and JSON timestamp contracts do not change.
 
 → Full record: [`adr/0006-config-file-and-timezones.md`](adr/0006-config-file-and-timezones.md)
 
@@ -157,7 +162,9 @@ reaches container nodes and satellite graft-points) **>** inline on the owning c
 **>** empty — kept **separate** from `description` (what the check does). Branch checks
 give each leaf its own `description` via a `descriptions:` map, leaving the shared
 host node's empty. A **startup consistency pass** warns about an `about` path no check
-covers. Links stay deferred.
+covers. Links stay deferred here — settled later by
+[ADR-0030](adr/0030-curated-links.md) as a page of their own, so a node never grew a
+structured `links:` field.
 
 → Full record: [`adr/0012-node-metadata.md`](adr/0012-node-metadata.md)
 
@@ -183,8 +190,8 @@ lingering forever — without pulling the general store question forward?
 engine runs. Every entry has an **auto-expiry** — default **one week** (`config.yaml`),
 overridable, no indefinite — swept by the scheduler; and a **startup reap** drops
 entries no configured check **covers** (segment-wise on the same root-to-leaf line, so
-subsystem and unreachable-branch-leaf pins survive). A deliberate stopgap in a later
-Phase subsumes.
+subsystem and unreachable-branch-leaf pins survive). A deliberate stopgap the
+persistence phase subsumes.
 
 *Amended 2026-08-02 — editing a pin, and two admins writing it.* A pinned node offered
 only *Clear*, so extending a window meant clearing and re-setting: the node alarmed in
@@ -234,6 +241,31 @@ the stored text**: blank means *"I did not touch this field"*, so an edit that o
 moves the window keeps the explanation; on a new pin the literal `maintenance` stays
 the placeholder.
 
+*Amended 2026-08-02 — read first, edit on intent.* The in-place edit now applies to
+an **entry pin** as well as a node pin. A pinned item shows its rendered explanation,
+authorship and expiry first; explicit *Edit* reveals the prefilled raw-Markdown
+textarea and the existing blank new-window field, while *Clear* stays separate. A
+member reason's maintenance control occupies a stable end rail and opens only on
+activation — hover never inserts a form into the pointer's path. The entry's guarded
+set carries `(path, slug, set_at)`, so rewording or extending it never clears the pin or
+lets the finding alarm in the gap. This changes no side-table field or file shape and
+needs no migration; a future shape change follows the existing hard-cut rule rather
+than adding a compatibility reader.
+
+*Amended again 2026-08-02 — name the expiry directly.* The maintenance field accepts
+unit-suffixed durations or a small calendar grammar: full ISO date/time, `MM-DD`, a
+day of month, `HH:MM`, or weekday plus time. Blank still uses the configured duration;
+digits now mean day-of-month, so seconds carry `s`. Shortcuts choose their next future
+occurrence in the configured timezone, never clamp an impossible date, refuse DST
+holes/folds, and still obey the one-second-to-365-day bound. A native click-opened help
+table beside every shared field makes the exact grammar discoverable. All forms still
+resolve to the existing `expires_at`; no persistence or JSON shape changes.
+
+*Amended again 2026-08-02 — bare weekday at noon.* A weekday without an explicit time,
+abbreviated or full and in any letter case, means its next occurrence at 12:00 in the
+configured timezone. When today has that name it always means the following week,
+independent of the current time; an explicitly supplied time may still select today.
+
 → Full record: [`adr/0014-maintenance-persistence.md`](adr/0014-maintenance-persistence.md)
 
 ### ADR-0015 — Check discovery: a union of config directories
@@ -247,7 +279,7 @@ ownership is a hard error** — branch checks like `host-metrics` + `qnap-metric
 disjoint child subtrees, so they still share a host node; no override / merge). Config
 applies at
 **startup**; a restart re-reads it — **no live reload**. Override-layering and reload
-are deferred; satellites (later Phase) are the real multi-site mechanism.
+are deferred; satellites (a later phase) are the real multi-site mechanism.
 
 → Full record: [`adr/0015-check-discovery-union.md`](adr/0015-check-discovery-union.md)
 
@@ -297,6 +329,21 @@ responsibility (operator-controlled, ADR-0007); the check base provides **`plain
 safely, and the built-in capturing checks use them. `title`/`description` render inline;
 `about`/`reasons` as a block. The JSON envelope is unchanged (raw Markdown).
 
+*Amended 2026-08-02 — maintenance explanations.* The admin-authored
+`MaintenanceEntry.reason` joins the rendered fields: block rendering on full read
+surfaces, inline rendering plus CSS clamping in compact summaries, and the untouched
+source in every editor. Raw HTML stays escaped and unsafe schemes stay rejected. The
+literal `maintenance` sentinel is not displayed; the persisted string and
+`maintenance_details.reason` remain raw Markdown in the same storage/API shapes.
+
+*Amended 2026-08-02 — bare web URLs.* Fully qualified bare `http://` and `https://`
+URLs render as links through markdown-it-py's linkification rule and receive the same
+scheme validation, new-tab target and `noopener noreferrer` relation as explicit
+Markdown links. Recognition is deliberately limited to those two schemes: schemaless
+domains, email addresses, FTP, protocol-relative text, code spans and `plain()`-wrapped
+captured output stay literal. The runtime dependency now uses the
+`markdown-it-py[linkify]` extra rather than an in-house URL recognizer.
+
 → Full record: [`adr/0018-markdown-rendering.md`](adr/0018-markdown-rendering.md)
 
 ### ADR-0019 — Inspection popover (hover card)
@@ -318,6 +365,11 @@ metadata gets no card.
 → Full record: [`adr/0019-inspection-popover.md`](adr/0019-inspection-popover.md)
 
 ### ADR-0020 — Deployment-supplied user list
+*Superseded 2026-08-08 by
+[ADR-0046](adr/0046-user-list-from-the-configuration-roots.md), which restates
+everything here except the path resolution: the `users` aspect of the configuration
+roots is now the only input. Kept for the history.*
+
 **Q:** For the repo split, how does a deployment supply its own users
 when `users.yaml` is read from inside the package today?
 
@@ -326,7 +378,7 @@ set, else `users.yaml` in the **cwd** — mirroring how `.env` / `config.yaml` a
 found ([ADR-0003](adr/0003-config-and-secrets-via-env-file.md)). The package ships
 **`users.example.yaml`** only and no longer bundles a real `users.yaml`. Format
 and fail-fast-on-missing are unchanged; this is a **location** change, not an auth-mechanism
-one (password hashing and a pluggable auth provider are in later Phases).
+one (password hashing and a pluggable auth provider are in later phases).
 
 → Full record: [`adr/0020-user-list-location.md`](adr/0020-user-list-location.md)
 
@@ -404,7 +456,7 @@ both the dashboard and detail-page headers; the **current** node (last crumb) is
 text. Small UI navigation change — recorded here, no ADR.
 
 ### Envelope fields — node metadata + maintenance details (additive to ADR-0008)
-**Q:** Which Phase-2 node fields (check `config`, `about`, `title`, maintenance expiry)
+**Q:** Which node-metadata fields (check `config`, `about`, `title`, maintenance expiry)
 should join the read-only JSON envelope ([ADR-0008](adr/0008-json-output-api.md))?
 
 **A:** **All four**, as an **additive** change (`schema_version` stays **1**). The envelope
@@ -416,7 +468,7 @@ maintenance) beside the existing **`maintenance`** bool — the bool is left **u
 (repurposing it to an object would be breaking). Contract:
 [`api/openapi.yaml`](api/openapi.yaml). Recorded here, no ADR.
 
-### ADR-0004 (2026-07-29 update) — A failing check shows its stack trace
+### ADR-0004 (2026-08-01 update) — A failing check shows its stack trace
 **Q:** When a check raises, the node shows only `check error: <message>` while the
 trace goes to the log. On a deployment whose log is awkward to reach — a container,
 someone else's cloud — that is the one piece of information the operator needs and
@@ -508,10 +560,10 @@ storage — enter only **deployment-side**, wired by the application through the
 provider seams ([ADR-0023](adr/0023-secret-references.md); the auth seam follows the
 same philosophy): the core gains no SDK, no service, no extra deploy step, and a plain
 local install keeps working with none of it. Deliberately still open is whether the
-later Phase durable store can hold this same line — that belongs to the store choice
-itself.
+persistence phase's durable store can hold this same line — that belongs to the store
+choice itself.
 
-### ADR-0027 — Observation timestamps: only where a check has written
+### ADR-0027 — Observation timestamps: stamped where written, rolled up while unambiguous
 **Q:** `Status.__init__` stamped every node at construction, so a node no check ever
 writes — a container above the check mounts, the root above all — served the process
 start time as its "observation" time, and a client polling the root read boot time as
@@ -528,6 +580,18 @@ min-rolled root look ancient) — the frequency-normalized freshness signal rema
 `stale` (ADR-0005). A deliberate asymmetry with ADR-0004: codes roll up worst-of;
 observation times do not aggregate. Cards show the time when present; the JSON
 `timestamp` becomes nullable with the same semantics.
+
+*Amended 2026-08-08 — the mount registry **counts checks per path**
+([ADR-0044](adr/0044-run-facts-on-the-node.md)).* An unwritten ancestor above one
+mount **shared by two checks** now inherits **no** stamp: the set collapsed the pair
+into one "sole" mount, so rule 3 attributed upward a value that flips between two
+checks' run times — rule 4's ambiguity. The shared node itself keeps its own last
+write (rule 2). A branch check's own mount needed no new stamping — it is written
+every run, as the context says; its bare look was display-only, closed by ADR-0044's
+topmost-visible rule (both records carry the correction in their update notes). The
+engine now writes the run's **facts** — wall time and armed next slot — beside each
+result, and the snapshot resolves them exactly where the count is one; nothing is
+synthesized from children.
 
 → Full record: [`adr/0027-observation-timestamp-semantics.md`](adr/0027-observation-timestamp-semantics.md)
 
@@ -690,8 +754,11 @@ their scripts, links and their icons, a brand and its assets); **both forms pres
 error**, and an unrecognized entry **warns and is ignored**, so an operator's stray file
 can never stop the monitor. `config.yaml` becomes **`config/settings.yaml`** and
 `users.yaml` becomes **`config/users.yaml`** in the same move — a deployment reorganizes
-**once**, not once per aspect — while `LITTLE_SISTER_CONFIG` and `LITTLE_SISTER_USERS`
-remain explicit single-file overrides that **bypass layering entirely**. **`.env` and
+**once**, not once per aspect — while `LITTLE_SISTER_CONFIG` remains an explicit
+single-file override that **bypasses layering entirely** (the matching user-list
+override is retired by
+[ADR-0046](adr/0046-user-list-from-the-configuration-roots.md), on the strength of
+this record's own first-root-wins rule). **`.env` and
 `var/` stay out**: `config/` is read-only input the operator authors,
 `var/` is state the program owns ([ADR-0014](adr/0014-maintenance-persistence.md)). One
 **clean break** — `LITTLE_SISTER_CHECKS_DIR` is gone and `checks/` is never consulted,
@@ -816,6 +883,16 @@ per-line control there would offer to raise a ticket about a stack trace. Additi
 mechanism and `reason.actions` are unchanged, and both slots are offered on every node
 with the filler declining by returning `None`, so this adds a place and not a policy.
 
+*Amended 2026-08-02 — `node.actions` on every box.* The slot is offered on each
+**nested box** under a card as well as on the card head. The first deployment to
+fill it found the gap by rendering: a card is the top of a subtree and is usually
+a container with no reading of its own, so a filler that declines a node with
+nothing to say declines exactly the nodes that have card heads — while the
+failing **leaf**, which is what an action is nearly always about, sat in a box
+that carried no slot at all. A quiet leaf stays a chip and carries none. Nothing
+about the seam changes; this widens the roster's `where`, which is part of the
+version contract, so it is recorded rather than left to the template.
+
 → Full record: [`adr/0034-template-slots-for-dependent-packages.md`](adr/0034-template-slots-for-dependent-packages.md)
 
 ### ADR-0035 — A dependent package registers its own configuration aspect
@@ -913,6 +990,14 @@ silently; the parameter instead lets the server say the one thing nothing else c
 that a pin whose slug the run did not report is **suspended, not deleted**. On the
 pip, only a **node** pin still takes a node out of the ancestor set: a node pin cancels
 its subtree, an entry pin cancels nothing below it.
+
+*Amended 2026-08-08 — decision 8's premise narrows.* An entry may declare a **code
+of its own** ([ADR-0042](adr/0042-entries-carry-their-own-code.md)); "an entry has
+no severity of its own" now describes entries that declare none — the default, and
+permanently right for a severity-banded leaf. The cap-not-`escapes` *effect* for
+entry pins stands unchanged; whether a pin on a coded entry may take `escapes` moves
+to the pin-policy design pass. Decision 13's envelope sketch grows `code` and
+`running` beside `text` and `maintenance`, still whole in the client contract round.
 
 → Full record: [`adr/0036-addressable-reasons.md`](adr/0036-addressable-reasons.md)
 
@@ -1048,3 +1133,305 @@ nothing else, and this change deletes it); a `maintenance` boolean; a separate
 administrative event kind.
 
 → Full record: [`adr/0041-maintenance-is-a-contribution-rule.md`](adr/0041-maintenance-is-a-contribution-rule.md)
+
+### ADR-0042 — A reason entry carries its own code
+**Q:** One node, mixed lines: this workflow failed, that one passed, a third is red
+*and* already re-running — and a severity-graded check collapses critical-to-low
+findings into one node code, smuggling the per-line severity back through an emoji.
+Is that a sixth status code (`RUNNING`, an `INFO` band), or something else?
+
+**A:** **No sixth code** — the vocabulary stays closed (ADR-0032 decision 4), and
+`INFO` collapses onto `WARN`: *seen and counted* ⇒ `WARN`, *available but not
+counted* ⇒ `OK` with a reason. Instead **an entry may declare a code**: the node's
+own status derives from its entries — worst-of over virtual children, `UNDEFINED`
+ignored, suppressed entries contributing nothing, the ADR-0039 tiebreak one level
+down, which makes ADR-0036 decision 7 literal — an entry-bearing node declares no
+code of its own, an **empty entry set reads `OK`** ("nothing to report" is not
+"nothing reported"; a check that could not enumerate reports prose and declares),
+and declaring both is refused at the `CheckResult` seam. A per-entry **`running`**
+flag shows work in flight as display (`is-running` class, italic; the words still
+say it) without touching the roll-up, so a failed job's verdict stays red and
+visible under its rerun. Check-facing shape: a frozen `Entry(slug, text, code,
+running)` accepted beside the untouched tolerant forms; uncoded entries carry the
+node's code forever, which severity-banded leaves keep permanently. Healthy entries
+are **per-aspect opt-in, off by default**; a run in flight always yields a line in
+the default view; ordering becomes the check's duty (non-OK, then in-flight, then
+healthy). Severity *mapping* stays deployment config (`severity_map`); whether lines
+carry codes is the check's structural statement about its data, never a knob. The
+envelope changes nothing until the client contract round. Rejected: a `RUNNING`
+code (one field, two facts — the destroyed-reading mistake ADR-0041 removed,
+re-created; no defensible rank; `UNDEFINED` already covers never-completed; and a
+sixth code fails silently in every fallback branch), a check-set pin (a check that
+can pin itself can silence itself), Markdown emphasis as the running channel
+(`shorten` is not emphasis-aware), a second entry for the in-flight run (churns the
+set, strands pins).
+
+→ Full record: [`adr/0042-entries-carry-their-own-code.md`](adr/0042-entries-carry-their-own-code.md)
+
+### ADR-0043 — The coverage backstop: an empty scope is never silently green
+**Q:** A check that discovers its own subjects returns an empty or over-narrow
+scope — a filter typo, a team that lost its repositories — and every aspect loops
+over nothing and reports `OK`. Green then means "nothing to report" and "nothing is
+being watched" identically. What guards the difference?
+
+**A:** A third standing invariant beside liveness and fail-toward-alarming
+(ADR-0032 rules 6–7): **a check that discovers its own scope reports that scope,
+and an empty scope is never silently green.** Zero scope is a **`WARN` on the
+check's own node**, naming the filter that produced it — `WARN`, not `ERROR`,
+following the zero-checks heartbeat precedent: the check works; the world or the
+configuration is wrong. The scope **count** rides as an `OK` reason on the
+container; the **roster** goes in `report`
+([ADR-0044](adr/0044-run-facts-on-the-node.md)) — the roster is presence, an entry
+is a claim. The expectation is the **check's business**: one `expect_min`
+comparison whose default is 1, and the setting **floors at 1** — a configurable
+zero would let a deployment silence the backstop. Subject children still render
+when the scope is empty (a leaf you can see is empty is a leaf you can see is being
+watched), and "overdue" follows the same ownership rule — core provides nothing for
+either. Rejected: `ERROR` at zero, a core-enforced minimum, leaving it in the log
+(the hole itself), a node per discovered subject.
+
+→ Full record: [`adr/0043-coverage-backstop.md`](adr/0043-coverage-backstop.md)
+
+### ADR-0044 — The run on the node: the container stamp, run facts, and `report`
+**Q:** A branch check's container shows no check time although one check answers
+for everything below it; the last run, wall time and next run hide behind the admin
+`/system` page; and the checks that publish their configuration onto a container
+node find it rendered nowhere. What may a node say about the check behind it?
+
+**A:** The mount registry **counts checks per path**, and the engine **writes the
+run's facts onto a sole-check container** after each run
+([ADR-0027](adr/0027-observation-timestamp-semantics.md) amended: ancestors above a
+mount shared by two checks inherit no stamp by count — a value flipping between two
+run times is rule 4's ambiguity — while the mount itself, written every run, keeps
+its own last write; nothing is synthesized from children; the container's stamp was
+never missing, only unrendered — the display rule below is what closes the visible
+gap). **One ownership rule for four facts** — run time, wall time, next
+run, and the check's own text: all belong to the check that owns the node *alone*,
+withheld where two checks share it. The node gains a small **`run`** object (wall
+time + next run, **engine-sourced** — under ADR-0033's retry, `timestamp +
+frequency` is wrong exactly when someone watches a failure) and a **`report`**
+field: what the run *found*, write-through Markdown beside `config`'s what-it-ran-
+*with* (ADR-0013), shown on the node's page and never on the card, and never a
+status claim. On a shared container, `report` goes on the owned child subtrees —
+the rule and mechanism `config` already uses. **Status, not volume,** separates
+reasons from `report`: items with verdicts of their own are entries (capped by
+`reason_cap`); a code-less list is scope. Display: the time shows on the **topmost
+node visible in the current view** and is suppressed below where it would be
+identical; the head line gains the next update beside the check time —
+**`22:25 → 22:30`**, absolute because a frozen relative "in 4m" lies under a
+failed poll while a frozen absolute recedes honestly (both at minute precision —
+seconds carried no information worth the row width — and the arrow is suppressed
+where it would render the very value beside it, so a sub-minute schedule shows a
+bare time); a stalled check shows a next-run in the past and staleness carries
+the alarm; the root stays blank. The
+**branch head becomes a real node header** (run facts, `config`, `report`; the
+kiosk keeps none). The envelope is untouched until the client contract round.
+Rejected: `max(children)` stamps, a view-layer join against `engine.info()` (the
+API stays blind), the roster in `config` (outputs filed under inputs), live counts
+in `about` (seed-once would make them lies), a relative next-run on the card.
+
+→ Full record: [`adr/0044-run-facts-on-the-node.md`](adr/0044-run-facts-on-the-node.md)
+
+### ADR-0045 — User avatars live with the user-list aspect
+**Q:** The top bar identifies the signed-in user by name, but `config/users.yaml` has
+nowhere inside its aspect to carry a picture. Does the configuration framework infer a
+directory whenever files appear, and how does one user name an avatar safely?
+
+**A:** The shape stays **explicit per aspect**: `users` now declares both the flat
+`config/users.yaml` form and a directory form containing `users.yaml` beside
+`avatars/`; dependent packages continue declaring their own legal forms through
+`register_aspect`. An optional per-user `avatar:` is a **bare name**, with or without an
+allowed image extension, resolved only inside that `avatars/` directory — no top-level
+registry because one user has one picture. A missing, invalid or ambiguous reference
+warns and falls back to the packaged neutral avatar without affecting login. The
+settings trigger shows it beside the first name. A login-gated `/user/avatar` route
+serves only the session user's selected file, never takes a username or path, and uses a
+private short cache plus an ETag. Avatars sit inside the aspect's directory form; the
+single-file override they could also sit beside is retired by
+[ADR-0046](adr/0046-user-list-from-the-configuration-roots.md).
+
+→ Full record: [`adr/0045-user-avatars.md`](adr/0045-user-avatars.md)
+
+### ADR-0046 — The user list comes from the configuration roots, and nowhere else
+**Q:** `LITTLE_SISTER_USERS` names one user-list file and bypasses the configuration
+roots. Two later records moved everything around it and kept the variable — is a
+second path into *who may log in* still earning its place?
+
+**A:** **No — it is retired, and startup refuses while it is set.** `users` is the one
+aspect that does not layer ([ADR-0031](adr/0031-deployment-config-directory.md)): the
+first root declaring it **wins whole**. So a users-only root named first in the
+path-list already *is* a single-file override —
+`LITTLE_SISTER_CONFIG_DIR=/etc/little-sister/identity:config` — and the variable bought
+only a second resolution branch in the loader, a second one in the run scripts, and its
+own avatars rule. The **hard cut** is deliberate: the name is never honored again. But
+unlike `LITTLE_SISTER_CHECKS_DIR`, whose removal announced itself (no checks ⇒ no
+start), a stale user-list variable would leave an instance looking healthy while
+authenticating against **a different list** — so it is read in exactly one place, the
+startup seam, in order to **refuse**, and the run-script preflight refuses identically.
+Permanently: a sunset needs a deletion nobody is scheduled to make.
+ADR-0020's other decisions are restated unchanged (deployment-controlled, no packaged
+list, fail-fast, same format). `LITTLE_SISTER_CONFIG` **stays** — settings merge per
+key, so a prepended root layers instead of replacing, and no path-list spelling
+reproduces it; the symmetry of the two names was never the argument.
+
+→ Full record: [`adr/0046-user-list-from-the-configuration-roots.md`](adr/0046-user-list-from-the-configuration-roots.md)
+
+### ADR-0047 — A node keeps notes, and they outlive it
+**Q:** A maintenance pin carries a line of Markdown saying why, and it is where an
+admin records a ticket, a finding, who to ask. That line dies with the pin — four
+ways, one of them silent. What should survive, and for how long?
+
+**A:** The field is renamed **`note`** (freeing `reason` for what a *check* reports),
+and a node keeps a **note history** rather than a current explanation. The note is
+appended when the pin is set, not when it ends, so expiry does nothing to it; it is
+editable while its owning pin is live and frozen afterwards, and it captures the node's
+code and reason lines **as they stood**, which is what makes "the same problem as
+before" answerable. Notes are deliberately **not a contribution rule**
+([ADR-0032](adr/0032-status-contribution-boundary.md)): they transform no code and
+never enter the roll-up. They are also **exempt from coverage reaping** — a check that
+left the configuration and came back is exactly the case worth serving — which makes
+them the first state here that is an *archive* rather than a projection of the live
+check set, and obliges an index searchable independently of the tree. Retention is
+four parameters: a note is retired iff it is **not among the last `notes_keep`** and
+either older than `notes_max_age` or the node holds more than `notes_cap` and it is
+older than `notes_min_age` — defaults 10 / 50 / 13mo / 25mo, **the count floor winning
+over everything**, because the node that has been healthy longest would otherwise lose
+precisely the history that lets anyone recognize the problem when it returns. Thirteen
+months is *more than a year*, twenty-five *one full repeat plus margin*. The keys live
+in `settings.yaml`, the sweep runs on the scheduler tick, and the table is its own
+`var/notes.json` on [ADR-0014](adr/0014-maintenance-persistence.md)'s discipline.
+
+→ Full record: [`adr/0047-node-notes-and-their-retention.md`](adr/0047-node-notes-and-their-retention.md)
+
+### ADR-0048 — The Content-Security-Policy is assembled, never a constant
+**Q:** A Content-Security-Policy is one response header, so setting it is one line. But
+a dependent package — today an extension, later a separately installable check or
+provider plugin — may need origins this library cannot know: a filler's script calling
+an issue tracker, a vendor's avatars in a reason line, an identity provider's redirect.
+(A check's own API traffic is server-side and invisible to the policy.) Who decides what
+the policy contains?
+
+**A:** Nobody, once. The policy has **no constant**: a `csp` module holds the library's
+defaults plus contributions and composes the header **at application creation**, after
+every registration has run and the configuration is loaded — never at import, because
+import is when contributions are still arriving. A package contributes through a
+module-level registry (`csp.allow(directive, source, by=...)`) from the same
+import-before-app slot it already uses for check types, fillers, assets, icon packs,
+aspects and secret resolvers, and a refusal is a warning and a skip like every other
+registration here. A contribution may name an **origin, never a keyword** —
+`'unsafe-inline'` and friends are the deployment's call, not a dependency's, or the
+policy is decorative for everyone else in the process. Where the host is
+deployment-specific it is **declared, not written** (`csp.origin_of("<aspect>.<field>")`,
+resolved at assembly and reduced to `scheme://host[:port]`), so it is never duplicated
+out of the package's own aspect and cannot drift. The deployment keeps the last word
+through a `csp` block in its configuration, so an unanticipated source is a config line
+rather than a fork. The first policy shipped is **Report-Only**, violations at
+`WARNING`, no store — enforcement is a separate later decision — and `/system` shows
+the effective policy with the contributor of each source. What made this tractable is
+[ADR-0037](adr/0037-extension-static-assets.md): `script-src` names **origins, not
+files**, so same-origin extension assets are already covered by `'self'` and the open
+question was only ever what a package *reaches*.
+
+→ Full record: [`adr/0048-an-assembled-content-security-policy.md`](adr/0048-an-assembled-content-security-policy.md)
+
+### ADR-0049 — The check-authoring surface is contract, and the gate holds it
+**Q:** §11 promises the check *registry* — but a check type is written against a base
+class, a result type, the metadata helpers, the slug vocabulary and the typed config
+readers, none of which were promised. Harmless while every check sits in a repository
+we bump in one commit; a silent `ImportError` at somebody else's process start once a
+check type lives behind its own tag. What may a check type outside this repository
+import?
+
+**A:** A named list, in `architecture.md` §11, and the gate holds it. The import point
+is the **package** `little_sister.checks`, never a module beneath it — `checks.base`
+is where most of those names live today, which is not what they are — so a refactor
+inside the module stays free while the promise holds still, and the subnode-metadata
+helpers are re-exported through the facade rather than promised at their module path.
+`tests/test_public_surface.py` parses the list out of the doc and imports every name
+(doc → code); for each module that declares `__all__` the two lists must be
+**identical** (code → doc). That measures **drift** — a name renamed by a refactor
+that looked local, or exported without being promised — not a coordinated rename,
+which is a deliberate act the version-bump rule governs. Adding a name is compatible;
+removing or renaming one is a version bump and a new ADR, exactly as for a template
+slot. **Logging is promised as a behavior, not a name**: `little_sister.logger` is
+*not* on the list — a plugin calls `logging.getLogger(__name__)` — and what is
+promised instead is that the library logs through the standard hierarchy and
+configures the **root** logger only when the application has not, so a dependent that
+sets up its own logging keeps its handlers *and its level* and gets little-sister's
+records in them. Writing that down fixed a real defect: the root `setLevel(DEBUG)` ran
+outside that guard.
+
+→ Full record: [`adr/0049-the-check-authoring-surface.md`](adr/0049-the-check-authoring-surface.md)
+
+### ADR-0050 — A declared slug comes from the provider's identifiers
+**Q:** [ADR-0036](adr/0036-addressable-reasons.md) made a reason line addressable but
+left *where a slug comes from* to the check, with a content hash as the fallback. Two
+check types answered it the same way through one shared helper in the deployment — and
+that helper now has to serve check types in repositories of their own. Where does the
+rule live?
+
+**A:** Here, as `slug(*parts)` in `little_sister.reasons`, beside `derived_slug` and
+`MAX_SLUG_LENGTH` and on the check-authoring surface. It is not a rule about a
+provider or a deployment: it is a rule about little-sister's own slug contract. Build
+identity from **identifiers the provider already owns** — never from the rendered
+text, because a hash *is* the wording and improving a line would drop every pin on it,
+and never from a position, because an index slides onto a different finding with
+nothing looking wrong. The helper narrows harder than `normalize` validates
+(`[A-Za-z0-9._-]`, everything else collapsed), so a token needs no escaping anywhere,
+and an over-long slug keeps a readable prefix plus a hash of the whole value rather
+than being truncated onto a neighbour. Which identifiers a given check uses stays with
+that check type, in its own repository.
+
+→ Full record: [`adr/0050-slugs-from-provider-identifiers.md`](adr/0050-slugs-from-provider-identifiers.md)
+
+### ADR-0051 — What startup refuses at the plugin boundary
+**Q:** Once a check type arrives as a separately released package, two things can go
+wrong silently: two packages claiming one `type:` name (the registry overwrites, so
+import order decides whose code answers for whose configuration), and a plugin
+outliving the surface it was built against (the install-time floor has no ceiling).
+What does the library do about each?
+
+**A:** It refuses, at startup, with both parties named. **Type names stay bare**
+(`type: github`) and a name is **claimed once**: a second registration raises,
+naming both classes, rather than letting import order pick a winner — re-registering
+the *same* class stays fine, since a reloading server re-runs its decorators. And the
+check-authoring surface gets an **epoch of its own**, `API_VERSION` (currently 1),
+which bumps only when a promised name is removed or renamed or a documented behavior
+changes — never for anything else in a release, so a plugin follows its contract
+rather than the library's cadence. A package declares its epoch with `require_api(n)`
+beside its registrations; a mismatch refuses naming both numbers. The epoch is held
+by a **snapshot** of what it promised (`tests/fixtures/check_api_v<n>.txt`), which the
+gate requires the surface to still contain — closing the one hole
+[ADR-0049](adr/0049-the-check-authoring-surface.md) left, since a rename that edits
+the code and the doc together cannot touch a snapshot a released plugin was built
+against. Both refusals are **hard**, unlike the warn-and-skip of the other
+registration seams: a slot that fails to fill leaves a page missing a chip, while
+these two leave a monitoring system reporting confidently about something it is not
+measuring. `/system` lists every registered type with the package and version that
+answers for it.
+
+→ Full record: [`adr/0051-what-startup-refuses.md`](adr/0051-what-startup-refuses.md)
+
+### ADR-0052 — Plugin names: one convention for a git dependency and a published one
+**Q:** The first plugins are consumed as **git dependencies**; an index comes later.
+A distribution name is the most expensive identifier in the system to change — a
+rename is a new project for every consumer, and the old name stays on the index for
+whoever asks next. Do the names chosen now survive publication unchanged?
+
+**A:** Yes, by construction, and that is what makes publication a packaging change
+rather than a migration. One word in three spellings: distribution
+`little-sister-<x>`, import package `little_sister_<x>`, check type `<x>`. A
+`[tool.uv.sources]` entry is a **source redirect, not a different package** — the
+dependency name and every `import` are the same whether the wheel came from a tag or
+an index — so publishing deletes a table from the consumers' configuration and changes
+no code, on the one condition that the git era already used the published name. The
+name is therefore **reserved on the index when the repository is cut**, not when it is
+published. No `little_sister.` sub-namespace: the library is an ordinary package with
+its own `__init__.py`, so a separate distribution cannot add submodules to it, and a
+plugin importing as part of the library would read as *inside* the version contract it
+is explicitly outside. The type name is the package's suffix, which makes a collision
+refusal name two projects that say what they claim and gives entry-point discovery an
+obvious key later.
+
+→ Full record: [`adr/0052-plugin-names.md`](adr/0052-plugin-names.md)
+

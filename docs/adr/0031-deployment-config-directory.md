@@ -13,6 +13,19 @@
   shape, one level down).
 - **Register:** [`../decisions.md`](../decisions.md)
 
+> **Update (2026-08-06):** point 5 below says `LITTLE_SISTER_CONFIG` and
+> `LITTLE_SISTER_USERS` "keep working as explicit single-file overrides". That was a
+> restatement of the two records those overrides belonged to, not a decision taken
+> here, and half of it has since been retired:
+> [ADR-0046](0046-user-list-from-the-configuration-roots.md) removes
+> `LITTLE_SISTER_USERS` — *because* of this record's own first-root-wins rule for
+> `users`, which already expresses a single-file override as a users-only root named
+> first — and makes startup refuse while the name is set. `LITTLE_SISTER_CONFIG`
+> stays: settings **merge per key**, so a prepended settings root layers rather than
+> replaces, and nothing in the path-list reproduces it. Everything this record itself
+> decides — the path-list, aspects and their shapes, the per-aspect combining rules,
+> the clean break — stands unchanged.
+
 ## Context
 `checks/` was accurately named when it held checks. It now holds three unrelated kinds
 of thing — check configs, `nodes.yaml` (node metadata, which `load_checks` carries a

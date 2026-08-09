@@ -1,12 +1,13 @@
-"""Branch pins in the UI (backlog #35): the card pin control and the subtree
+"""Branch pins in the UI (ADR-0014): the card pin control and the subtree
 page's maintenance card. The model, POST /maintenance, persistence and the
 reaper always accepted a container pin — these tests pin the surfaces down."""
 
 import os
 import re
 from dataclasses import replace
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from unittest import TestCase, mock
+from zoneinfo import ZoneInfo
 
 os.environ.setdefault("LITTLE_SISTER_ENGINE", "0")
 os.environ.setdefault("SECRET_KEY", "test-key")
@@ -54,6 +55,7 @@ class BranchPinTests(TestCase):
         self.assertIn('aria-haspopup="dialog"', body)
         # the no-JS fallback is the node's own page
         self.assertIn('href="/status/system"\n   role="button"', body)
+        self.assertIn("Which formats can I use?", body)
 
     def test_viewer_sees_no_pin_control_or_dialog(self):
         self._viewer()
@@ -158,6 +160,25 @@ class BranchPinTests(TestCase):
         self.assertIn("Silences <strong>/svc/api</strong>", body)
         self.assertIn("The check keeps running", body)     # the leaf sentence
         self.assertIn("default 7d", body)
+        self.assertIn("Duration or expiry", body)
+        self.assertIn("Which formats can I use?", body)
+        self.assertIn("Timezone: Europe/Berlin", body)
+        self.assertIn("used when the input has no", body)
+        self.assertIn("Next 10 July, at midnight", body)
+        self.assertIn("Next Friday at 12:00", body)
+
+    def test_open_editor_replaces_its_trigger_only_when_cancel_is_enhanced(self):
+        css = self.client.get(
+            "/static/css/overview.css").get_data(as_text=True)
+        selector = (
+            ".maintenance-edit-enhanced "
+            ".maintenance-editor-disclosure[open] > summary")
+        rule = css.split(selector, 1)[1].split("}", 1)[0]
+        self.assertIn("display: none", rule)
+        script = self.client.get(
+            "/static/js/maintenance-edit.js").get_data(as_text=True)
+        self.assertIn(
+            'classList.add("maintenance-edit-enhanced")', script)
 
     def test_duration_placeholder_follows_the_configured_default(self):
         self._login()
@@ -236,11 +257,30 @@ class EditAndConflictTests(TestCase):
         body = self.client.get("/status/system/alpha").get_data(as_text=True)
         self.assertIn("Save changes", body)                 # not only "Clear"
         self.assertIn("Clear maintenance", body)
-        self.assertIn('name="reason" placeholder="why?" value="rebuild"', body)
-        # duration is deliberately NOT prefilled: blank is the configured default
+        self.assertIn('id="node-maintenance-reason" name="reason"', body)
+        self.assertIn('placeholder="why?">rebuild</textarea>', body)
+        # expiry is deliberately NOT prefilled: blank is the configured default
         # here exactly as it is on an unpinned node
-        self.assertIn('name="duration" placeholder="e.g. 2h, 3d — default 7d"',
-                      body)
+        self.assertIn('id="node-maintenance-duration" name="duration" value=""', body)
+        self.assertIn('placeholder="e.g. 2h or Friday — default 7d"', body)
+
+    def test_pinned_node_is_rendered_first_and_keeps_raw_markdown_to_edit(self):
+        self._login()
+        self.tree.upsert("/system/alpha/disk", StatusCode.OK)
+        self._pin(
+            "/system/alpha",
+            "**Rebuild** — [runbook](https://ops.example/runbook)\n\n<script>x</script>",
+        )
+
+        body = self.client.get("/status/system/alpha").get_data(as_text=True)
+
+        self.assertIn("<strong>Rebuild</strong>", body)
+        self.assertIn('href="https://ops.example/runbook"', body)
+        self.assertIn("&lt;script&gt;x&lt;/script&gt;", body)
+        self.assertNotIn("<script>x</script>", body)
+        self.assertIn(">Edit maintenance</summary>", body)
+        self.assertIn("**Rebuild** — [runbook]", body)  # raw textarea source
+
 
     def test_both_forms_carry_the_token(self):
         self._login()
@@ -266,6 +306,16 @@ class EditAndConflictTests(TestCase):
         self.assertIn('data-pin-reason="planned"', body)
         self.assertIn(f'data-pin-token="{entry.set_at}"', body)
         self.assertIn('data-pin-by="ada"', body)
+
+    def test_pinned_card_carries_server_rendered_read_source(self):
+        self._login()
+        self.tree.upsert("/db/ping", StatusCode.OK)
+        self._pin("/db", "See **runbook**")
+        body = self.client.get("/status").get_data(as_text=True)
+        self.assertIn('class="pin-control__reason-source"', body)
+        self.assertIn("<strong>runbook</strong>", body)
+        self.assertIn('id="pin-card-read"', body)
+        self.assertIn('id="pin-card-edit"', body)
 
     def test_editing_keeps_the_reason_and_the_original_author(self):
         self._login()
@@ -311,7 +361,7 @@ class EditAndConflictTests(TestCase):
         body = response.get_data(as_text=True)
         self.assertIn("Nothing was saved", body)
         self.assertIn("ben wrote this", body)                  # the stored text
-        self.assertIn('value="pan wrote this"', body)       # and mine, preserved
+        self.assertIn('placeholder="why?">pan wrote this</textarea>', body)
         self.assertIn("ben", body)                          # who beat me to it
         self.assertIn("/status?depth=2", body)              # where I came from
         # and the stored pin is untouched
@@ -370,7 +420,7 @@ class EditAndConflictTests(TestCase):
             "set_at": stale.set_at}).get_data(as_text=True)
         self.assertIn("gone — someone cleared it", body)
         self.assertIn('name="set_at" value=""', body)       # re-pin from nothing
-        self.assertIn('value="mine"', body)                 # my words survive
+        self.assertIn('placeholder="why?">mine</textarea>', body)  # my words survive
 
     def test_a_post_without_a_token_still_writes(self):
         # a hand-rolled client, never one of our forms: today's behavior
@@ -407,6 +457,14 @@ class EditAndConflictTests(TestCase):
         self.assertIn("last changed by", body)
         self.assertIn("<strong>pan</strong>", body)
 
+    def test_maintenance_page_renders_the_explanation_as_markdown(self):
+        self._login()
+        self.tree.upsert("/db/ping", StatusCode.OK)
+        self._pin("/db", "See **owner** and [runbook](https://ops.example/runbook)")
+        body = self.client.get("/maintenance").get_data(as_text=True)
+        self.assertIn("<strong>owner</strong>", body)
+        self.assertIn('href="https://ops.example/runbook"', body)
+
     def test_maintenance_page_says_nothing_extra_about_an_untouched_pin(self):
         self._login()
         self.tree.upsert("/db/ping", StatusCode.OK)
@@ -423,8 +481,8 @@ class EditAndConflictTests(TestCase):
         self.assertIn('<span class="maintenance-pop__by">ada</span>', body)
 
     def test_a_reason_with_quotes_survives_the_round_trip(self):
-        # the conflict page puts both texts back into attributes; autoescape owns
-        # the untrusted halves, so a quote must not be able to end one
+        # The stored text is rendered and mine goes back into a textarea; autoescape
+        # owns both untrusted halves, so a quote cannot end either context.
         self._login()
         self.tree.upsert("/db/ping", StatusCode.OK)
         stale = self._pin("/db", "plain")
@@ -434,7 +492,7 @@ class EditAndConflictTests(TestCase):
             "path": "/db", "action": "set", "reason": "pan's turn",
             "set_at": stale.set_at}).get_data(as_text=True)
         self.assertIn("ben&#39;s &#34;big&#34; upgrade", body)      # the stored text
-        self.assertIn('value="pan&#39;s turn"', body)               # and mine
+        self.assertIn('placeholder="why?">pan&#39;s turn</textarea>', body)  # and mine
 
 
 class EntryPinSurfaceTests(TestCase):
@@ -476,7 +534,14 @@ class EntryPinSurfaceTests(TestCase):
         body = self._page()
         self.assertEqual(body.count('class="reason-pin"'), 2)
         self.assertIn('name="slug" value="acme/pr-412"', body)
-        self.assertIn("Silence this one", body)
+        self.assertIn("Set maintenance", body)
+        self.assertIn("reason-pin__toggle", body)
+
+    def test_the_pin_summary_does_not_add_an_inline_line_box_to_the_rail(self):
+        css = self.client.get(
+            "/static/css/overview.css").get_data(as_text=True)
+        rule = css.split(".reason-pin > summary {", 1)[1].split("}", 1)[0]
+        self.assertIn("display: flex", rule)
 
     def test_prose_gets_no_per_line_control(self):
         # its unit of suppression is the node pin; a per-line button there would
@@ -513,7 +578,27 @@ class EntryPinSurfaceTests(TestCase):
         self.assertIn("is-quiet", body)
         self.assertIn("ada is on it", body)
         self.assertIn("1 of 2 in maintenance", body)
-        self.assertIn("Let this one alarm again", body)
+        self.assertIn("Clear maintenance", body)
+
+    def test_a_pinned_line_can_be_edited_in_place_with_raw_markdown(self):
+        self._login()
+        self._findings()
+        self.client.post("/maintenance", data={
+            "path": "/wiz", "slug": "acme/pr-412", "action": "set",
+            "reason": "**Ada** has [ticket](https://issues.example/412)",
+            "duration": "2d", "set_at": ""})
+        entry = self.tree.entry_maintenance("/wiz", "acme/pr-412")
+        assert entry is not None
+
+        body = self._page()
+
+        self.assertIn("<strong>Ada</strong>", body)
+        self.assertIn('href="https://issues.example/412"', body)
+        self.assertIn(">Edit maintenance</summary>", body)
+        self.assertIn(f'name="set_at" value="{entry.set_at}"', body)
+        self.assertIn("**Ada** has [ticket]", body)  # untouched textarea source
+        self.assertIn("Save changes", body)
+        self.assertIn("Clear maintenance", body)
 
     def test_silencing_every_line_says_nothing_is_reporting(self):
         self._login()
@@ -815,9 +900,9 @@ class EntryPinIndexTests(TestCase):
         self.assertIn('id="pinned-reason"', page)
         self.assertIn("is-focused", page)
         # and it marks the line it was asked for, not the first one
-        marked = page.split('id="pinned-reason"', 1)[1].split("</div>", 1)[0]
-        self.assertIn("waiting on review", marked)
-        self.assertNotIn("stale branch", marked)
+        marked_and_after = page.split('id="pinned-reason"', 1)[1]
+        self.assertLess(marked_and_after.index("waiting on review"),
+                        marked_and_after.index("stale branch"))
 
     def test_an_unasked_page_marks_nothing(self):
         self._findings()
@@ -895,8 +980,11 @@ class PinnedCardTests(TestCase):
         self.assertIn("cutover", body)
         # An OK reading is named too, not suppressed. "No suffix means healthy"
         # would be a silent convention, and the whole point of the suffix is that
-        # you never have to wonder what is under the blue.
-        self.assertIn("maintenance · ok", body)
+        # you never have to wonder what is under the blue. (The box's state
+        # cluster now prints the word itself and the suffix beside it — the same
+        # rendered text the single word=True span used to carry.)
+        self.assertIn(
+            'maintenance <span class="status-reported">· ok</span>', body)
 
     def test_pinned_over_an_error_names_what_it_is_silencing(self):
         # the state that was invisible before, and the reason the keystone exists
@@ -1011,11 +1099,11 @@ class DurationGuardTests(TestCase):
         body = response.get_data(as_text=True)
         self.assertIn("Nothing was saved", body)
         self.assertIn("has to be in the future", body)
-        self.assertIn("value=\"ada is on it\"", body)      # my words come back
+        self.assertIn('placeholder="why?">ada is on it</textarea>', body)
         self.assertIsNone(self.tree.maintenance_entry("/db"))
 
     def test_zero_is_refused_too(self):
-        self.assertIn("has to be in the future",
+        self.assertIn("is not a duration or expiry",
                       self._set("0").get_data(as_text=True))
         self.assertIsNone(self.tree.maintenance_entry("/db"))
 
@@ -1050,7 +1138,7 @@ class DurationGuardTests(TestCase):
         assert entry is not None
 
     def test_one_second_is_allowed(self):
-        self.assertEqual(self._set("1").status_code, 302)
+        self.assertEqual(self._set("1s").status_code, 302)
         self.assertIsNotNone(self.tree.maintenance_entry("/db"))
 
     def test_a_blank_duration_still_means_the_configured_default(self):
@@ -1064,6 +1152,180 @@ class DurationGuardTests(TestCase):
             "reason": "on it", "duration": "-1d", "set_at": ""})
         self.assertEqual(response.status_code, 200)
         self.assertIsNone(self.tree.entry_maintenance("/wiz", "f-1"))
+
+    def test_a_calendar_expiry_pins_an_entry_too(self):
+        self.tree.upsert("/wiz", StatusCode.ERROR, {"f-1": "one"})
+        tomorrow = datetime.now(app_module.config.tzinfo) + timedelta(days=1)
+        response = self.client.post("/maintenance", data={
+            "path": "/wiz", "slug": "f-1", "action": "set",
+            "reason": "on it",
+            "duration": tomorrow.strftime("%Y-%m-%d %H:%M:%S"),
+            "set_at": ""})
+        self.assertEqual(response.status_code, 302)
+        self.assertIsNotNone(self.tree.entry_maintenance("/wiz", "f-1"))
+
+    def test_a_calendar_expiry_uses_the_same_node_write(self):
+        tomorrow = datetime.now(app_module.config.tzinfo) + timedelta(days=1)
+        response = self._set(tomorrow.strftime("%Y-%m-%d %H:%M:%S"))
+        self.assertEqual(response.status_code, 302)
+        self.assertIsNotNone(self.tree.maintenance_entry("/db"))
+
+    def test_a_refused_expiry_keeps_the_raw_value_and_help(self):
+        body = self._set("32").get_data(as_text=True)
+        self.assertIn('name="duration" value="32"', body)
+        self.assertIn("Which formats can I use?", body)
+        self.assertIn("Nothing was saved", body)
+
+
+class MaintenanceExpiryInputTests(TestCase):
+    """The form accepts a small deterministic calendar grammar and resolves every
+    spelling to the existing naive server-local expiry."""
+
+    zone = ZoneInfo("Europe/Berlin")
+
+    def _resolve(self, value: str, now: datetime) -> datetime:
+        with mock.patch.object(
+                app_module, "config",
+                replace(app_module.config, timezone="Europe/Berlin")):
+            return app_module._maintenance_expiry(value, now=now)
+
+    @staticmethod
+    def _stored(moment: datetime) -> datetime:
+        return moment.astimezone().replace(tzinfo=None)
+
+    def test_duration_and_explicit_seconds_are_elapsed_from_now(self):
+        now = datetime(2026, 8, 3, 10, 0, tzinfo=UTC)
+        self.assertEqual(
+            self._resolve("2h", now),
+            self._stored(datetime(2026, 8, 3, 12, 0, tzinfo=UTC)))
+        self.assertEqual(
+            self._resolve("17s", now),
+            self._stored(datetime(2026, 8, 3, 10, 0, 17, tzinfo=UTC)))
+
+    def test_a_bare_number_is_the_next_day_of_month(self):
+        now = datetime(2026, 8, 3, 10, 0, tzinfo=UTC)  # 12:00 configured time
+        self.assertEqual(
+            self._resolve("17", now),
+            self._stored(datetime(2026, 8, 17, tzinfo=self.zone)))
+
+        on_the_day = datetime(2026, 8, 17, 10, 0, tzinfo=UTC)
+        self.assertEqual(
+            self._resolve("17", on_the_day),
+            self._stored(datetime(2026, 9, 17, tzinfo=self.zone)))
+
+    def test_day_of_month_skips_a_month_that_has_no_such_day(self):
+        now = datetime(2026, 5, 31, 10, 0, tzinfo=UTC)
+        self.assertEqual(
+            self._resolve("31", now),
+            self._stored(datetime(2026, 7, 31, tzinfo=self.zone)))
+
+    def test_month_day_uses_this_year_then_rolls_to_the_next(self):
+        before = datetime(2026, 7, 9, 10, 0, tzinfo=UTC)
+        self.assertEqual(
+            self._resolve("07-10", before),
+            self._stored(datetime(2026, 7, 10, tzinfo=self.zone)))
+
+        on_the_day = datetime(2026, 7, 10, 10, 0, tzinfo=UTC)
+        self.assertEqual(
+            self._resolve("07-10", on_the_day),
+            self._stored(datetime(2027, 7, 10, tzinfo=self.zone)))
+
+    def test_full_date_and_local_or_offset_timestamp(self):
+        now = datetime(2026, 7, 1, tzinfo=UTC)
+        self.assertEqual(
+            self._resolve("2026-07-10", now),
+            self._stored(datetime(2026, 7, 10, tzinfo=self.zone)))
+        self.assertEqual(
+            self._resolve("2026-07-10 18:00", now),
+            self._stored(datetime(2026, 7, 10, 18, 0, tzinfo=self.zone)))
+        self.assertEqual(
+            self._resolve("2026-07-10T18:00+03:00", now),
+            self._stored(datetime(2026, 7, 10, 15, 0, tzinfo=UTC)))
+        self.assertEqual(
+            self._resolve("2026-07-10T18:00:30Z", now),
+            self._stored(datetime(2026, 7, 10, 18, 0, 30, tzinfo=UTC)))
+
+    def test_unzoned_input_uses_configured_not_host_timezone(self):
+        now = datetime(2026, 8, 3, 10, 0, tzinfo=UTC)
+        auckland = ZoneInfo("Pacific/Auckland")
+        with mock.patch.object(
+                app_module, "config",
+                replace(app_module.config, timezone="Pacific/Auckland")):
+            resolved = app_module._maintenance_expiry("23:00", now=now)
+        self.assertEqual(
+            resolved,
+            self._stored(datetime(2026, 8, 3, 23, 0, tzinfo=auckland)))
+
+    def test_time_only_uses_today_or_tomorrow(self):
+        before = datetime(2026, 8, 3, 10, 0, tzinfo=UTC)  # 12:00 in Berlin
+        self.assertEqual(
+            self._resolve("18:00", before),
+            self._stored(datetime(2026, 8, 3, 18, 0, tzinfo=self.zone)))
+
+        after = datetime(2026, 8, 3, 20, 0, tzinfo=UTC)   # 22:00 in Berlin
+        self.assertEqual(
+            self._resolve("18:00", after),
+            self._stored(datetime(2026, 8, 4, 18, 0, tzinfo=self.zone)))
+
+    def test_weekday_uses_today_only_while_its_time_is_future(self):
+        # 2026-08-03 is Monday.
+        morning = datetime(2026, 8, 3, 8, 0, tzinfo=UTC)
+        self.assertEqual(
+            self._resolve("mon 14:30", morning),
+            self._stored(datetime(2026, 8, 3, 14, 30, tzinfo=self.zone)))
+
+        evening = datetime(2026, 8, 3, 18, 0, tzinfo=UTC)
+        self.assertEqual(
+            self._resolve("Monday 14:30", evening),
+            self._stored(datetime(2026, 8, 10, 14, 30, tzinfo=self.zone)))
+
+    def test_bare_weekday_uses_the_following_weekday_at_noon(self):
+        # 2026-08-03 is Monday. A bare Monday always means the following Monday,
+        # independent of whether today's noon has passed.
+        morning = datetime(2026, 8, 3, 8, 0, tzinfo=UTC)
+        self.assertEqual(
+            self._resolve("monday", morning),
+            self._stored(datetime(2026, 8, 10, 12, 0, tzinfo=self.zone)))
+
+        afternoon = datetime(2026, 8, 3, 11, 0, tzinfo=UTC)
+        self.assertEqual(
+            self._resolve("MON", afternoon),
+            self._stored(datetime(2026, 8, 10, 12, 0, tzinfo=self.zone)))
+        self.assertEqual(
+            self._resolve("Friday", morning),
+            self._stored(datetime(2026, 8, 7, 12, 0, tzinfo=self.zone)))
+
+    def test_dst_hole_and_fold_need_an_explicit_offset(self):
+        now = datetime(2026, 1, 1, tzinfo=UTC)
+        for value in ("2026-03-29 02:30", "2026-10-25 02:30"):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(
+                        app_module._BadExpiry, "not an unambiguous local time"):
+                    self._resolve(value, now)
+
+        self.assertEqual(
+            self._resolve("2026-10-25T02:30+02:00", now),
+            self._stored(datetime(2026, 10, 25, 0, 30, tzinfo=UTC)))
+
+    def test_invalid_ambiguous_and_out_of_range_values_are_refused(self):
+        now = datetime(2026, 8, 3, 10, 0, tzinfo=UTC)
+        for value in ("32", "02-30", "Funday", "10-07-2026", "90"):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(
+                        app_module._BadExpiry, "not a duration or expiry"):
+                    self._resolve(value, now)
+        with self.assertRaisesRegex(app_module._BadExpiry, "in the future"):
+            self._resolve("2026-08-01", now)
+        with self.assertRaisesRegex(app_module._BadExpiry, "longer than a year"):
+            self._resolve("2027-08-04 14:00", now)
+
+    def test_the_exact_365_day_boundary_is_inclusive(self):
+        now = datetime(2026, 1, 1, tzinfo=UTC)
+        with mock.patch.object(
+                app_module, "config", replace(app_module.config, timezone="UTC")):
+            resolved = app_module._maintenance_expiry(
+                "2027-01-01 00:00", now=now)
+        self.assertEqual(resolved, self._stored(datetime(2027, 1, 1, tzinfo=UTC)))
 
 
 class BlankReasonTests(TestCase):

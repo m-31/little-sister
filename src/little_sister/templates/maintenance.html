@@ -45,7 +45,7 @@
                             an ellipsis, and `title` carries the whole of it. -#}
                         <td class="maintenance-line"{% if pin.slug %} title="{{ pin.line }}"{% endif %}>{% if pin.slug %}{{ pin.line | markdown_inline }}{% else %}<span class="text-muted">the whole node</span>{% endif %}</td>
                         <td class="text-nowrap">{{ pin.remaining }}</td>
-                        <td>{% if pin.note and pin.note != 'maintenance' %}{{ pin.note }}{% else %}<span class="text-muted">—</span>{% endif %}</td>
+                        <td class="maintenance-why md-body">{% if pin.note and pin.note != 'maintenance' %}{{ pin.note | markdown }}{% else %}<span class="text-muted">—</span>{% endif %}</td>
                         <td>
                             {%- if pin.created_by or pin.created_at -%}
                                 pinned by <strong>{{ pin.created_by or 'unknown' }}</strong>

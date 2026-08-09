@@ -19,12 +19,9 @@
     way it was left. No layout attribute: this page has no rail and no menu. -#}
 <body data-ls-theme="{{ theme }}"
       {%- if bs_theme %} data-bs-theme="{{ bs_theme }}"{% endif %}>
-<script>
-    if (document.body.dataset.lsTheme === 'auto' &&
-        window.matchMedia('(prefers-color-scheme: dark)').matches) {
-        document.body.setAttribute('data-bs-theme', 'dark');
-    }
-</script>
+{#- The same partial the header includes — this page carried a copy of it, which
+    is two inline scripts for one behavior and would have cost two hashes. -#}
+{% include '_theme_bootstrap.html' %}
     <div class="container mt-5">
         <div class="row justify-content-center">
             <div class="col-sm-8 col-md-6 col-lg-4">

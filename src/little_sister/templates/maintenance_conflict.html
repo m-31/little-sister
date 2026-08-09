@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
+    {% from '_maintenance_fields.html' import maintenance_fields with context %}
     {% set page_title = 'Maintenance conflict' %}
     {% include '_header.html' %}
 
@@ -14,9 +15,10 @@
         one clever one: taking the stored words is a plain one-click submit, so it
         needs no JavaScript and no server-side "which field wins" rule.
 
-        The other is a **duration we will not accept** (`problem`): not a duration
-        at all, or not a positive one, or longer than a year. A zero or negative
-        window used to be written happily and then swept away a tick later, taking
+        The other is an **expiry we will not accept** (`problem`): not one of the
+        explicit duration/calendar forms, not in the future, or longer than a year.
+        A zero or negative window used to be written happily and then swept away a
+        tick later, taking
         the reason and both authorships with it — a lost explanation behind a
         redirect that looked like success, which is exactly what this page exists
         to make impossible. Here the token is unchanged, because nothing about the
@@ -38,14 +40,9 @@
                         <input type="hidden" name="action" value="set">
                         <input type="hidden" name="set_at" value="{{ token }}">
                         <input type="hidden" name="next" value="{{ back }}">
-                        <div class="mb-2">
-                            <label class="form-label" for="conflict-reason">Reason</label>
-                            <input class="form-control" id="conflict-reason" name="reason" value="{{ mine }}" placeholder="why?">
-                        </div>
-                        <div class="mb-2">
-                            <label class="form-label" for="conflict-duration">Duration</label>
-                            <input class="form-control" id="conflict-duration" name="duration" value="{{ duration }}" placeholder="e.g. 2h, 3d — default {{ maintenance_default }}">
-                        </div>
+                        {{ maintenance_fields(mine, duration, 'conflict',
+                                              maintenance_default,
+                                              maintenance_timezone) }}
                         <button class="btn btn-primary" type="submit">Save</button>
                     </form>
                 </div>
@@ -64,7 +61,11 @@
             <div class="card mb-3">
                 <div class="card-body">
                     <h2 class="h6 text-muted text-uppercase">The stored reason</h2>
-                    <p class="mb-0">{{ stored.reason }}</p>
+                    {% if stored.reason and stored.reason != 'maintenance' %}
+                        <div class="maintenance-explanation md-body">{{ stored.reason | markdown }}</div>
+                    {% else %}
+                        <p class="mb-0 text-muted">No explanation was given.</p>
+                    {% endif %}
                 </div>
             </div>
 
@@ -90,14 +91,9 @@
                             <input type="hidden" name="action" value="set">
                             <input type="hidden" name="set_at" value="{{ stored.set_at }}">
                             <input type="hidden" name="next" value="{{ back }}">
-                            <div class="mb-2">
-                                <label class="form-label" for="conflict-reason">Reason</label>
-                                <input class="form-control" id="conflict-reason" name="reason" value="{{ mine }}" placeholder="why?">
-                            </div>
-                            <div class="mb-2">
-                                <label class="form-label" for="conflict-duration">Duration</label>
-                                <input class="form-control" id="conflict-duration" name="duration" value="{{ duration }}" placeholder="e.g. 2h, 3d — default {{ maintenance_default }}">
-                            </div>
+                            {{ maintenance_fields(mine, duration, 'conflict',
+                                                  maintenance_default,
+                                                  maintenance_timezone) }}
                             <button class="btn btn-primary" type="submit">Save mine, replacing the stored reason</button>
                         </form>
                     </div>
@@ -111,7 +107,7 @@
                     <input type="hidden" name="reason" value="{{ stored.reason }}">
                     <input type="hidden" name="duration" value="{{ duration }}">
                     <input type="hidden" name="next" value="{{ back }}">
-                    <button class="btn btn-outline-secondary" type="submit">Keep the stored reason, use my duration</button>
+                    <button class="btn btn-outline-secondary" type="submit">Keep the stored reason, use my expiry</button>
                 </form>
                 <a class="btn btn-link" href="{{ back }}">Change nothing</a>
             {% endif %}
@@ -135,14 +131,9 @@
                             <input type="hidden" name="action" value="set">
                             <input type="hidden" name="set_at" value="">
                             <input type="hidden" name="next" value="{{ back }}">
-                            <div class="mb-2">
-                                <label class="form-label" for="conflict-reason">Reason</label>
-                                <input class="form-control" id="conflict-reason" name="reason" value="{{ mine }}" placeholder="why?">
-                            </div>
-                            <div class="mb-2">
-                                <label class="form-label" for="conflict-duration">Duration</label>
-                                <input class="form-control" id="conflict-duration" name="duration" value="{{ duration }}" placeholder="e.g. 2h, 3d — default {{ maintenance_default }}">
-                            </div>
+                            {{ maintenance_fields(mine, duration, 'conflict',
+                                                  maintenance_default,
+                                                  maintenance_timezone) }}
                             <button class="btn btn-primary" type="submit">Set maintenance</button>
                         </form>
                     </div>

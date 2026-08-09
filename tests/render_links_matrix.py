@@ -26,9 +26,10 @@ from wsgiref.simple_server import WSGIServer, make_server
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE.parent))
 
-os.environ.setdefault("LITTLE_SISTER_CONFIG_DIR", str(_HERE / "demo_config"))
-os.environ.setdefault("LITTLE_SISTER_USERS",
-                      str(_HERE / "fixtures" / "users.yaml"))
+os.environ.setdefault(
+    "LITTLE_SISTER_CONFIG_DIR",
+    os.pathsep.join((str(_HERE / "fixtures" / "config"),
+                     str(_HERE / "demo_config"))))
 os.environ.setdefault("SECRET_KEY", "links-matrix")
 os.environ.setdefault("LITTLE_SISTER_ENGINE", "0")
 

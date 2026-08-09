@@ -120,8 +120,9 @@ SLOTS: Mapping[str, Slot] = {
     "node.actions": Slot(
         name="node.actions",
         context=("node", "surface"),
-        where="in a card head on the dashboard grid, and beside the status on a "
-              "leaf's own page — an action whose subject is the whole node",
+        where="on every node the dashboard grid draws as a box — a card head and "
+              "each nested box under it — and beside the status on a leaf's own "
+              "page; an action whose subject is the whole node",
     ),
 }
 

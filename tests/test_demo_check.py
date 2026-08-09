@@ -354,12 +354,12 @@ class DemoCheckTests(TestCase):
         # the WSGI wrapper registers `demo` before this runs; importing DemoCheck
         # above did the same. Every config in the demo dir must load cleanly.
         checks = load_checks(_DEMO_CONFIG_DIR)
-        self.assertEqual(len(checks), 7)
+        self.assertEqual(len(checks), 8)
         self.assertTrue(all(isinstance(c, DemoCheck) for c in checks))
         self.assertEqual({c.path for c in checks},
-                         {"/services/api", "/ci/nightly", "/ci/reviews",
-                          "/network/vpn", "/storage/backup", "/hosts/nas",
-                          "/security/audit"})
+                         {"/services/api", "/ci/nightly", "/ci/pipelines",
+                          "/ci/reviews", "/network/vpn", "/storage/backup",
+                          "/hosts/nas", "/security/audit"})
 
     def test_dropped_child_ages_to_stale(self):
         # the mechanism the `silent` scenario relies on: a child omitted from a

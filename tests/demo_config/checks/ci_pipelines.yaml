@@ -1,0 +1,17 @@
+# Live-demo check (Mode 2) — see tests/demo_check.py and docs/testing-the-gui.md.
+# The demo's **coded-entries** node (ADR-0042): every workflow line declares its
+# own verdict (plus `running` while a run is in flight), and the check declares no
+# node code at all — the seam derives it from the lines. Watch the failed build's
+# retry run in italic while its line stays red, and pin the one red line to see
+# the node read the worst of what is left.
+type: demo
+path: /ci/pipelines
+title: Pipelines
+about: |
+  The latest GitHub-Actions-style run per workflow (a *synthetic* demo node).
+  Each line is a **member** with its **own status code**; the node's color is
+  derived from the lines, so silencing the one failing workflow turns the node
+  green while the rest keep reporting.
+scenario: pipelines
+frequency: 5s
+period: 90s

@@ -10,6 +10,17 @@
   file is still a secret reference), [ADR-0020](0020-user-list-location.md)
 - **Register:** [`../decisions.md`](../decisions.md)
 
+> **Update (2026-08-08):** decision §6 now records **who registered** each aspect.
+> `register_aspect` infers the calling package — the one-line call site in a
+> package's `__init__` already says who it is, and a name the caller had to repeat
+> is a name the caller can get wrong — and only a *winning* registration is
+> attributed, so a refused one owns nothing. The name alone answered *is this file
+> declared*; it did not answer *who reads it*, which is the question when the file
+> is misbehaving and the answer is a package somebody else wrote. `/system` prints
+> the owner beside the name and uses the same attribution to place the aspect on
+> its package inventory, which is where a package that registers no check type gets
+> a version at all.
+
 ## Context
 
 ADR-0031 made `config/` the one place an operator authors input, and made the set of

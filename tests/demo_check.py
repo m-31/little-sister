@@ -29,6 +29,12 @@ by the scenario that shows it cheapest:
 ``eruption`` stays prose on purpose, so one dashboard carries a members node and a
 prose node whose reason lists look alike and behave differently.
 
+``pipelines`` carries the **coded** entries of ADR-0042: each workflow line
+declares its own verdict plus a ``running`` flag, the check emits **no code of its
+own** (the seam derives it), healthy lines are emitted on purpose — the per-aspect
+choice a deployment makes — and the failed build's retry runs in italic while the
+line stays red, which is the whole design in one line.
+
 Dev-only: lives under ``tests/`` and never ships in the package.
 """
 from __future__ import annotations
@@ -40,10 +46,11 @@ from pathlib import Path
 from typing import Any
 
 from little_sister import values
-from little_sister.checks.base import (
+from little_sister.checks import (
     Check,
     CheckError,
     CheckResult,
+    Entry,
     config_markdown,
     parse_duration,
     register,
@@ -187,17 +194,89 @@ def _reviews(t: float, period: float) -> CheckResult:
     return CheckResult(StatusCode.WARN, reason)
 
 
+@_scenario("pipelines")
+def _pipelines(t: float, period: float) -> CheckResult:
+    """Coded entry lines (ADR-0042): each workflow carries its own verdict and the
+    node derives — this scenario returns **no code of its own**, dogfooding the
+    seam. ``web-build`` walks the design's one-line arc across the cycle: passed →
+    a run in flight on a passing job (ok, italic) → failed (red, upright) → the
+    retry running while the verdict stays red → recovered. ``api-tests`` stays
+    green so the mixed list is mixed, ``deploy-gate`` waits mid-cycle (warn), and
+    ``nightly-audit`` has never concluded (UNDEFINED: ignored by the derivation,
+    ring cue). Healthy lines are emitted deliberately — the per-aspect choice
+    ADR-0042 leaves to a deployment — and the list obeys the three-tier ordering
+    rule (non-OK, then in-flight, then healthy and idle), so the failures stay
+    above the ``reason_cap`` fold."""
+    f = t / period
+    if f < 0.2:
+        build = Entry("web-build",
+                      "web (main) / build: passed in 8m14s (#4215)",
+                      StatusCode.OK)
+    elif f < 0.35:
+        build = Entry("web-build",
+                      f"web (main) / build: passed in 8m14s \u00b7 #4216 "
+                      f"running {int((f - 0.2) * period)}s",
+                      StatusCode.OK, running=True)
+    elif f < 0.5:
+        build = Entry("web-build",
+                      "web (main) / build: failed after 8m21s (#4216)",
+                      StatusCode.ERROR)
+    elif f < 0.8:
+        build = Entry("web-build",
+                      f"web (main) / build: failed after 8m21s \u00b7 #4217 "
+                      f"running {int((f - 0.5) * period)}s",
+                      StatusCode.ERROR, running=True)
+    else:
+        build = Entry("web-build",
+                      "web (main) / build: passed in 9m01s (#4217)",
+                      StatusCode.OK)
+    gate = (Entry("deploy-gate", "deploy (main) / gate: waiting for approval",
+                  StatusCode.WARN)
+            if 0.3 <= f < 0.9 else
+            Entry("deploy-gate", "deploy (main) / gate: approved in 12s",
+                  StatusCode.OK))
+    lines = [build, gate,
+             Entry("api-tests", "api (main) / tests: passed in 2m01s",
+                   StatusCode.OK),
+             Entry("nightly-audit", "nightly / audit: has never completed",
+                   StatusCode.UNDEFINED)]
+
+    def tier(entry: Entry) -> int:
+        if entry.code in (StatusCode.ERROR, StatusCode.WARN):
+            return 0
+        return 1 if entry.running else 2
+
+    lines.sort(key=tier)        # stable: emission order survives within a tier
+    return CheckResult(reason=lines)
+
+
 @_scenario("children")
 def _children(t: float, period: float) -> CheckResult:
     """A host with disk/memory/load children in a shifting mix — a multi-node card
-    whose roll-up moves as the children change."""
+    whose roll-up moves as the children change, and the demo's **branch head**: it
+    owns its container alone, so that container carries the run facts, its
+    ``config`` and a ``report`` (ADR-0044), and `/status/hosts/nas` is where the
+    node-facts block shows them."""
     f = t / period
     memory = (CheckResult(StatusCode.WARN, ["memory at 84%"], name="memory")
               if 0.4 <= f < 0.7 else CheckResult(StatusCode.OK, name="memory"))
     load = (CheckResult(StatusCode.ERROR, ["load average 14.2 (8 cores)"], name="load")
             if 0.6 <= f < 0.9 else CheckResult(StatusCode.OK, name="load"))
+    # What the run **found**, and nothing that alarms: a roster is presence, an
+    # entry is a claim (ADR-0044 decision 6). The volume list moves with the loop
+    # so the write-through is visible on the page — a report is an output of this
+    # run, not a caption that was true once. The child reports are the shape a
+    # *shared* container's checks are told to use.
+    volumes = 2 if f < 0.5 else 3
+    mounts = "\n".join(f"- `/vol{index + 1}` — 3.6 TB, ext4"
+                       for index in range(volumes))
     return CheckResult(StatusCode.OK, children=(
-        CheckResult(StatusCode.OK, name="disk"), memory, load))
+        CheckResult(StatusCode.OK, name="disk",
+                    report=f"Volumes in scope:\n\n{mounts}"), memory, load),
+        report=(f"Enumerated **{volumes + 2} devices** on this host: "
+                f"{volumes} volume{'s' if volumes != 1 else ''}, one memory "
+                f"bank, one load average.\n\nNothing here carries a verdict — "
+                f"what would is a reason."))
 
 
 @register("demo")

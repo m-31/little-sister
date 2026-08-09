@@ -20,6 +20,72 @@ require() {
     { echo "ERROR: required command '$1' not found." >&2; exit 1; }
 }
 
+# Resolve the user-list document exactly as the built-in `users` aspect does
+# (ADR-0031/0045). LITTLE_SISTER_CONFIG_DIR is a path-list: the first root declaring
+# the aspect wins, and that aspect may be a flat users.yaml/users.yml file or a
+# users/ directory containing exactly one users.yaml/users.yml document. One rule,
+# the same one the library applies — a deployment pinning one exact file names a
+# root that carries only that file, first.
+resolve_users_document() {
+  # The retired override (ADR-0046). Refused, not ignored, and refused here so
+  # ./start.sh stops before it forks a worker onto a different user list.
+  if [ -n "${LITTLE_SISTER_USERS:-}" ]; then
+    echo "ERROR: LITTLE_SISTER_USERS is set, but it is no longer read (ADR-0046) — move that file into a configuration root, name the root first in LITTLE_SISTER_CONFIG_DIR, then unset it." >&2
+    return 1
+  fi
+
+  local spec="${LITTLE_SISTER_CONFIG_DIR:-config}"
+  local raw_root root
+  local -a raw_roots=() roots=() forms=() documents=()
+  local IFS=:
+  read -r -a raw_roots <<< "$spec"
+  for raw_root in "${raw_roots[@]}"; do
+    root="${raw_root#"${raw_root%%[![:space:]]*}"}"
+    root="${root%"${root##*[![:space:]]}"}"
+    [ -n "$root" ] && roots+=("$root")
+  done
+  [ "${#roots[@]}" -gt 0 ] || roots=(config)
+
+  for root in "${roots[@]}"; do
+    if [ ! -d "$root" ]; then
+      echo "ERROR: configuration root '$root' not found." >&2
+      return 1
+    fi
+
+    forms=()
+    [ -f "$root/users.yaml" ] && forms+=("$root/users.yaml")
+    [ -f "$root/users.yml" ] && forms+=("$root/users.yml")
+    [ -d "$root/users" ] && forms+=("$root/users")
+    if [ "${#forms[@]}" -gt 1 ]; then
+      echo "ERROR: the users aspect occurs more than once in '$root' — keep only users.yaml, users.yml, or users/." >&2
+      return 1
+    fi
+    [ "${#forms[@]}" -eq 1 ] || continue
+
+    if [ -f "${forms[0]}" ]; then
+      printf '%s\n' "${forms[0]}"
+      return 0
+    fi
+
+    documents=()
+    [ -f "${forms[0]}/users.yaml" ] && documents+=("${forms[0]}/users.yaml")
+    [ -f "${forms[0]}/users.yml" ] && documents+=("${forms[0]}/users.yml")
+    if [ "${#documents[@]}" -eq 1 ]; then
+      printf '%s\n' "${documents[0]}"
+      return 0
+    fi
+    if [ "${#documents[@]}" -eq 0 ]; then
+      echo "ERROR: users directory '${forms[0]}' needs users.yaml or users.yml." >&2
+    else
+      echo "ERROR: users directory '${forms[0]}' contains both users.yaml and users.yml — keep one." >&2
+    fi
+    return 1
+  done
+
+  echo "ERROR: no users aspect found in the configured root(s)." >&2
+  return 1
+}
+
 # PIDs currently LISTENing on the port (a gunicorn master and its workers all
 # share the one listening socket, so this may return more than one PID).
 listeners() { lsof -ti "tcp:${PORT}" -sTCP:LISTEN 2>/dev/null | sort -u || true; }

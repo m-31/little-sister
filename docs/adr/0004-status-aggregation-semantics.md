@@ -111,8 +111,8 @@ the flag and record events; clearing reverts to `UNDEFINED` until the next check
 
 ## Consequences
 - Replaces the buggy guard/return in `get_status_code()`; expand the unit tests
-  (including *MAINTENANCE cancels subtree* and *UNDEFINED ignored*). A phase-1
-  task.
+  (including *MAINTENANCE cancels subtree* and *UNDEFINED ignored*). A task for
+  the initial build.
 - A maintenance node makes its whole subtree **invisible to ancestors** — intended,
   so planned downtime doesn't redden the top.
 - **Edge case to confirm:** a node whose children are *all* ignored

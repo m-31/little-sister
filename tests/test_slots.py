@@ -267,6 +267,27 @@ class NodeActionTests(TestCase):
         self.assertIn('data-demo-node-action="node-filler"', body)
         self.assertIn("check: check error: connection refused", body)
 
+    def test_a_filler_renders_on_a_nested_box_too(self):
+        # A card is the top of a subtree and is usually a container with nothing of
+        # its own to act on; the failing *leaf* sits in a nested box. Offering the
+        # slot on cards alone put the chip nowhere the eye already was (ADR-0034,
+        # 2026-08-03).
+        slots.register("node.actions", DEMO, NODE_TEMPLATE, node_action)
+        self._login()
+        self.tree.upsert("/hosts/alpha/disk", StatusCode.ERROR, "disk at 98%")
+        body = self._body()
+        # /hosts is the card; /hosts/alpha and its /disk leaf are nested boxes
+        self.assertIn("tracker.example.org/new?node=/hosts/alpha/disk", body)
+
+    def test_a_quiet_leaf_is_a_chip_and_carries_no_slot(self):
+        # Nothing quiet is worth acting on, and a chip has no room to say so.
+        slots.register("node.actions", DEMO, NODE_TEMPLATE, node_action)
+        self._login()
+        self.tree.upsert("/hosts/alpha/disk", StatusCode.OK, "disk at 12%")
+        body = self._body()
+        self.assertIn("leaf-chip", body)
+        self.assertNotIn("node=/hosts/alpha/disk", body)
+
     def test_the_filler_declines_a_node_whose_reasons_are_members(self):
         # placement policy stays with the filler: there the per-line control is
         # the right one, and this slot renders nothing

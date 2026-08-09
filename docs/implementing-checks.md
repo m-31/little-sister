@@ -5,12 +5,17 @@ This is the developer-side companion to [`checks/README.md`](../config/checks/RE
 which covers the other half: how to _author_ a check (write the YAML for a type
 that already exists).
 
-Everything here applies both to the **built-in** types in this repo and to the
-types a **deployment** adds through the public `CHECK_TYPES` seam
-([`architecture.md`](architecture.md) §11) — that a deployment can carry its own
-check types is the whole idea. Only §4 (registration timing) differs between the
-two. Later, deployment types lift out into installable plugin packages "as an
-evolution of this, not a rewrite" — in the packaging-and-PyPI phase of the roadmap.
+Everything here applies to all three places a type can live: the **built-in** types
+in this repo, the types a **deployment** adds through the public `CHECK_TYPES` seam
+([`architecture.md`](architecture.md) §11), and the types an **installed package**
+adds through the same seam. The class is identical in all three; only §4
+(registration timing) differs, and §9 says which of the three a type belongs in.
+
+That third one is not a plan any more. A type that outgrows the deployment it was
+written in gets a repository of its own and arrives as an ordinary dependency —
+`little-sister-github`, `little-sister-wiz` and `little-sister-jira` all did, and
+their move was the evolution of this seam it was always described as, not a rewrite.
+[`plugin-repository.md`](plugin-repository.md) is the procedure.
 
 > Grounded in `src/little_sister/checks/` (`base.py`, `loader.py`, the built-in
 > types) and `app.py`. If a name here drifts from the source, the source wins —
@@ -38,8 +43,10 @@ Two things that sound alike but aren't:
 
 ## 2. The `Check` contract
 
-Everything lives in `little_sister.checks.base`. A check type is a subclass of `Check`
-decorated with `@register("<type>")`:
+Everything is imported from the package `little_sister.checks` — the **check-authoring
+surface** of the version contract ([`architecture.md`](architecture.md) §11), which
+promises those names and leaves the modules beneath the package free to move. A check
+type is a subclass of `Check` decorated with `@register("<type>")`:
 
 ```python
 from __future__ import annotations
@@ -47,7 +54,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from little_sister.checks.base import (
+from little_sister.checks import (
     Check, CheckError, CheckResult, config_markdown, plain, register,
 )
 from little_sister.status import StatusCode
@@ -117,12 +124,13 @@ Raise **`CheckError`** for any bad configuration; the loader names the offending
 
 ```python
 CheckResult(
-    code:        StatusCode,               # required
+    code:        StatusCode | None,        # required — unless the entries carry their own (ADR-0042)
     reason:      list[str] = [],           # required when not OK; rendered as Markdown
     name:        str = "",                 # a child's id under its parent; empty on the root
     description: str = "",                 # node metadata
     children:    tuple[CheckResult, ...] = (),
     config:      str = "",                 # per-child config markdown (branch checks)
+    report:      str = "",                 # what this run FOUND, markdown; root and children (ADR-0044)
     about:       str = "",                 # subnode subject label; child-only, fills empty (ADR-0025)
     title:       str = "",                 # subnode short label; child-only, fills empty (ADR-0025)
 )
@@ -145,12 +153,64 @@ CheckResult(
   `CheckResult(StatusCode.ERROR, ["discovery failed: …"])` with **no children**, and
   the whole branch goes red.
 - **Status codes** — a check returns `StatusCode.OK`, `WARN`, or `ERROR`.
-  `MAINTENANCE` / `UNDEFINED` are the tree's concern, not a check's. `coerce_code(...)`
+  `MAINTENANCE` / `UNDEFINED` are the tree's concern, not a check's (an *entry* may
+  additionally carry `UNDEFINED` — a run that has never concluded; see the coded
+  entries below). `coerce_code(...)`
   turns a config string (e.g. `stale_code: WARN`) into a `StatusCode`.
+- **Coded entries** ([ADR-0042](adr/0042-entries-carry-their-own-code.md)) — where
+  one node's lines have verdicts of their own (this workflow failed, that one
+  passed), hand over `Entry` values and **omit `code`**; the node's stored code is
+  then derived (worst-of the entries' codes, `UNDEFINED` ignored, an empty
+  entry-bearing set reading `OK` — "nothing to report" is not "nothing reported"):
+
+  ```python
+  from little_sister.checks import Entry
+
+  return CheckResult(reason=[
+      Entry("web-build", "web (main) / build: failed after 8m14s · #4216 running 2m",
+            StatusCode.ERROR, running=True),
+      Entry("api-tests", "api (main) / tests: passed in 2m01s", StatusCode.OK),
+  ])
+  ```
+
+  Declaring **both** a result code and entry codes is refused at construction — a
+  silently ignored code would be believed. `running` marks a line whose subject
+  has work in flight; it is display (an italic and a class), never severity, so
+  the line's **text must still say it** in words. An entry carrying a code or
+  `running` declares members by shape, like a mapping. Three author rules come
+  with the power: **order the list non-OK first, then in-flight, then healthy**
+  (`reason_cap` clamps the card, and healthy lines above the fold would bury the
+  failures); **seen and counted ⇒ `WARN`, available but not counted ⇒ `OK` with a
+  reason** (a permanent informational `WARN` holds the root amber — a legitimate
+  choice, but a choice); and **split the node when the *group* is what an operator
+  acts on, code the line when the *finding* is** — a severity band is a real node
+  with a pin that silences the whole band, while a coded line keeps its pin when
+  its state moves. Emitting healthy lines is a per-aspect choice, off by default;
+  a run in flight should always produce a line.
 - **Reasons are Markdown** — fold untrusted text in safely: `plain(text)` escapes an
   inline value (a path, an error, an API message); `code(text)` fences multi-line /
   log output as a verbatim block ([ADR-0018](adr/0018-markdown-rendering.md)). Never
   interpolate raw external bytes straight into a reason.
+- **`report` — what the run found** ([ADR-0044](adr/0044-run-facts-on-the-node.md)) —
+  the outputs field beside `config`'s inputs: the repositories in scope, the volumes
+  enumerated, the queues discovered. Markdown, shown on the node's own page — never
+  on a card, because volume is exactly what `reason_cap` exists to keep off the grid
+  — and **written through on every run**: hand over an empty one and the last is
+  cleared, which is the point, since a roster that outlives the run that found it is
+  a lie by the next tick.
+
+  Two author rules. **It is never a status claim**: anything that should alarm is a
+  reason, and this field must not become a second, quieter reason channel. What
+  separates them is **status, not volume** — a list whose items each carry a verdict
+  belongs in the reasons as coded entries (and the card clamps them); a list whose
+  items carry none is scope and belongs here. *The roster is presence; an entry is a
+  claim.* So the **count** of what was found is an `OK` reason, where it is seen
+  without opening anything, and the forty **names** go in `report`, where they cost
+  nothing. **And it belongs to whoever owns the node alone**: put a whole-check
+  statement on the root of a container your check owns outright; on a container
+  **shared** with another check, tag the owned children instead — a shared node
+  publishes neither `config` nor `report`, by the same rule that withholds its
+  timestamp. A check with whole-check information to publish should own its own node.
 - **Subnode labels — `about` / `title`** — a branch check can caption the subnodes it
   emits by setting a child's `about` (subject: what the aspect *is* and how it grades)
   and, rarely, `title` (a short label) ([ADR-0025](adr/0025-check-provided-subnode-metadata.md)).
@@ -176,8 +236,14 @@ defines the class — the whole game is making that import happen first.
 
 ```python
 # wsgi.py — register the deployment's check types, then expose the app.
+# The order is load-bearing and deliberately not sorted: importing
+# little_sister.app builds the engine and loads the check configs at import time,
+# so everything this deployment registers must already be in place. An import
+# sorter puts `little_sister` first and silently inverts exactly that.
+# isort: off
 import my_deployment.checks          # noqa: F401  registration side effects
-from little_sister.app import app    # noqa: E402  builds engine, loads checks
+from little_sister.app import app    # builds the engine, loads the checks
+# isort: on
 
 __all__ = ["app"]
 ```
@@ -185,19 +251,32 @@ __all__ = ["app"]
 and point the runner at it (gunicorn → `wsgi:app` instead of
 `little_sister.app:app`). The check package must be importable — run from the
 directory where it resolves on `sys.path`. The same wrapper (and the same import
-slot) also registers **secret resolvers** (§6).
+slot) also registers **secret resolvers** (§6), **template slot fillers**
+([ADR-0034](adr/0034-template-slots-for-dependent-packages.md)) and **configuration
+aspects** ([ADR-0035](adr/0035-registering-a-config-aspect.md)).
+
+The `# isort: off` fence is not decoration, and `# noqa: E402` is not superstition:
+the app import must follow the registrations, so it cannot sit with the others at
+the top of the file. Do not carry the `noqa` into a file where nothing sits between
+the two imports — with this repo's ruff selection an unused one is itself an error.
+
+**In an installed package** — identical, and it is *still a wrapper*: the deployment
+writes `import little_sister_github` in the same slot, and the package's
+`__init__.py` does the importing that registers. What a package changes is who
+maintains the type and on what version line, not how it arrives. Discovery without
+an import — an entry point that would let a deployment install a type and write no
+line at all — does not exist yet; when it does, that import is what it replaces.
 
 **In the library** — the built-ins do the same thing via a side-effect import in
 `little_sister/checks/__init__.py` (it imports `http`, `file`, `command`, `ssh`).
-That's the graduation path for a deployment check at the packaging-and-PyPI phase:
-same class, moved into
-a package whose import registers it (eventually via entry points) — no wrapper
-needed.
 
-`CHECK_TYPES`, `little_sister.app:app`, `little_sister.secrets` and the
-`LITTLE_SISTER_*` environment variables are part of little-sister's **published
-version contract** ([`architecture.md`](architecture.md) §11), so a tag won't move
-them under a deployment.
+`CHECK_TYPES`, `little_sister.app:app`, `little_sister.secrets`, the
+`LITTLE_SISTER_*` environment variables and every name in §2 above are part of
+little-sister's **published version contract** ([`architecture.md`](architecture.md)
+§11), so a tag won't move them under a deployment. Logging is on that contract as a
+*behavior* rather than a name: call `logging.getLogger(__name__)` and your records
+reach whatever the application configured — including your own setup, if you install
+it before importing `little_sister.app`.
 
 ---
 
@@ -224,7 +303,7 @@ them under a deployment.
   branch check emits can be **hardcoded** (a per-aspect default in code, like
   `host-metrics`' built-in `about`s) or read from the check's **own config** — a
   `subnodes:` block, `name → {title, about}`, sitting beside the root's inline metadata.
-  `little_sister.checks.metadata` provides the reader: `parse_subnodes(config)` →
+  `little_sister.checks` provides the reader: `parse_subnodes(config)` →
   `{name: {title, about}}`, and `expand_tokens(text, {…})` to fill `{token}` placeholders
   (a plain replace, never `str.format`, so backticks / braces in the Markdown survive).
   `resolve_text(configured, default, tokens)` layers a check that has both: the config
@@ -291,7 +370,9 @@ import-before-app slot as the check types (§4); the library ships no store clie
 - **Respect the upstream's rate limits.** Batch where you can, keep `frequency` sane,
   and prefer few calls per run. (API-specific tactics belong in the check's own doc.)
 - **Keep dependencies light.** The built-ins use stdlib `urllib`; matching that keeps
-  an eventual plugin thin and its extraction clean.
+  a plugin thin and its extraction clean — and that is measured, not hoped for: both
+  check types extracted so far reached their provider over stdlib `urllib` and ship
+  with little-sister as their only dependency.
 
 ---
 
@@ -318,12 +399,20 @@ import-before-app slot as the check types (§4); the library ships no store clie
 
 ## 9. Extraction to a plugin
 
-Build a deployment check type so it lifts out cleanly later: a **self-contained
-module** (class + tests + an example YAML + a short doc), **minimal dependencies**,
-and credentials behind **secret references** (§6). Then packaging it as an
-installable `little-sister-<x>` with an entry point is "an evolution of this, not a
-rewrite" ([`architecture.md`](architecture.md) §11). Until then a deployment's checks
-are an integral part of its repo.
+Build a deployment check type so it lifts out cleanly: a **self-contained module**
+(class + tests + an example YAML + a short doc), **minimal dependencies**, and
+credentials behind **secret references** (§6). This section is the *design*
+advice — what makes a type liftable. The **procedure** for actually lifting one, when
+it turns out to have a second user, is
+[`plugin-repository.md`](plugin-repository.md): the repository template, the cutover
+order that stays green at every step, the private-strings sweep an extraction out of
+a private deployment needs, and how a deployment then consumes the result.
+
+The table below is no longer a prediction. Three extractions have run against it and
+every row that applied held — what could not move turned out to be configuration
+already, which is the same line arriving from the other direction. Only the two check
+types exercised the whole table; the surface extension has no credential and no
+subnode prose, so it tested the knob row alone.
 
 The line to build against is **type vs deployment**: what is true of the check *type*
 travels inside the package, what is true of one installation stays in that

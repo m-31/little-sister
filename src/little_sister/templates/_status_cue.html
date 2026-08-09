@@ -1,0 +1,30 @@
+{#- Status not by color alone (ADR-0024): a small shape cue per state — a check (ok),
+    triangle (warn), filled disc (error), pause bars (maintenance), hollow ring (idle /
+    undefined) — so a status reads without leaning on the fill color, and a red/green
+    color-blind viewer can separate error from ok. Drawn in ``currentColor`` so it
+    inherits each surface's readable text color. ``labeled`` names the cue for assistive
+    tech (WCAG 1.1.1): a **coded reason line** (ADR-0042) has no status word, so its cue
+    is its only status channel (role=img + aria-label). Every other cue — cards, boxes,
+    the strip — stays ``aria-hidden``: a status word beside it already speaks (a box
+    gained its word with the state cluster), and a named cue would double-announce.
+
+    Its own partial (rather than a macro inside the grid) because the leaf detail page
+    needs it too, and importing the grid template would execute the grid's body without
+    the grid's context — StrictUndefined rightly refuses that. -#}
+{% macro status_cue(code, labeled=false) -%}
+<svg class="status-cue status-cue--{{ code | status_slug }}" viewBox="0 0 16 16"
+     width="12" height="12" focusable="false"
+     {% if labeled %}role="img" aria-label="{{ code.name.lower() }}"{% else %}aria-hidden="true"{% endif %}>
+{%- if code.name == 'OK' -%}
+<path d="M3.5 8.5 6.5 11.5 12.5 4.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+{%- elif code.name == 'WARN' -%}
+<path d="M8 2 15 14 1 14 Z" fill="currentColor"/>
+{%- elif code.name == 'ERROR' -%}
+<circle cx="8" cy="8" r="5.5" fill="currentColor"/>
+{%- elif code.name == 'MAINTENANCE' -%}
+<rect x="4" y="3.5" width="2.7" height="9" rx="0.7" fill="currentColor"/><rect x="9.3" y="3.5" width="2.7" height="9" rx="0.7" fill="currentColor"/>
+{%- else -%}
+<circle cx="8" cy="8" r="5" fill="none" stroke="currentColor" stroke-width="2"/>
+{%- endif -%}
+</svg>
+{%- endmacro %}

@@ -1,0 +1,44 @@
+# The deployment's last word on the Content-Security-Policy (ADR-0048 §5).
+#
+# little-sister assembles the policy rather than carrying one: the library's own
+# defaults, plus what dependent packages contribute in code, plus this file. Nothing
+# here is required — the file may be absent entirely — and this copy is an example
+# with every entry commented out, so it adds nothing as it stands.
+#
+# Two reasons to write in it:
+#
+#   * An origin nobody anticipated. A package declares the hosts *it* reaches
+#     (`csp.allow(...)`, in the deployment's import-before-app block), but a source
+#     that no package knows about — an image host a check's Markdown embeds, an
+#     identity provider a login form posts to — belongs here. That is what keeps such
+#     a source a configuration line rather than a fork.
+#   * A keyword. `'unsafe-inline'` and friends relax the policy, so a *package* may
+#     not add one: one dependency able to switch the policy off would make it
+#     decorative for every other package in the process. This file is the only place
+#     a keyword is taken at all, because relaxing a policy is the deployment's call
+#     and nobody else's.
+#
+# The shape is one key per directive, each a list of sources. Sources are **added** to
+# the assembled policy, never replaced — and this file layers across the whole
+# LITTLE_SISTER_CONFIG_DIR path-list the same way, a site root adding to a base root's
+# (ADR-0031), because a policy is a union and there is nothing here to overwrite.
+#
+# `/system` prints the effective policy with the contributor of every source, so what
+# this file did is visible from the running instance.
+#
+# The policy currently ships as `Content-Security-Policy-Report-Only`: a violation is
+# logged at WARNING and nothing is blocked. Read the log before tightening anything.
+
+# A tracker whose host the filler package could not know, and the vendor avatars a
+# check embeds in its reason text:
+#
+#   connect-src:
+#     - https://tickets.example.org
+#   img-src:
+#     - https://assets.example.org
+#
+# The escape hatch, for the day a page needs something a source list cannot express.
+# Prefer fixing the page:
+#
+#   script-src:
+#     - "'unsafe-inline'"

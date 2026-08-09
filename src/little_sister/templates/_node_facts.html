@@ -1,0 +1,93 @@
+{#- The node's own facts — time, what the run found, what it ran with — as the
+    **one** block both pages render (ADR-0044 decision 8, questions §4.8 answered:
+    the container gets the detail page it never had, built by reuse rather than as
+    a second surface).
+
+    The leaf detail page owned all of this and the container owned none of it:
+    `/status/<branch>` is a dashboard *of the children*, so a container's `config`
+    was stored by two checks in the tree and rendered by nothing, and its run facts
+    had nowhere to land. Same partial on both pages, so the two can no longer drift.
+
+    Three cards, in the order a reader wants them: **when** it ran, **what it
+    found** (`report` — the run's outputs), **what it ran with** (`config` — its
+    inputs). Report before config on purpose: the outputs are why you opened the
+    page, the inputs are the reference beside them. Both are Markdown through the
+    hardened renderer (ADR-0018) — checks author them with `config_markdown()`, and
+    rendering that bullet list as literal text was a leftover from before the
+    renderer landed.
+
+    Context: ``node`` (a StatusSnapshot), ``branch`` (its path, for the history
+    link) and ``since`` (the start of the current own-status period, or None).
+    Never included by the kiosk, which keeps none of this. -#}
+<div class="card mb-3">
+    <div class="card-body">
+        <h3 class="h6 text-muted text-uppercase">Time</h3>
+        {#- Observation time (ADR-0027). No timestamp means no check has ever
+            written this node — say so, rather than inventing an instant. With
+            a timestamp but no recorded transition of its own (``since`` is
+            None) there is no period to bound either, so report the single
+            observation instead of a from/until of one moment.
+
+            The period is bounded by the **own**-status event log, so it names the
+            own status: on a container the rolled-up code is a statement about the
+            children, and the children are on the same page saying it themselves. -#}
+        {% if node.timestamp is none %}
+            <p class="mb-1 text-muted">Not yet observed.</p>
+        {% elif since %}
+            <p class="mb-1">
+                Status <strong>{{ node.own_code.name.lower() }}</strong>
+                from {{ since | localtime }} until {{ node.timestamp | localtime }}
+            </p>
+        {% else %}
+            <p class="mb-1">Observed {{ node.timestamp | localtime }}.</p>
+        {% endif %}
+        {#- The run facts (ADR-0044 decisions 2 and 4), present exactly where this
+            node carries them — the sole owning check's mount and the unwritten
+            ancestors above it. This is where **wall time** surfaces: stored since
+            the run-object slice, rendered nowhere until this header.
+
+            The next update stays **absolute** here, as on the grid. §10.5 of the
+            working note reserved the relative "in 4m" for this header, on the
+            grounds that the reader is looking deliberately and the stale banner is
+            directly above — but that argument needs a *live* page, and this partial
+            is on one page that polls and one that does not. A relative form on the
+            leaf page would go on claiming "in 4m" for as long as the tab is open,
+            which is the same freeze the absolute form was chosen to survive. One
+            partial, one form, and the safe one wins. -#}
+        {% if node.run and node.run.next_run_at %}
+            <p class="mb-1">Next update {{ node.run.next_run_at | localtime }}</p>
+        {% endif %}
+        {% if node.run and node.run.wall_seconds is not none %}
+            <p class="mb-1 text-muted">Last run took {{ node.run.wall_seconds | elapsed }}</p>
+        {% endif %}
+        {% if node.frequency_seconds %}
+            <p class="mb-2 text-muted">Checked every {{ node.frequency_seconds | duration }}</p>
+        {% endif %}
+        {# Secondary, like the maintenance buttons below it, rather than the
+           off-palette `btn-info` cyan it used to wear — the one color on this
+           page that belonged to no theme and followed none of them. #}
+        <a class="btn btn-outline-secondary" href="{{ url_for('history', path=branch) }}">History</a>
+    </div>
+</div>
+
+{% if node.report %}
+{#- What the run **found** (ADR-0044 decision 6) — the roster, the scope, the
+    enumeration — and never a status claim: anything that should alarm is a reason,
+    and this field must not become a second, quieter reason channel. Never on a
+    card either: volume is exactly what `reason_cap` exists to keep off the grid. -#}
+<div class="card mb-3">
+    <div class="card-body">
+        <h3 class="h6 text-muted text-uppercase">Report</h3>
+        <div class="md-body">{{ node.report | markdown }}</div>
+    </div>
+</div>
+{% endif %}
+
+{% if node.config %}
+<div class="card mb-3">
+    <div class="card-body">
+        <h3 class="h6 text-muted text-uppercase">Configuration</h3>
+        <div class="md-body text-muted">{{ node.config | markdown }}</div>
+    </div>
+</div>
+{% endif %}

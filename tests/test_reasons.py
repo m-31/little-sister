@@ -11,8 +11,10 @@ from little_sister.checks.base import CheckResult
 from little_sister.errors import CheckError
 from little_sister.reasons import (
     MAX_SLUG_LENGTH,
+    Entry,
     ReasonEntry,
     ReasonError,
+    derive_code,
     derived_slug,
     normalize,
 )
@@ -160,3 +162,67 @@ class StatusReasonTests(TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class CodedEntryTests(TestCase):
+    """Entries that carry their own claim (ADR-0042)."""
+
+    def test_an_entry_may_not_claim_maintenance(self):
+        # a pin is recorded beside the reading, never reported by a check
+        with self.assertRaises(ReasonError):
+            Entry("w1", "down on purpose", StatusCode.MAINTENANCE)
+
+    def test_entry_and_reasonentry_are_one_class(self):
+        # two spellings, zero migration: ADR-0036-era code keeps working
+        self.assertIs(Entry, ReasonEntry)
+
+    def test_a_code_or_running_declares_members_by_shape(self):
+        self.assertTrue(normalize([Entry("w", "x", StatusCode.OK)])[1])
+        self.assertTrue(normalize([Entry("w", "x", running=True)])[1])
+
+    def test_a_plain_entry_sequence_keeps_the_flag_semantics(self):
+        self.assertFalse(normalize([Entry("w", "x")])[1])
+        self.assertTrue(normalize([Entry("w", "x")], True)[1])
+
+    def test_entry_slugs_are_validated_like_declared_pairs(self):
+        with self.assertRaises(ReasonError):
+            normalize([Entry("has space", "x")])
+        with self.assertRaises(ReasonError):
+            normalize([Entry("", "x")])
+
+    def test_a_taken_slug_bumps_and_the_claim_travels_with_it(self):
+        entries, _ = normalize([Entry("w", "a", StatusCode.OK),
+                                Entry("w", "b", StatusCode.ERROR, running=True)])
+        self.assertEqual([e.slug for e in entries], ["w", "w-2"])
+        self.assertEqual(entries[1].code, StatusCode.ERROR)
+        self.assertTrue(entries[1].running)
+
+
+class DeriveCodeTests(TestCase):
+    """The node code a coded entry set derives to (ADR-0042)."""
+
+    def test_worst_of_the_declared_codes(self):
+        entries = (Entry("a", "x", StatusCode.OK),
+                   Entry("b", "y", StatusCode.ERROR),
+                   Entry("c", "z", StatusCode.WARN))
+        self.assertEqual(derive_code(entries), StatusCode.ERROR)
+
+    def test_undefined_is_ignored_and_wins_only_alone(self):
+        self.assertEqual(
+            derive_code((Entry("a", "x", StatusCode.UNDEFINED),
+                         Entry("b", "y", StatusCode.OK))),
+            StatusCode.OK)
+        # a job list where nothing has ever concluded has not reported
+        self.assertEqual(derive_code((Entry("a", "x", StatusCode.UNDEFINED),)),
+                         StatusCode.UNDEFINED)
+
+    def test_an_empty_set_reads_ok(self):
+        # the check ran, enumerated, and found nothing — "nothing to report"
+        # is not "nothing reported"
+        self.assertEqual(derive_code(()), StatusCode.OK)
+
+    def test_an_uncoded_entry_contributes_nothing_here(self):
+        # it carries the node's code — which is the value being derived
+        self.assertEqual(
+            derive_code((Entry("a", "x"), Entry("b", "y", StatusCode.WARN))),
+            StatusCode.WARN)

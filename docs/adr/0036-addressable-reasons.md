@@ -52,6 +52,22 @@
 >   node from a capped list. The count is also what keeps the pip honest: without it a
 >   row would read as a node pin, which it is not.
 
+> **Update 3 (2026-08-06, decided 2026-08-05):** decision 8's premise **narrows**. An
+> entry may now declare a **code of its own**
+> ([ADR-0042](0042-entries-carry-their-own-code.md)), so "an entry has no severity of
+> its own" is true only of entries that declare none — which remains the default, and
+> remains permanently right for a severity-banded leaf, whose lines are one severity
+> by construction. Decision 7's "the node's own status is the worst of what is left"
+> becomes literally true over coded entries: same derivation, same exclusions, same
+> silenced-versus-unreported tiebreak, with one stated default — an entry-bearing
+> node whose run reports **no** entries reads `OK`, because "nothing to report" is
+> not "nothing reported". Decision 8's *effect* — a per-entry pin takes the cap, not
+> the `escapes` threshold — stands unchanged for now; whether a pin on a *coded*
+> entry may take `escapes` is re-examined by the pin policy when it is designed.
+> Decisions 1, 2, 6, 9, 10 and 12 are untouched; decision 13's envelope sketch grows
+> `code` and `running` beside `text` and `maintenance`, still in the client contract
+> round and not before.
+
 ## Context
 
 A check that discovers **dynamic entries** puts many of them into one node's reasons:
@@ -223,9 +239,9 @@ client contract round rather than arriving on its own.
   model. The ADR-0004 split owes the same answer: a container whose every child is
   pinned is in maintenance, not idle.
 - **A write client cannot yet address an entry.** Decision 13 publishes no slug, so a
-  token-authed mutation (Phase 7's write actions) has nothing to name. Adding the slug
-  later is additive but costs a second `schema_version` bump; that is the accepted
-  trade for a smaller envelope now.
+  token-authed mutation (the JSON API's write actions) has nothing to name. Adding
+  the slug later is additive but costs a second `schema_version` bump; that is the
+  accepted trade for a smaller envelope now.
 - **Two shapes at one seam.** `CheckResult.reason` accepts four input forms and the
   core sees one. The normalization is the only place that knows the difference, which
   is the same rule the value readers follow

@@ -29,9 +29,14 @@ sys.path.insert(0, str(_REPO_ROOT))
 
 # Point the app at the demo tree and the committed fixture user; hand the JSON API
 # a token so the demo can be polled as JSON too. The engine stays ON — the point.
-os.environ.setdefault("LITTLE_SISTER_CONFIG_DIR", str(_HERE / "demo_config"))
+# The fixture user list is a configuration root of its own, named first: `users` is
+# the aspect that does not layer, so the first root declaring it wins whole
+# (ADR-0031) — which is how the demo and the suite share one login list without the
+# demo tree carrying a second copy.
 os.environ.setdefault(
-    "LITTLE_SISTER_USERS", str(_HERE / "fixtures" / "users.yaml"))
+    "LITTLE_SISTER_CONFIG_DIR",
+    os.pathsep.join((str(_HERE / "fixtures" / "config"),
+                     str(_HERE / "demo_config"))))
 os.environ.setdefault("SECRET_KEY", "demo-harness")
 os.environ.setdefault("LITTLE_SISTER_API_TOKENS", "demo=demo-token")
 
@@ -61,6 +66,16 @@ slots.register("reason.actions", "tests.demo_extension", "review_action.html",
 slots.register("node.actions", "tests.demo_extension", "node_action.html",
                demo_extension.node_action)
 slots.register_assets("tests.demo_extension", "demo.css", "demo.js")
+
+# The third seam a package registers into (ADR-0048): the origin its script *reaches*.
+# `'self'` already covers `demo.js` itself, because the asset route serves it from our
+# origin — what a policy cannot know is the host it would call. Nothing in the demo
+# actually calls it; the point is that `/system` then shows a source whose contributor
+# is a package rather than the library, beside one contributed by `demo_config/csp.yaml`
+# — and that a contribution made *here*, before the app import, reaches a policy
+# assembled *there*, which is the whole of "assembled, never a constant".
+csp = importlib.import_module("little_sister.csp")
+csp.allow("connect-src", "https://tracker.example.org", by="tests.demo_extension")
 
 from little_sister.app import app  # noqa: E402
 

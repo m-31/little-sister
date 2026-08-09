@@ -6,7 +6,7 @@ import urllib.error
 from pathlib import Path
 from unittest import TestCase, mock
 
-from little_sister.checks import CheckError, code, load_checks, parse_duration
+from little_sister.checks import CheckError, Entry, code, load_checks, parse_duration
 from little_sister.checks.base import CheckResult
 from little_sister.checks.command import CommandCheck
 from little_sister.checks.file import FileFreshnessCheck
@@ -439,3 +439,45 @@ class InlineAboutTests(TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class CodedResultSeamTests(TestCase):
+    """The CheckResult seam of ADR-0042: a node with coded entries declares no
+    code of its own, and declaring both is refused — loudly, like ``name:`` in a
+    check YAML — because a silently ignored code would be believed."""
+
+    def test_declaring_both_is_refused(self):
+        with self.assertRaises(CheckError):
+            CheckResult(StatusCode.OK, [Entry("w", "x", StatusCode.OK)])
+
+    def test_coded_entries_derive_the_stored_code(self):
+        result = CheckResult(reason=[Entry("a", "passed", StatusCode.OK),
+                                     Entry("b", "failed", StatusCode.ERROR)])
+        self.assertIsNone(result.code)
+        self.assertEqual(result.stored_code, StatusCode.ERROR)
+        self.assertTrue(result.members)
+
+    def test_an_entry_bearing_empty_set_reads_ok(self):
+        # an empty mapping, or entries=True beside an empty list, says "I
+        # enumerated and found nothing" — which is OK, not UNDEFINED
+        self.assertEqual(CheckResult(reason={}).stored_code, StatusCode.OK)
+        self.assertEqual(CheckResult(reason=[], entries=True).stored_code,
+                         StatusCode.OK)
+
+    def test_a_result_without_any_code_is_refused(self):
+        with self.assertRaises(CheckError):
+            CheckResult(reason="boom")                  # prose, no code
+        with self.assertRaises(CheckError):
+            CheckResult()                               # nothing at all
+        with self.assertRaises(CheckError):
+            CheckResult(reason={"a": "x"})              # members, none coded
+
+    def test_a_declared_code_is_the_stored_code(self):
+        self.assertEqual(CheckResult(StatusCode.WARN, "meh").stored_code,
+                         StatusCode.WARN)
+
+    def test_running_alone_rides_a_declared_code(self):
+        # `running` is display, not severity — it does not force derivation
+        result = CheckResult(StatusCode.WARN, [Entry("a", "x", running=True)])
+        self.assertEqual(result.stored_code, StatusCode.WARN)
+        self.assertTrue(result.members)     # a per-line claim declares members

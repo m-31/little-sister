@@ -47,19 +47,20 @@ what happened.
 
 ## 5. Pulling status into an incident
 
-A real outage hits and Robin opens an incident channel. From the **Text** page
-they copy a plain-text snapshot of the tree and paste it straight in:
+A real outage hits and Robin opens an incident channel. From the **Copy** page
+they copy the Markdown snapshot into chat — or rich text into a ticket:
 
 ```
-Production: ERROR
-  payments: ERROR
-    gateway: ERROR - 503 from /health
-  database: OK
-  cache: WARN - evictions high
+- payments
+  - gateway ⛔
+    - 503 from /health
+- cache ⚠️
+  - evictions high
 ```
 
-No screenshots, no reformatting — the status drops cleanly into chat and the
-ticket, and everyone's looking at the same picture.
+Healthy branches stay out; each problem keeps the minimum ancestor chain needed
+to locate it. No screenshots, no reformatting — the status drops cleanly into chat
+and the ticket, and everyone's looking at the same picture.
 
 ## 6. The shared toolbox, one click away
 
@@ -111,11 +112,11 @@ many clients reading the same JSON.
   "schema_version": 1,
   "generated_at": "2026-06-17T08:14:05Z",
   "status": {
-    "path": "Production", "name": "Production",
+    "path": "/production", "name": "production",
     "own_code": "UNDEFINED", "code": "ERROR",
     "reasons": [], "timestamp": "2026-06-17T08:14:02Z",
     "children": [
-      { "path": "Production.payments", "name": "payments",
+      { "path": "/production/payments", "name": "payments",
         "own_code": "ERROR", "code": "ERROR",
         "reasons": ["503 from /health"], "timestamp": "2026-06-17T08:14:02Z",
         "children": [] }
@@ -130,7 +131,7 @@ The company runs systems in three places: the office, a colo, and a cloud region
 Each site runs its **own** little-sister as a **satellite**, watching the machines
 it lives next to. The central instance runs a handful of **satellite checks** —
 each one fetches a satellite's JSON and **grafts that whole branch** into the
-central tree at a path like `sites.colo`. The result: one `/status` screen for
+central tree at a path like `/sites/colo`. The result: one `/status` screen for
 the entire company, assembled from instances that each only know their own
 corner. Because every instance speaks the same JSON, the output of one is simply
 the input of the next.
@@ -151,4 +152,3 @@ notices before anyone opens a laptop. By the door, an even simpler screen runs t
 **traffic light**: the whole display is a single color — green, amber, or red —
 for the root's rolled-up status, with the failing services listed when it's not
 green. You can read the health of everything on your way out the door.
-

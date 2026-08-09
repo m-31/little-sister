@@ -1,6 +1,17 @@
 # ADR-0020 — Deployment-supplied user list
 
-- **Status:** Accepted
+> **Superseded 2026-08-06 by [ADR-0046](0046-user-list-from-the-configuration-roots.md).**
+> Its decisions that still stand — a deployment-controlled location, the shipped
+> `users.example.yaml` and no packaged list, fail-fast on a missing file, and the
+> unchanged format — are restated there with this record's date. What changed is the
+> **path resolution** below: the `users` aspect of the configuration roots is now the
+> only input, `LITTLE_SISTER_USERS` is retired, and startup refuses while it is set.
+>
+> Kept for the history. Everything below describes the design as it stood; where it
+> disagrees with ADR-0046, that record wins.
+
+- **Status:** Superseded by
+  [ADR-0046](0046-user-list-from-the-configuration-roots.md)
 - **Date:** 2026-07-10
 - **Related:** [ADR-0003 — Configuration & secrets via a `.env` file](0003-config-and-secrets-via-env-file.md)
   (same cwd convention).
@@ -37,9 +48,9 @@ Read the user list from a **deployment-controlled location**, not from the packa
   directory (git-ignored) or point `LITTLE_SISTER_USERS` at a fixture — the same way they
   already rely on a cwd `.env` / `config.yaml`.
 - This changes **only the file's location**, not the auth mechanism. Plaintext passwords
-  and the viewer/admin role model are untouched: password hashing stays a Phase 8 item, and
-  a **pluggable auth provider** (Keycloak / SSO) is Phase 6 — which would make this static
-  file merely the *default* provider.
+  and the viewer/admin role model are untouched: password hashing stays a later phase,
+  and a **pluggable auth provider** (Keycloak / SSO) is its own seam — which would make
+  this static file merely the *default* provider.
 - One env var and one file-shipping change; no API or template change.
 
 ## Alternatives considered

@@ -581,9 +581,24 @@ class DeadlineTests(TestCase):
 
     def setUp(self):
         self.held = threading.Event()
+        # LIFO: held.set (registered last) runs first, so the drain below only
+        # ever waits on workers that have already been released.
+        self.addCleanup(self._drained)
         self.addCleanup(self.held.set)
         self.started = {}
         self.calls = []
+        # The stuck count is module state, so a leftover crossing a test
+        # boundary turns a deadline case into a flake: released, a wedged
+        # worker exits in microseconds on an idle box — and lags past the next
+        # test's assertion on a loaded one (`2 != 1`, seen live).
+        self._drained(when="before")
+
+    def _drained(self, when="after"):
+        """Wait out every wedged worker still letting go of the module state."""
+        if not self._eventually(lambda: link_probe.stuck_passes() == 0
+                                and not link_probe.is_running()):
+            self.fail(f"a wedged probe survived {when} the test "
+                      f"(stuck={link_probe.stuck_passes()})")
 
     def wedging(self, *slow, answer=200):
         """A ``_request`` stand-in that blocks on the test's event for ``slow``.

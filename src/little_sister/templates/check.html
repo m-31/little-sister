@@ -1,6 +1,8 @@
 <!DOCTYPE html>
 <html>
 <head>
+    {% from '_maintenance_fields.html' import maintenance_fields with context %}
+    {% from '_status_cue.html' import status_cue %}
     {# the node, not the section: three leaf tabs open at once should be
        tellable apart #}
     {% set page_title = node.name %}
@@ -36,7 +38,7 @@
                         reading it names was not merely hidden but overwritten. -#}
                     Status: <strong>{{ node.code.name.lower() }}</strong>{% if node.own_code.name == 'MAINTENANCE' and node.reported_code.name not in ('MAINTENANCE', 'UNDEFINED') %} <span class="status-reported">· {{ node.reported_code.name.lower() }}</span>{% endif %}
                     {%- if node.maintenance_entry %}
-                        <div class="pin-banner">Silenced by <strong>{{ node.maintenance_entry.set_by or 'an admin' }}</strong> until {{ node.maintenance_entry.expires_at | localtime }}{% if node.maintenance_entry.reason and node.maintenance_entry.reason != 'maintenance' %} — {{ node.maintenance_entry.reason }}{% endif %}</div>
+                        <div class="pin-banner">Silenced by <strong>{{ node.maintenance_entry.set_by or 'an admin' }}</strong> until {{ node.maintenance_entry.expires_at | localtime }}{% if node.maintenance_entry.reason and node.maintenance_entry.reason != 'maintenance' %}<span class="pin-banner__reason"> — {{ node.maintenance_entry.reason | markdown_inline }}</span>{% endif %}</div>
                     {%- endif %}
                     {#- The dashboard's reason line, uncapped: every reason, and the
                         same ``reason.actions`` slot (ADR-0034) beside each one, so a
@@ -74,25 +76,58 @@
                     {%- endif %}
                     {% for line in node.reasons %}
                         {%- set focused = focus and line.slug == focus %}
-                        <div {% if focused %}id="pinned-reason" {% endif %}class="md-body small check-reason{% if line.quiet %} is-quiet{% endif %}{% if focused %} is-focused{% endif %}"><span class="reason-actions">{{ slot('reason.actions', node=node, reason=line.text, index=loop.index0, surface='check') }}</span>{{ line.text | markdown }}
+                        {#- A coded line carries its own claim (ADR-0042): state class,
+                            its state's own tint, and a labeled cue as its accessible
+                            name; quiet keeps the maintenance tint over any code, and
+                            is-running is display only — the words still say it. -#}
+                        <div {% if focused %}id="pinned-reason" {% endif %}class="small check-reason{% if line.code %} is-coded s-{{ line.code | status_slug }}{% endif %}{% if line.running %} is-running{% endif %}{% if line.quiet %} is-quiet{% endif %}{% if focused %} is-focused{% endif %}">
+                            <div class="check-reason__rail">
+                                <span class="reason-actions">{{ slot('reason.actions', node=node, reason=line.text, index=loop.index0, surface='check') }}</span>
+                                {%- if is_admin and node.members %}
+                                    <details class="reason-pin">
+                                        <summary class="reason-action reason-pin__toggle">{% if line.quiet %}Edit maintenance{% else %}Set maintenance{% endif %}</summary>
+                                        <div class="reason-pin__panel">
+                                            <form method="post" action="{{ url_for('maintenance') }}"
+                                                  class="maintenance-editor-form">
+                                                <input type="hidden" name="path" value="{{ branch }}">
+                                                <input type="hidden" name="slug" value="{{ line.slug }}">
+                                                <input type="hidden" name="action" value="set">
+                                                <input type="hidden" name="set_at" value="{{ line.maintenance.set_at if line.quiet else '' }}">
+                                                {{ maintenance_fields(
+                                                    line.maintenance.reason if line.quiet else '', '',
+                                                    'reason-maintenance-' ~ loop.index,
+                                                    maintenance_default,
+                                                    maintenance_timezone,
+                                                    true) }}
+                                                <div class="maintenance-editor-form__actions">
+                                                    <button class="btn btn-sm btn-primary" type="submit">{% if line.quiet %}Save changes{% else %}Set maintenance{% endif %}</button>
+                                                    <button class="btn btn-sm btn-link maintenance-editor-cancel"
+                                                            type="reset">Cancel</button>
+                                                </div>
+                                            </form>
+                                            {%- if line.quiet %}
+                                                <form method="post" action="{{ url_for('maintenance') }}"
+                                                      class="reason-pin__clear">
+                                                    <input type="hidden" name="path" value="{{ branch }}">
+                                                    <input type="hidden" name="slug" value="{{ line.slug }}">
+                                                    <input type="hidden" name="action" value="clear">
+                                                    <input type="hidden" name="set_at" value="{{ line.maintenance.set_at }}">
+                                                    <button class="btn btn-sm btn-outline-secondary"
+                                                            type="submit">Clear maintenance</button>
+                                                </form>
+                                            {%- endif %}
+                                        </div>
+                                    </details>
+                                {%- endif %}
+                            </div>
+                            <div class="md-body check-reason__body">{% if line.code %}{{ status_cue(line.code, labeled=true) }}{% endif %}{{ line.text | markdown }}</div>
                             {%- if line.quiet %}
-                                <div class="reason-quiet-note">In maintenance{% if line.maintenance.set_by %}, set by <strong>{{ line.maintenance.set_by }}</strong>{% endif %} — expires {{ line.maintenance.expires_at | localtime }}.{% if line.maintenance.reason and line.maintenance.reason != 'maintenance' %} {{ line.maintenance.reason }}{% endif %}</div>
-                            {%- endif %}
-                            {%- if is_admin and node.members %}
-                                <form class="reason-pin" method="post" action="{{ url_for('maintenance') }}">
-                                    <input type="hidden" name="path" value="{{ branch }}">
-                                    <input type="hidden" name="slug" value="{{ line.slug }}">
-                                    <input type="hidden" name="set_at" value="{{ line.maintenance.set_at if line.quiet else '' }}">
-                                    {%- if line.quiet %}
-                                        <input type="hidden" name="action" value="clear">
-                                        <button class="btn btn-sm btn-outline-secondary" type="submit">Let this one alarm again</button>
-                                    {%- else %}
-                                        <input type="hidden" name="action" value="set">
-                                        <input class="form-control form-control-sm reason-pin__reason" name="reason" placeholder="why?" aria-label="why this line is being silenced">
-                                        <input class="form-control form-control-sm reason-pin__duration" name="duration" placeholder="{{ maintenance_default }}" aria-label="for how long">
-                                        <button class="btn btn-sm btn-outline-secondary" type="submit">Silence this one</button>
-                                    {%- endif %}
-                                </form>
+                                <div class="reason-quiet-note">
+                                    <div>In maintenance{% if line.maintenance.set_by %}, set by <strong>{{ line.maintenance.set_by }}</strong>{% endif %} — expires {{ line.maintenance.expires_at | localtime }}.</div>
+                                    {% if line.maintenance.reason and line.maintenance.reason != 'maintenance' %}
+                                        <div class="maintenance-explanation md-body">{{ line.maintenance.reason | markdown }}</div>
+                                    {% endif %}
+                                </div>
                             {%- endif %}
                         </div>
                     {% endfor %}
@@ -111,42 +146,11 @@
             </div>
         </div>
 
-        <div class="card mb-3">
-            <div class="card-body">
-                <h3 class="h6 text-muted text-uppercase">Time</h3>
-                {#- Observation time (ADR-0027). No timestamp means no check has ever
-                    written this node — say so, rather than inventing an instant. With
-                    a timestamp but no recorded transition of its own (``since`` is
-                    None) there is no period to bound either, so report the single
-                    observation instead of a from/until of one moment. -#}
-                {% if node.timestamp is none %}
-                    <p class="mb-1 text-muted">Not yet observed.</p>
-                {% elif since %}
-                    <p class="mb-1">
-                        Status <strong>{{ node.code.name.lower() }}</strong>
-                        from {{ since | localtime }} until {{ node.timestamp | localtime }}
-                    </p>
-                {% else %}
-                    <p class="mb-1">Observed {{ node.timestamp | localtime }}.</p>
-                {% endif %}
-                {% if node.frequency_seconds %}
-                    <p class="mb-2 text-muted">Checked every {{ node.frequency_seconds | duration }}</p>
-                {% endif %}
-                {# Secondary, like the maintenance buttons below it, rather than the
-                   off-palette `btn-info` cyan it used to wear — the one color on this
-                   page that belonged to no theme and followed none of them. #}
-                <a class="btn btn-outline-secondary" href="{{ url_for('history', path=branch) }}">History</a>
-            </div>
-        </div>
-
-        {% if node.config %}
-        <div class="card mb-3">
-            <div class="card-body">
-                <h3 class="h6 text-muted text-uppercase">Configuration</h3>
-                <div class="text-muted" style="white-space: pre-wrap">{{ node.config }}</div>
-            </div>
-        </div>
-        {% endif %}
+        {#- Time, report and configuration — the shared node-facts block
+            (_node_facts.html), which the branch page now renders too, so a
+            container and a leaf say the same things in the same shapes
+            (ADR-0044 decision 8). -#}
+        {% include '_node_facts.html' %}
 
         {% if is_admin %}
         {% include '_maintenance_card.html' %}
@@ -156,5 +160,6 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     <script src="{{ url_for('static', filename='js/rail.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/maintenance-edit.js') }}"></script>
 </body>
 </html>

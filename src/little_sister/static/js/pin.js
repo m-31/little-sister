@@ -1,4 +1,4 @@
-/* The card pin control (backlog #35; ADR-0014 data).
+/* The card pin control (ADR-0014 — its model, route and persistence).
  *
  * An admin's pin control in a card head — an <a> to the node's own page, so
  * no JavaScript (or no Floating UI) still lands on a page carrying the
@@ -8,15 +8,16 @@
  * from under the admin. The maintenance.js conventions throughout: event
  * delegation on #status-grid, Floating UI positioning, Escape / outside click
  * close, a MutationObserver that re-anchors the dialog across the poll's swap and
- * drops it only when the node itself is gone. Being a form rather than a list, it
- * also manages focus: the reason field on open, back to the trigger on an explicit
- * close.
+ * drops it only when the node itself is gone. It also manages focus: read mode
+ * starts on Edit, edit mode starts in the reason field, and an explicit close
+ * returns to the trigger.
  *
- * A pinned card gets the SAME form, prefilled (ADR-0014 amendment) — who pinned
- * it and until when, its stored reason in the field, "Save changes" on the
- * button and "Clear maintenance" beneath. Both forms also carry the control's
- * `data-pin-token` (the entry's `set_at`) as the compare-and-set token; an
- * unpinned card sends it empty, which says "I believe nothing is pinned".
+ * A pinned card opens in rendered read mode (ADR-0014 / ADR-0018 amendments),
+ * with Edit and Clear actions. Edit reveals the same guarded form, prefilled
+ * from the raw source on the trigger; an unpinned card opens that form directly.
+ * Both writes carry the control's `data-pin-token` (the entry's `set_at`) as the
+ * compare-and-set token; an unpinned card sends it empty, which says "I believe
+ * nothing is pinned".
  */
 (function () {
     "use strict";
@@ -28,22 +29,25 @@
 
     var nameEl = document.getElementById("pin-card-name");
     var pathEl = document.getElementById("pin-card-path");
+    var readEl = document.getElementById("pin-card-read");
     var setEl = document.getElementById("pin-card-set");
-    var clearEl = document.getElementById("pin-card-clear");
     var setInput = document.getElementById("pin-card-input");
     var clearInput = document.getElementById("pin-card-clear-input");
     var setToken = document.getElementById("pin-card-token");
     var clearToken = document.getElementById("pin-card-clear-token");
-    var pinnedEl = document.getElementById("pin-card-pinned");
     var byEl = document.getElementById("pin-card-by");
     var expiresEl = document.getElementById("pin-card-expires");
+    var reasonReadEl = document.getElementById("pin-card-reason");
+    var editEl = document.getElementById("pin-card-edit");
+    var cancelEl = document.getElementById("pin-card-cancel");
     var reasonEl = document.getElementById("pin-reason");
     var durationEl = document.getElementById("pin-duration");
-    var durationLabel = document.getElementById("pin-duration-label");
     var submitEl = document.getElementById("pin-card-submit");
 
     var current = null;   // the control the dialog is currently open for
     var cleanup = null;   // Floating UI autoUpdate teardown
+    var currentPinned = false;
+    var openedReason = "";
 
     function place(trigger) {
         FUI.computePosition(trigger, card, {
@@ -54,6 +58,23 @@
             card.style.left = pos.x + "px";
             card.style.top = pos.y + "px";
         });
+    }
+
+    function showRead(focus) {
+        readEl.hidden = false;
+        setEl.hidden = true;
+        if (focus) { editEl.focus(); }
+    }
+
+    function showEditor(focus) {
+        readEl.hidden = true;
+        setEl.hidden = false;
+        if (focus) { reasonEl.focus(); }
+    }
+
+    function resetEditor() {
+        reasonEl.value = openedReason;
+        durationEl.value = "";
     }
 
     function open(trigger) {
@@ -69,17 +90,12 @@
         // card sends "", which is the claim that nothing is pinned.
         setToken.value = token;
         clearToken.value = token;
-        setEl.hidden = false;
-        clearEl.hidden = !pinned;
-        // Pinned: the same form, prefilled and relabeled as an edit, so
-        // extending a window never means clearing first.
-        pinnedEl.hidden = !pinned;
-        reasonEl.value = pinned ? (trigger.getAttribute("data-pin-reason") || "") : "";
+        currentPinned = pinned;
+        openedReason = pinned ? (trigger.getAttribute("data-pin-reason") || "") : "";
+        resetEditor();
         // Reset the duration too. One dialog serves every card, so a value left
         // over from the card before it would silently re-time this one — and on an
         // edit, silently re-time a window the admin only meant to re-word.
-        durationEl.value = "";
-        durationLabel.textContent = pinned ? "New window, from now" : "Duration";
         submitEl.textContent = pinned ? "Save changes" : "Set maintenance";
         if (pinned) {
             var by = trigger.getAttribute("data-pin-by");
@@ -89,6 +105,11 @@
             byEl.textContent = by ? ", set by " + by : "";
             expiresEl.textContent = expires ? " — expires " + expires : "";
         }
+        var source = trigger.nextElementSibling;
+        var hasRenderedReason = pinned && source &&
+            source.classList.contains("pin-control__reason-source");
+        reasonReadEl.innerHTML = hasRenderedReason ? source.innerHTML : "";
+        reasonReadEl.hidden = !hasRenderedReason;
         // the promise sentence matches what the pin covers: subtree or leaf, and
         // is only a promise while the pin is still to be made
         var kids = trigger.hasAttribute("data-pin-kids");
@@ -100,7 +121,7 @@
         trigger.setAttribute("aria-expanded", "true");
         if (cleanup) { cleanup(); }
         cleanup = FUI.autoUpdate(trigger, card, function () { place(trigger); });
-        reasonEl.focus();
+        if (pinned) { showRead(true); } else { showEditor(true); }
     }
 
     function close(refocus) {
@@ -109,8 +130,21 @@
         current.setAttribute("aria-expanded", "false");
         if (refocus && document.contains(current)) { current.focus(); }
         current = null;
+        currentPinned = false;
+        openedReason = "";
         if (cleanup) { cleanup(); cleanup = null; }
     }
+
+    editEl.addEventListener("click", function () {
+        if (!current) { return; }
+        showEditor(true);
+    });
+
+    cancelEl.addEventListener("click", function () {
+        if (!current) { return; }
+        resetEditor();
+        if (currentPinned) { showRead(true); } else { close(true); }
+    });
 
     // A control click toggles the dialog. The control is a link to the node's
     // page; a modified click (new tab/window) is left to the browser, like the
@@ -134,7 +168,14 @@
         close(false);
     });
     document.addEventListener("keydown", function (e) {
-        if (e.key === "Escape") { close(true); }
+        if (e.key !== "Escape" || !current) { return; }
+        if (currentPinned && !setEl.hidden) {
+            e.preventDefault();
+            resetEditor();
+            showRead(true);
+        } else {
+            close(true);
+        }
     });
 
     // The ~10s poll replaces #status-grid's contents wholesale, so the open

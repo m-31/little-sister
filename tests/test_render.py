@@ -23,6 +23,28 @@ class RenderInlineTests(TestCase):
         self.assertIn('target="_blank"', out)
         self.assertIn('rel="noopener noreferrer"', out)
 
+    def test_bare_http_urls_are_linked_and_trim_trailing_punctuation(self):
+        out = str(render_markdown_inline(
+            "See https://heise.de/a?q=1 and (http://example.com/path)."))
+        self.assertIn('href="https://heise.de/a?q=1"', out)
+        self.assertIn('>https://heise.de/a?q=1</a>', out)
+        self.assertIn('href="http://example.com/path"', out)
+        self.assertIn('</a>).', out)
+        self.assertEqual(out.count('target="_blank"'), 2)
+        self.assertEqual(out.count('rel="noopener noreferrer"'), 2)
+
+    def test_linkification_is_limited_to_explicit_http_urls(self):
+        out = str(render_markdown_inline(
+            "example.com person@example.com ftp://example.com //example.com"))
+        self.assertNotIn("<a", out)
+
+    def test_linkification_skips_code_and_existing_markdown_links(self):
+        out = str(render_markdown_inline(
+            "`https://code.example` [heise](https://heise.de)"))
+        self.assertIn("<code>https://code.example</code>", out)
+        self.assertEqual(out.count("<a "), 1)
+        self.assertIn(">heise</a>", out)
+
 
 class RenderSafetyTests(TestCase):
     def test_raw_html_is_escaped(self):
@@ -72,10 +94,12 @@ class PlainHelperTests(TestCase):
         self.assertEqual(plain(None), "None")
 
     def test_escaped_text_renders_literally(self):
-        out = str(render_markdown_inline(plain("*no* and [no](link)")))
+        out = str(render_markdown_inline(plain(
+            "*no* and [no](link) at HTTPS://external.example/path")))
         self.assertNotIn("<em>", out)
         self.assertNotIn("<a", out)
         self.assertIn("*no*", out)
+        self.assertIn("HTTPS://external.example/path", out)
 
 
 class CodeHelperTests(TestCase):

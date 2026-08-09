@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from unittest import TestCase
 
-from tests.render_ui_fixtures import render_page
+from tests.render_ui_fixtures import render_copy_page, render_page
 from tests.ui_fixtures import FIXTURES, FIXTURES_BY_NAME
 
 
@@ -25,7 +25,10 @@ class FixtureRenderTests(TestCase):
                 html = render_page(fixture)
                 self.assertIn("<!DOCTYPE", html)
                 self.assertIn("</html>", html)
-                self.assertIn('data-rendered-at="2026-07-20 12:00:00"', html)
+                if fixture.detail:
+                    self.assertIn("maintenance-edit.js", html)
+                else:
+                    self.assertIn('data-rendered-at="2026-07-20 12:00:00"', html)
 
     def test_overview_density_lists_every_host(self):
         html = self._render("hosts_ok_40")
@@ -99,6 +102,22 @@ class FixtureRenderTests(TestCase):
         self.assertIn("unknown check type", html)
         self.assertIn("No checks", html)   # the empty grid beneath the banner
 
+    def test_multi_front_incident_renders_through_copy_page(self):
+        html = render_copy_page()
+        self.assertIn("Copy status", html)
+        self.assertIn("Copy Markdown", html)
+        self.assertIn("Copy rich text", html)
+        self.assertIn("actions", html)
+        self.assertNotIn("host01 ✅", html)  # calm leaves are pruned
+
+    def test_maintenance_editor_fixture_has_read_and_edit_states(self):
+        html = self._render("maintenance_editor_member_leaf")
+        self.assertIn("<strong>Ada owns this</strong>", html)
+        self.assertIn("Edit maintenance", html)
+        self.assertIn("Set maintenance", html)
+        self.assertIn("maintenance-reason-source", html)
+        self.assertIn("&lt;script&gt;shown as text&lt;/script&gt;", html)
+
 
 class WallFixtureTests(TestCase):
     """The "realistic wall" tier: extremes embedded in a populated overview."""
@@ -152,7 +171,7 @@ class WallFixtureTests(TestCase):
         # machine — diff. The stamp carries an offset, so the rendered time of day is
         # the configured timezone's wherever the harness runs.
         html = self._render("hosts_ok_10")
-        self.assertIn('<span class="status-card__time">11:59:31</span>', html)
+        self.assertIn('<span class="status-card__time">11:59</span>', html)
         self.assertEqual(html.count('class="status-card__time"'), 10)
 
     def test_observation_times_fixture_contrasts_present_and_absent(self):

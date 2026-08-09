@@ -291,10 +291,11 @@ class Engine:
         """Run every check once, synchronously, and upsert results.
 
         Used for tests and a potential one-shot refresh; the background loop does
-        not call this.
+        not call this. A one-shot run has no live schedule, so the run facts it
+        writes carry no next slot (ADR-0044).
         """
         for item in self._scheduled:
-            self._execute(item)
+            self._execute(item, once=True)
 
     def _loop(self) -> None:
         while not self._stop.is_set():
@@ -338,7 +339,7 @@ class Engine:
         # so the next check refills the node.
         self._tree.sweep_expired()
 
-    def _execute(self, item: _Scheduled) -> None:
+    def _execute(self, item: _Scheduled, once: bool = False) -> None:
         check = item.check
         ran = not check.secret_errors
         started = time.monotonic()
@@ -384,7 +385,7 @@ class Engine:
         if texts:
             detail = " — " + texts[0].replace("\n", " ")[:120]
         logger.info("check %s: %s (%.0f ms)%s", check.path,
-                    result.code.name, elapsed_ms, detail)
+                    result.stored_code.name, elapsed_ms, detail)
         # A faster second look on failure (ADR-0033): a non-OK completion pulls
         # the armed slot earlier — never later — to the retry interval, at most
         # `retry_attempts` times per failure episode; an OK ends the episode
@@ -393,7 +394,7 @@ class Engine:
         # would burn the pool confirming a result that cannot change.
         if ran and item.retry_interval_seconds > 0 and item.retry_attempts > 0:
             with self._lock:
-                if result.code is StatusCode.OK:
+                if result.stored_code is StatusCode.OK:
                     item.retry_used = 0
                 elif item.retry_used < item.retry_attempts:
                     pulled = self._clock() + item.retry_interval_seconds
@@ -401,6 +402,24 @@ class Engine:
                         item.retry_used += 1
                         item.retrying = True
                         item.next_due = pulled
+        # The run's facts ride beside the result (ADR-0044): the wall time this
+        # run took, and the armed slot projected onto the wall clock **once,
+        # here** — the same projection info() makes, frozen at write time so a
+        # failed poll later shows an honest absolute receding into the past.
+        # After the retry block above, `next_due` is final for this run —
+        # nominal re-arm or pulled-in slot, whichever won (ADR-0033) — never
+        # `timestamp + frequency`. A one-shot run has no live schedule and
+        # writes no next; a secret-pinned check never ran and writes no wall.
+        if once:
+            next_run_at = None
+        else:
+            with self._lock:
+                next_due = item.next_due
+            next_run_at = (datetime.now() + timedelta(
+                seconds=max(0.0, next_due - self._clock()))).isoformat()
+        self._tree.set_run_facts(check.path,
+                                 wall_seconds=elapsed if ran else None,
+                                 next_run_at=next_run_at)
         try:
             self._store(check.path, result, check, is_root=True)
         except Exception:
@@ -414,8 +433,12 @@ class Engine:
         their own. A root with no description leaves the node's description
         untouched (``None``) so a second check contributing to the same host node
         doesn't clobber it. ``config`` rides the same way (ADR-0013): the root takes
-        the check's ``config_summary`` (empty for a branch check, so the shared
-        container stays bare); each child carries its own slice. Every node inherits
+        the check's ``config_summary`` (empty where the container is shared, so it
+        stays bare); each child carries its own slice. ``report`` — what the run
+        *found*, beside config's what it ran *with* (ADR-0044) — rides the result
+        on the root as on **every** child, because only the run can produce it,
+        and writes through including the empty string: a roster the current run no
+        longer finds must not outlive it. Every node inherits
         the check's ``frequency`` so freshness (ADR-0005) applies uniformly.
         Identity, observation time, maintenance and event-on-change stay the tree's
         concern (ADR-0007).
@@ -432,12 +455,14 @@ class Engine:
         title = None if is_root else (result.title or None)
         # The pre-normalized entries travel, not the raw input: the check has
         # already been through the one normalization (ADR-0036), and re-deriving
-        # slugs here would be the same work done twice.
-        self._tree.upsert(path, result.code, result.reason_entries,
+        # slugs here would be the same work done twice. `stored_code` is the
+        # declared code, or the one derived from coded entries (ADR-0042).
+        self._tree.upsert(path, result.stored_code, result.reason_entries,
                           members=result.members,
                           description=description,
                           frequency_seconds=check.frequency_seconds,
-                          config=config, about=about, title=title)
+                          config=config, report=result.report,
+                          about=about, title=title)
         for child in result.children:
             self._store(join_path(path, child.name), child, check)
 

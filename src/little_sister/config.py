@@ -29,6 +29,8 @@ DEFAULT_REASON_CAP = 6
 DEFAULT_BRANCH_CAP = 3
 DEFAULT_MAINTENANCE_CAP = 5
 DEFAULT_RETRY_ATTEMPTS = 2
+DEFAULT_CARD_STATUS_LINE = "beside"
+CARD_STATUS_LINES = ("beside", "below")
 SETTINGS_ASPECT = "settings"
 # An explicit single-file override, read at import so a wrapper can set it before
 # importing the app. Empty (the normal case) means "use the aspect and its layering".
@@ -45,8 +47,9 @@ class Config:
     # free). No indefinite — there is always an expiry.
     maintenance_default_expiry: str = DEFAULT_MAINTENANCE_EXPIRY
     # Reason *lines* a dashboard card shows before its header chevron reveals the
-    # rest (#9): the collapsed reason block is clamped to this many lines, so short
-    # reasons show that many reasons while a wrapped reason uses more of the budget.
+    # rest (the reason-overflow budget, ADR-0024): the collapsed reason block is
+    # clamped to this many lines, so short reasons show that many reasons while a
+    # wrapped reason uses more of the budget.
     # A non-negative int (0 shows none up front); the _status_grid.html reason macro
     # passes it through as the block's --reason-lines. Not reasons.js's CLIP_SLOP.
     reason_cap: int = DEFAULT_REASON_CAP
@@ -79,6 +82,13 @@ class Config:
     # disables the retry even where an interval is set. The later damping work
     # ties its escalation count here.
     retry_attempts: int = DEFAULT_RETRY_ATTEMPTS
+    # Where a dashboard card's status cluster (time, cue, status word) sits
+    # relative to its title row: ``beside`` (the default) keeps the compact
+    # one-line head, dropping the cluster to its own line only when it cannot
+    # fit; ``below`` gives every card a standing second line — a calmer, more
+    # uniform grid that spends vertical space for it. Display only, a sibling
+    # of reason_cap's budget family; a per-viewer override is a later step.
+    card_status_line: str = DEFAULT_CARD_STATUS_LINE
 
     @property
     def tzinfo(self) -> ZoneInfo:
@@ -139,6 +149,18 @@ def _valid_maintenance_cap(value: object) -> int:
         logger.warning("config: maintenance_cap %d is negative; using 0", cap)
         return 0
     return cap
+
+
+def _valid_card_status_line(value: object) -> str:
+    """Coerce the card status-line placement to a known value; anything else
+    falls back to the compact default with a warning naming the choices."""
+    choice = str(value).strip().lower()
+    if choice not in CARD_STATUS_LINES:
+        logger.warning("config: card_status_line %r is not one of %s; using %r",
+                       value, "/".join(CARD_STATUS_LINES),
+                       DEFAULT_CARD_STATUS_LINE)
+        return DEFAULT_CARD_STATUS_LINE
+    return choice
 
 
 def _valid_retry_attempts(value: object) -> int:
@@ -224,16 +246,19 @@ def load_config(path: str | Path | None = None, *,
         retry_attempts=_valid_retry_attempts(
             data.get("retry_attempts", DEFAULT_RETRY_ATTEMPTS)),
         stacktrace=values.flag(data, "stacktrace", default=True),
+        card_status_line=_valid_card_status_line(
+            data.get("card_status_line", DEFAULT_CARD_STATUS_LINE)),
     )
     if sources:
         logger.info(
             "config: loaded %s — timezone=%s, time_format=%r, reason_cap=%d, "
             "branch_cap=%d, maintenance_cap=%d, maintenance_default_expiry=%s, "
-            "retry_interval=%s, retry_attempts=%d",
+            "retry_interval=%s, retry_attempts=%d, card_status_line=%s",
             ", ".join(str(source.resolve()) for source in sources),
             cfg.timezone, cfg.time_format, cfg.reason_cap, cfg.branch_cap,
             cfg.maintenance_cap, cfg.maintenance_default_expiry,
-            cfg.retry_interval or "off", cfg.retry_attempts)
+            cfg.retry_interval or "off", cfg.retry_attempts,
+            cfg.card_status_line)
     return cfg
 
 

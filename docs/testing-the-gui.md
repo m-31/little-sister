@@ -17,7 +17,9 @@ implementation.
 
 `tests/render_ui_fixtures.py` feeds hand-built extreme fixtures through the real
 `status.html` / `_status_grid.html` and writes one static HTML page each — no
-server, no engine, no login:
+server, no engine, no login. The realistic multi-front incident also renders
+through the real **Copy** page, so its complete outline, long code block and
+clipboard controls sit in the same sheet:
 
 ```bash
 uv run python tests/render_ui_fixtures.py
@@ -38,8 +40,10 @@ tier isolates one extreme beside a calm neighbor: all-OK overviews at 2/10/40
 hosts, a 12- and a 100-linked-reason eruption, a 200-line `code()` reason, a
 15-leaf host, a depth-8 tree, over-long names/titles/`about`, a
 live+stale+idle+maintenance mix, graduated reason counts (cap boundaries), the
-empty engine-down tree, and the engine-start failure banner (a `Fixture` with
-`engine_error` set renders the header alert over the empty grid). A second,
+empty engine-down tree, the engine-start failure banner (a `Fixture` with
+`engine_error` set renders the header alert over the empty grid), and an admin
+member-leaf page carrying rendered node/entry maintenance explanations plus their
+closed editors. A second,
 **realistic-wall** tier embeds the extremes in a
 populated overview (all content synthetic): an 80-root mixed wall (root scale), a
 multi-front incident wall (eruption + trace + stale/idle/maintenance at once), an
@@ -95,6 +99,11 @@ time:
 - **reviews** — a small queue of pull requests waiting for a reviewer, whose reasons
   are a keyed **mapping**. Never empty, never more than six lines, and re-worded on
   every run.
+- **pipelines** — the latest run per workflow, as **coded entries**
+  ([ADR-0042](adr/0042-entries-carry-their-own-code.md)): each line declares its
+  own verdict, the check declares no node code at all, and one build walks the
+  whole arc in a cycle — passed, a rerun in italic on a passing job, failed,
+  the retry running *while the line stays red*, recovered.
 
 ### Members, and the two slug promises
 
@@ -123,7 +132,9 @@ The two nodes are a **pair**, and each shows the promise the other cannot:
   merged near the end of the cycle and another opens mid-cycle.
 
 What that costs is worth seeing once: `check.html` renders every reason, so on the
-audit leaf **members means ~150 per-line forms on one page**. The review queue is the
+audit leaf **members means ~150 stable per-line controls and their closed native
+editor disclosures on one page**. None opens on hover; the anchored form appears only
+after its control is activated. The review queue is the
 pleasant everyday version, and it is deliberately small enough to pin *every* member,
 which is the case worth walking: with all of them pinned the card reads
 **MAINTENANCE** on the dashboard, the strip pill's popover says *all 5 reasons* — the
@@ -132,6 +143,19 @@ silences. Click one of those rows and you land on that line, marked, rather than
 the top of the page. Pin a line on `/security/audit` too, and then wait out a cycle:
 the audit list clears at the end of it, and the node page tells you the pin's line is
 no longer being reported rather than leaving you to wonder.
+
+`/ci/pipelines` adds the **coded** third
+([ADR-0042](adr/0042-entries-carry-their-own-code.md)): its lines disagree — a red
+build over a green test suite, a warn gate, a never-concluded nightly wearing the
+ring cue — and the node's color is *derived* from them. Two things to walk. Watch
+`web-build` fail and then rerun: the line goes italic and **stays red** — the
+verdict is not displaced by the retry, which is the whole design in one line. Then
+pin that one red line: the node turns **green** while the pinned line sits in the
+maintenance tint with its cue still saying *error* — silencing the one failing
+workflow no longer silences (or discolors) the rest. The healthy lines are emitted
+deliberately, so `hide_ok` is worth toggling here too: the green lines vanish with
+their node when it reads OK, exactly as an operator who asked for problems-only
+asked.
 
 ### What the demo tree carries besides its checks
 
@@ -145,12 +169,18 @@ that make the features above visible:
   things to watch: `/network/vpn` flaps, so each recovery re-arms its budget and it
   is in `retry 1/6`, `2/6`, … for the whole of every red window; `/ci/reviews` never
   recovers, so it spends its six fast attempts once and settles back — that is the
-  *budget* in the name.
+  *budget* in the name. The same file deliberately sets `card_status_line: below`,
+  opting the demo into a standing second line on every dashboard card so that
+  non-default shape remains visible somewhere; a deployment omitting the key keeps
+  the compact `beside` default and emits no card-state body attribute.
 - **`nodes.yaml`** labels the container nodes (`/ci`, `/security`, …), which the tree
   creates from the check paths and no check owns. Without it the dashboard is a wall
   of bare path segments. It also names the engine's heartbeat, which feeds the status
   strip's hover card.
 - **`actions.yaml`** puts a deployment's own links on the pages — see below.
+- **`csp.yaml`** adds one source to the assembled Content-Security-Policy, so the
+  `/system` readout has a line whose contributor is *this deployment* rather than the
+  library or a package — see below.
 - **`links/links.yaml`**, so `/links` has a page worth judging: many groups, a title
   long enough to wrap, notes, and every rung of the icon search path — a built-in
   pair, a deployment's own single file (on the chip), a deployment-supplied pair
@@ -198,11 +228,87 @@ puts a chip on each of the ~150 audit findings.
 One free check while you are here: switch the layout to **kiosk** and both slots
 vanish. That is the `_slot()` gate demonstrating itself.
 
+### The Content-Security-Policy, and how to make it complain
+
+The policy is the one feature with **nothing to look at on a page** — it is a response
+header, it ships as `Content-Security-Policy-Report-Only`, and it blocks nothing
+([ADR-0048](adr/0048-an-assembled-content-security-policy.md),
+`architecture.md` §5.4). Two places show it anyway.
+
+**`/system`, as an admin.** The policy table prints every directive with the
+contributor of each source, and the demo is rigged so all three kinds appear at once:
+`'self'` and the CDN from the library, `https://tracker.example.org` in `connect-src`
+from **`tests.demo_extension`** (a `csp.allow` in `demo_wsgi.py` — the origin its
+`demo.js` would call, which `'self'` cannot cover), and
+`https://assets.example.org` in `img-src` from **`demo_config/csp.yaml`** (a source no
+package knew about, which only the deployment can add). That the package's line is
+there at all is the decision demonstrating itself: it was registered before the app
+import, and the policy was assembled after it.
+
+**The log, by causing a violation.** This one is a recipe rather than a state, because
+a demo that permanently violated its own policy would just look broken:
+
+1. Put an external image in something the page renders as Markdown — the simplest is
+   `about:` on a node in `demo_config/nodes.yaml`, e.g.
+   `![x](https://upload.wikimedia.org/x.png)`. Restart the demo.
+2. Load `/status`. The image fails to load (it does not exist), and the browser posts
+   a report to `/csp-report`.
+3. The demo's log gets one `WARNING` naming `img-src`, the document, and the blocked
+   URI. Nothing was blocked — Report-Only — so the only change on the page is the
+   broken image you asked for.
+4. Add `https://upload.wikimedia.org` under `img-src` in `demo_config/csp.yaml`,
+   restart, reload: the report is gone. That is the whole operator loop the header
+   exists for.
+
+Take the change back out afterwards; the demo tree is committed.
+
+One more free check: `curl -sI` any page and the header is there; ask for JSON
+(`Accept: application/json` with the demo's token) and it is not — the policy governs
+documents, and on a JSON body it would be a header no browser consults.
+
+### Copy
+
+Open `/copy` at different points in the demo cycle. The page keeps only non-OK
+leaves and their ancestor chains, so a healthy scenario disappears and a recovering
+one leaves no empty heading behind. The review queue proves authored links survive;
+the maintenance recipe below proves both a whole-node pin and an individually pinned
+reason are named and attributed. **Copy Markdown** should put the visible source on
+the clipboard as plain text; **Copy rich text** should paste as a nested list in a
+rich editor and still carry the Markdown as its plain-text fallback. Deny clipboard
+permission once: the source opens, selects itself, and the message must say that
+manual copying is required rather than claiming success.
+
 ### Maintenance
 
 Maintenance is not a scenario — a check cannot set a real pin (that is the tree's
 concern). Set one from the admin **Set maintenance** button on any node (`pan` is an
 admin), or from the per-line control on `/ci/reviews` and `/security/audit`.
+
+The read/edit interaction has one concrete walk:
+
+1. Open `/status/security/audit` while its findings are present. Move the pointer down
+   the action controls without clicking: no reason or control should move, and no form
+   should appear. Tab through the same controls; each has a visible focus ring.
+2. Open one *Set maintenance* disclosure. The **Duration or expiry** field names the
+   configured timezone; open *Which formats can I use?* by click and keyboard and
+   confirm the full table fits the reason panel without covering its actions. Enter
+   `**owned** — [ticket](https://example.com/ticket)` plus `Friday` and save. The
+   line stays in place, shows the bold word and link as rendered HTML, and reports the
+   resolved expiry in read mode. Repeat once with `07-10` or a day such as `17` and
+   confirm the displayed boundary is the next future midnight described by the help.
+3. Click *Edit maintenance*. The textarea contains the exact Markdown source, not text
+   recovered from the rendered DOM. Change it and cancel once — read mode returns with
+   the stored explanation unchanged — then edit and save. The line never alarms between
+   the two writes. *Clear maintenance* remains a separate clear action.
+4. Repeat at node depth from the maintenance card: a pinned node opens in rendered read
+   mode, *Edit maintenance* reveals the prefilled textarea, and raw `<script>` entered
+   as a check stays visible as escaped text rather than becoming an element.
+5. From the dashboard, open a pinned card's pause-bars dialog. It starts in read mode;
+   open Edit, type without submitting and leave it across a poll. The dialog re-anchors
+   without replacing the source, expiry input or original compare-and-set token. Open
+   the format help there too: the fixed dialog scrolls instead of leaving the viewport.
+   Cancel returns focus to Edit; Escape once does the same while editing, and once more
+   closes the dialog.
 
 The **conflict page** needs no code either, only a recipe, because it is about two
 people and one node. Every maintenance form carries the pin's `set_at` as a
@@ -256,8 +362,9 @@ what is showing.
 The other three modes are for *looking*. Contrast is the one property looking is
 bad at: a red that reads fine to you can be under the bar, and the accessibility
 bar outranks any picked swatch. `tests/sweep_contrast.py` walks every theme — the
-settings menu opened on `/status`, then the rows on `/links` that are not plain
-body text — and measures each as the eye actually gets it: the *computed* ink,
+settings menu opened on `/status`, the rows on `/links` that are not plain body
+text, and the coded reason lines of a seeded tree — and measures each as the eye
+actually gets it: the *computed* ink,
 the background composited from every translucent layer above the first opaque
 one, stacked opacity folded in. It prints the WCAG ratio:
 
@@ -297,6 +404,18 @@ browser folds them, against the two surfaces above written down as constants. It
 runs on every commit, so the regression this harness would have caught cannot
 land again between manual runs — but it can only measure surfaces someone already
 knew about. The two are a pair: the sweep discovers, the test remembers.
+
+**The coded lines are the third thing it walks**, and the one row that paints its
+own surface: `.is-coded` resets the reason wash to full opacity so the declared tint
+pair is the rendered one ([ADR-0042](adr/0042-entries-carry-their-own-code.md)). The
+gate measures those four pairs from the sheet's own inks; only a browser can say
+that the vivid card fill underneath — or the leaf page's alert — has not
+re-composited them on the way to the eye. The sweep serves Mode 1's coded-entry
+fixture (`ui_fixtures.coded_workflow_tree`, seeded straight into the tree because
+the engine is off), so the sheet you look at and the ratios measured here are the
+same roster: every tint, the running variant, the pinned line's maintenance tint
+over the code it covers, and the uncoded advisory beside them, on the overview card
+and again on the member leaf page.
 
 ---
 

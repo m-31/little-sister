@@ -92,7 +92,7 @@ a node erupting with a dozen reasons) as side-by-side static pages and comparing
 screenshots — layout judged in the abstract fails; forty rendered extremes side by
 side works.
 
-## Update — 2026-07-22 (Phase 3, slice 3)
+## Update — 2026-07-22 (the heartbeat strip band)
 
 The lifted heartbeat's strip moved from directly under the "updated …" caption to a
 **right-aligned band at the top of `#status-grid`, beneath the hide/depth controls**,
@@ -105,7 +105,7 @@ identity, setting it apart from the node pills. The rejected negative-margin pul
 onto the caption row still stands: `poll.js` inserts the sustained-outage banner
 exactly there (`insertBefore(banner, #status-grid)`).
 
-## Update — 2026-07-22 (Phase 3, slice 6)
+## Update — 2026-07-22 (capping quiet sub-branches)
 
 Leaf density (decision 2 above) chips a card's quiet *leaves*, but a quiet
 sub-*branch* still renders as a full box, so a card with many sub-branches — a NAS
@@ -122,7 +122,7 @@ nothing urgent is hidden; with the density switch off, `branch_cap` does nothing
 every node renders as a full box. Positions are untouched — folding only shortens a
 card — so the grid keeps its alphabetical, size-independent layout.
 
-## Update — 2026-07-23 (Phase 3, slice 9)
+## Update — 2026-07-23 (surfacing maintenance)
 
 Admin **maintenance** (a sticky override, [ADR-0014](0014-maintenance-persistence.md))
 was easy to lose: a pin deep in the tree rolls up out of sight at a shallow `depth`,
@@ -144,14 +144,14 @@ hides only never-reported
 visible. View-only — the snapshot, the maintenance side-table and the JSON envelope are
 unchanged.
 
-## Update — 2026-07-23 (Phase 3, slice 10)
+## Update — 2026-07-23 (folding the maintenance index)
 
-Slice 9's **maintenance index** (above) suits a handful of pins but becomes a wall once
+The **maintenance index** above suits a handful of pins but becomes a wall once
 they pile up, dwarfing the grid it sits over. The always-on global list now **folds
 away**: a compact, maintenance-tinted **pill** joins the status strip just left of the
 `little-sister` heartbeat — the pause-bars glyph and a live count (`12 in maintenance`),
 shown only when something is pinned and refreshed inside the polled fragment like the
-strip around it. Clicking it opens the slice-9 popover (`maintenance.js`, Floating UI,
+strip around it. Clicking it opens the maintenance popover (`maintenance.js`, Floating UI,
 [ADR-0019](0019-inspection-popover.md)) over the **whole** set rather than one card's,
 **capped like a node**: a `maintenance_cap` in `config.yaml` (the count-cap sibling of
 `reason_cap` / `branch_cap`, plumbed to the full page and the `?fragment` swap) shows the

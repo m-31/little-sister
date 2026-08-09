@@ -356,7 +356,7 @@ body[data-ls-layout="topbar"] .ls-rail { display: none; }
     border-radius: 8px;
     padding: 8px 10px;
     color: var(--ls-vivid-ink);
-    /* Bound card heights (ADR-0024): the shipped reason caps (#9) bound growth from
+    /* Bound card heights (ADR-0024): the shipped reason caps bound growth from
        above; this floors a sparse card (a bare heartbeat-less leaf, or an
        all-green host that shrank to a chip row) so the everyday grid keeps a
        steady rhythm and holes stay shallow. Height ∈ [min, cap]. */
@@ -367,8 +367,32 @@ body[data-ls-layout="topbar"] .ls-rail { display: none; }
     display: flex;
     justify-content: space-between;
     align-items: baseline;
+    flex-wrap: wrap;           /* the state's full-basis line lives below */
     margin-bottom: 8px;
     padding: 0 2px;
+}
+/* The head's middle — title and action chips — with zero say in line-fitting.
+   Wrapping preempts shrinking: flex forms its lines from *unshrunk* widths, so
+   anything merely shrinkable never gives way — the state would wrap to a second
+   line while a title sat untouched. Basis 0 takes the whole middle out of that
+   equation: **name and state alone decide whether a row fits.** Inside it the
+   title ellipses, and the chips sit absolutely at the middle's right edge — over
+   the title where the two collide, because a chip is something to click and a
+   title is a nicety. Chips cost the head line no width at all. */
+.status-head__middle {
+    display: flex;
+    align-items: baseline;
+    flex: 1 1 0;
+    min-width: 0;
+    position: relative;
+}
+.status-head__middle > .node-title { min-width: 0; }
+.status-head__middle > .node-actions {
+    position: absolute;
+    right: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    margin-left: 0;
 }
 
 .status-card__name {
@@ -385,6 +409,20 @@ body[data-ls-layout="topbar"] .ls-rail { display: none; }
     font-size: 0.85rem;
     color: inherit;
     opacity: 0.8;
+    margin-left: auto;
+    white-space: nowrap;       /* "14:15 → 14:16 ● error" is one fact — never
+                                  broken between its time, cue and word; it
+                                  right-aligns whole or drops whole */
+    flex-shrink: 0;
+}
+/* settings.yaml `card_status_line: below` — the standing second line: every
+   card the same two-line shape instead of jumping with how much state it
+   carries. A calmer grid that spends vertical space for it, so it is the
+   deployment's choice; the compact default keeps the cluster beside the title,
+   dropping it only when it cannot fit. */
+body[data-ls-card-state="below"] .status-card__state {
+    flex-basis: 100%;
+    text-align: right;
 }
 
 /* Status not by color alone (ADR-0024): a per-state shape cue (the status_cue macro)
@@ -408,6 +446,35 @@ body[data-ls-layout="topbar"] .ls-rail { display: none; }
     font-weight: 400;
     opacity: 0.75;
     margin-right: 0.45em;
+}
+/* The box's state cluster — name+title left, state right, like a card head, and
+   laid out the way the viewed head already is: the self row is a wrapping flex
+   row. (A float dropped out of the box under width pressure and overlaid the
+   next one — action chips made that real.) The state never breaks internally,
+   and the **title yields first**: it shrinks into its ellipsis so the state
+   keeps its row. Pin banner and reason rows stay full-width lines below. */
+.status-node__self {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+}
+.status-node__self > .pin-banner,
+.status-node__self > .reason-block,
+.status-node__self > .reason-quiet-count { flex-basis: 100%; }
+.status-node__state {
+    margin-left: auto;
+    padding-left: 0.6em;       /* never touch the yielding title */
+    white-space: nowrap;
+    flex-shrink: 0;
+    font-size: 0.85rem;
+    opacity: 0.8;
+}
+/* lift the problem word, exactly as the card state does below; the time span's
+   own weight rule keeps the digits at 400 */
+.status-node.s-warn  > .status-node__self > .status-node__state,
+.status-node.s-error > .status-node__self > .status-node__state {
+    opacity: 1;
+    font-weight: 600;
 }
 
 /* lift the problem word out of the muted 0.8 state text (the cue carries a quiet OK) */
@@ -534,7 +601,7 @@ body[data-ls-layout="topbar"] .ls-rail { display: none; }
     opacity: 0.8;
 }
 
-/* The admin pin control in a card head (backlog #35): an outline pause-bars
+/* The admin pin control in a card head (ADR-0014): an outline pause-bars
    button-link, quiet until the card is hovered — a wall of cards must not grow
    a wall of buttons — but always visible to keyboard focus, and simply shown
    where there is no hover to reveal it (touch). Muted, not maintenance-blue:
@@ -569,14 +636,28 @@ body[data-ls-layout="topbar"] .ls-rail { display: none; }
 
 /* The pin dialog (#pin-card): the maintenance popover chrome carrying a small
    form instead of a list (pin.js). */
-.pin-card { width: 24rem; }
+.pin-card {
+    width: 24rem;
+    max-height: calc(100vh - 1.5rem);
+    overflow-y: auto;
+}
 .pin-card__title { color: inherit; }
 .pin-card__path { font-size: 0.75rem; word-break: break-all; }
 .pin-card__promise { opacity: 0.9; }
 .pin-card__pinned { opacity: 0.9; }
+.pin-card__actions {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+}
 .maintenance-pop__reason {
+    display: block;
     padding-left: 0.2rem;      /* its own line under the pin's row, never an orphan */
     opacity: 0.7;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 /* Who set the pin (ADR-0014 amendment): the popover has room for one name, so
    it names the *last writer* — whose words the reason above it is. Quieter than
@@ -688,6 +769,61 @@ body[data-ls-layout="topbar"] .ls-rail { display: none; }
     margin-left: 0.5rem;
 }
 
+/* A coded reason line (ADR-0042): the entry's **own** claim, not its node's.
+   **Every** coded line paints its own tint pair — the chip vocabulary one level
+   down, and the is-quiet lesson below: an ink (or a currentColor cue) on whatever
+   surface a line happens to land on is how a 2.7:1 ships. The ok case is why
+   there is no quiet-OK exception: a mixed list renders inside a *vivid* card — a
+   node deriving ERROR is not dim — so a surfaceless passed line inherits the red
+   fill and reads as more of the problem, its cue not even green. Green-under-red
+   is the point of coded entries, and the pale ok tint *is* the quiet treatment
+   (ok pale at every depth, ADR-0028); an all-healthy node collapses to a chip on
+   the grid anyway, so a wall of green panels does not arise where calm matters.
+   Full opacity on purpose: the 0.95 wash above softens plain text on a card
+   fill, but a line that paints its own opaque surface must measure as the pair
+   it declares, not as a composite (test_contrast.py measures all four rows). The
+   floated cue is the non-color channel and the line's accessible name (a line
+   has no status word). A *quiet* (pinned) line keeps the maintenance tint
+   whatever its code says — suppression is the louder fact; that override sits
+   after the is-quiet rule below, where source order lets it win. */
+.status-node__reason.is-coded,
+.check-reason.is-coded {
+    opacity: 1;
+    border-radius: 3px;
+    padding: 1px 0.35rem;
+}
+.status-node__reason.is-coded.s-ok,
+.check-reason.is-coded.s-ok {
+    background: var(--ls-tint-ok);
+    color: var(--ls-tint-ok-ink);
+}
+.status-node__reason.is-coded.s-warn,
+.check-reason.is-coded.s-warn {
+    background: var(--ls-tint-warn);
+    color: var(--ls-tint-warn-ink);
+}
+.status-node__reason.is-coded.s-error,
+.check-reason.is-coded.s-error {
+    background: var(--ls-tint-error);
+    color: var(--ls-tint-error-ink);
+}
+.status-node__reason.is-coded.s-undefined,
+.check-reason.is-coded.s-undefined {
+    background: var(--ls-tint-undefined);
+    color: var(--ls-tint-undefined-ink);
+}
+/* Work in flight (ADR-0042): display only — the words say `#4215 running 2m`; the
+   italic is the glance, never the channel. Composes with quiet and with any code. */
+.status-node__reason.is-running,
+.check-reason.is-running { font-style: italic; }
+/* The line's cue floats at its head so the paragraph wraps beside it, the way the
+   action chips float right; it inherits the line's ink via currentColor. */
+.status-node__reason > .status-cue,
+.check-reason__body > .status-cue {
+    float: left;
+    margin: 0.2em 0.35rem 0 0;
+}
+
 /* A silenced reason (ADR-0036). Quiet is **shown**, never hidden (ADR-0032 rule 5):
    a suppression that covered its own tracks is exactly the failure the contribution
    boundary exists to prevent. So the line stays where it was and is **tinted
@@ -717,6 +853,15 @@ body[data-ls-layout="topbar"] .ls-rail { display: none; }
     border-radius: 3px;
     padding: 1px 0.35rem;
 }
+/* Suppression outranks the entry's own claim (ADR-0042): a pinned coded line wears
+   the maintenance pair, and only the cue still says what state is being silenced.
+   Source order alone cannot decide it — `.is-coded.s-*` is more specific than
+   `.is-quiet` — so the combination is stated outright. */
+.status-node__reason.is-coded.is-quiet,
+.check-reason.is-coded.is-quiet {
+    background: var(--ls-tint-maintenance);
+    color: var(--ls-tint-maintenance-ink);
+}
 .reason-quiet-count {
     display: inline-block;
     font-size: 0.75rem;
@@ -733,6 +878,10 @@ body[data-ls-layout="topbar"] .ls-rail { display: none; }
     font-size: 0.75rem;
     opacity: 0.85;
 }
+.maintenance-explanation {
+    overflow-wrap: anywhere;
+}
+.maintenance-explanation > :last-child { margin-bottom: 0; }
 /* The line named by `?reason=<slug>` (ADR-0036 decision 12): the maintenance index
    links to one line of a node that may have 150 of them, and arriving at the right
    page is not the same as arriving at the line. A ring rather than a fill — a fill
@@ -759,6 +908,10 @@ body[data-ls-layout="topbar"] .ls-rail { display: none; }
    than by opacity, because dimming an ink nobody re-measured is how the last
    contrast defect happened. */
 .pin-banner {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
     font-size: 0.75rem;
     margin: 0 0 0.35rem 0.5rem;
     padding: 0.15rem 0.4rem;
@@ -766,6 +919,7 @@ body[data-ls-layout="topbar"] .ls-rail { display: none; }
     background: var(--ls-tint-maintenance);
     color: var(--ls-tint-maintenance-ink);
 }
+.pin-banner__reason { overflow-wrap: anywhere; }
 .status-reported {
     font-weight: 400;
     white-space: nowrap;
@@ -814,6 +968,11 @@ body[data-ls-layout="topbar"] .ls-rail { display: none; }
     text-overflow: ellipsis;
     white-space: nowrap;
 }
+.maintenance-page .maintenance-why {
+    min-width: 12rem;
+    max-width: 34rem;
+    overflow-wrap: anywhere;
+}
 /* A pin whose line the current run did not report: suspended, not deleted (ADR-0036
    decision 6). The pin is real and there is nothing to anchor to, so the page says
    so in words — the one thing a fragment could never have done.
@@ -833,34 +992,124 @@ body[data-ls-layout="topbar"] .ls-rail { display: none; }
     scroll-margin-top: 5rem;
 }
 
-/* The per-line pin control on the leaf detail page: a small inline form, folded
-   away until the line is hovered or focused — a node with twenty findings must not
-   read as a wall of forms, and merely making it transparent would reserve twenty
-   empty rows. It **collapses** rather than being `display: none`, so a keyboard can
-   still reach it: tabbing into the form fires `:focus-within` and unfolds it. Where
-   there is no hover to reveal it (touch), it is simply always open. */
-.reason-pin {
+/* Maintenance is read first and edited on intent (ADR-0014 amendment). Native
+   details keeps the node form usable without JS. Once JS supplies Cancel/Escape,
+   the open trigger yields to those form actions; without JS it remains the native
+   close control. Bootstrap styles the summary as a button, so remove the disclosure
+   marker without removing its native keyboard behavior. */
+.maintenance-editor-disclosure > summary {
+    list-style: none;
+    cursor: pointer;
+}
+.maintenance-edit-enhanced .maintenance-editor-disclosure[open] > summary {
+    display: none;
+}
+.maintenance-editor-disclosure > summary::-webkit-details-marker { display: none; }
+.maintenance-editor-disclosure > summary::marker { content: ""; }
+.maintenance-editor-form { min-width: 0; }
+.maintenance-editor-form__actions {
     display: flex;
-    gap: 0.35rem;
     align-items: center;
-    max-height: 0;
-    opacity: 0;
-    overflow: hidden;
-    transition: max-height 0.15s ease, opacity 0.15s ease, margin-top 0.15s ease;
+    gap: 0.35rem;
+    flex-wrap: wrap;
 }
-.check-reason:hover > .reason-pin,
-.reason-pin:focus-within {
-    max-height: 3rem;
-    opacity: 1;
+.maintenance-card__actions {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+.maintenance-card__actions .maintenance-editor-disclosure[open] {
+    flex-basis: 100%;
+    order: 2;
+}
+.maintenance-reason-source {
+    min-height: 5.5rem;
+    resize: vertical;
+}
+.maintenance-expiry-help {
     margin-top: 0.25rem;
+    font-size: 0.8rem;
 }
-.reason-pin__reason { max-width: 18rem; }
-.reason-pin__duration { max-width: 7rem; }
-@media (hover: none) {
-    .reason-pin { max-height: 3rem; opacity: 1; margin-top: 0.25rem; }
+.maintenance-expiry-help > summary {
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 0.15em;
 }
-@media (prefers-reduced-motion: reduce) {
-    .reason-pin { transition: none; }
+.maintenance-expiry-help__table-wrap {
+    max-width: 100%;
+    overflow-x: auto;
+}
+.maintenance-expiry-help__table {
+    width: 100%;
+    margin-top: 0.35rem;
+    border-collapse: collapse;
+}
+.maintenance-expiry-help__table th,
+.maintenance-expiry-help__table td {
+    padding: 0.18rem 0.4rem 0.18rem 0;
+    border-bottom: 1px solid currentColor;
+    text-align: left;
+    vertical-align: top;
+}
+.maintenance-expiry-help__table code { white-space: nowrap; }
+
+/* The per-line maintenance control now shares one stable end rail with extension
+   actions. The small summary is present at rest and never changes the reason's
+   geometry on hover; an explicit click opens the editor as an anchored panel. This
+   also avoids rendering 150 permanently expanded forms on the audit fixture while
+   retaining a native, no-JS disclosure. */
+.check-reason { position: relative; }
+.check-reason__rail {
+    position: relative;
+    z-index: 5;
+    float: right;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.15rem;
+    margin-left: 0.4rem;
+}
+.check-reason:has(.reason-pin[open]) .check-reason__rail,
+.check-reason__rail:focus-within { z-index: 80; }
+.check-reason__rail .reason-actions {
+    float: none;
+    margin-left: 0;
+}
+.reason-pin { position: relative; }
+.reason-pin > summary {
+    display: flex;
+    list-style: none;
+    cursor: pointer;
+}
+.reason-pin > summary::-webkit-details-marker { display: none; }
+.reason-pin > summary::marker { content: ""; }
+.reason-pin[open] > .reason-pin__toggle { opacity: 1; }
+.reason-pin__panel {
+    position: absolute;
+    z-index: 70;
+    top: calc(100% + 0.35rem);
+    right: 0;
+    width: min(30rem, calc(100vw - 2rem));
+    padding: 0.75rem;
+    color: var(--ls-ink);
+    background: var(--ls-panel);
+    border: 1px solid var(--ls-panel-line);
+    border-radius: 8px;
+    box-shadow: 0 6px 20px var(--ls-panel-shadow);
+    text-align: left;
+    max-height: calc(100vh - 2rem);
+    overflow-y: auto;
+}
+.reason-pin__clear {
+    margin-top: 0.6rem;
+    padding-top: 0.6rem;
+    border-top: 1px solid var(--ls-panel-line);
+}
+@media (max-width: 575.98px) {
+    /* The compact rail remains beside the fixed 50px navigation strip. Keep
+       the anchored editor inside the remaining canvas instead of letting a
+       desktop-width panel disappear underneath that strip. */
+    .reason-pin__panel { width: min(30rem, calc(100vw - 5.5rem)); }
 }
 
 /* Slot actions on a reason line (ADR-0034). The frame is ours, the contents are a
@@ -985,7 +1234,7 @@ body[data-ls-layout="topbar"] .ls-rail { display: none; }
     border-top: 1px solid color-mix(in srgb, currentColor 22%, transparent);
 }
 
-/* Reason overflow (#9). A card clamps its reasons to a *line budget* (the block's
+/* Reason overflow (ADR-0024). A card clamps its reasons to a *line budget* (the block's
    ``--reason-lines``, from config.yaml ``reason_cap``): short reasons show that
    many, a wrapped reason uses more of the budget. The overflow stays in the DOM,
    clipped by CSS (never cut mid-HTML, ADR-0018) and faded. A header chevron
@@ -1011,8 +1260,9 @@ body[data-ls-layout="topbar"] .ls-rail { display: none; }
 /* The show-all / collapse control: one chevron in the card header, just after the
    status word (reasons.js fills it). ▼ when the reasons overflow the budget (click
    to show all), ▲ when expanded (click to collapse), and an empty same-width slot
-   otherwise so the status words stay aligned. Nested nodes, which have no status
-   word, get it pinned to the top-right of their name row instead. */
+   otherwise so the status words stay aligned. A nested node's state cluster
+   carries the same slot; the pinned --node variant below is only the fallback
+   for a row without one. */
 .reason-chevron {
     display: inline-block;
     width: 0.95rem;                     /* fixed slot: ▼ / ▲ / empty align the words */
@@ -1271,6 +1521,15 @@ body[data-ls-layout="topbar"] .ls-rail { display: none; }
     color: var(--ls-muted);
 }
 .ls-menu__trigger:hover { color: var(--ls-ink); }
+.ls-menu__avatar {
+    flex: 0 0 auto;
+    width: 1.75rem;
+    height: 1.75rem;
+    object-fit: cover;
+    border: 1px solid var(--ls-line);
+    border-radius: 50%;
+    background: var(--ls-panel);
+}
 .ls-menu__gear { flex: 0 0 auto; }
 .ls-menu__panel { min-width: 14rem; padding: 0.35rem 0; }
 .ls-menu__heading {
@@ -2047,3 +2306,9 @@ body[data-bs-theme="dark"] .ls-links__icon--dark { display: block; }
     background: var(--ls-chip-dark);
     box-shadow: inset 0 0 0 1px var(--ls-chip-dark-line);
 }
+
+/* /system's package inventory: one registration per line, and each of them is a
+   single fact — "slot reason.actions" broken after the word reads as two entries.
+   The line breaks between items are the template's; this only stops the wrap
+   inside one. */
+.ls-system__register { white-space: nowrap; }

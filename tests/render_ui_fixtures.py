@@ -3,7 +3,8 @@
 The *fast loop*. Each extreme fixture (``ui_fixtures.py``) is fed through the
 genuine Jinja pipeline — the very ``status.html`` / ``_status_grid.html`` the
 server renders, with ``url_for``, the registered template filters and the session
-all live — and written as a static HTML page, plus an ``index.html`` linking them.
+all live — and written as a static HTML page. The multi-front incident also renders
+through the real Copy page, and ``index.html`` links the whole sheet.
 Open the index, screenshot, and compare a CSS or template variant across every
 fixture in one glance. Because it is the *real* templates, a variant that wins
 here is most of the implementation.
@@ -32,11 +33,14 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPO_ROOT))
 
 # The app loads the user list and (unless disabled) starts the engine at import
-# (ADR-0020); point it at the committed test user list and disable the engine so
-# importing is side-effect-free — the same setup tests/conftest.py uses.
+# (ADR-0020); point it at the committed fixture root and disable the engine so
+# importing is side-effect-free — the same path-list tests/conftest.py builds, set
+# here too so this stays runnable as a script (the cwd `config/` has no committed
+# user list — `config/users/` is git-ignored).
 os.environ.setdefault(
-    "LITTLE_SISTER_USERS",
-    str(_REPO_ROOT / "tests" / "fixtures" / "users.yaml"))
+    "LITTLE_SISTER_CONFIG_DIR",
+    os.pathsep.join((str(_REPO_ROOT / "tests" / "fixtures" / "config"),
+                     str(_REPO_ROOT / "config"))))
 os.environ.setdefault("LITTLE_SISTER_ENGINE", "0")
 os.environ.setdefault("SECRET_KEY", "ui-harness")
 
@@ -51,7 +55,9 @@ from little_sister.app import (  # noqa: E402
     _split_heartbeat,
     app,
 )
-from tests.ui_fixtures import FIXTURES, Fixture  # noqa: E402
+from little_sister.copy_status import format_copy_markdown  # noqa: E402
+from little_sister.render import render_markdown  # noqa: E402
+from tests.ui_fixtures import FIXTURES, FIXTURES_BY_NAME, Fixture  # noqa: E402
 
 _DEFAULT_OUT = _REPO_ROOT / "var" / "ui-harness"
 _STATIC_SRC = _REPO_ROOT / "src" / "little_sister" / "static"
@@ -62,14 +68,15 @@ _RENDERED_AT = "2026-07-20 12:00:00"
 
 
 def render_page(fixture: Fixture) -> str:
-    """Render one fixture's ``status.html`` through the real Jinja pipeline.
+    """Render one fixture through the real status/detail Jinja pipeline.
 
     Runs inside a request context so ``url_for`` and ``session`` resolve exactly
     as they do for a live request; the session is set admin so the full nav
     renders. A fixture's ``engine_error`` is installed on the app module for the
     duration of the render (the header banner reads it through the context
-    processor) and restored afterwards. Returns the page HTML with
-    server-absolute ``/static/`` references left intact —
+    processor) and restored afterwards. ``fixture.detail`` selects the member
+    leaf's ``check.html`` instead of the overview's ``status.html``. Returns the
+    page HTML with server-absolute ``/static/`` references left intact —
     :func:`_localize_static` rewrites them per output directory.
     """
     node = fixture.build()
@@ -87,8 +94,9 @@ def render_page(fixture: Fixture) -> str:
             session["username"] = "harness"
             session["firstname"] = "Harness"
             session["admin"] = True
+            template = "check.html" if fixture.detail else "status.html"
             return render_template(
-                "status.html",
+                template,
                 username="harness",
                 firstname="Harness",
                 node=node,
@@ -100,6 +108,7 @@ def render_page(fixture: Fixture) -> str:
                 dense=True,
                 is_admin=True,
                 maintenance_default=app_module.config.maintenance_default_expiry,
+                maintenance_timezone=app_module.config.timezone,
                 heartbeat=heartbeat,
                 node_meta=_node_meta_map(node) | _node_meta_map(heartbeat),
                 rendered_at=_RENDERED_AT,
@@ -108,9 +117,31 @@ def render_page(fixture: Fixture) -> str:
                 maintenance_cap=app_module.config.maintenance_cap,
                 maintenance_rows=maintenance_rows,
                 maintenance_ancestors=maintenance_ancestors,
+                # Bounds the current status period in the node-facts block's Time
+                # card (ADR-0044) — the branch page's now as well as the leaf
+                # page's. A fixture is a hand-built snapshot with no transition log
+                # behind it, so there is no period to bound and the card reports
+                # the single observation instead.
+                since=None,
+                focus="",
+                focus_orphan=None,
             )
     finally:
         app_module.engine_error = previous_error
+
+
+def render_copy_page() -> str:
+    """Render the Copy page with the realistic multi-front incident fixture."""
+    markdown = format_copy_markdown(FIXTURES_BY_NAME["wall_incident"].build())
+    rich = render_markdown(markdown)
+    with app.test_request_context("/copy"):
+        session["username"] = "harness"
+        session["firstname"] = "Harness"
+        session["admin"] = True
+        return render_template(
+            "text.html", username="harness", firstname="Harness",
+            copy_markdown=markdown, copy_html=rich,
+            copy_html_text=str(rich))
 
 
 def _localize_static(html: str, out_dir: Path) -> str:
@@ -123,10 +154,15 @@ def _localize_static(html: str, out_dir: Path) -> str:
 
 def _index_html(fixtures: tuple[Fixture, ...]) -> str:
     """A minimal contents page linking every rendered fixture."""
-    items = "\n".join(
+    status_items = "\n".join(
         f'    <li><a href="{escape(f.name)}.html">{escape(f.name)}</a>'
         f' — {escape(f.description)}</li>'
         for f in fixtures
+    )
+    items = (
+        '    <li><a href="copy_status.html">copy_status</a>'
+        ' — the multi-front incident through the Copy page</li>\n'
+        f"{status_items}"
     )
     return (
         "<!DOCTYPE html>\n<html><head><meta charset=\"utf-8\">"
@@ -151,6 +187,10 @@ def render_all(out_dir: Path) -> list[Path]:
         target = out_dir / f"{fixture.name}.html"
         target.write_text(page, encoding="utf-8")
         written.append(target)
+    copy_page = out_dir / "copy_status.html"
+    copy_page.write_text(
+        _localize_static(render_copy_page(), out_dir), encoding="utf-8")
+    written.append(copy_page)
     index = out_dir / "index.html"
     index.write_text(_index_html(FIXTURES), encoding="utf-8")
     written.append(index)

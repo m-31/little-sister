@@ -54,8 +54,8 @@ Address a node by **one absolute, slash-separated path**.
   (`url_for('status', branch=…)`) must not double the leading slash. The root stays
   bare `/status`; breadcrumbs render the absolute path.
 - **The JSON `path` field changes shape** ([ADR-0008](0008-json-output-api.md)) —
-  `/system/alpha`, leading slash. This is **schema-visible**, but the Phase-3 Swift
-  client and satellite federation do not exist yet, so it is a **free change now** and
+  `/system/alpha`, leading slash. This is **schema-visible**, but the Swift client
+  and satellite federation do not exist yet, so it is a **free change now** and
   an expensive one once a consumer ships — doing it first is deliberate. The
   `status_envelope` question inherits the new shape.
 

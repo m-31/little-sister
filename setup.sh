@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # First-time setup: create the git-ignored config the app needs to run —
-# config/users.yaml (the login list) and .env (a session signing key + JSON-API
+# config/users/users.yaml (the login list) and .env (a session signing key + JSON-API
 # tokens). The user list is an aspect of the configuration directory (ADR-0031);
 # .env stays beside it, deliberately outside — it is secrets, not authored config.
 # Existing files are kept unless you confirm overwriting. Edit the values after.
@@ -21,18 +21,25 @@ confirm_write() {
   esac
 }
 
-mkdir -p config
-if confirm_write config/users.yaml; then
-  cat > config/users.yaml <<'EOF'
+users_path="config/users/users.yaml"
+if [ -e config/users.yaml ]; then
+  users_path="config/users.yaml"
+  echo "  kept existing config/users.yaml (move it to config/users/users.yaml before adding avatars)"
+else
+  mkdir -p config/users/avatars
+  if confirm_write "$users_path"; then
+    cat > "$users_path" <<'EOF'
 # Login list (git-ignored). `admin: true` grants the admin-only actions.
 # Passwords are plaintext for now — change these before real use.
+# Add `avatar: admin` and put admin.svg/png/webp in avatars/ for a custom picture.
 admin:
   firstname: "Admin"
   lastname: "User"
   password: "change-me"
   admin: true
 EOF
-  echo "  wrote config/users.yaml (default login: admin / change-me)"
+    echo "  wrote $users_path (default login: admin / change-me)"
+  fi
 fi
 
 if confirm_write .env; then
@@ -47,4 +54,4 @@ EOF
   echo "  wrote .env (random SECRET_KEY; edit LITTLE_SISTER_API_TOKENS)"
 fi
 
-echo "Done — review config/users.yaml and .env, then run ./start.sh"
+echo "Done — review $users_path and .env, then run ./start.sh"

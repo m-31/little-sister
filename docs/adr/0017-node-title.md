@@ -39,7 +39,7 @@ Add an optional **`title`** — a short display label for the node.
    and `description`. The name/path identity is unchanged underneath.
 4. **Web-only this slice.** It surfaces in the snapshot and renders in the web UI;
    it is **not** added to the JSON envelope ([ADR-0008](0008-json-output-api.md)) here
-   — that is the Phase-2 `status_envelope` item.
+   — that is the `status_envelope` item.
 
 ## Consequences
 - Friendly labels without touching identity: the path/name stays the stable address

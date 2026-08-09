@@ -43,8 +43,8 @@ time, maintenance and event-on-change stay the tree's).
 4. **Web-only this slice.** It surfaces in the snapshot and renders on leaf detail
    pages **to all viewers** (config is operator-authored; secrets live in `.env`,
    [ADR-0003](0003-config-and-secrets-via-env-file.md)). It is **not** added to the
-   JSON envelope ([ADR-0008](0008-json-output-api.md)) here — that is the Phase 2 API
-   item.
+   JSON envelope ([ADR-0008](0008-json-output-api.md)) here — that is the
+   API-envelope round's decision.
 
 ## Consequences
 - Branch-check leaves show their own config — the case a pull-from-engine design

@@ -77,6 +77,17 @@ class EngineTests(TestCase):
         assert node is not None
         self.assertIn("http://x", node.config)
 
+    def test_run_once_writes_wall_time_and_no_next(self):
+        # A one-shot run has no live schedule (ADR-0044): the wall time is
+        # real, the next slot honestly absent rather than a stale projection.
+        tree = StatusTree()
+        Engine([_FakeCheck(path="/svc/a")], tree).run_once()
+        node = tree.snapshot("/svc/a")
+        assert node is not None and node.run is not None
+        assert node.run.wall_seconds is not None
+        self.assertGreaterEqual(node.run.wall_seconds, 0.0)
+        self.assertIsNone(node.run.next_run_at)
+
     def test_branch_child_config_with_bare_container(self):
         tree = StatusTree()
         # A branch check's container reports no config (its config_summary is
@@ -89,6 +100,34 @@ class EngineTests(TestCase):
         assert container is not None and child is not None
         self.assertEqual(container.config, "")
         self.assertEqual(child.config, "- **warn at:** 80%")
+
+    def test_report_rides_the_result_onto_root_and_children(self):
+        # Unlike `config`, whose root value comes from the *check* object, the
+        # report is an output of **this run**, so it rides the result at every
+        # level — including the check's own node (ADR-0044 decision 6).
+        tree = StatusTree()
+        result = CheckResult(StatusCode.OK, report="- 14 repositories",
+                             children=(CheckResult(StatusCode.OK, name="disk",
+                                                   report="- /dev/sda1"),))
+        Engine([_FakeCheck(path="/host", result=result)], tree).run_once()
+        container = tree.snapshot("/host")
+        child = tree.snapshot("/host/disk")
+        assert container is not None and child is not None
+        self.assertEqual(container.report, "- 14 repositories")
+        self.assertEqual(child.report, "- /dev/sda1")
+
+    def test_a_run_that_finds_nothing_clears_the_last_report(self):
+        # The write-through property, end to end: a roster must not outlive the
+        # run that found it, or the page states as current what is already gone.
+        tree = StatusTree()
+        check = _FakeCheck(path="/host",
+                           result=CheckResult(StatusCode.OK, report="- alpha"))
+        Engine([check], tree).run_once()
+        check._result = CheckResult(StatusCode.OK)
+        Engine([check], tree).run_once()
+        node = tree.snapshot("/host")
+        assert node is not None
+        self.assertEqual(node.report, "")
 
     def test_raising_check_becomes_error(self):
         tree = StatusTree()

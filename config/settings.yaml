@@ -9,7 +9,7 @@ timezone: Europe/Berlin
 time_format: "%Y-%m-%d %H:%M:%S"
 
 # Reason lines a dashboard card shows before a header chevron reveals the rest (the
-# reason-overflow budget, #9). Short reasons show this many reasons; a reason that
+# reason-overflow budget, ADR-0024). Short reasons show this many reasons; a reason that
 # wraps to several lines uses more of the budget. A non-negative integer; default 6.
 reason_cap: 6
 
@@ -23,6 +23,16 @@ branch_cap: 3
 # /maintenance page (extends ADR-0024). A non-negative integer; default 5 (0 sends
 # every pin straight to the /maintenance page).
 maintenance_cap: 5
+
+# Where a dashboard card's status cluster (time, cue and status word) sits relative
+# to its title. `beside` is the library default: compact host walls keep one-line
+# heads whenever they fit. Omitting the key leaves an unconfigured deployment's
+# markup byte-for-byte unchanged: no card-state body attribute is emitted. `below`
+# opts into a standing, right-aligned second line on every card; only that choice
+# emits `data-ls-card-state="below"` for the stylesheet. Anything except `beside` or
+# `below` warns, names both choices, and falls back to `beside`. The resolved choice
+# is included in the startup config-load log.
+card_status_line: beside
 
 # Default maintenance window when an admin sets maintenance without an explicit
 # duration (e.g. 12h, 7d). Maintenance always expires — there is no indefinite pin.

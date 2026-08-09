@@ -19,7 +19,8 @@
                     the window?* The row keeps the status color it would have had,
                     because that is what it would have alarmed as; the chip is what
                     says it did not. Defaulting the page to hide them, with a toggle,
-                    is questions.md §4.2 and rides its own change, not this one. -#}
+                    is still an open question and rides its own change, not this
+                    one. -#}
                 {% for e in events %}
                     <tr class="row-{{ e.new | status_slug }}">
                         <td class="text-nowrap">{{ e.timestamp | localtime }}</td>

@@ -55,19 +55,42 @@ class ReasonLine:
     """One of a node's reasons, with its key and whatever is pinned on it.
 
     The **virtual child** of [ADR-0036] decision 7 and the ADR-0032 amendment: an
-    entry with a pin contributes nothing to its node, the rest contribute the
-    node's reported status. It carries no severity of its own — an entry is a line
-    of one check's result, not a thing that is separately red.
+    entry with a pin contributes nothing to its node; the rest contribute their
+    **own** ``code`` where the check declared one (ADR-0042), and the node's
+    reported status where it did not — which is every entry that predates coded
+    ones, unchanged. ``running`` marks a line whose subject has work in flight;
+    it is display only (an ``is-running`` class and an italic — the words still
+    say it) and never touches the roll-up: a red line whose job is re-running
+    stays red.
     """
     slug: str
     text: str
     maintenance: MaintenanceEntry | None = None
+    code: StatusCode | None = None
+    running: bool = False
 
     @property
     def quiet(self) -> bool:
         """Whether this entry is suppressed. Quiet is **shown**, not hidden
         (ADR-0032 rule 5) — the surfaces render it in the maintenance color."""
         return self.maintenance is not None
+
+
+@dataclass(frozen=True)
+class RunFacts:
+    """The last run's facts for the check that owns a node **alone** (ADR-0044):
+    how long the run took, and when the next is due.
+
+    ``wall_seconds`` is ``None`` for a secret-pinned check — it never runs
+    (ADR-0023), so there is no honest duration. ``next_run_at`` is the engine's
+    **armed slot**, projected onto the wall clock once, at write time — under the
+    budgeted retry (ADR-0033) a failing check's slot is pulled in, which is why
+    it is never computed from ``timestamp + frequency``; it is ``None`` for a
+    one-shot run, which has no live schedule. Web-only until the client contract
+    round (ADR-0008's batched revision), like ``reported_code`` before it.
+    """
+    wall_seconds: float | None
+    next_run_at: str | None
 
 
 @dataclass(frozen=True)
@@ -93,6 +116,22 @@ class StatusSnapshot:
     ``timestamp`` is the observation time — ``None`` when no check has written this
     node (ADR-0027), while ``stale`` and ``age_seconds`` always measure the node's
     **own** stamp.
+
+    ``run`` carries the owning check's last-run facts (ADR-0044) and resolves
+    under the same condition as the inherited stamp: it is present exactly where
+    the subtree holds **one** check — the sole mount itself and the unwritten
+    ancestors above it — and ``None`` on a mount two checks share, on that
+    mount's ancestors, and on the leaves *below* a branch mount, whose next
+    update belongs to the node where the check is named.
+
+    ``report`` is what the run **found** (ADR-0044), beside ``config``'s what it
+    ran **with**. Both are the owning check's own text, so both answer to the
+    same ownership rule as the run facts — one rule over four facts (decision 1)
+    — and are **withheld on a node two or more checks mount**: two checks writing
+    one field give it no single answer, and a value that flips between them is
+    worse than none. The condition is local (this node's own mount count), so a
+    child *below* a shared container keeps its own per-child text, which is where
+    that shape's material belongs anyway.
     """
     path: str
     name: str
@@ -104,6 +143,7 @@ class StatusSnapshot:
     description: str = ""
     frequency_seconds: int | None = None
     config: str = ""
+    report: str = ""
     about: str = ""
     title: str = ""
     maintenance: bool = False
@@ -113,6 +153,7 @@ class StatusSnapshot:
     children: tuple[StatusSnapshot, ...] = ()
     reasons: tuple[ReasonLine, ...] = ()
     members: bool = False
+    run: RunFacts | None = None
 
     @property
     def quiet_reasons(self) -> int:
@@ -154,10 +195,19 @@ class Event:
 
 @dataclass(frozen=True)
 class StatusPeriod:
-    """One stretch of time a node held a given status (status history)."""
+    """One stretch of time a node held a given status (status history).
+
+    ``until`` is the observation that bounds the period — the next transition's
+    stamp, or for the current one the node's own last check time. It is ``None``
+    on the current period of a node **no check has ever written**: an admin pin
+    can land on a container that never reported (``_emit`` says so outright), and
+    that transition is real while the observation bounding it does not exist. The
+    surfaces render the absence as ``—``, which is the honest reading; inventing
+    the moment the admin acted would date the period by an act, not a check.
+    """
     code: StatusCode
     since: str
-    until: str
+    until: str | None
     reason: tuple[str, ...]
 
 
@@ -184,7 +234,17 @@ class StatusTree:
         # Check mounts: the nodes a check writes its result root to, seeded at
         # startup. Read only by the snapshot's timestamp roll-up (ADR-0027); the
         # tree itself stays check-agnostic and derives nothing into the nodes.
-        self._check_mounts: set[str] = set()
+        # Mount path -> how many checks write there (ADR-0027 as amended by
+        # ADR-0044): the count is what tells a sole-check mount, whose stamp an
+        # unwritten ancestor may inherit, from a shared one, whose two run times
+        # must not be attributed upward as if they were one.
+        self._check_mounts: dict[str, int] = {}
+        # The owning check's last-run facts per mount path (ADR-0044), written by
+        # the engine after each run and resolved by the snapshot under the same
+        # sole-check condition as the inherited stamp. Registry, not node state:
+        # the facts belong to the check behind the node, and nothing derived is
+        # stored on the nodes.
+        self._run_facts: dict[str, RunFacts] = {}
 
     def use_maintenance_store(self, store: MaintenanceStore) -> None:
         """Attach the persistence store (once, at startup, before restore)."""
@@ -196,12 +256,21 @@ class StatusTree:
                description: str | None = None,
                frequency_seconds: int | None = None,
                config: str | None = None,
+               report: str | None = None,
                about: str | None = None,
                title: str | None = None) -> bool:
         """Create-or-update the node at ``path`` and record a transition event if
         its own code changed. ``description`` / ``frequency_seconds`` / ``config``
-        (inherited from the check) are stored when given — ``config`` is static
-        display metadata, never a transition (ADR-0013).
+        / ``report`` (inherited from the check) are stored when given — ``config``
+        is static display metadata, never a transition (ADR-0013), and ``report``
+        is per-run display metadata, equally never one (ADR-0044: what the run
+        found is not a status claim; anything that alarms is a reason).
+
+        ``report`` writes through **including the empty string**, which is how a
+        run that found nothing clears what the last one found — a roster that
+        outlives its run is a lie by the next tick. Nothing has to guard a shared
+        container here: the snapshot withholds the text of a node two checks
+        mount, so the last writer can no longer be believed there.
 
         ``reason`` is keyed (ADR-0036) and accepts any of the check-facing forms —
         a string, a list of strings, a ``{slug: text}`` mapping, ``(slug, text)``
@@ -230,6 +299,8 @@ class StatusTree:
                 node.frequency_seconds = frequency_seconds
             if config is not None:
                 node.config = config
+            if report is not None:
+                node.report = report
             if about and not node.about:
                 node.about = about
             if title and not node.title:
@@ -263,10 +334,32 @@ class StatusTree:
 
         Unlike :meth:`set_about` this is **registry-only** — deliberately no
         ``_ensure_node``, so the tree's visible shape still grows only with results.
-        Two checks sharing one mount register one entry, which is the point: the
-        ambiguity rule counts mounts, not checks. Thread-safe."""
+        The registry **counts checks per path** (the ADR-0044 amendment of
+        ADR-0027): two checks legitimately sharing one mount register a count of
+        two, so an ancestor above them inherits **no** stamp — the shared node's
+        own last write answers for itself (rule 2), but attributed upward it would
+        present one check's run time as both checks', which is rule 4's ambiguity.
+        A set used to collapse the pair into a "sole" mount. Thread-safe."""
         with self._lock:
-            self._check_mounts.add(join_path(path))
+            key = join_path(path)
+            self._check_mounts[key] = self._check_mounts.get(key, 0) + 1
+
+    def set_run_facts(self, path: str, *, wall_seconds: float | None,
+                      next_run_at: str | None) -> None:
+        """Record the owning check's last-run facts for the mount at ``path`` —
+        the run's wall time and the engine's **armed next slot** (ADR-0044).
+
+        Registry-only, like :meth:`set_check_mount`: no node is created, nothing
+        is stored on one, and the snapshot resolves the facts onto exactly the
+        nodes whose subtree holds **one** check — never a shared mount, never
+        its ancestors. ``next_run_at`` must come from the engine's schedule,
+        already projected onto the wall clock: under the budgeted retry
+        (ADR-0033) the armed slot is pulled in, which is why it is never
+        computed from ``timestamp + frequency``.
+        """
+        with self._lock:
+            self._run_facts[join_path(path)] = RunFacts(wall_seconds,
+                                                        next_run_at)
 
     def set_maintenance(self, path: str, reason: str | None = None, *,
                         expires_at: datetime, set_by: str = "",
@@ -304,8 +397,10 @@ class StatusTree:
 
     def clear_maintenance(self, path: str, *,
                           expected_set_at: str | None = None) -> MaintenanceWrite:
-        """Release maintenance; the node reverts to ``UNDEFINED`` until the next
-        check. ``applied`` is ``False`` when it wasn't in maintenance.
+        """Release maintenance; the node shows the check's preserved reading again
+        **at once**, not at the next run — nothing was destroyed while it was pinned
+        (ADR-0041; see :meth:`_clear_node`). ``applied`` is ``False`` when it wasn't
+        in maintenance.
 
         Clearing carries the same ``expected_set_at`` token as
         :meth:`set_maintenance` — clearing someone else's pin should not be the one
@@ -524,9 +619,13 @@ class StatusTree:
                       if event.path == node.path and not event.suppressed_by]
             if not events:
                 return []
-            # A node with a transition behind it was written, so it is stamped
-            # (ADR-0027) — history only ever describes observed nodes.
-            assert node.timestamp is not None
+            # A check's transition only ever lands on a node it wrote, so a
+            # stamp is the usual case — but an **admin pin** lands on a node
+            # nobody has written (a container: `_emit` passes its own `when` for
+            # exactly that), and then the current period has no observation to
+            # end at. This used to be an `assert node.timestamp is not None`,
+            # which made `/history/<pinned container>` a 500 and would have made
+            # the branch page one the moment it asked for its own history.
             periods: list[StatusPeriod] = []
             for index, event in enumerate(events):
                 is_current = index == len(events) - 1
@@ -656,18 +755,22 @@ class StatusTree:
         return node
 
     def _snapshot(self, node: Status, now: datetime) -> StatusSnapshot:
-        snapshot, _mounts, _mount_stamp = self._snapshot_subtree(node, now)
+        snapshot, _mounts, _mount_stamp, _mount_run = (
+            self._snapshot_subtree(node, now))
         return snapshot
 
     def _snapshot_subtree(self, node: Status, now: datetime
-                          ) -> tuple[StatusSnapshot, int, str | None]:
-        """``node``'s snapshot, plus the two values its parent needs to resolve its
-        own observation time (ADR-0027): how many **check mounts** this subtree holds
-        and, when that count is exactly one, that sole mount's own stamp.
+                          ) -> tuple[StatusSnapshot, int, str | None,
+                                     RunFacts | None]:
+        """``node``'s snapshot, plus the values its parent needs to resolve its
+        own observation time (ADR-0027) and run facts (ADR-0044): how many
+        **checks** this subtree holds and, when that count is exactly one, the
+        sole mount's own stamp and its check's last-run facts.
 
-        One recursion computes all three roll-ups — effective code, staleness and the
-        published timestamp — under the one lock (ADR-0002). Nothing derived is stored
-        on the nodes, so a topology change can never leave a stale roll-up behind.
+        One recursion computes all the roll-ups — effective code, staleness, the
+        published timestamp and the run facts — under the one lock (ADR-0002).
+        Nothing derived is stored on the nodes, so a topology change can never
+        leave a stale roll-up behind.
         """
         # Siblings render in natural, case-insensitive name order at every level —
         # deterministic, independent of check/discovery order (decisions.md). The
@@ -677,21 +780,35 @@ class StatusTree:
             for child in sorted(node.get_children(), key=lambda c: _sort_key(c.name))
         )
         children = tuple(result[0] for result in results)
-        # Count the mounts below and keep the candidate stamp of the one that is
-        # alone in its own subtree; a second mount anywhere makes any single value an
-        # attribution of one check's run time to another check's data, so the
-        # candidate is dropped rather than chosen.
+        # Count the *checks* below (per mount path — the ADR-0044 amendment of
+        # ADR-0027) and keep the candidate stamp of the mount that is alone in its
+        # own subtree; a second check anywhere — a second mount, or a second check
+        # on one shared mount — makes any single value an attribution of one
+        # check's run time to another check's data, so the candidate is dropped
+        # rather than chosen.
         mounts = 0
         mount_stamp: str | None = None
-        for _child, child_mounts, child_stamp in results:
+        mount_run: RunFacts | None = None
+        for _child, child_mounts, child_stamp, child_run in results:
             mounts += child_mounts
             if child_mounts == 1:
                 mount_stamp = child_stamp
-        if node.path in self._check_mounts:
-            mounts += 1
+                mount_run = child_run
+        own_checks = self._check_mounts.get(node.path, 0)
+        if own_checks:
+            mounts += own_checks
             mount_stamp = node.timestamp
+            mount_run = self._run_facts.get(node.path)
+        # The owning check's own **text** answers to the same rule as its run
+        # facts (ADR-0044 decision 1): `config` and `report` belong to the check
+        # that owns this node alone, so a node **two or more checks mount** has
+        # no single answer and publishes neither. The condition is this node's
+        # own count, not the subtree's: a child below a shared container keeps
+        # its own per-child text, which is where that shape's material belongs.
+        shared = own_checks > 1
         if mounts != 1:
             mount_stamp = None
+            mount_run = None
         # Own stamp when a check has written this node; otherwise the sole mount's,
         # if the subtree holds exactly one. Staleness and `age_seconds` deliberately
         # keep reading the **own** stamp — an inherited time is a display value, not
@@ -705,7 +822,8 @@ class StatusTree:
         pins = self._entry_maintenance
         lines = tuple(
             ReasonLine(entry.slug, entry.text,
-                       pins.get((node.path, entry.slug)) if node.members else None)
+                       pins.get((node.path, entry.slug)) if node.members else None,
+                       code=entry.code, running=entry.running)
             for entry in node.reason_entries)
         # Own status is now a **derived** value: the entries are virtual children,
         # and a node whose members are all pinned has nothing left reporting.
@@ -722,12 +840,14 @@ class StatusTree:
             reported_code=node.code,
             reason=tuple(node.reason), timestamp=timestamp,
             description=node.description, frequency_seconds=node.frequency_seconds,
-            config=node.config, about=node.about, title=node.title,
+            config="" if shared else node.config,
+            report="" if shared else node.report,
+            about=node.about, title=node.title,
             maintenance=node.maintenance,
             maintenance_entry=self._maintenance.get(node.path), stale=stale,
             age_seconds=age, children=children,
-            reasons=lines, members=node.members)
-        return snapshot, mounts, mount_stamp
+            reasons=lines, members=node.members, run=mount_run)
+        return snapshot, mounts, mount_stamp, mount_run
 
 
 def _own_code(reported: StatusCode, lines: tuple[ReasonLine, ...],
@@ -740,13 +860,19 @@ def _own_code(reported: StatusCode, lines: tuple[ReasonLine, ...],
     and it covers the node whole, so nothing below the pin can change the answer.
 
     Otherwise the node's entries are its **virtual children** (ADR-0036 decision 7;
-    the ADR-0032 amendment). Each unsuppressed entry contributes the node's reported
-    status — an entry has no severity of its own — so the worst of what is left *is*
-    the reported code until nothing is left, at which point the node presents
-    ``MAINTENANCE``. Two kinds of node stay outside that rule entirely and read
-    exactly what they reported: one with **no** reasons (a check with a code and
-    nothing to say), and one whose reasons are **prose**, which has no individually
-    suppressible parts.
+    the ADR-0032 amendment), and the walk over them is the roll-up one level down
+    (ADR-0039, made literal by ADR-0042): each unsuppressed entry contributes its
+    **own** code where the check declared one, and the node's reported status where
+    it did not; ``UNDEFINED`` contributions are ignored; the worst of what is
+    counted wins. With nothing counted the answer depends on why — entries skipped
+    because they are *pinned* (or carrying ``MAINTENANCE`` from a direct upsert)
+    leave the node ``MAINTENANCE``, entries that merely have not reported leave it
+    ``UNDEFINED`` — the ADR-0039 rule-5 tiebreak, unchanged. So pinning the one
+    red line of an otherwise healthy coded set turns the node ``OK``, and pinning
+    every line turns it ``MAINTENANCE``, exactly as with real children. Two kinds
+    of node stay outside the rule entirely and read what they reported: one with
+    **no** reasons (a check with a code and nothing to say), and one whose reasons
+    are **prose**, which has no individually suppressible parts.
 
     What this function must never do is *lose* ``reported``. It is the check's real
     answer, it stays on the node, and it travels to the surfaces beside the derived
@@ -756,9 +882,22 @@ def _own_code(reported: StatusCode, lines: tuple[ReasonLine, ...],
         return StatusCode.MAINTENANCE
     if not members or not lines:
         return reported
-    if any(not line.quiet for line in lines):
-        return reported
-    return StatusCode.MAINTENANCE
+    counted: list[StatusCode] = []
+    silenced = False
+    for line in lines:
+        if line.quiet:
+            silenced = True
+            continue
+        code = line.code if line.code is not None else reported
+        if code is StatusCode.MAINTENANCE:
+            silenced = True
+            continue
+        if code is StatusCode.UNDEFINED:
+            continue
+        counted.append(code)
+    if counted:
+        return worst_of(counted)
+    return StatusCode.MAINTENANCE if silenced else StatusCode.UNDEFINED
 
 
 def _sort_key(name: str) -> str:

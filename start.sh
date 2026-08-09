@@ -25,12 +25,11 @@ require lsof
 require curl   # the readiness probe (see `responds` in lib.sh)
 
 # --- Config preflight: the files the app reads from this directory -----------
-# config/users.yaml is required (the login list); .env is recommended (session key
-# + API tokens). Point at ./setup.sh rather than failing deep inside gunicorn.
-users_file="${LITTLE_SISTER_USERS:-config/users.yaml}"
-if [ ! -f "$users_file" ]; then
-  echo "ERROR: user list '$users_file' not found — it is required to log in." >&2
-  echo "Run ./setup.sh to create config/users.yaml and .env, then edit the values." >&2
+# The users aspect is required (the login list), in either legal form; .env is
+# recommended (session key + API tokens). Point at ./setup.sh rather than failing
+# deep inside gunicorn.
+if ! resolve_users_document >/dev/null; then
+  echo "Run ./setup.sh to create config/users/users.yaml and .env, then edit the values." >&2
   exit 1
 fi
 if [ ! -f .env ]; then

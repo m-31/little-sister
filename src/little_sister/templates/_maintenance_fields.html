@@ -1,0 +1,49 @@
+{#- The two authored fields shared by every maintenance set/edit form. The reason
+    is raw Markdown source — never rendered DOM round-tripped back into a control —
+    so it is a textarea even when today's explanation happens to be one line.
+    `prefix` keeps labels unique on the member page, which may carry hundreds of
+    editors. The duration-or-expiry value deliberately stays one line, blank keeps
+    the ADR-0014 configured-default rule, and the click-opened help makes its exact
+    grammar discoverable without a hover gesture or a second client-side parser. -#}
+{% macro maintenance_fields(reason, duration, prefix, maintenance_default,
+                            maintenance_timezone, compact=false) -%}
+<div class="mb-2">
+    <label class="form-label" for="{{ prefix }}-reason">Reason</label>
+    <textarea class="form-control{% if compact %} form-control-sm{% endif %} maintenance-reason-source"
+              id="{{ prefix }}-reason" name="reason" rows="3"
+              placeholder="why?">{{ reason }}</textarea>
+    <div class="form-text">Markdown is supported; raw HTML is shown as text.</div>
+</div>
+<div class="mb-2">
+    <label class="form-label" id="{{ prefix }}-duration-label"
+           for="{{ prefix }}-duration">Duration or expiry</label>
+    <input class="form-control{% if compact %} form-control-sm{% endif %}"
+           id="{{ prefix }}-duration" name="duration" value="{{ duration }}"
+           placeholder="e.g. 2h or Friday — default {{ maintenance_default }}"
+           aria-describedby="{{ prefix }}-expiry-zone">
+    <div class="form-text" id="{{ prefix }}-expiry-zone">
+        Timezone: {{ maintenance_timezone }} — used when the input has no
+        <code>Z</code> or numeric offset.
+    </div>
+    <details class="maintenance-expiry-help" id="{{ prefix }}-expiry-help">
+        <summary>Which formats can I use?</summary>
+        <div class="maintenance-expiry-help__table-wrap">
+            <table class="maintenance-expiry-help__table">
+                <thead>
+                    <tr><th scope="col">Input</th><th scope="col">Meaning</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td><code>2h</code>, <code>3d</code>, <code>17s</code></td><td>Duration from now</td></tr>
+                    <tr><td><code>2026-07-10 18:00</code></td><td>Exact local date and time</td></tr>
+                    <tr><td><code>2026-07-10T18:00+02:00</code></td><td>Exact time with its own offset</td></tr>
+                    <tr><td><code>07-10</code></td><td>Next 10 July, at midnight</td></tr>
+                    <tr><td><code>17</code></td><td>Next 17th, at midnight</td></tr>
+                    <tr><td><code>18:00</code></td><td>Next 18:00</td></tr>
+                    <tr><td><code>Friday</code></td><td>Next Friday at 12:00</td></tr>
+                    <tr><td><code>Fri 18:00</code></td><td>Next Friday at 18:00</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </details>
+</div>
+{%- endmacro %}

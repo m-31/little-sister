@@ -9,6 +9,7 @@ nominal frequency; ``/system`` says when a slot is a retry slot.
 import os
 import tempfile
 from dataclasses import replace
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest import TestCase, mock
 
@@ -143,6 +144,75 @@ class RetrySchedulingTests(TestCase):
         check.result = CheckResult(StatusCode.OK)
         self._run(engine, item)
         self.assertFalse(engine.info().checks[0].retrying)
+
+
+class RunFactsScheduleTests(TestCase):
+    """The run facts the engine writes beside each result (ADR-0044) carry the
+    **armed slot** — which under ADR-0033 is the pulled-in retry slot when one
+    is armed, never ``timestamp + frequency`` arithmetic."""
+
+    def setUp(self):
+        self.now = 1000.0
+
+    def _engine(self, check):
+        tree = StatusTree()
+        engine = Engine([check], tree, clock=lambda: self.now)
+        item = engine._scheduled[0]
+        item.stagger = 0.0
+        return engine, tree, item
+
+    def _run(self, engine, item):
+        """One scheduled run, inline, as RetrySchedulingTests drives it."""
+        item.next_due = self.now + item.check.frequency_seconds + item.stagger
+        item.stagger = 0.0
+        item.retrying = False
+        engine._execute(item)
+
+    def _facts(self, tree, path="/svc"):
+        snap = tree.snapshot(path)
+        assert snap is not None and snap.run is not None
+        return snap.run
+
+    def test_the_nominal_slot_is_projected_onto_the_wall_clock(self):
+        check = _Probe(path="/svc", frequency_seconds=300)
+        check.result = CheckResult(StatusCode.OK)
+        engine, tree, item = self._engine(check)
+        before = datetime.now()
+        self._run(engine, item)
+        after = datetime.now()
+        facts = self._facts(tree)
+        assert facts.next_run_at is not None
+        got = datetime.fromisoformat(facts.next_run_at)
+        self.assertGreaterEqual(got, before + timedelta(seconds=300))
+        self.assertLessEqual(got, after + timedelta(seconds=300))
+        self.assertIsNotNone(facts.wall_seconds)
+
+    def test_a_failure_writes_the_pulled_slot_not_the_frequency(self):
+        # The ADR-0044 point of sourcing from the engine: while someone watches
+        # a failure, the next update shown is the fast retry — arithmetic from
+        # the frequency would confidently say five minutes.
+        check = _Probe(path="/svc", frequency_seconds=300,
+                       retry_interval_seconds=30, retry_attempts=2)
+        engine, tree, item = self._engine(check)
+        before = datetime.now()
+        self._run(engine, item)
+        after = datetime.now()
+        facts = self._facts(tree)
+        assert facts.next_run_at is not None
+        got = datetime.fromisoformat(facts.next_run_at)
+        self.assertGreaterEqual(got, before + timedelta(seconds=30))
+        self.assertLessEqual(got, after + timedelta(seconds=30))
+
+    def test_a_pinned_check_writes_no_wall_but_keeps_its_slot(self):
+        # It never runs (ADR-0023), so there is no honest duration — but the
+        # pinned ERROR still re-asserts on schedule, so the next slot is real.
+        check = _Probe(path="/svc", frequency_seconds=300)
+        check.secret_errors.append("store unreachable")
+        engine, tree, item = self._engine(check)
+        self._run(engine, item)
+        facts = self._facts(tree)
+        self.assertIsNone(facts.wall_seconds)
+        self.assertIsNotNone(facts.next_run_at)
 
 
 class RetrySettingsResolutionTests(TestCase):

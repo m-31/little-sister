@@ -8,6 +8,36 @@
   [ADR-0006](0006-config-file-and-timezones.md) (timestamp storage & rendering).
 - **Register:** [`../decisions.md`](../decisions.md)
 
+> **Update (2026-08-06, decided 2026-08-05):** the mount registry **counts checks
+> per path** instead of holding a set of paths, and the engine **stamps the
+> sole-check container** with the run's facts after each run
+> ([ADR-0044](0044-run-facts-on-the-node.md)). This closes the one shape rule 3 did
+> not cover — a branch check's own node is a mount that is never written, so it sat
+> stampless although exactly one check answers for everything below it — and it
+> enforces rule 4 by count rather than by the accident of a node being unwritten:
+> two checks legitimately sharing one mount (host metrics beside a hardware probe)
+> now yield **no** container stamp, where a set would have collapsed them into a
+> "sole" mount whose stamp flipped between two checks' run times. Rule 5 is
+> untouched — nothing is synthesized from children — and the newly stamped container
+> becomes subject to staleness, deliberately: a branch check that stops running now
+> degrades where it is named. Rule 1's reading widens accordingly: on a branch
+> container, *having a timestamp* means *the check behind this node ran*.
+
+> **Update 2 (2026-08-06):** the update above misstates the shape it closes, and
+> the build slice measured it before building: a branch check's own node **is**
+> written — the engine stores the check's result at the check's own path on every
+> run, exactly as this record's context says ("leaves, inner branch nodes, and the
+> mount itself") — so no container ever sat stampless in the model; it sat
+> unrendered, and [ADR-0044](0044-run-facts-on-the-node.md)'s display rule
+> (decision 5) is what closes the visible gap. What the count really fixes sits one
+> step up: the set collapsed two checks sharing one mount into one entry, so rule 3
+> stamped the **unwritten ancestors above them** with a value that flips between
+> two checks' run times — rule 4's ambiguity, smuggled upward. With the count those
+> ancestors inherit **no** stamp, while the shared node itself still answers with
+> its own last write (rule 2, unchanged). What the engine will newly write is the
+> run's **facts** — wall time and next run, which no upsert carries today
+> ([ADR-0044](0044-run-facts-on-the-node.md) decision 4, a later slice).
+
 ## Context
 `Status.timestamp` is meant to be the **observation time**: `update()` re-stamps it on
 every check write, `touch()` on a maintenance-pinned refresh. But `__init__` stamped it

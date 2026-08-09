@@ -29,6 +29,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 
 from little_sister.checks import code
+from little_sister.reasons import Entry
 from little_sister.status import StatusCode
 from little_sister.tree import StatusSnapshot, StatusTree
 
@@ -47,9 +48,10 @@ class Fixture:
     """One named extreme case: how to build its snapshot and where it is viewed.
 
     ``build`` returns the snapshot of the node named by ``branch`` (the root, i.e.
-    the overview, when ``branch`` is empty); the harness renders ``status.html``
-    for that node with that breadcrumb. ``engine_error`` renders the page as if
-    the engine had failed to start with that reason (the header banner).
+    the overview, when ``branch`` is empty); the harness normally renders
+    ``status.html`` for that node with that breadcrumb. ``detail`` selects the
+    member-leaf ``check.html`` surface instead. ``engine_error`` renders the page
+    as if the engine had failed to start with that reason (the header banner).
     """
 
     name: str
@@ -57,6 +59,7 @@ class Fixture:
     build: Callable[[], StatusSnapshot]
     branch: str = ""
     engine_error: str | None = None
+    detail: bool = False
 
 
 # The sheet is a static artifact, so the *observation* times the cards now carry
@@ -65,6 +68,10 @@ class Fixture:
 # configured timezone's whatever the renderer's own clock is set to, which keeps the
 # sheet (and the tests reading it) identical on any machine.
 _PINNED_STAMP = "2026-07-20T11:59:31+02:00"
+#: The armed next slot, pinned for the same reason (ADR-0044). ``_pin_stamps`` does
+#: not reach it — the run facts are one object below the snapshot, and a fixture that
+#: wants them says so — so it is written straight into the tree.
+_PINNED_NEXT_RUN = "2026-07-20T12:04:00+02:00"
 
 
 def _pin_stamps(snap: StatusSnapshot) -> StatusSnapshot:
@@ -98,8 +105,8 @@ def _hosts_ok(count: int) -> StatusSnapshot:
 
 def _eruption() -> StatusSnapshot:
     """A CI host whose ``actions`` leaf lists twelve failed workflows, each a
-    link (the github-``actions`` case, #9) — beside two calm neighbors so the
-    eruption's effect on the grid is visible."""
+    link (the github-``actions`` case for the reason budget, ADR-0024) — beside
+    two calm neighbors so the eruption's effect on the grid is visible."""
     tree = StatusTree()
     tree.upsert("/web", StatusCode.OK)
     tree.upsert("/db", StatusCode.OK)
@@ -137,7 +144,7 @@ def _long_link_eruption() -> StatusSnapshot:
 
 def _code_reason() -> StatusSnapshot:
     """A single 200-line ``code()`` reason (a captured traceback) — the vertical
-    overflow case (#9) — beside a calm neighbor."""
+    overflow case for the reason budget (ADR-0024) — beside a calm neighbor."""
     tree = StatusTree()
     tree.upsert("/web", StatusCode.OK)
     lines = "\n".join(
@@ -199,7 +206,7 @@ def _deep_tree() -> StatusSnapshot:
 def _long_text() -> StatusSnapshot:
     """A host with an over-long name, an over-long child name, an ellipsable
     title and a long ``about`` on the branch head — viewed at the branch so the
-    header (title + about) and the card heads all take the strain (#4/ADR-0024)."""
+    header (title + about) and the card heads all take the strain (ADR-0024)."""
     tree = StatusTree()
     leaf = f"/{_LONG_HOST}/{_LONG_LEAF}"
     tree.upsert(leaf, StatusCode.WARN,
@@ -251,6 +258,38 @@ def _observation_times() -> StatusSnapshot:
     tree.set_check_mount("/never-run/host_metrics")
     tree.set_about("/never-run", "a host whose only check has not reported yet")
     return _snapshot(tree)
+
+
+def _node_facts() -> StatusSnapshot:
+    """The **branch page's** node-facts block (ADR-0044 decision 8) at the size that
+    decided its placement: a container owned by one check, so it carries run facts,
+    its ``config`` and a ``report`` — and the report is a forty-name roster, which is
+    the volume the block was put *below* the child grid for. The layout question is
+    whether the dashboard still reads as a dashboard with all that under it, and
+    whether the 820px block sits right beside a full-width grid."""
+    tree = StatusTree()
+    tree.set_check_mount("/quality/github")
+    tree.upsert("/quality/github", StatusCode.OK, frequency_seconds=300,
+                config=("- **scope:** andro-meda\n- **name prefix:** little-\n"
+                        "- **archived:** excluded\n- **team:** platform"),
+                report=("**40 repositories** in scope — a roster, carrying no "
+                        "verdicts: a repository acquires a claim only when "
+                        "something is wrong with it, and that claim is a reason.\n\n"
+                        + "\n".join(f"- `little-sister-{name}`" for name in (
+                            "app", "agent", "stress", "docs", "ansible",
+                            "charts", "cli", "client-ios", "client-macos",
+                            "dashboards", "demo", "e2e", "fixtures", "gateway",
+                            "helm", "infra", "lint", "metrics", "notify",
+                            "operator", "playbooks", "probe", "proxy", "release",
+                            "runner", "satellite", "schemas", "scripts", "sdk",
+                            "shell", "site", "snapshots", "spec", "ssh", "stubs",
+                            "themes", "tools", "vault", "web", "workers"))))
+    tree.upsert("/quality/github/actions", StatusCode.OK)
+    tree.upsert("/quality/github/pull_requests", StatusCode.WARN,
+                ["#4821 Bump ruff to 0.6.9 — waiting 21h for a reviewer"])
+    tree.set_run_facts("/quality/github", wall_seconds=1.42,
+                       next_run_at=_PINNED_NEXT_RUN)
+    return _snapshot(tree, branch="quality/github")
 
 
 def _maintenance_deep() -> StatusSnapshot:
@@ -305,6 +344,33 @@ def _maintenance_many() -> StatusSnapshot:
     return _snapshot(tree, now=built + timedelta(minutes=1))
 
 
+def _maintenance_editor() -> StatusSnapshot:
+    """The admin member-leaf interaction: stable controls, one rendered entry pin
+    and the whole-node read/edit card on the same page. The explanation deliberately
+    carries block Markdown and raw HTML so the sheet exposes both rendering and the
+    source textarea's escaping boundary."""
+    tree = StatusTree()
+    findings = {
+        f"finding-{index}": (
+            f"[Finding {index}](https://security.example/findings/{index}) — "
+            f"package-{index} needs review"
+        )
+        for index in range(1, 13)
+    }
+    tree.upsert("/security/audit", StatusCode.ERROR, findings)
+    expires = datetime.now() + timedelta(days=2)
+    tree.set_entry_maintenance(
+        "/security/audit", "finding-2",
+        "**Ada owns this**\n\n- ticket filed\n- patch under review",
+        expires_at=expires, set_by="ada")
+    tree.set_maintenance(
+        "/security/audit",
+        "[Change window](https://ops.example/change/42)\n\n"
+        "<script>shown as text</script>",
+        expires_at=expires, set_by="pan")
+    return _snapshot(tree, "security/audit")
+
+
 def _reasons_graduated() -> StatusSnapshot:
     """Cards carrying 1 / 6 / 7 / 20 reasons side by side — around the per-card line
     budget (``reason_cap`` = 6 by default): the 1- and 6-reason cards fit, the 7- and
@@ -315,6 +381,57 @@ def _reasons_graduated() -> StatusSnapshot:
         reasons = [f"reason line {i} of {count}" for i in range(1, count + 1)]
         tree.upsert(f"/reasons-{count:02d}", StatusCode.ERROR, reasons)
     return _snapshot(tree)
+
+
+def coded_workflow_tree() -> StatusTree:
+    """The coded-entry tree behind both coded fixtures — and the one the contrast
+    sweep serves, so Mode 1 and Mode 4 judge the same roster (testing-the-gui.md).
+
+    Coded entry lines (ADR-0042) in every state at once, beside a calm neighbor: a
+    failed workflow already re-running (error tint + italic), a healthy line (pale
+    ok tint — green under the red card), a healthy line rebuilding (ok tint +
+    italic), a queued line (warn tint), one that has never concluded (ring cue on
+    the undefined tint), a pinned coded line wearing the maintenance tint over its
+    own state, and an uncoded advisory carrying the node's code. The node derives
+    ERROR from its lines; the reported code beneath the pin stays visible on the
+    leaf page.
+
+    The two warn lines are the point of the ordering: a pin's quiet tint outranks
+    the code it covers, so the *pinned* line cannot also show what a warn line looks
+    like — with one line each, both are on the sheet. Seven lines against a
+    ``reason_cap`` of six also means the uncoded advisory folds on the overview and
+    shows on the leaf page, which is where an uncoded line matters anyway (on the
+    card it is ordinary reason ink, measured from the tokens by
+    ``tests/test_contrast.py``)."""
+    tree = StatusTree()
+    tree.upsert("/ci/actions", StatusCode.ERROR, [
+        Entry("web-build",
+              "web (main) / build: failed after 8m14s \u00b7 #4216 running 2m",
+              StatusCode.ERROR, running=True),
+        Entry("api-tests", "api (main) / tests: passed in 2m01s",
+              StatusCode.OK),
+        Entry("docs-build", "docs (main) / build: passed in 41s \u00b7 #911 "
+              "running 12s", StatusCode.OK, running=True),
+        Entry("release-queue", "release (main) / publish: queued behind 3 jobs",
+              StatusCode.WARN),
+        Entry("nightly-audit", "nightly / audit: has never completed",
+              StatusCode.UNDEFINED),
+        Entry("deploy-gate", "deploy (main) / gate: waiting for approval",
+              StatusCode.WARN),
+        Entry("quota-note", "runner minutes at 61% of the monthly quota"),
+    ])
+    tree.upsert("/ci/lint", StatusCode.OK)
+    tree.set_entry_maintenance(
+        "/ci/actions", "deploy-gate",
+        "approvals paused for the release freeze",
+        expires_at=datetime.now() + timedelta(days=2), set_by="ada")
+    return tree
+
+
+def _coded_workflows() -> StatusSnapshot:
+    """The coded-entry roster as the templates render it (see
+    :func:`coded_workflow_tree`)."""
+    return _snapshot(coded_workflow_tree())
 
 
 def _empty() -> StatusSnapshot:
@@ -483,15 +600,32 @@ FIXTURES: tuple[Fixture, ...] = (
             "the card time under the ADR-0027 roll-up: a container over one check "
             "shows it, over two shows none, a never-run mount shows none",
             _observation_times),
+    Fixture("node_facts_branch_head",
+            "the branch page's node-facts block: run facts, a forty-name report "
+            "and the config block under the child grid",
+            _node_facts, branch="quality/github"),
     Fixture("maintenance_deep_pin",
             "an admin pin deep in a card — the strip pill's popover + ancestor pip",
             _maintenance_deep),
     Fixture("maintenance_many_pins",
             "12 pins past the cap — the strip pill, its capped '+N more' popover, "
             "and the /maintenance page", _maintenance_many),
+    Fixture("maintenance_editor_member_leaf",
+            "admin member leaf with rendered node/entry explanations and stable "
+            "read-to-edit controls",
+            _maintenance_editor, branch="security/audit", detail=True),
     Fixture("reasons_graduated",
             "cards with 1/6/7/20 reasons (reason-cap boundary material)",
             _reasons_graduated),
+    Fixture("coded_workflow_lines",
+            "coded entry lines (ADR-0042): error+running, ok, ok+running, warn, "
+            "never-run and a pinned line — every tint on one card",
+            _coded_workflows),
+    Fixture("coded_workflow_leaf",
+            "the same coded lines on the member leaf page, every state rail, "
+            "the uncoded advisory the card folds, and the pinned line's read "
+            "mode", _coded_workflows,
+            branch="ci/actions", detail=True),
     Fixture("empty_engine_down",
             "the empty tree (engine disabled) — the 'No checks' hint", _empty),
     Fixture("engine_error_banner",

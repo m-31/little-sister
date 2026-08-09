@@ -1,4 +1,5 @@
 import os
+import re
 import tempfile
 import unittest
 from dataclasses import replace
@@ -10,11 +11,26 @@ from unittest import TestCase, mock
 os.environ.setdefault("LITTLE_SISTER_ENGINE", "0")
 os.environ.setdefault("SECRET_KEY", "test-key")
 
-from little_sister import __version__, icons, link_probe, links, secrets, watch_lines
+from little_sister import (
+    __version__,
+    csp,
+    icons,
+    link_probe,
+    links,
+    origins,
+    secrets,
+    slots,
+    watch_lines,
+)
 from little_sister import app as app_module
 from little_sister.checks import code
+from little_sister.checks.base import registered_types
+from little_sister.config_dir import aspect_owner, forget_aspects, register_aspect
+from little_sister.origins import package_origin
+from little_sister.reasons import Entry
 from little_sister.status import HEARTBEAT_PATH, StatusCode
 from little_sister.tree import StatusTree
+from little_sister.users import AvatarFile
 
 
 class WebTests(TestCase):
@@ -33,6 +49,56 @@ class WebTests(TestCase):
         response = self.client.get("/status")
         self.assertEqual(response.status_code, 302)
         self.assertIn("/login", response.headers["Location"])
+
+    def test_copy_requires_login(self):
+        response = self.client.get("/copy")
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/login", response.headers["Location"])
+
+    def test_copy_renders_one_snapshot_as_markdown_and_rich_html(self):
+        self._login()
+        self.tree.upsert("/ci/healthy", StatusCode.OK)
+        self.tree.upsert(
+            "/ci/build", StatusCode.ERROR,
+            "See **owner** and [run](https://ci.example/42)",
+        )
+        with mock.patch.object(
+                self.tree, "snapshot", wraps=self.tree.snapshot) as snapshot:
+            body = self.client.get("/copy").get_data(as_text=True)
+
+        snapshot.assert_called_once_with("")
+        self.assertIn("Copy Markdown", body)
+        self.assertIn("Copy rich text", body)
+        self.assertIn("build ⛔", body)
+        self.assertNotIn("healthy", body)
+        self.assertIn("<strong>owner</strong>", body)  # rendered preview
+        self.assertIn('href="https://ci.example/42"', body)
+        self.assertIn('id="ls-copy-source"', body)    # manual-copy fallback
+        self.assertIn("js/copy.js", body)
+
+    def test_copy_payload_cannot_break_out_of_html_or_json(self):
+        self._login()
+        self.tree.upsert(
+            "/service/api", StatusCode.ERROR,
+            "</textarea></script><script>BAD</script>",
+        )
+
+        body = self.client.get("/copy").get_data(as_text=True)
+
+        self.assertNotIn("<script>BAD</script>", body)
+        self.assertIn("&lt;script&gt;BAD&lt;/script&gt;", body)
+        self.assertIn("\\u003c", body)  # tojson protects the payload boundary
+        self.assertEqual(body.count('id="ls-copy-html"'), 1)
+
+    def test_copy_empty_state_has_no_clipboard_actions(self):
+        self._login()
+        self.tree.upsert("/service/api", StatusCode.OK)
+
+        body = self.client.get("/copy").get_data(as_text=True)
+
+        self.assertIn("Nothing needs attention", body)
+        self.assertNotIn("data-copy-format", body)
+        self.assertNotIn("js/copy.js", body)
 
     def test_system_shows_version(self):
         # /system shows the package version, visible even with the engine disabled
@@ -157,13 +223,14 @@ class WebTests(TestCase):
     def test_card_shows_the_observation_time_before_the_status(self):
         # The `svc` container covers exactly one check, so its card inherits that
         # check's run time — rendered as a time of day in the configured timezone
-        # (ADR-0006) and sitting directly before the cue + status word.
+        # (ADR-0006), at minute precision (seconds saved no information worth
+        # the row width), sitting directly before the cue + status word.
         self._login()
         self.tree.set_check_mount("/svc/api")
         self.tree.upsert("/svc/api", StatusCode.OK)
         stamp = self.tree.snapshot("/svc/api").timestamp
         shown = (datetime.fromisoformat(stamp).astimezone()
-                 .astimezone(app_module.config.tzinfo).strftime("%H:%M:%S"))
+                 .astimezone(app_module.config.tzinfo).strftime("%H:%M"))
         body = self.client.get("/status").get_data(as_text=True)
         self.assertIn(f'<span class="status-card__time">{shown}</span>'
                       f'<svg class="status-cue', body)
@@ -215,7 +282,7 @@ class WebTests(TestCase):
         self.assertNotIn("until", body)
         self.assertNotIn("Not yet observed.", body)
 
-    # --- Reason overflow (#9): a dashboard card clamps its reasons to a *line
+    # --- Reason overflow (ADR-0024): a dashboard card clamps its reasons to a *line
     # budget* (settings.yaml reason_cap → the block's --reason-lines); the overflow
     # stays in the DOM, clipped by CSS. The show-all / collapse chevron is added
     # client-side (reasons.js), so it is exercised in the browser, not here. The
@@ -609,18 +676,22 @@ class WebTests(TestCase):
         self.assertIn("ls-strip", body)
         self.assertEqual(body.count("status-cue--"), 2)   # strip + web card
 
-    def test_node_box_cue_named_for_screen_readers(self):
-        # WCAG 1.1.1: a node box has no status word, so its cue is named for
-        # assistive tech (role=img + aria-label); the card cue in the same view is not
+    def test_node_box_word_speaks_and_its_cue_stays_decorative(self):
+        # DELIBERATELY REWRITTEN with the box state cluster: a box now prints
+        # its status word like a card does, so the visible word is the
+        # accessible channel (WCAG 1.1.1) and the cue drops its role=img — a
+        # named cue beside a word would double-announce. Coded reason lines
+        # keep their labeled cues; this scenario has none.
         self._login()
         self.tree.upsert("/host/disk", StatusCode.ERROR, "disk full")
         body = self.client.get("/status").get_data(as_text=True)
-        self.assertIn('role="img" aria-label="error"', body)   # the disk box cue speaks
-        self.assertEqual(body.count('role="img"'), 1)          # only the box, not card
+        clusters = re.findall(r'status-node__state">.*?</button></span>', body)
+        self.assertTrue(any("error<button" in c for c in clusters))  # the word speaks
+        self.assertNotIn('role="img"', body)        # ...so no cue is named
 
     def test_quiet_node_box_cue_not_announced(self):
-        # only a problem (warn/error) box announces; a quiet box keeps a
-        # decorative aria-hidden cue, so a reader doesn't hear a stream of "ok"s
+        # every box cue is decorative now that the word speaks; a quiet box in
+        # particular must not have a reader hear a stream of "ok"s
         self._login()
         self.tree.upsert("/host/disk/smart", StatusCode.OK)  # /host/disk = quiet box
         body = self.client.get("/status").get_data(as_text=True)
@@ -1052,6 +1123,69 @@ class WebTests(TestCase):
                       elapsed_seconds=None),))
         self.assertIn("queued", body)
 
+    def _a_check(self, path, type_name):
+        from little_sister.engine import CheckInfo
+        return CheckInfo(path=path, type_name=type_name, frequency_seconds=60,
+                         running=False, running_since=None,
+                         running_seconds=None,
+                         next_run_at="2026-07-20T13:52:00+00:00",
+                         next_in_seconds=60.0, last_run_at=None,
+                         elapsed_seconds=None)
+
+    def test_system_roster_leads_with_the_types_in_use(self):
+        # the roster answers two questions and only one is urgent: *which code
+        # answers for `type: http`* concerns the handful of types the config
+        # names, so those come first, counted, and the rest fold away
+        self._login()
+        body = self._system_body((self._a_check("/svc/a", "http"),))
+        self.assertIn("<code>http</code>", body)
+        self.assertIn("used by 1 check</span>", body)
+        self.assertLess(body.index("<code>http</code>"), body.index("<details"))
+        # …and a type nobody configured is still there, below the fold
+        self.assertIn("unused by this configuration", body)
+        self.assertGreater(body.index("<code>ssh-script</code>"),
+                           body.index("<details"))
+
+    def test_system_roster_counts_the_checks_behind_a_type(self):
+        # one row per type, not per check — the count is what says how much of
+        # this configuration rides on that code, without repeating the module and
+        # version once per check. "used by", because a bare "2 checks" under a type
+        # name reads as two checks the package *brought*, which is the opposite of
+        # what it counts: one type serving two configured checks is the norm.
+        self._login()
+        body = self._system_body((self._a_check("/svc/a", "http"),
+                                  self._a_check("/svc/b", "http")))
+        self.assertEqual(body.count("<code>http</code>"), 1)
+        self.assertIn("used by 2 checks</span>", body)
+
+    def test_system_roster_is_unfolded_when_nothing_is_in_use(self):
+        # no engine: nothing is known to be unused, and this is the moment the
+        # roster matters most (a start refused for an unknown `type:` lands
+        # here), so it is shown whole rather than hidden behind a disclosure
+        self._login()
+        app_module.engine = None
+        body = self.client.get("/system").get_data(as_text=True)
+        self.assertIn("<code>http</code>", body)
+        self.assertIn("<code>ssh-script</code>", body)
+        self.assertNotIn("<details", body)
+
+    def test_type_roster_splits_on_what_the_engine_runs(self):
+        from little_sister.engine import EngineInfo
+        checks = (self._a_check("/svc/a", "http"),
+                  self._a_check("/svc/b", "http"))
+        info = EngineInfo(started_at="2026-07-20T10:00:00", uptime_seconds=5.0,
+                          max_workers=8, check_count=2, running=0,
+                          checks=checks)
+
+        in_use, folded = app_module._type_roster(info)
+
+        self.assertEqual([(o.type_name, n) for o, n in in_use], [("http", 2)])
+        self.assertNotIn("http", [o.type_name for o, _ in folded])
+        self.assertIn("ssh-script", [o.type_name for o, _ in folded])
+        self.assertEqual({n for _, n in folded}, {0})
+        # nothing to split against — everything folds, and the template unfolds it
+        self.assertEqual(app_module._type_roster(None)[0], [])
+
     def test_localtime_filter_accepts_explicit_format(self):
         # the format is overridable, the timezone never is (ADR-0006)
         self.assertEqual(
@@ -1407,6 +1541,25 @@ class WebTests(TestCase):
         for layout in ("rail", "topbar", "kiosk"):
             with self.subTest(layout=layout):
                 self.assertIn(f'name="layout" value="{layout}"', body)
+
+    def test_the_menu_trigger_shows_the_configured_avatar_beside_the_user(self):
+        self._login()
+        body = self.client.get("/status").get_data(as_text=True)
+        self.assertIn('class="ls-menu__avatar"', body)
+        self.assertIn('src="/user/avatar"', body)
+        self.assertIn('alt=""', body)
+
+        css = self.client.get(
+            "/static/css/overview.css").get_data(as_text=True)
+        self.assertIn(".ls-menu__avatar", css)
+        self.assertIn("object-fit: cover", css)
+        self.assertIn("border-radius: 50%", css)
+
+    def test_the_menu_trigger_uses_the_default_when_no_avatar_resolved(self):
+        self._login()
+        with mock.patch.dict(app_module.user_avatars, {}, clear=True):
+            body = self.client.get("/status").get_data(as_text=True)
+        self.assertIn('src="/static/default-avatar.svg"', body)
 
     def test_every_layout_is_choosable(self):
         self._login()
@@ -2217,6 +2370,103 @@ class LinksPageTests(TestCase):
         self.assertEqual(app_module._site_origin("not a url"), "")
 
 
+class UserAvatarRouteTests(TestCase):
+    """`/user/avatar` serves only the session user's selected file (ADR-0045)."""
+
+    def setUp(self):
+        app_module.app.config["TESTING"] = True
+        self.client = app_module.app.test_client()
+
+    def _login(self):
+        self.client.post("/login",
+                         data={"username": "pan", "password": "12345678"})
+
+    def test_requires_login(self):
+        response = self.client.get("/user/avatar")
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/login", response.headers["Location"])
+
+    def test_a_user_without_a_custom_avatar_gets_the_packaged_default(self):
+        with mock.patch.dict(app_module.user_avatars, {}, clear=True):
+            self._login()
+            response = self.client.get("/user/avatar")
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(
+            response.headers["Location"].endswith("/static/default-avatar.svg"))
+
+    def test_serves_the_session_users_custom_avatar_privately(self):
+        with tempfile.TemporaryDirectory() as directory:
+            picture = Path(directory) / "pan.png"
+            picture.write_bytes(b"avatar-png")
+            avatar = AvatarFile(path=picture, content_type="image/png",
+                                root=Path(directory))
+            with mock.patch.dict(app_module.user_avatars, {"pan": avatar}, clear=True):
+                self._login()
+                page = self.client.get("/status").get_data(as_text=True)
+                response = self.client.get("/user/avatar")
+
+            self.assertIn('src="/user/avatar"', page)
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.mimetype, "image/png")
+            self.assertEqual(response.data, b"avatar-png")
+            self.assertIn("private", response.headers["Cache-Control"])
+            self.assertTrue(response.headers.get("ETag"))
+
+    def test_a_repeat_request_is_answered_not_modified(self):
+        with tempfile.TemporaryDirectory() as directory:
+            picture = Path(directory) / "pan.webp"
+            picture.write_bytes(b"avatar-webp")
+            avatar = AvatarFile(path=picture, content_type="image/webp",
+                                root=Path(directory))
+            with mock.patch.dict(app_module.user_avatars, {"pan": avatar}, clear=True):
+                self._login()
+                first = self.client.get("/user/avatar")
+                again = self.client.get(
+                    "/user/avatar", headers={"If-None-Match": first.headers["ETag"]})
+
+            self.assertEqual(again.status_code, 304)
+
+    def test_a_selected_file_removed_while_running_falls_back(self):
+        with tempfile.TemporaryDirectory() as directory:
+            picture = Path(directory) / "pan.png"
+            picture.write_bytes(b"avatar-png")
+            avatar = AvatarFile(path=picture, content_type="image/png",
+                                root=Path(directory))
+            with mock.patch.dict(app_module.user_avatars, {"pan": avatar}, clear=True):
+                self._login()
+                picture.unlink()
+                response = self.client.get("/user/avatar")
+
+            self.assertEqual(response.status_code, 302)
+            self.assertTrue(
+                response.headers["Location"].endswith("/static/default-avatar.svg"))
+
+    def test_a_selected_file_replaced_by_an_escaping_symlink_falls_back(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            avatar_root = root / "avatars"
+            avatar_root.mkdir()
+            picture = avatar_root / "pan.png"
+            picture.write_bytes(b"avatar-png")
+            outside = root / "secret"
+            outside.write_bytes(b"not-an-avatar")
+            avatar = AvatarFile(path=picture.resolve(), content_type="image/png",
+                                root=avatar_root.resolve())
+            with mock.patch.dict(app_module.user_avatars, {"pan": avatar}, clear=True):
+                self._login()
+                picture.unlink()
+                picture.symlink_to(outside)
+                response = self.client.get("/user/avatar")
+
+            self.assertEqual(response.status_code, 302)
+            self.assertTrue(
+                response.headers["Location"].endswith("/static/default-avatar.svg"))
+
+    def test_the_route_has_no_username_or_path_form(self):
+        self._login()
+        self.assertEqual(self.client.get("/user/avatar/pan").status_code, 404)
+
+
 class LinkIconRouteTests(TestCase):
     """`/links/icon/<variant>/<name>` — every rung that holds bytes (ADR-0030)."""
 
@@ -2382,3 +2632,831 @@ class SettingResolutionTests(TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CodedReasonLineTests(TestCase):
+    """Coded entry lines on the web surfaces (ADR-0042): the entry's own state
+    class, the labeled cue (a line has no status word), and `is-running` as
+    display — on the grid and on the leaf detail page alike."""
+
+    def setUp(self):
+        self.tree = StatusTree()
+        self._original = app_module.status_tree
+        app_module.status_tree = self.tree
+        self.client = app_module.app.test_client()
+        self.client.post("/login",
+                         data={"username": "pan", "password": "12345678"})
+        self.tree.upsert(
+            "/ci/actions", StatusCode.ERROR,
+            [Entry("build", "web (main) / build: failed after 8m14s · #4216 "
+                           "running 2m", StatusCode.ERROR, running=True),
+             Entry("test", "tests: passed in 2m01s", StatusCode.OK)])
+
+    def tearDown(self):
+        app_module.status_tree = self._original
+
+    def test_the_grid_paints_the_line_not_the_node(self):
+        body = self.client.get("/status").get_data(as_text=True)
+        self.assertIn("is-coded s-error", body)
+        self.assertIn("is-running", body)
+        # the passed line paints the pale ok tint — green under a red card
+        # is the point of coded entries
+        self.assertIn("is-coded s-ok", body)
+
+    def test_the_line_cue_is_its_accessible_name(self):
+        body = self.client.get("/status").get_data(as_text=True)
+        self.assertIn('aria-label="error"', body)
+        self.assertIn('aria-label="ok"', body)
+
+    def test_the_leaf_page_carries_the_same_channels(self):
+        body = self.client.get("/status/ci/actions").get_data(as_text=True)
+        self.assertIn("is-coded s-error", body)
+        self.assertIn("is-coded s-ok", body)
+        self.assertIn("is-running", body)
+        self.assertIn('aria-label="error"', body)
+
+    def test_a_pinned_coded_line_reads_quiet_and_keeps_its_cue(self):
+        self.tree.set_entry_maintenance(
+            "/ci/actions", "build", "rerunning",
+            expires_at=datetime.now() + timedelta(days=1), set_by="pan",
+            expected_set_at=None)
+        # the node now reads OK, so the grid collapses it to a chip — the
+        # leaf page is where every line always renders (ADR-0036)
+        body = self.client.get("/status/ci/actions").get_data(as_text=True)
+        self.assertIn("is-coded s-error is-running is-quiet", body)
+
+
+class TopmostTimeTests(TestCase):
+    """The observation time shows on the topmost node visible in the current view
+    and is suppressed below where it would be identical (ADR-0044; ADR-0027 as
+    amended). Counts are asserted rather than digits, so the tests hold in any
+    timezone; identical stored stamps render identically wherever they land."""
+
+    def setUp(self):
+        self.tree = StatusTree()
+        self._original = app_module.status_tree
+        app_module.status_tree = self.tree
+        self.client = app_module.app.test_client()
+        self.client.post("/login",
+                         data={"username": "pan", "password": "12345678"})
+
+    def tearDown(self):
+        app_module.status_tree = self._original
+
+    def _stamp(self, path, iso):
+        node = self.tree._find_node(path)
+        assert node is not None
+        node.timestamp = iso
+
+    def test_the_branch_head_shows_the_time_and_identical_cards_suppress(self):
+        # A written sole-check container viewed as a branch: the head is the
+        # topmost visible node, so it carries the run time once and the aspect
+        # cards below — same check, same run — stay bare rather than repeating
+        # it three times as if three checks had run.
+        self.tree.set_check_mount("/quality/github")
+        self.tree.upsert("/quality/github", StatusCode.OK)
+        self.tree.upsert("/quality/github/actions", StatusCode.OK)
+        self.tree.upsert("/quality/github/issues", StatusCode.OK)
+        for path in ("/quality/github", "/quality/github/actions",
+                     "/quality/github/issues"):
+            self._stamp(path, "2026-08-06T11:30:01")
+        body = self.client.get("/status/quality/github").get_data(as_text=True)
+        self.assertEqual(body.count('class="status-card__time"'), 1)
+
+    def test_a_run_crossing_a_minute_is_shown_rather_than_hidden(self):
+        # DELIBERATELY ADJUSTED with the minute-precision display (times carry
+        # no seconds — they saved no information worth the row width).
+        # Suppression compares the *displayed* rendering: a child stamped in
+        # the next displayed minute is not identical, so it shows — while one
+        # a second later renders the same "11:30" and suppresses.
+        self.tree.set_check_mount("/quality/github")
+        self.tree.upsert("/quality/github", StatusCode.OK)
+        self.tree.upsert("/quality/github/actions", StatusCode.OK)
+        self.tree.upsert("/quality/github/issues", StatusCode.OK)
+        self._stamp("/quality/github", "2026-08-06T11:30:59")
+        self._stamp("/quality/github/actions", "2026-08-06T11:31:01")
+        self._stamp("/quality/github/issues", "2026-08-06T11:30:58")
+        body = self.client.get("/status/quality/github").get_data(as_text=True)
+        self.assertEqual(body.count('class="status-card__time"'), 2)
+
+    def test_a_sole_check_box_shows_its_time_under_an_ambiguous_card(self):
+        # Two checks under /quality: the card has no single answer and shows
+        # nothing (ADR-0027), while each nested sole-check container finally
+        # states when its own check ran — the topmost visible carrier is the box.
+        self.tree.set_check_mount("/quality/github")
+        self.tree.set_check_mount("/quality/wiz")
+        self.tree.upsert("/quality/github", StatusCode.ERROR, "boom")
+        self.tree.upsert("/quality/github/actions", StatusCode.ERROR, "boom")
+        self.tree.upsert("/quality/wiz", StatusCode.OK)
+        self.tree.upsert("/quality/wiz/findings", StatusCode.OK)
+        for path in ("/quality/github", "/quality/github/actions"):
+            self._stamp(path, "2026-08-06T11:30:01")
+        for path in ("/quality/wiz", "/quality/wiz/findings"):
+            self._stamp(path, "2026-08-06T11:31:02")
+        body = self.client.get("/status").get_data(as_text=True)
+        # one per container box (a quiet *branch* stays a box, not a chip); the
+        # identically-stamped grandchildren suppress under each
+        self.assertEqual(body.count('class="status-card__time"'), 2)
+
+    def test_a_box_under_a_timed_card_suppresses_the_identical_time(self):
+        # A sole-check card shows the time; the box below it — same check, same
+        # run — does not repeat it.
+        self.tree.set_check_mount("/site/host")
+        self.tree.upsert("/site/host", StatusCode.ERROR, "boom")
+        self.tree.upsert("/site/host/disk", StatusCode.ERROR, "full")
+        self._stamp("/site/host", "2026-08-06T11:30:01")
+        self._stamp("/site/host/disk", "2026-08-06T11:30:01")
+        body = self.client.get("/status").get_data(as_text=True)
+        self.assertEqual(body.count('class="status-card__time"'), 1)
+
+    def test_a_shared_two_check_mount_no_longer_times_its_card(self):
+        # The ADR-0044 amendment of ADR-0027: two checks writing one mount leave
+        # the unwritten card above them bare — a single inherited value would
+        # present one check's run time as both checks'. The mount's own box
+        # still shows its own last write.
+        self.tree.set_check_mount("/shared/host")
+        self.tree.set_check_mount("/shared/host")
+        self.tree.upsert("/shared/host", StatusCode.ERROR, "boom")
+        self._stamp("/shared/host", "2026-08-06T11:30:01")
+        body = self.client.get("/status").get_data(as_text=True)
+        self.assertEqual(body.count('class="status-card__time"'), 1)
+
+
+class RunArrowTests(TestCase):
+    """The next update joins the check time wherever that time shows (ADR-0044
+    decision 5): `22:25:33 → 22:30` — absolute, seconds dropped on the arrow's
+    side, kept when the two share a minute. Assertions target the arrow and its
+    precision rather than digits, so they hold in any timezone (an offset moves
+    both stamps together)."""
+
+    ARROW = " → "
+
+    def setUp(self):
+        self.tree = StatusTree()
+        self._original = app_module.status_tree
+        app_module.status_tree = self.tree
+        self.client = app_module.app.test_client()
+        self.client.post("/login",
+                         data={"username": "pan", "password": "12345678"})
+
+    def tearDown(self):
+        app_module.status_tree = self._original
+
+    def _stamp(self, path, iso):
+        node = self.tree._find_node(path)
+        assert node is not None
+        node.timestamp = iso
+
+    def _minutes(self, body):
+        """The rendered arrow sides, `→ HH:MM`-shaped (no seconds)."""
+        return re.findall(r"→ \d\d:\d\d(?!:)", body)
+
+    def _seconds(self, body):
+        """The rendered arrow sides that kept their seconds."""
+        return re.findall(r"→ \d\d:\d\d:\d\d", body)
+
+    def test_the_branch_head_gains_the_next_update(self):
+        self.tree.set_check_mount("/quality/github")
+        self.tree.upsert("/quality/github", StatusCode.OK)
+        self.tree.upsert("/quality/github/actions", StatusCode.OK)
+        for path in ("/quality/github", "/quality/github/actions"):
+            self._stamp(path, "2026-08-06T11:30:01")
+        self.tree.set_run_facts("/quality/github", wall_seconds=0.4,
+                                next_run_at="2026-08-06T11:35:00")
+        body = self.client.get("/status/quality/github").get_data(as_text=True)
+        # the head's one time span carries the arrow, minute-precision
+        self.assertEqual(body.count('class="status-card__time"'), 1)
+        self.assertEqual(len(self._minutes(body)), 1)
+        self.assertEqual(self._seconds(body), [])
+
+    def test_an_inheriting_card_carries_it_and_the_box_suppresses(self):
+        # The unwritten /site card inherits stamp *and* facts from its sole
+        # mount below; the mount's own box — same run — repeats neither.
+        self.tree.set_check_mount("/site/host")
+        self.tree.upsert("/site/host", StatusCode.ERROR, "boom")
+        self.tree.upsert("/site/host/disk", StatusCode.ERROR, "full")
+        self._stamp("/site/host", "2026-08-06T11:30:01")
+        self._stamp("/site/host/disk", "2026-08-06T11:30:01")
+        self.tree.set_run_facts("/site/host", wall_seconds=0.4,
+                                next_run_at="2026-08-06T11:35:00")
+        body = self.client.get("/status").get_data(as_text=True)
+        self.assertEqual(body.count('class="status-card__time"'), 1)
+        self.assertEqual(len(self._minutes(body)), 1)
+
+    def test_sole_check_boxes_carry_their_own_arrows(self):
+        # Two checks under /quality: the ambiguous card shows nothing, each
+        # sole-check box shows its own time with its own next update.
+        self.tree.set_check_mount("/quality/github")
+        self.tree.set_check_mount("/quality/wiz")
+        self.tree.upsert("/quality/github", StatusCode.ERROR, "boom")
+        self.tree.upsert("/quality/github/actions", StatusCode.ERROR, "boom")
+        self.tree.upsert("/quality/wiz", StatusCode.OK)
+        self.tree.upsert("/quality/wiz/findings", StatusCode.OK)
+        for path in ("/quality/github", "/quality/github/actions"):
+            self._stamp(path, "2026-08-06T11:30:01")
+        for path in ("/quality/wiz", "/quality/wiz/findings"):
+            self._stamp(path, "2026-08-06T11:31:02")
+        self.tree.set_run_facts("/quality/github", wall_seconds=0.4,
+                                next_run_at="2026-08-06T11:35:00")
+        self.tree.set_run_facts("/quality/wiz", wall_seconds=0.4,
+                                next_run_at="2026-08-06T11:36:00")
+        body = self.client.get("/status").get_data(as_text=True)
+        self.assertEqual(body.count('class="status-card__time"'), 2)
+        self.assertEqual(len(self._minutes(body)), 2)
+
+    def test_no_facts_no_arrow(self):
+        self.tree.set_check_mount("/site/host")
+        self.tree.upsert("/site/host", StatusCode.ERROR, "boom")
+        self._stamp("/site/host", "2026-08-06T11:30:01")
+        body = self.client.get("/status").get_data(as_text=True)
+        self.assertEqual(body.count('class="status-card__time"'), 1)
+        self.assertNotIn(self.ARROW, body)
+
+    def test_a_shared_mount_shows_a_bare_time(self):
+        # Facts were written for the path, and the count keeps them off the
+        # snapshot: the shared node's own last write answers for itself (rule
+        # 2), but its next update would be one check's claim on both.
+        self.tree.set_check_mount("/shared/host")
+        self.tree.set_check_mount("/shared/host")
+        self.tree.upsert("/shared/host", StatusCode.ERROR, "boom")
+        self._stamp("/shared/host", "2026-08-06T11:30:01")
+        self.tree.set_run_facts("/shared/host", wall_seconds=0.4,
+                                next_run_at="2026-08-06T11:35:00")
+        body = self.client.get("/status").get_data(as_text=True)
+        self.assertEqual(body.count('class="status-card__time"'), 1)
+        self.assertNotIn(self.ARROW, body)
+
+    def test_a_same_minute_next_update_is_suppressed(self):
+        # DELIBERATELY ADJUSTED with the minute-precision display: an arrow to
+        # the very value beside it (`11:30 → 11:30`) says nothing, so a
+        # sub-minute next update shows a bare time instead — the arrow appears
+        # exactly when it adds information.
+        self.tree.set_check_mount("/quality/github")
+        self.tree.upsert("/quality/github", StatusCode.OK)
+        self.tree.upsert("/quality/github/actions", StatusCode.OK)
+        for path in ("/quality/github", "/quality/github/actions"):
+            self._stamp(path, "2026-08-06T11:30:01")
+        self.tree.set_run_facts("/quality/github", wall_seconds=0.4,
+                                next_run_at="2026-08-06T11:30:31")
+        body = self.client.get("/status/quality/github").get_data(as_text=True)
+        self.assertEqual(body.count('class="status-card__time"'), 1)
+        self.assertEqual(self._minutes(body) + self._seconds(body), [])
+
+    def test_the_leaf_page_says_the_next_update(self):
+        # DELIBERATELY REWRITTEN with the node-facts block (ADR-0044 decision 8):
+        # the leaf page used to carry the grid's `→ 11:35` suffix inside its
+        # observation sentence; the Time card now states the next update on its
+        # own line, so the arrow is the *grid's* form and saying both would say
+        # it twice. The fact under test is unchanged — this page names the check,
+        # so this page carries its next update.
+        self.tree.set_check_mount("/site/disk")
+        self.tree.upsert("/site/disk", StatusCode.OK)
+        self._stamp("/site/disk", "2026-08-06T11:30:01")
+        self.tree.set_run_facts("/site/disk", wall_seconds=0.4,
+                                next_run_at="2026-08-06T11:35:00")
+        body = self.client.get("/status/site/disk").get_data(as_text=True)
+        # The page's own full-precision format, not the grid's trimmed one: the
+        # observation sentence directly above uses it, and two times a reader is
+        # meant to compare should not be printed two ways.
+        self.assertRegex(body, r"Next update \d{4}-\d\d-\d\d \d\d:35:00")
+        self.assertEqual(self._minutes(body) + self._seconds(body), [])
+
+    def test_a_leaf_below_a_branch_mount_stays_bare_on_its_page(self):
+        # Its next update lives one level up, where the check is named.
+        self.tree.set_check_mount("/quality/github")
+        self.tree.upsert("/quality/github", StatusCode.OK)
+        self.tree.upsert("/quality/github/actions", StatusCode.OK)
+        for path in ("/quality/github", "/quality/github/actions"):
+            self._stamp(path, "2026-08-06T11:30:01")
+        self.tree.set_run_facts("/quality/github", wall_seconds=0.4,
+                                next_run_at="2026-08-06T11:35:00")
+        body = self.client.get(
+            "/status/quality/github/actions").get_data(as_text=True)
+        self.assertEqual(self._minutes(body) + self._seconds(body), [])
+
+
+class CardStatusLineStyleTests(TestCase):
+    """settings.yaml `card_status_line` reaches the page as a body attribute the
+    stylesheet branches on: `below` opts the deployment into the standing
+    second head line; the compact default renders no attribute at all, so an
+    unconfigured deployment's markup is byte-for-byte what it was."""
+
+    def setUp(self):
+        app_module.app.config["TESTING"] = True
+        self.client = app_module.app.test_client()
+        self.client.post("/login",
+                         data={"username": "pan", "password": "12345678"})
+
+    def test_the_default_renders_no_attribute(self):
+        body = self.client.get("/status").get_data(as_text=True)
+        self.assertNotIn("data-ls-card-state", body)
+
+    def test_below_lands_on_the_body(self):
+        patched = replace(app_module.config, card_status_line="below")
+        with mock.patch.object(app_module, "config", patched):
+            body = self.client.get("/status").get_data(as_text=True)
+        self.assertIn('data-ls-card-state="below"', body)
+        self.assertNotIn("Next update", body)
+
+
+class NodeFactsTests(TestCase):
+    """The shared node-facts block (ADR-0044 decision 8, questions §4.8): time,
+    `report` and `config` in one partial, rendered by the leaf page and — for the
+    first time — by the branch page, so a container stops being the one node whose
+    stored text nothing renders."""
+
+    HEADINGS = ("Time", "Report", "Configuration")
+
+    def setUp(self):
+        self.tree = StatusTree()
+        self._original = app_module.status_tree
+        app_module.status_tree = self.tree
+        self.client = app_module.app.test_client()
+        self.client.post("/login",
+                         data={"username": "pan", "password": "12345678"})
+
+    def tearDown(self):
+        app_module.status_tree = self._original
+
+    def _container(self, path="/quality/github"):
+        """A sole-check branch container with text and run facts of its own."""
+        self.tree.set_check_mount(path)
+        self.tree.upsert(path, StatusCode.OK,
+                         config="- **scope:** org", report="- alpha\n- beta",
+                         frequency_seconds=300)
+        self.tree.upsert(path + "/actions", StatusCode.OK)
+        self.tree.set_run_facts(path, wall_seconds=0.4,
+                                next_run_at="2026-08-06T11:35:00")
+
+    def test_the_branch_page_renders_the_block(self):
+        self._container()
+        body = self.client.get("/status/quality/github").get_data(as_text=True)
+        for heading in self.HEADINGS:
+            with self.subTest(heading=heading):
+                self.assertIn(f">{heading}</h3>", body)
+        self.assertIn("Next update", body)
+        self.assertIn("Last run took", body)
+        self.assertIn("/history/quality/github", body)
+
+    def test_the_block_is_inside_the_polled_fragment(self):
+        # `report` is an output of the run, so it changes every tick: outside
+        # #status-grid it would be the one part of a polling page quietly going
+        # stale. The fragment is what the poll swaps in, so it must carry it.
+        self._container()
+        frag = self.client.get(
+            "/status/quality/github?fragment=1").get_data(as_text=True)
+        self.assertIn(">Report</h3>", frag)
+        self.assertIn("<li>alpha</li>", frag)
+
+    def test_config_and_report_render_as_markdown(self):
+        # Checks author both with `config_markdown()`; the leaf page rendered
+        # config as literal pre-wrap text — a leftover from before the renderer
+        # landed (ADR-0018), which showed `- **scope:** org` verbatim.
+        self._container()
+        body = self.client.get("/status/quality/github").get_data(as_text=True)
+        self.assertIn("<strong>scope:</strong>", body)
+        self.assertNotIn("- **scope:** org", body)
+        self.assertIn("<li>alpha</li>", body)
+
+    def test_the_leaf_page_renders_the_same_block(self):
+        self.tree.set_check_mount("/svc/api")
+        self.tree.upsert("/svc/api", StatusCode.OK,
+                         config="- **url:** http://x", report="- 3 endpoints")
+        body = self.client.get("/status/svc/api").get_data(as_text=True)
+        for heading in self.HEADINGS:
+            with self.subTest(heading=heading):
+                self.assertIn(f">{heading}</h3>", body)
+        self.assertIn("<strong>url:</strong>", body)
+
+    def test_the_report_never_reaches_the_grid(self):
+        # Never on a card (ADR-0044 decision 6): volume is precisely what
+        # `reason_cap` exists to keep off the dashboard.
+        self._container()
+        body = self.client.get("/status").get_data(as_text=True)
+        self.assertNotIn("alpha", body)
+        self.assertNotIn(">Report</h3>", body)
+
+    def test_the_overview_root_gets_no_block(self):
+        # The root is nobody's node: many checks, no single answer (rule 4).
+        self._container()
+        body = self.client.get("/status").get_data(as_text=True)
+        for heading in self.HEADINGS:
+            with self.subTest(heading=heading):
+                self.assertNotIn(f">{heading}</h3>", body)
+
+    def test_the_kiosk_keeps_none_of_it(self):
+        self.client.set_cookie("ls_prefs", "layout=kiosk")
+        self._container()
+        body = self.client.get("/status/quality/github").get_data(as_text=True)
+        for heading in self.HEADINGS:
+            with self.subTest(heading=heading):
+                self.assertNotIn(f">{heading}</h3>", body)
+
+    def test_a_shared_container_shows_no_text_and_no_block(self):
+        # Two checks on one node: the snapshot withholds the text and the run
+        # facts (decision 1), and with nothing of its own to say the block does
+        # not render at all — its Time card could only report "not yet observed"
+        # about a node neither check writes.
+        for _ in range(2):
+            self.tree.set_check_mount("/system/node_a")
+        self.tree.upsert("/system/node_a/disk", StatusCode.OK)
+        body = self.client.get("/status/system/node_a").get_data(as_text=True)
+        for heading in self.HEADINGS:
+            with self.subTest(heading=heading):
+                self.assertNotIn(f">{heading}</h3>", body)
+
+    def test_a_written_shared_container_still_withholds_its_text(self):
+        # Written by both checks and stamped, so the Time card has something to
+        # say — but the text belongs to whoever owns the node alone, and nobody
+        # does. The card renders; the two text blocks do not.
+        for _ in range(2):
+            self.tree.set_check_mount("/system/node_a")
+        self.tree.upsert("/system/node_a", StatusCode.OK,
+                         config="- **host:** a", report="- alpha")
+        self.tree.upsert("/system/node_a/disk", StatusCode.OK)
+        body = self.client.get("/status/system/node_a").get_data(as_text=True)
+        self.assertIn(">Time</h3>", body)
+        self.assertNotIn(">Report</h3>", body)
+        self.assertNotIn(">Configuration</h3>", body)
+
+    def test_a_pinned_unwritten_container_page_still_renders(self):
+        # The 500 this slice found: a pin lands on a container no check wrote,
+        # its history has a transition and no observation to bound it, and the
+        # page now asks for exactly that period.
+        self.tree.upsert("/system/alpha/disk", StatusCode.OK)
+        self.tree.set_maintenance(
+            "/system/alpha", "rebuild",
+            expires_at=datetime.now() + timedelta(days=1), set_by="pan")
+        response = self.client.get("/status/system/alpha")
+        self.assertEqual(response.status_code, 200)
+        history = self.client.get("/history/system/alpha")
+        self.assertEqual(history.status_code, 200)
+
+
+class BoxStateTests(TestCase):
+    """A nested box ends its head line the way a card head does: a right-aligned
+    state cluster of staleness, the topmost-visible time, and the status word —
+    which a box used to lack, leaving its time dangling after the title and its
+    problem cue carrying the only status channel."""
+
+    def setUp(self):
+        self.tree = StatusTree()
+        self._original = app_module.status_tree
+        app_module.status_tree = self.tree
+        self.client = app_module.app.test_client()
+        self.client.post("/login",
+                         data={"username": "pan", "password": "12345678"})
+
+    def tearDown(self):
+        app_module.status_tree = self._original
+
+    def _stamp(self, path, iso):
+        node = self.tree._find_node(path)
+        assert node is not None
+        node.timestamp = iso
+
+    def test_every_box_prints_its_status_word(self):
+        # the error leaf box and the quiet branch box alike — a card says "ok"
+        # on a healthy day and so does a box now (the quiet leaf stays a chip)
+        self.tree.upsert("/host/disk", StatusCode.ERROR, "disk full")
+        self.tree.upsert("/host/net", StatusCode.OK)
+        self.tree.upsert("/host/net/ping", StatusCode.OK)
+        body = self.client.get("/status").get_data(as_text=True)
+        clusters = re.findall(r'status-node__state">.*?</button></span>', body)
+        self.assertEqual(len(clusters), 2)
+        self.assertTrue(any("error<button" in c for c in clusters))
+        self.assertTrue(any("ok<button" in c for c in clusters))
+
+    def test_a_pinned_box_says_maintenance_and_what_it_silences(self):
+        # the cluster carries the same transform display a card does (ADR-0032
+        # rule 5): the word, then the reported reading the pin is silencing.
+        # A quiet *leaf* collapses to a chip, so the pinned node needs a child
+        # to stay a box.
+        self.tree.upsert("/host/disk", StatusCode.ERROR, "disk full")
+        self.tree.upsert("/host/disk/smart", StatusCode.ERROR, "smart fail")
+        self.tree.set_maintenance(
+            "/host/disk", "planned",
+            expires_at=datetime.now() + timedelta(hours=1), set_by="pan")
+        body = self.client.get("/status").get_data(as_text=True)
+        self.assertIn(
+            'maintenance <span class="status-reported">· error</span>', body)
+
+    def test_the_time_sits_inside_the_cluster(self):
+        # a sole-check box under an ambiguous two-check card: its topmost-visible
+        # time and its word travel together at the row's end
+        self.tree.set_check_mount("/quality/github")
+        self.tree.set_check_mount("/quality/wiz")
+        self.tree.upsert("/quality/github", StatusCode.ERROR, "boom")
+        self.tree.upsert("/quality/wiz", StatusCode.OK)
+        self.tree.upsert("/quality/wiz/findings", StatusCode.OK)
+        self._stamp("/quality/github", "2026-08-06T11:30:01")
+        self._stamp("/quality/wiz", "2026-08-06T11:31:02")
+        self._stamp("/quality/wiz/findings", "2026-08-06T11:31:02")
+        body = self.client.get("/status").get_data(as_text=True)
+        self.assertEqual(body.count(
+            'status-node__state"><span class="status-card__time">'), 2)
+
+
+class ContentSecurityPolicyTests(TestCase):
+    """The header on the wire, the readout on /system, and the report endpoint
+    (ADR-0048)."""
+
+    def setUp(self):
+        app_module.app.config["TESTING"] = True
+        self.tree = StatusTree()
+        app_module.status_tree = self.tree
+        self.client = app_module.app.test_client()
+
+    def _login(self):
+        self.client.post("/login",
+                         data={"username": "pan", "password": "12345678"})
+
+    def _policy(self):
+        """Re-assemble, the way app creation does, so a contribution this test made
+        reaches the header — the module global is deliberately not recomputed per
+        request."""
+        return mock.patch.object(app_module, "csp_policy", csp.assemble(
+            inline_scripts=app_module._inline_scripts()))
+
+    def test_a_document_carries_the_report_only_header(self):
+        self._login()
+        response = self.client.get("/status")
+        self.assertIn("default-src 'self'",
+                      response.headers[app_module.CSP_HEADER])
+        # Report-Only, so nothing is enforced by shipping it
+        self.assertNotIn("Content-Security-Policy", response.headers)
+
+    def test_the_login_page_carries_it_too(self):
+        self.assertIn("script-src",
+                      self.client.get("/login").headers[app_module.CSP_HEADER])
+
+    def test_an_error_page_carries_it(self):
+        # a 404 is still a document, and the one most likely to be reached by a URL
+        # somebody else composed
+        self.assertIn(app_module.CSP_HEADER, self.client.get("/nope").headers)
+
+    def test_the_json_api_and_the_static_files_do_not(self):
+        # the policy governs how a *document* may be built; on JSON or on a
+        # stylesheet it is a header no browser consults
+        with mock.patch.object(app_module, "api_tokens", {"tester": "tok"}):
+            api = self.client.get("/status", headers={
+                "Accept": "application/json", "Authorization": "Bearer tok"})
+        self.assertEqual(api.status_code, 200)      # a real API answer, not a 401
+        self.assertEqual(api.mimetype, "application/json")
+        self.assertNotIn(app_module.CSP_HEADER, api.headers)
+        asset = self.client.get("/static/js/prefs.js")
+        self.assertEqual(asset.status_code, 200)
+        self.assertNotIn(app_module.CSP_HEADER, asset.headers)
+
+    def test_the_hash_covers_the_inline_script_the_page_actually_carries(self):
+        # the point of folding the two copies into one partial: *this* is the
+        # guarantee, and it would break silently if the hashed text ever drifted
+        # from the rendered one
+        for path in ("/login", "/status"):
+            with self.subTest(path=path):
+                if path == "/status":
+                    self._login()
+                response = self.client.get(path)
+                body = response.get_data(as_text=True)
+                script = re.search(r"<script>(.*?)</script>", body, re.DOTALL)
+                self.assertIsNotNone(script)
+                self.assertIn(csp.inline_hash(script.group(1)),
+                              response.headers[app_module.CSP_HEADER])
+
+    def test_no_page_carries_an_inline_handler_any_more(self):
+        self._login()
+        for path in ("/login", "/status", "/system", "/links", "/about"):
+            with self.subTest(path=path):
+                body = self.client.get(path).get_data(as_text=True)
+                self.assertIsNone(re.search(r"\son[a-z]+\s*=\s*[\"']", body))
+
+    def test_the_switches_and_the_menu_radios_submit_through_the_script(self):
+        self._login()
+        body = self.client.get("/status").get_data(as_text=True)
+        # four filters, six themes, three layouts
+        self.assertEqual(body.count("data-ls-submit"), 13)
+        self.assertIn("js/prefs.js", body)
+
+    def test_each_preference_form_keeps_a_noscript_submit(self):
+        self._login()
+        body = self.client.get("/status").get_data(as_text=True)
+        self.assertEqual(body.count("<noscript>"), 2)
+
+    def test_system_prints_the_policy_and_who_asked_for_each_source(self):
+        csp.allow("connect-src", "https://tickets.example.org", by="ls_tickets")
+        self._login()
+        with self._policy():
+            body = self.client.get("/system").get_data(as_text=True)
+        self.assertIn(app_module.CSP_HEADER, body)
+        self.assertIn("<code>connect-src</code>", body)
+        self.assertIn("https://tickets.example.org", body)
+        self.assertIn("(ls_tickets)", body)
+        self.assertIn(f"({csp.LIBRARY})", body)
+
+    def test_system_needs_an_admin_like_the_rest_of_the_page(self):
+        # the readout names a deployment's internal hosts; it inherits /system's gate
+        self.assertEqual(self.client.get("/system").status_code, 302)
+
+    def test_a_violation_report_is_logged_without_a_session(self):
+        # a violation on the login page has no session, so this endpoint cannot have
+        # a gate — it is bounded instead
+        payload = ('{"csp-report": {"document-uri": "http://x/status",'
+                   ' "effective-directive": "img-src",'
+                   ' "blocked-uri": "https://evil.example/p.png"}}')
+        with self.assertLogs("little_sister", level="WARNING") as logs:
+            response = self.client.post(csp.REPORT_PATH, data=payload,
+                                        content_type="application/csp-report")
+        self.assertEqual(response.status_code, 204)
+        logged = "\n".join(logs.output)
+        self.assertIn("img-src", logged)
+        self.assertIn("https://evil.example/p.png", logged)
+
+    def test_a_reported_field_cannot_forge_a_second_log_line(self):
+        # a blocked URI is whatever the page tried to load, and this endpoint has no
+        # gate: a newline through it would write an arbitrary log record
+        payload = ('{"csp-report": {"blocked-uri": "https://e/p.png\\n'
+                   '2026-08-07 12:00:00 CRITICAL engine: DISK FAILURE"}}')
+        with self.assertLogs("little_sister", level="WARNING") as logs:
+            self.client.post(csp.REPORT_PATH, data=payload,
+                             content_type="application/csp-report")
+        self.assertEqual(len(logs.output), 1)
+        self.assertNotIn("\n", logs.output[0])
+        self.assertIn("DISK FAILURE", logs.output[0])   # flattened, not dropped
+
+    def test_the_deprecated_directive_field_is_still_read(self):
+        # Safari sends only `violated-directive`; the report must not read as "?"
+        payload = '{"csp-report": {"violated-directive": "script-src"}}'
+        with self.assertLogs("little_sister", level="WARNING") as logs:
+            self.client.post(csp.REPORT_PATH, data=payload,
+                             content_type="application/csp-report")
+        self.assertIn("script-src violated", logs.output[0])
+
+    def test_a_payload_that_is_not_a_report_is_logged_and_shrugged_off(self):
+        for payload in ("{}", "not json at all", '{"csp-report": 3}'):
+            with self.subTest(payload=payload):
+                with self.assertLogs("little_sister", level="WARNING"):
+                    response = self.client.post(csp.REPORT_PATH, data=payload,
+                                                content_type="application/csp-report")
+                self.assertEqual(response.status_code, 204)
+
+    def test_an_oversized_report_is_refused_unread(self):
+        with self.assertLogs("little_sister", level="WARNING") as logs:
+            response = self.client.post(
+                csp.REPORT_PATH, data="x" * (app_module.CSP_REPORT_LIMIT + 1),
+                content_type="application/csp-report")
+        self.assertEqual(response.status_code, 204)
+        self.assertIn("refused unread", "\n".join(logs.output))
+
+    def test_an_oversized_body_is_refused_before_it_is_parsed(self):
+        # the limit is a bounded *read*, not a Content-Length check — this is the one
+        # route with no session behind it, and a chunked request carries no length to
+        # measure. If the body reached the parser, this patch would say so.
+        with mock.patch.object(app_module.json, "loads",
+                               side_effect=AssertionError("parsed anyway")):
+            with self.assertLogs("little_sister", level="WARNING"):
+                response = self.client.post(
+                    csp.REPORT_PATH,
+                    data="x" * (app_module.CSP_REPORT_LIMIT * 4),
+                    content_type="application/csp-report")
+        self.assertEqual(response.status_code, 204)
+
+    def test_a_reported_field_is_truncated_before_it_reaches_the_log(self):
+        # a blocked URI is whatever the page tried to load, so it is untrusted text
+        payload = ('{"csp-report": {"blocked-uri": "https://evil.example/'
+                   + "a" * 500 + '"}}')
+        with self.assertLogs("little_sister", level="WARNING") as logs:
+            self.client.post(csp.REPORT_PATH, data=payload,
+                             content_type="application/csp-report")
+        self.assertNotIn("a" * (app_module.CSP_FIELD_LIMIT + 1),
+                         "\n".join(logs.output))
+
+
+class SystemPackagesTests(TestCase):
+    """`/system`'s package inventory — what is installed beside the library.
+
+    A package reaches an instance through four seams, and only the check-type
+    roster ever carried an origin. An extension that registers no type — the Jira
+    chip is exactly that shape — therefore had its *version* nowhere on the page.
+    """
+
+    def setUp(self):
+        app_module.app.config["TESTING"] = True
+        app_module.status_tree = StatusTree()
+        self.client = app_module.app.test_client()
+        self.addCleanup(slots.forget_fillers)
+        self.addCleanup(forget_aspects)
+
+    def _login(self):
+        self.client.post("/login",
+                         data={"username": "pan", "password": "12345678"})
+
+    def _system(self):
+        app_module.engine = None
+        return self.client.get("/system").get_data(as_text=True)
+
+    def _register_a_surface_extension(self):
+        """A filler and an aspect, the way a chip package registers: no check type.
+        `tests.demo_extension` is the one package in the suite that really ships a
+        templates/ directory, so the registration is not stubbed."""
+        from tests.demo_extension import node_action
+        slots.register("node.actions", "tests.demo_extension",
+                       "node_action.html", node_action)
+        register_aspect("jira")
+
+    def test_a_package_with_no_check_type_still_reports_its_origin(self):
+        self._login()
+        self._register_a_surface_extension()
+
+        body = self._system()
+
+        self.assertIn("Packages", body)
+        # keyed by the top-level package, not the template namespace the filler
+        # was registered under — a version belongs to an installation
+        self.assertIn("<code>tests</code>", body)
+        self.assertIn("slot node.actions", body)
+        self.assertIn("config/jira", body)
+        # loaded from, so a copy on the path is visible as one
+        self.assertRegex(body, r"tests/__init__\.py")
+        # not installed as a distribution: said out loud rather than left blank
+        self.assertIn("source", body)
+
+    def test_a_registration_never_breaks_across_lines(self):
+        # "slot reason.actions" wrapping after the word reads as two entries, and
+        # the column is narrow enough for it. The class has to exist in the
+        # stylesheet the page actually loads, or the markup says nothing.
+        self._login()
+        self._register_a_surface_extension()
+        body = self._system()
+        self.assertIn('<span class="ls-system__register">slot node.actions</span>',
+                      body)
+        css = self.client.get(
+            "/static/css/overview.css").get_data(as_text=True)
+        self.assertIn(".ls-system__register { white-space: nowrap; }", css)
+
+    def test_the_library_is_not_one_of_the_packages(self):
+        # the built-in check types would otherwise put little_sister in the table;
+        # the page header already carries its version
+        self._login()
+        body = self._system()
+        self.assertNotIn("<code>little_sister</code>", body)
+
+    def test_the_card_is_absent_when_only_the_library_registered(self):
+        # a deployment with no extensions gets no section rather than an empty one.
+        # The registries are process-wide and other modules in this suite register
+        # into them, so the empty case is staged rather than waited for.
+        self._login()
+        with mock.patch.object(app_module, "registered_types",
+                               lambda: [origin for origin
+                                        in registered_types() if origin.builtin]), \
+             mock.patch.object(app_module.slots, "extension_fillers",
+                               lambda: ()), \
+             mock.patch.object(app_module.slots, "assets", lambda: ()), \
+             mock.patch.object(app_module, "registered_aspects", lambda: ()):
+            self.assertNotIn("Packages", self._system())
+
+    def test_the_aspects_line_names_who_registered_each_one(self):
+        # "is this file declared" is not the question when config/jira misbehaves
+        self._login()
+        self._register_a_surface_extension()
+        body = self._system()
+        self.assertIn("Registered configuration aspects", body)
+        self.assertRegex(body, r"config/jira</code> \(tests\)")
+
+    def test_a_registration_from_a_script_claims_nothing(self):
+        # `__main__` is what any script is called when run directly, so it names no
+        # installation and changes with the launcher; a deployment's `wsgi` module
+        # keeps its name, because that one points at a file somebody can open
+        module = {"__name__": "__main__"}
+        with mock.patch.object(origins.sys, "_getframe",
+                               return_value=mock.Mock(f_globals=module)):
+            self.assertEqual(origins.calling_package(), "")
+        module["__name__"] = "wsgi"
+        with mock.patch.object(origins.sys, "_getframe",
+                               return_value=mock.Mock(f_globals=module)):
+            self.assertEqual(origins.calling_package(), "wsgi")
+
+    def test_the_registrant_is_recorded_only_for_a_winning_registration(self):
+        register_aspect("jira")
+        self.assertEqual(aspect_owner("jira"), "tests")
+        # a built-in may not be redefined, so nobody may claim it
+        with self.assertLogs("little_sister", level="WARNING"):
+            register_aspect("users")
+        self.assertEqual(aspect_owner("users"), "")
+
+        forget_aspects()
+
+        self.assertEqual(aspect_owner("jira"), "")
+
+    def test_package_origin_reads_the_installed_metadata(self):
+        origin = package_origin("little_sister")
+
+        self.assertEqual(origin.distribution, "little-sister")
+        self.assertTrue(origin.version)
+        self.assertTrue(origin.builtin)
+        self.assertTrue(origin.path.endswith("little_sister/__init__.py"))
+
+    def test_package_origin_of_something_not_installed(self):
+        origin = package_origin("nothing_by_this_name")
+
+        self.assertEqual((origin.distribution, origin.version, origin.path),
+                         ("", "", ""))

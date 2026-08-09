@@ -155,6 +155,24 @@ class AspectFormTests(TestCase):
                 aspect_in(root, "settings")
             self.assertIn("settings.yaml", str(caught.exception))
 
+    def test_users_accepts_the_file_and_directory_forms(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "users.yaml").write_text("admin: {password: a}\n")
+            self.assertEqual(aspect_in(root, "users"), root / "users.yaml")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "users").mkdir()
+            self.assertEqual(aspect_in(root, "users"), root / "users")
+
+    def test_users_cannot_take_both_forms_at_once(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "users").mkdir()
+            (root / "users.yaml").write_text("admin: {password: a}\n")
+            with self.assertRaises(ConfigError):
+                aspect_in(root, "users")
+
     def test_both_yaml_suffixes_is_an_error_not_a_precedence_rule(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -292,10 +310,12 @@ class RegisteredAspectTests(TestCase):
             register_aspect("users", as_file=False, as_directory=True)
         self.assertNotIn("users", registered_aspects())
         self.assertTrue(any("config/users.yaml" in line for line in logs.output))
-        # …and the built-in shape still holds.
+        # …and the built-in two-form shape still holds.
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "users").mkdir()
+            self.assertEqual(aspect_in(root, "users"), root / "users")
+            (root / "users.yaml").write_text("admin: {password: a}\n")
             with self.assertRaises(ConfigError):
                 aspect_in(root, "users")
 

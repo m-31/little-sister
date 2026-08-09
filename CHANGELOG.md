@@ -8,6 +8,341 @@ contract versions **separately** — see `docs/api/openapi.yaml` `info.version`.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-09
+
+### Added
+
+- **A check type can now be a package of its own, and the boundary is enforced.**
+  [`docs/plugin-repository.md`](docs/plugin-repository.md) is the procedure — whether
+  a type deserves a repository at all, the repository template, what travels and what
+  stays with the deployment, a cutover order that is green at every step, the
+  private-strings sweep, the extra seams a *surface* extension brings, and how a
+  deployment consumes the result. Three things in the library back it up:
+
+  - **The check API epoch.** `little_sister.checks.API_VERSION` is **1**. It moves
+    only when a promised name leaves the check-authoring surface or a documented
+    behavior changes — never for anything else in a release — so your package follows
+    the contract it uses rather than the library's version line. Declare it with
+    `require_api(1)` beside your registrations and a mismatch refuses at startup,
+    naming both epochs, instead of failing as an `ImportError` inside your package.
+    Your dependency stays a **floor** (`little-sister >= x`, never a pin, or two
+    plugins could not be installed together); the epoch is what catches the upgrade a
+    floor cannot see.
+  - **A `type:` name is claimed once.** Names stay bare — `type: github` — so two
+    packages *can* now claim one; the second registration refuses at startup and
+    names both classes, rather than letting import order decide whose code answers
+    for whose configuration. Re-registering the same class (a reloading server) is
+    still fine.
+  - **`/system` lists the check types** with the module, the path it was loaded from,
+    and the distribution and version answering for each. When a type can come from a
+    package released elsewhere, this is the only place that question has an answer —
+    and the path is there because a source copy on the path shadows an installed one
+    while the metadata keeps reporting the version you installed. The types your
+    configuration runs lead the table, each with the number of checks behind it; the
+    rest fold into a disclosure, so a plugin that registered but has no check on it
+    yet is one click away instead of nine rows of noise.
+  - **`/system` also lists the packages**, one row per installation beside the
+    library: distribution, version, the file it was loaded from, and everything it
+    registered — check types, filled slots, served assets, configuration aspects. A
+    check type is only one of four ways a package reaches the instance, and an
+    extension that registers none of them — a chip package, say — previously had its
+    version nowhere on the page. Registering a configuration aspect now records the
+    package that did it, so `config/<name>.yaml` says who reads it.
+  - **A naming convention that survives publication.** Distribution
+    `little-sister-<x>`, import package `little_sister_<x>`, check type `<x>`. A git
+    source is a *redirect*, not a different package, so moving these to an index later
+    deletes a `[tool.uv.sources]` table and changes no import and no config — as long
+    as the name was right from the first tag. Reserve it when you cut the repository.
+
+- **The version contract now covers what a check type is actually written against.**
+  If you write check types — in your deployment, or in a package of their own — this
+  is the release to pin. `architecture.md` §11 gained a **check-authoring surface**:
+  the base class and result type, `register`, the config helpers (`coerce_code`,
+  `config_markdown`, `parse_duration`, `parse_secret_refs`, `plain`, `code`), the
+  subnode-metadata helpers (`parse_subnodes`, `resolve_text`, `expand_tokens`, now
+  re-exported from `little_sister.checks` itself), the reason vocabulary (`Entry`,
+  `derived_slug`, `slug`, `normalize`, `MAX_SLUG_LENGTH`, `ReasonError`),
+  `StatusCode`, `join_path` — what a branch check's `owned_nodes` override needs — and
+  the typed `values` readers. Those names are promised across a tag now, and the gate
+  fails on a rename that drops one, so a check type behind its own tag cannot be
+  broken by a refactor it never saw.
+
+  **Import them from the package `little_sister.checks`, not from
+  `little_sister.checks.base`.** The package is the promise; the modules under it stay
+  free to move. Existing imports keep working — nothing was removed — but only the
+  package spelling is covered going forward, so it is worth the one-line change.
+
+- **`slug()` — a reason entry's key, built from the identifiers your provider already
+  owns.** `from little_sister.reasons import slug`; `slug(repo, "pr", 42)` →
+  `repo-pr-42`. Unsafe characters collapse, empty parts drop out, and an over-long
+  slug keeps a readable prefix plus a hash of the whole value rather than being
+  truncated onto a neighbour's key. A part that keeps nothing at all — an entity named
+  in Cyrillic or Japanese — is hashed rather than dropped, so two findings can never
+  collapse onto one key; a `None` part drops out like an empty one. Use it wherever a
+  check discovers findings that carry real ids: `derived_slug`'s content hash *is*
+  the wording, so improving a line drops every maintenance pin on it, while an
+  id-based key survives the re-wording.
+  Which ids to use is your check's call; the shape of the token is now the library's.
+
+- **Every page now carries a Content-Security-Policy — as a report, not yet as a
+  rule.** The header is `Content-Security-Policy-Report-Only`, so a violation is
+  logged at `WARNING` and **nothing is blocked**: no page changes behavior, and the
+  log starts saying what a strict policy *would* have caught before anyone commits to
+  one. Nothing is stored, so this waits on no persistence decision.
+
+  The policy is **assembled, never a constant**: the library's own defaults, plus
+  origins a dependent package declares, plus an optional `config/csp.yaml` of your
+  own. That matters if you ship a package against these seams — `script-src` names
+  origins rather than files, so `'self'` already covers a filler's *code*, but not the
+  hosts that code **reaches**. Declare one with
+  `csp.allow("connect-src", "https://…", by="your_package")` from the same
+  import-before-app block you register check types in, or
+  `csp.allow("connect-src", csp.origin_of("<aspect>.<field>"), by=…)` where the host is
+  the deployment's own and already sits in your configuration aspect. A package may
+  name an **origin, never a keyword**: `'unsafe-inline'` and friends are the
+  deployment's call, in `config/csp.yaml`, which is also where an origin nobody
+  anticipated goes — so a source you did not foresee is a configuration line and never
+  a fork. A source must also be a single token: whitespace, `;`, `,` and control
+  characters are refused on both paths, because the header separates sources by
+  whitespace and directives by `;`. Refusals are a warning and a skip, as everywhere
+  else in these seams.
+
+  `/system` prints the effective policy directive by directive with the contributor of
+  every source, because a request blocked inside somebody else's package is otherwise
+  undebuggable from the running instance.
+
+- **A node can now say what the run *found*, and a container finally has a page
+  that shows it.** Checks may set `report` on any result — the outputs field
+  beside `config`'s inputs: the repositories in scope, the volumes enumerated, the
+  queues discovered. It is Markdown, it is written through on every run (a run
+  that finds nothing clears what the last one found, so a roster cannot outlive
+  it), and it never appears on a card. It is never a status claim either —
+  anything that should alarm stays a reason; the roster is presence, an entry is
+  a claim.
+
+  The leaf page's Time and Configuration cards are now **one shared block**, with
+  a Report card added, and `/status/<branch>` renders it below its child grid: the
+  container acquires the detail page it never had, so its stored configuration —
+  which nothing had ever displayed — its report and its run facts are all visible
+  where the node is named, and the two pages can no longer drift. The run's **wall
+  time** surfaces there, and `config` finally renders as Markdown instead of the
+  literal `- **scope:** org` it had been showing. The kiosk keeps none of it.
+
+  One ownership rule now covers four facts: the run time, the wall time, the next
+  run and the check's own text all belong to the check that owns a node **alone**,
+  so a container two checks share publishes no `config` and no `report` — the same
+  refusal that already withheld its timestamp, and the reason a check with
+  whole-check information to publish should own its own node. The JSON envelope is
+  untouched until the client contract round.
+
+### Changed
+
+- **little-sister no longer overrides logging you configured yourself.** The library
+  sets up the root logger — stdout plus `var/little-sister.log` — only when nothing
+  else has, which was already true of the handlers but **not** of the level: a
+  `setLevel(DEBUG)` ran unconditionally at import, so a deployment that had chosen
+  INFO quietly got DEBUG (and, with it, the third-party chatter the same module was
+  suppressing). Configure your logging **before** importing `little_sister.app`, in
+  the same block where you register check types, and it now stays exactly as you set
+  it — with little-sister's own records arriving in it, since nothing here switches
+  propagation off. A check type in its own package should call
+  `logging.getLogger(__name__)` rather than importing a logger from little-sister.
+
+- **The preference controls submit through a script instead of an inline handler.**
+  The dashboard's filter switches and the settings menu's theme/layout radios used an
+  `onchange` attribute, which no Content-Security-Policy can cover by hash or nonce.
+  They now carry `data-ls-submit` and one delegated listener does the submitting;
+  each form keeps a `<noscript>` Apply button, so a choice can still be applied
+  without JavaScript. The login page's copy of the theme-resolving inline script was
+  folded into the partial the header already used, so the two documents share one
+  script — and one hash — rather than two. No behavior changes.
+
+### Removed
+
+- **`LITTLE_SISTER_USERS` is gone.** The user list comes only from the `users` aspect
+  of the configuration roots now — `config/users.yaml`, or `config/users/users.yaml`
+  beside `config/users/avatars/`. A deployment that already keeps its list there needs
+  to change nothing.
+
+  A deployment that used the variable to name a file elsewhere gives that file a
+  **configuration root of its own** and names it first:
+
+  ```
+  LITTLE_SISTER_CONFIG_DIR=/etc/little-sister/identity:config
+  ```
+
+  That does exactly what the variable did: `users` is the one aspect that does not
+  layer, so the first root declaring it wins whole and the rest of the tree still comes
+  from the roots behind it. Avatars for such a list live in that root's
+  `users/avatars/`, as they do anywhere else.
+
+  **The variable is not ignored — it is refused.** A startup that finds it set stops
+  with a message naming the move, and `./start.sh` fails before it starts the server.
+  Leaving it set while a user list also sits in the configuration tree would otherwise
+  bring the instance up looking healthy while authenticating against a *different* set
+  of accounts, and a silent change to who can log in is not something to find out
+  about later.
+
+### Fixed
+
+- **A pinned container that no check has ever written no longer 500s on its
+  history.** An admin pin is a real transition and lands on nodes a check never
+  writes, but the history walk asserted that a node with a transition is stamped;
+  the current period now simply has no end (rendered `—`) instead of taking the
+  page down.
+
+- **User avatars now sit beside the login list and appear in the settings trigger.**
+  The existing `config/users.yaml` form remains valid; deployments that want custom
+  pictures move it to `config/users/users.yaml`, put images in
+  `config/users/avatars/`, and add `avatar: name` (or an explicit filename) to each
+  relevant account. There is no separate registry: the value resolves directly inside
+  that one directory, and a missing, invalid or ambiguous image falls back to the new
+  packaged neutral avatar without affecting login.
+
+  Custom bytes are exposed only through the signed-in user's username-free
+  `/user/avatar` route, with a private short cache and ETag. The configuration
+  framework still does not guess aspect shapes: `users` explicitly opts into file and
+  directory forms, as dependent aspects do through their registration API (ADR-0045).
+
+- **The dashboard now says when the next update is due.** Wherever a check time
+  shows and the node is answered for by a single check, the armed next run joins
+  it: `22:25 → 22:30` — on the grid's cards and boxes and the branch page's head
+  line (the detail pages state it in words instead, in their Time card, where
+  printing both would say it twice). The value is **engine-sourced**, never
+  `timestamp + frequency` arithmetic: while you watch a failure, the fast retry
+  slot is what shows. The format is absolute on purpose — when polling fails, the
+  staleness dim leaves the page on screen, and a frozen relative "in 4m" would
+  keep looking live while a frozen `→ 22:30` stays true and recedes into the
+  past. Grid times drop their seconds with this — the whole pair is minute
+  precision, saving the row width — and the arrow is suppressed where it would
+  repeat the value beside it, so a sub-minute schedule shows a bare time. A
+  mount two checks share and the leaves below a branch check keep their bare
+  times. The run's wall time lands in the model beside it and surfaces in the
+  node-facts block below; the JSON envelope is untouched until the client
+  contract round.
+
+- **A reason entry can carry its own status code — so one node's lines can
+  disagree, and a running rerun no longer hides a failure.** A check whose lines
+  have verdicts of their own (this workflow failed, that one passed) hands over
+  `Entry(slug, text, code, running)` values and declares no node code at all: the
+  node derives it from the lines, an empty entry set reads OK ("nothing to
+  report" is not "nothing reported"), and declaring both is refused at
+  construction rather than silently resolved. Pinning the one failing line now
+  turns the node the worst of what is left — silencing one finding no longer
+  discolors the rest — and pinning every line reads maintenance, exactly as with
+  real children (ADR-0042).
+
+  On the dashboard and the leaf page, every coded line paints its state's own
+  measured tint with a small labeled shape cue (a line has no status word, so the
+  cue is its accessible name) — a passed line is green even inside a red card,
+  which is the point — and `running: true` renders in italic while the line's
+  words still say it: a failed build's retry is legible at a glance without
+  displacing the verdict.
+  Existing checks change nothing: entries without codes keep carrying their
+  node's, permanently. The JSON envelope is untouched; per-entry codes reach it
+  with the client contract round. The live demo grows a `/ci/pipelines` node
+  that walks the whole arc.
+
+- **The Copy page now turns the live incident into paste-ready Markdown or rich
+  text.** It keeps every non-OK leaf and only the ancestor chain needed to locate
+  it, drops wholly healthy branches, preserves authored reason formatting, and
+  marks status without relying on colour. Maintenance stays accountable in the
+  snapshot: whole-node and per-reason pins name who set them and when they expire,
+  while a silenced node still shows the status it is suppressing.
+
+  Both buttons use one immutable tree snapshot and one canonical Markdown document.
+  **Copy Markdown** writes plain text; **Copy rich text** writes HTML with the same
+  Markdown as its plain-text fallback. The page shows the exact source for manual
+  copying when clipboard access is unavailable, and an all-OK tree gets a clear
+  empty state instead of copying an empty document.
+
+### Changed
+
+- **A nested box now ends its head line the way a card does: time and status
+  word together, right-aligned.** A box used to append its time straight after
+  the title with no status word at all, so the time read displaced and the state
+  incomplete beside the cards. The box keeps its single leading shape cue; the
+  status word (with the silenced reading beside it, where a pin applies) joins
+  the topmost-visible time and staleness in one right-aligned cluster. With the
+  word visible, a problem box's cue no longer needs its screen-reader name — the
+  word is the accessible channel, on boxes as on cards; a coded reason line's
+  labeled cue is unchanged. Under width pressure — action chips, long titles —
+  the **title yields first**, shrinking into its ellipsis, and action chips sit
+  **over the title's space** rather than beside it, so a chip to click never
+  costs the row its state: a cluster never breaks between its time and its
+  word, and never spills over the box below. Where a **card's** cluster sits is
+  now the deployment's choice — `card_status_line` in `settings.yaml`: `beside`
+  (the default) keeps the compact one-line head, `below` gives every card a
+  standing second line — name, title and chips above, the time and status word
+  right-aligned below — a calmer, more uniform grid that spends vertical space
+  for it. The demo runs `below`; an unconfigured deployment's markup is
+  unchanged.
+
+- **The check time now shows on the topmost node visible in the current view — a
+  branch check's container included — and is suppressed below, where it would be
+  identical.** A branch page's head line carries its node's time, a nested box on
+  the grid shows its own where no visible ancestor already shows the same one, and
+  cards behave as before minus the duplicates — so one check writing seven aspects
+  in one run reads as one observation, not seven. And an ancestor above one mount
+  **shared by two checks** no longer inherits a stamp at all: the mount registry
+  counts checks per path, so a value that would flip between the two checks' run
+  times disappears instead of attributing one check's time to the other's data;
+  the shared node itself still shows its own last write (ADR-0044; ADR-0027 as
+  amended).
+
+- **Maintenance can now end at a named time, not only after a calculated duration.**
+  The shared field accepts unit-suffixed durations, full ISO dates/timestamps,
+  yearless `MM-DD`, a day of month, a time of day, or a weekday with an optional time
+  (bare weekdays use 12:00). Short forms choose their next future occurrence in the configured timezone; explicit offsets
+  are respected, while ambiguous clock-change times and results outside the existing
+  one-second-to-365-day bound are refused without writing. A click-opened format table
+  beside every maintenance field makes the grammar discoverable. Persistence and the
+  JSON shape are unchanged.
+
+- Fully qualified bare `http://` and `https://` URLs in Markdown fields now render as
+  links with the same new-tab and scheme-safety policy as explicit Markdown links.
+  Hostnames without a scheme, email addresses, FTP, code spans and `plain()`-escaped
+  captured output remain literal.
+
+- **Maintenance explanations now read like content and edit only on intent.** Node
+  and per-reason pins render their explanation as safe Markdown throughout the web
+  interface, including the maintenance index, compact dashboard summaries, refused
+  writes and the Copy page. Raw HTML remains escaped; editors preserve the exact
+  Markdown source, and the persisted file and JSON schema are unchanged.
+
+  A pinned item now opens in rendered read mode with explicit **Edit** and **Clear**
+  actions. A per-reason control occupies a stable end rail and opens its anchored form
+  only after a click, so moving the pointer down a long findings list no longer makes
+  the form jump under the cursor. Pinned reasons can be reworded or extended in place
+  with the same compare-and-set guard as node pins, without clearing them or briefly
+  re-arming the finding.
+
+- **The `node.actions` slot is now offered on every box the grid draws, not only on
+  card heads.** A dependent package's whole-node action — the Jira chip a deployment
+  fills it with — appeared on the top-level cards and on a leaf's own page, and
+  nowhere in between. That is precisely backwards: a card at depth 1 is usually a
+  *container*, whose reading is rolled up from below and whose own reason list is
+  empty, while the thing actually on fire sits in a nested box two rows down. So the
+  chip was offered where there was nothing to file a ticket about and withheld where
+  there was, and the filler — which declines a node with no reasons — quietly rendered
+  nothing on most dashboards.
+
+  The slot now renders in `render_nodes` as well, with the same context (`node`,
+  `surface`) and the same decline-by-returning-`None` contract. A quiet leaf still
+  draws as a chip and carries no slot. Nothing is required of a filler that already
+  exists: it is offered more often and declines as before. This widens a **version
+  contract** — a package pinned to an older little-sister sees the old placement
+  (ADR-0034).
+
+### Fixed
+
+- **`./start.sh` now accepts both legal forms of the `users` aspect.** Its early
+  preflight was still hard-coded to `config/users.yaml`, so it rejected the
+  `config/users/users.yaml` layout that carries avatars before the app could load it.
+  The preflight now follows `LITTLE_SISTER_CONFIG_DIR` in root order, accepts `.yaml`
+  and `.yml` file or directory forms, honors the explicit `LITTLE_SISTER_USERS` file
+  override, and rejects the same duplicate or malformed shapes as the loader.
+
 ## [0.2.4] - 2026-08-03
 
 ### Fixed

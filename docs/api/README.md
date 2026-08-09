@@ -53,7 +53,8 @@ curl -si -H "Accept: application/json" -H "Authorization: Bearer $TOKEN" \
 A node in the response carries its status (`own_code` / `code` / `reasons` / `stale`),
 timing (`timestamp`, `frequency_seconds`), Markdown metadata (`about`, `title`,
 `description`, `config` — **raw Markdown**, render it client-side), `maintenance` plus
-`maintenance_details` when pinned, and `children` (name-sorted). Full field docs are in
+`maintenance_details` when pinned (its `reason` is raw Markdown too), and `children`
+(name-sorted). Full field docs are in
 [`openapi.yaml`](openapi.yaml).
 
 ## Errors

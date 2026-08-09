@@ -25,15 +25,29 @@
 > settles what a blank reason means on an edit — see *A window is positive and bounded*
 > below.
 >
+> **Update (2026-08-03):** the in-place edit applies to an **entry pin** as well as a
+> node pin, and the form moves behind an explicit read-to-edit disclosure — see
+> *Read first, edit on intent* below. This is presentation only: the side-table entry,
+> the two-table file shape and the write path are unchanged, with no migration.
+>
 > Everything else stands: the file is still the side-table serialized, restored once at
 > startup, reaped by coverage, and every entry still carries a mandatory expiry.
+>
+> **Update (2026-08-03):** §4's explicit duration widens to a deterministic
+> **duration-or-expiry** form grammar — see *Naming the expiry instead of calculating
+> a duration* below. The form still resolves one `expires_at` before the write, so the
+> entry, file and JSON shapes do not move.
+>
+> **Update (2026-08-03):** decision 21 grows one predictable default: a bare weekday,
+> abbreviated or full and in any letter case, means that weekday at 12:00. See
+> *Giving a bare weekday a time* below.
 
 ## Context
 Maintenance (`project.md` §2.6) is a sticky admin override held **only in memory**
 (`Status.maintenance` plus the tree's state). A restart loses it — the node reverts
 to `UNDEFINED` and the next check can redden a system that is still intentionally
 down. And maintenance currently **never ends**, so a forgotten or orphaned pin
-lingers. Full durable persistence is deferred to Phase 8; maintenance needs a
+lingers. A durable store is deferred to the persistence phase; maintenance needs a
 restart-survival answer **sooner**, without pulling that decision forward.
 
 ## Decision
@@ -193,6 +207,75 @@ asked.
     placeholder. This is the same principle as the duration rule above: a field the
     admin left alone must not change anything.
 
+### Read first, edit on intent
+*(decided 2026-08-03; decision §6's in-place edit grows to entry pins and the form's
+presentation changes, nothing above is withdrawn)*
+
+A maintenance explanation is something viewers read far more often than an admin
+changes it. Keeping its raw field permanently open makes it look like unfinished input,
+and hiding a whole per-entry form behind hover made the pointer move the form it was
+trying to reach. The two depths now follow one interaction.
+
+16. **Pinned is a read state.** A pinned node or entry shows its rendered explanation,
+    authorship and expiry with explicit *Edit* and *Clear* actions. *Edit* reveals a
+    prefilled textarea and the existing blank “new window, from now” duration; *Save*
+    is the same guarded `action=set`, and *Cancel* writes nothing. An unpinned item has
+    one *Set maintenance* disclosure into the same editor.
+17. **Entry pins edit in place.** The entry form carries `(path, slug)` and the stored
+    entry's `set_at`, exactly as the node form carries `path` and its token. Rewording or
+    extending one therefore never clears it and never lets the finding alarm in the
+    gap. Blank reason and duration keep the rules in §§15 and 6.
+18. **Hover never owns the form.** A member reason has a compact control in a stable
+    action rail. Hover or focus may change its emphasis, but only activation opens the
+    editor. This is a web presentation rule, not a new maintenance state.
+19. **The persisted contract does not move.** Rendering and disclosure add no field and
+    change no file shape. If a future maintenance change genuinely needs a different
+    shape, it follows §11's hard-cut precedent — loud old-shape warning, new writes only,
+    no migrator or compatibility reader — rather than making this UI pass a migration.
+
+### Naming the expiry instead of calculating a duration
+*(decided 2026-08-03; decision §4's explicit input widens, and §13's bound applies to
+the resolved result; nothing persisted changes)*
+
+An admin often knows *until when* a maintenance lasts — the end of a change window or
+the next handover — and making them calculate `3h` from a clock is unnecessary work.
+The form now accepts that boundary directly, with a small grammar rather than a
+natural-language parser whose meaning changes by locale or library version.
+
+20. **One field accepts duration or expiry.** Blank still means the configured default
+    duration. Unit-suffixed durations (`17s`, `90m`, `2h`, `3d`) keep their meaning.
+    The posted field remains named `duration`, but a digits-only value is now reserved
+    for a day of the month: seconds must carry `s`. This compatibility cut is confined
+    to the maintenance form; the shared check-configuration duration parser is
+    unchanged.
+21. **Calendar input has an enumerated grammar.** A full ISO date or timestamp is
+    accepted; a date without a time ends at midnight. `MM-DD` means the next such date
+    in ISO order, `1` through `31` means the next occurrence of that day at midnight,
+    `HH:MM` means the next occurrence of that time, and `Mon 14:30` / `Monday 14:30`
+    means the next matching weekday and time. A same-day midnight has already passed,
+    so a month/day rolls to next year and a day-of-month rolls to the next month in
+    which it exists; impossible days are skipped, never clamped. A bare weekday,
+    locale-dependent date order and free-form prose are refused.
+22. **Resolve once, in the operator's timezone.** The route captures one `now` for
+    parsing and bounds. Unzoned calendar input uses `settings.yaml`'s timezone; `Z` or
+    a numeric UTC offset wins when present. A DST hole or fold is refused and asks for
+    an explicit offset. After resolution, the expiry must be at least one second and
+    at most 365 days away, exactly as §13 requires, and is converted to the existing
+    naive server-local timestamp before the tree sees it.
+23. **The grammar is visible at the field.** Every shared maintenance editor labels
+    the control *Duration or expiry*, states the configured timezone and carries a
+    click-opened, keyboard-native format table. It is closed by default and never
+    depends on hover or placeholder text; a refused write returns the raw input and
+    compare-and-set token unchanged.
+
+### Giving a bare weekday a time
+*(decided 2026-08-03; additive refinement of decision 21)*
+
+24. **A bare weekday means noon.** `Fri`, `Friday` and case variants resolve to the
+    next Friday at 12:00 in the configured timezone. When today already has that
+    name, the result is the following week regardless of the current time. An explicit
+    weekday time continues to win when supplied and may therefore still select today.
+
 ## Consequences
 - Maintenance survives restarts; an intentionally-down system stays blue across a
   deploy.
@@ -207,10 +290,10 @@ asked.
   optional duration; the detail page shows "set by X, expires …".
 - Crash-safe: write-through at mutation time means a `kill -9` never loses a just-set
   pin.
-- The persisted record is a small contract; Phase 8's durable store subsumes this
+- The persisted record is a small contract; the durable store subsumes this
   file — the side-table is the seam.
 - The JSON envelope ([ADR-0008](0008-json-output-api.md)) is **not** changed here;
-  whether `maintenance_expires_at` joins it is the Phase 2 API item.
+  whether `maintenance_expires_at` joins it is the API-envelope round's decision.
 - *(2026-08-02)* **The token is designed once and widens later.** Per-entry pins key the
   side-table by `(path, slug)` ([ADR-0036](0036-addressable-reasons.md)); the same guard
   has to cover them, which is why the concurrency answer lands before them rather than
@@ -225,7 +308,7 @@ asked.
   inside `reason` — so moving it to acknowledgment is later a migration and not a parse.
 
 ## Alternatives considered
-- **Wait for the Phase 8 store.** Rejected: restart-survival and an expiry are wanted
+- **Wait for the durable store.** Rejected: restart-survival and an expiry are wanted
   now and don't need the store's open choices settled.
 - **Expire at render / snapshot time** (compute "expired" like staleness). Rejected:
   it desyncs the in-memory flag from the file and emits no transition event; a read

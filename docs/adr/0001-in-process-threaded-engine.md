@@ -1,4 +1,4 @@
-# ADR-0001 — In-process threaded engine with a single shared in-memory status tree (phase 1)
+# ADR-0001 — In-process threaded engine with a single shared in-memory status tree
 
 - **Status:** Accepted
 - **Date:** 2026-06-17
@@ -7,9 +7,9 @@
 
 ## Context
 Little Sister runs many **checks** on per-check intervals and serves a web view
-of **one overall status tree** ([`../project.md`](../project.md) §2.8). Phase 1
-deliberately needs **no persistence** (`../project.md` §5). Checks are
-**I/O-bound** — they call APIs, ping hosts, run shell commands. We want the
+of **one overall status tree** ([`../project.md`](../project.md) §2.8). The
+initial build deliberately needs **no persistence** (`../project.md` §5). Checks
+are **I/O-bound** — they call APIs, ping hosts, run shell commands. We want the
 simplest correct model in which the checks and the web view look at the same
 live state.
 
@@ -27,7 +27,7 @@ live state.
 
 ## Rationale
 - One process ⇒ one shared memory ⇒ web threads and check threads see the same
-  tree with no broker or store. This is what makes phase-1 "no persistence" work.
+  tree with no broker or store. This is what makes "no persistence" work.
 - CPython's **GIL** serializes Python bytecode, but it is **released during
   blocking I/O**. Because checks are I/O-bound, multiple checks (and request
   handlers) make real progress concurrently. Threads are the right fit here, not
@@ -50,22 +50,22 @@ live state.
   starving others. A check that **fails or times out sets its node to `ERROR`**
   (see ADR-0004).
 - The in-memory **event log must be bounded** (e.g. `collections.deque(maxlen=N)`);
-  durable history is out of scope for phase 1.
+  durable history is out of scope for the first release.
 - **Traded away by design:** horizontal scaling and restart durability — both
-  recovered in phase 2 (see Seam).
+  recovered by the seam below.
 
 ## Alternatives considered
 - **Multiple gunicorn workers + shared state in Redis/DB** — needed only if we
-  ever require more than one web process; reintroduces a store, which phase 1
-  explicitly avoids. Deferred to phase 2.
+  ever require more than one web process; reintroduces a store, which this
+  decision explicitly avoids. Deferred to the seam below.
 - **`asyncio` event loop instead of threads** — also gives I/O concurrency, but
   forces checks into async APIs (shell and many third-party libs are sync) and is
   less boring. Threads chosen for simplicity.
 - **Separate engine process writing to a store now** — cleaner decoupling, but
-  needs persistence/IPC immediately; that is exactly the phase-2 seam and is
+  needs persistence/IPC immediately; that is exactly the seam below and is
   premature today.
 
-## Phase-2 seam
+## The seam it leaves
 Move the engine into its **own process** and put the shared tree + event table in
 **Redis (or a DB)**. Web workers become stateless and can scale; the single-worker
 constraint above is the thing that lifts.

@@ -20,6 +20,17 @@
 > would let images stay on with host limits. The images-off test is
 > skipped while this holds.
 
+> **Update (2026-08-03):** an admin-authored **maintenance explanation** joins the
+> rendered fields. It uses the same block/inline filters and the same trust boundary;
+> raw HTML is still escaped, and the persisted/JSON value is still raw Markdown. See
+> *Maintenance explanations* below.
+
+> **Update (2026-08-03):** fully qualified bare `http://` and `https://` URLs are
+> linkified through markdown-it-py's own link rule. The scope is deliberately narrow:
+> bare domains, email addresses, FTP and protocol-relative text remain text, while the
+> generated links pass through the existing validation and hardening. See *Bare web
+> URLs* below.
+
 ## Context
 Several node fields are **Markdown** but shown as **plain text** today: `title`
 (ADR-0017), `about` (ADR-0012), a leaf's `description`, and each `reason`. The runtime
@@ -60,6 +71,37 @@ filters; render **all four fields**, and give checks helpers to keep reason cont
    wherever they appear (grid, detail, history, events). Card hover content moves to the
    inspection popover (a later ADR-0019). The native `title=` tooltips keep the raw
    Markdown for now.
+
+### Maintenance explanations
+*(decided 2026-08-03; the rendered-field set grows, nothing above is withdrawn)*
+
+6. **The explanation is authored Markdown.** `MaintenanceEntry.reason` is rendered as
+   a block on full read surfaces and inline on compact summaries, through the same
+   filters and policy as the node fields. The editor always receives the untouched raw
+   source; rendered DOM is never converted back into an input value. The literal
+   `maintenance` sentinel remains the absence of an explanation and is not displayed.
+7. **Compact means clamped HTML, not truncated source.** A banner or popover may clamp
+   the rendered result with CSS, but must not shorten the Markdown string first: doing
+   so can cut a link, code span or delimiter into invalid syntax. The full maintenance
+   card, entry detail, conflict page and maintenance index keep the whole rendering.
+8. **Persistence and JSON remain source contracts.** The file stores the same string in
+   the same entry shape, and the JSON `maintenance_details.reason` field carries raw
+   Markdown for a client to render itself. No persistence migration or schema change is
+   involved.
+
+### Bare web URLs
+*(decided 2026-08-03; link recognition grows, nothing above is withdrawn)*
+
+9. **An explicit web scheme is enough.** Plain `http://…` and `https://…` text becomes
+   a link without requiring `<…>` or `[label](…)`. It produces the same `link_open`
+   token as an authored Markdown link, so scheme validation, `target="_blank"` and
+   `rel="noopener noreferrer"` remain one policy rather than a parallel HTML rewrite.
+10. **Linkification is narrow.** Schemaless domains, bare email addresses, FTP URLs,
+    protocol-relative URLs, code spans and text passed through `plain()` remain literal.
+    This avoids turning hostnames and addresses in captured monitoring output into
+    unintended navigation. The `linkify-it-py` parser is supplied by the declared
+    `markdown-it-py[linkify]` runtime extra; no in-house URL recognizer or post-render
+    HTML mutation is added.
 
 ## Consequences
 - One new runtime dependency, safe by default, so we don't own a security-sensitive

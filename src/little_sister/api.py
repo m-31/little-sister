@@ -61,7 +61,8 @@ def snapshot_to_dict(snapshot: StatusSnapshot) -> dict[str, Any]:
     what the check is actually saying** instead of a copy of the pin's own text,
     which has always also been in ``maintenance_details``. The raw code itself does
     not ship yet: ADR-0032 puts a field for it in the client-contract round
-    ([backlog #33](../../docs/backlog.md)) rather than letting it arrive piecemeal,
+    — the batched revision where the JSON surface and its clients move together —
+    rather than letting it arrive piecemeal,
     so ``StatusSnapshot.reported_code`` stays server-side for now.
 
     The node-metadata fields (``about``, ``title``, ``config``) ship as **raw

@@ -1,25 +1,34 @@
 [project]
 name = "little-sister"
-version = "0.2.4"
-description = "This is a web application that shows the status of various systems."
+version = "0.3.0"
+description = "Self-hosted status monitoring — checks are plain Python, from a homelab to a team"
 authors = [
     { name = "Michael Meyling" }
 ]
 readme = {file = "README.md", content-type = "text/markdown"}
 license = "MIT"
 license-files = ["LICENSE"]
-keywords = ["monitoring", "status", "web application"]
+keywords = [
+    "monitoring", "status", "status-page", "dashboard",
+    "self-hosted", "homelab", "devops", "flask",
+]
 classifiers = [
-    "Development Status :: 3 - Alpha",
-    "Programming Language :: Python :: 3",
+    "Development Status :: 4 - Beta",
     "Environment :: Web Environment",
     "Framework :: Flask",
+    "Intended Audience :: Information Technology",
+    "Intended Audience :: System Administrators",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: System :: Monitoring",
+    "Typing :: Typed",
 ]
 requires-python = ">=3.14"
 dependencies = [
     "flask>=3.0",
     "gunicorn>=22.0",
-    "markdown-it-py>=4.2.0",
+    "markdown-it-py[linkify]>=4.2.0",
     "PyYAML>=6.0",
     "tzdata>=2024.1",
 ]
@@ -27,6 +36,7 @@ dependencies = [
 [project.urls]
 homepage = "https://github.com/m-31/little-sister"
 repository = "https://github.com/m-31/little-sister"
+documentation = "https://github.com/m-31/little-sister/tree/main/docs"
 issues = "https://github.com/m-31/little-sister/issues"
 changelog = "https://github.com/m-31/little-sister/blob/main/CHANGELOG.md"
 
@@ -35,7 +45,7 @@ dev = [
     "mypy>=2.1.0",
     "pytest>=9.0.3",
     "pytest-cov>=7.1.0",
-    "ruff>=0.15.13",
+    "ruff>=0.16.1",
     "types-PyYAML",
 ]
 
@@ -56,8 +66,6 @@ strict = true
 [tool.pytest.ini_options]
 addopts = "--cov=little_sister --cov-report=term-missing"
 
-
 [build-system]
 requires = ["uv_build>=0.11.14,<0.12.0"]
 build-backend = "uv_build"
-

@@ -1,11 +1,11 @@
-# ADR-0003 — Configuration & secrets via a `.env` file (phase 1)
+# ADR-0003 — Configuration & secrets via a `.env` file
 
 - **Status:** Accepted
 - **Date:** 2026-06-17
 - **Related:** [ADR-0001 — In-process threaded engine](0001-in-process-threaded-engine.md)
 - **Register:** [`../decisions.md`](../decisions.md)
 
-> **Update (2026-07-18):** the phase-2 note below has been taken up:
+> **Update (2026-07-18):** the closing note below has been taken up:
 > [ADR-0023](0023-secret-references.md) extends this decision's reference-by-name rule
 > into a general **secret reference** — a bare environment-variable name (this ADR's
 > behavior, still the default) or a `scheme://address` reference resolved by a
@@ -16,13 +16,13 @@
 little-sister needs a Flask **`secret_key`** (today hardcoded as `"TODO"` — see
 [`../architecture.md`](../architecture.md) §5.2) and, increasingly, **credentials
 and tokens** for checks (APIs, remote hosts) and for the planned JSON API
-(`../project.md` §2.9). Phase 1 keeps operations simple and has **no secret
-store**. `app.py` already carries a placeholder comment about loading a `.env`
-file; `.env` is already git-ignored.
+(`../project.md` §2.9). The initial build keeps operations simple and has **no
+secret store**. `app.py` already carries a placeholder comment about loading a
+`.env` file; `.env` is already git-ignored.
 
 ## Decision
-For phase 1, load configuration **secrets from a single `.env` file** via the
-process environment:
+With no secret store yet, load configuration **secrets from a single `.env`
+file** via the process environment:
 - `secret_key` and any check/API credentials come from the environment, not from
   source or version control.
 - The `.env` file is provisioned **per host** and never committed (it stays in
@@ -46,11 +46,11 @@ process environment:
 
 ## Alternatives considered
 - **Hardcoded secrets** (today's `"TODO"`) — rejected; insecure and unshippable.
-- **A secret manager / OS keychain** (e.g. macOS Keychain) — heavier than phase 1
-  warrants; revisit in phase 2 if the deployment grows.
+- **A secret manager / OS keychain** (e.g. macOS Keychain) — heavier than the
+  initial build warrants; revisit if the deployment grows.
 - **Committed config file** — rejected; secrets must not enter version control.
 
-## Phase-2 note
+## When to revisit
 If the deployment grows (multiple hosts, the JSON API, satellite tokens), revisit
 with a proper secret manager. The `.env` approach is intended as the simple
-phase-1 baseline, consistent with ADR-0001's "no extra services yet".
+initial baseline, consistent with ADR-0001's "no extra services yet".

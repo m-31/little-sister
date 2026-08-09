@@ -1,4 +1,4 @@
-{#- Reason overflow (#9): a node's reasons clamped to a *line budget*. The block
+{#- Reason overflow (ADR-0024): a node's reasons clamped to a *line budget*. The block
     shows at most ``cap`` lines (settings.yaml ``reason_cap``: short reasons ⇒ that
     many reasons, a wrapped reason uses more of the budget); the overflow stays in
     the DOM, clipped by CSS (never cut mid-HTML, ADR-0018) and faded. A header
@@ -32,7 +32,7 @@
     quiet count already follows. Paints its own maintenance tint, like every other
     maintenance surface, so it does not depend on the card fill under it. -#}
 {% macro pin_banner(node) -%}
-{%- if node.maintenance_entry %}<div class="pin-banner">Silenced by <strong>{{ node.maintenance_entry.set_by or 'an admin' }}</strong> until {{ node.maintenance_entry.expires_at | localtime }}{% if node.maintenance_entry.reason and node.maintenance_entry.reason != 'maintenance' %} — {{ node.maintenance_entry.reason | shorten(160) }}{% endif %}</div>{% endif -%}
+{%- if node.maintenance_entry %}<div class="pin-banner">Silenced by <strong>{{ node.maintenance_entry.set_by or 'an admin' }}</strong> until {{ node.maintenance_entry.expires_at | localtime }}{% if node.maintenance_entry.reason and node.maintenance_entry.reason != 'maintenance' %}<span class="pin-banner__reason"> — {{ node.maintenance_entry.reason | markdown_inline }}</span>{% endif %}</div>{% endif -%}
 {%- endmacro %}
 {#- The **viewed** node's own state, above its children.
 
@@ -57,19 +57,31 @@
     <div class="status-node__self" data-path="{{ node.path }}">
         {{ status_cue(node.own_code) }}<span class="status-node__name">{{ node.name }}</span>
         {%- if node.stale %} <span class="status-stale">stale{% if not node.children %} · {{ node.age_seconds | round | int | duration }} ago{% endif %}</span>{% endif %}
-        <span class="viewed-head__state">{{ node.own_code.name.lower() }}{{ reported_suffix(node) }}</span>
+        {#- The head is the topmost visible node of this view, so the observation
+            time shows here and the cards below suppress an identical one
+            (ADR-0044): seven aspect cards repeating one check's run time invite a
+            reader to think the seven were checked separately. -#}
+        <span class="viewed-head__state">{{ card_time(node) }}{{ node.own_code.name.lower() }}{{ reported_suffix(node) }}</span>
         {{ pin_banner(node) }}{{ reason_block(node, reason_cap) }}
     </div>
 </div>
 {%- endif -%}
 {%- endmacro %}
+{#- A coded line (ADR-0042) carries the entry's **own** claim: its state class, a
+    small labeled cue (a line has no status word, so the cue is its accessible name),
+    and its state's own tint — every coded line paints one, because a mixed list
+    sits on a *vivid* card fill, where a surfaceless passed line would read as more
+    of the problem (the is-quiet lesson: ink-on-whatever fails the bar). A quiet
+    (pinned) line keeps the maintenance tint whatever its code says: suppression is
+    the louder fact. `is-running` marks work in flight — italic, display only; the
+    line's words still say it, so no meaning rides on the italic alone. -#}
 {% macro reason_block(node, cap) -%}
 {%- if node.reasons -%}
 {%- set total = node.reasons | length -%}
 <div class="reason-block" style="--reason-lines: {{ cap }}"
      data-reason-node="{{ node.path }}" data-reason-total="{{ total }}">
 {%- for line in node.reasons %}
-    <div class="status-node__reason md-body{% if line.quiet %} is-quiet{% endif %}"><span class="reason-actions">{{ slot('reason.actions', node=node, reason=line.text, index=loop.index0, surface='grid') }}</span>{{ line.text | shorten(400) | markdown }}</div>
+    <div class="status-node__reason md-body{% if line.code %} is-coded s-{{ line.code | status_slug }}{% endif %}{% if line.running %} is-running{% endif %}{% if line.quiet %} is-quiet{% endif %}"><span class="reason-actions">{{ slot('reason.actions', node=node, reason=line.text, index=loop.index0, surface='grid') }}</span>{% if line.code %}{{ status_cue(line.code, labeled=true) }}{% endif %}{{ line.text | shorten(400) | markdown }}</div>
 {%- endfor %}
 </div>
 {#- Under a **node** pin everything here is silenced already, so this count is not
@@ -78,48 +90,36 @@
 {%- if node.quiet_reasons %}<div class="reason-quiet-count">{{ node.quiet_reasons }} of {{ total }} {% if node.maintenance %}also pinned individually{% else %}in maintenance{% endif %}</div>{% endif -%}
 {%- endif -%}
 {%- endmacro %}
-{#- Status not by color alone (ADR-0024): a small shape cue per state — a check (ok),
-    triangle (warn), filled disc (error), pause bars (maintenance), hollow ring (idle /
-    undefined) — so a status reads without leaning on the fill color, and a red/green
-    color-blind viewer can separate error from ok. Drawn in ``currentColor`` so it
-    inherits each surface's readable text color. ``labeled`` names the cue for assistive
-    tech (WCAG 1.1.1): a *problem* box (warn/error) has no status word, so its cue is its
-    only status channel (role=img + aria-label). A quiet box, like every card and strip
-    cue, stays ``aria-hidden`` — a card/strip word already speaks, and a healthy box's
-    "ok" is noise, not signal. -#}
-{% macro status_cue(code, labeled=false) -%}
-<svg class="status-cue status-cue--{{ code | status_slug }}" viewBox="0 0 16 16"
-     width="12" height="12" focusable="false"
-     {% if labeled %}role="img" aria-label="{{ code.name.lower() }}"{% else %}aria-hidden="true"{% endif %}>
-{%- if code.name == 'OK' -%}
-<path d="M3.5 8.5 6.5 11.5 12.5 4.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
-{%- elif code.name == 'WARN' -%}
-<path d="M8 2 15 14 1 14 Z" fill="currentColor"/>
-{%- elif code.name == 'ERROR' -%}
-<circle cx="8" cy="8" r="5.5" fill="currentColor"/>
-{%- elif code.name == 'MAINTENANCE' -%}
-<rect x="4" y="3.5" width="2.7" height="9" rx="0.7" fill="currentColor"/><rect x="9.3" y="3.5" width="2.7" height="9" rx="0.7" fill="currentColor"/>
-{%- else -%}
-<circle cx="8" cy="8" r="5" fill="none" stroke="currentColor" stroke-width="2"/>
-{%- endif -%}
-</svg>
-{%- endmacro %}
+{#- The shape cue lives in its own partial (_status_cue.html) so the leaf detail
+    page can import it without executing this template's body; the rationale and
+    the labeling rule are documented there. -#}
+{% from '_status_cue.html' import status_cue %}
+{% from '_next_update.html' import next_update %}
 {#- Maintenance pip: a click-to-open marker on a card whose subtree holds a
     pinned node but which is not itself pinned — a glance at any depth shows where to
     drill, and a click opens a popover (maintenance.js) listing that card's pins as
     links. A real <button> (keyboard-reachable, announced as a popup control); the
     hidden <template> carries the card-scoped pin list the popover clones. Solid
     maintenance-blue so it reads on any card fill. -#}
-{#- Observation time on a card (ADR-0027): *when* beside *what*. Shown only when the
-    card's node has an unambiguous answer to "when did the check behind this node
-    run?" — its own last write, or the run time of the single check below it — and
-    rendered as a time of day (the /system table's format), so a wall of cards stays
-    scannable. A container above two or more checks has no single answer, so it shows
-    **nothing** rather than a placeholder: absence is the signal. It sits inside the
-    poll fragment, so it refreshes with the grid; the freshness *alarm* stays the
-    stale badge (ADR-0005), which is normalized per check frequency. -#}
-{% macro card_time(node) -%}
-{%- if node.timestamp %}<span class="status-card__time">{{ node.timestamp | localtime("%H:%M:%S") }}</span>{% endif -%}
+{#- Observation time (ADR-0027): *when* beside *what*. Shown only when the node has
+    an unambiguous answer to "when did the check behind this node run?" — its own
+    last write, or the run time of the single check below it — and rendered as a
+    time of day at **minute precision** — seconds saved no information worth the row
+    width — so a wall of cards stays scannable. A
+    container above two or more checks has no single answer, so it shows **nothing**
+    rather than a placeholder: absence is the signal. The time shows on the
+    **topmost node visible in the current view** and is suppressed below, where it
+    would be identical (ADR-0044) — safe because an ancestor carries a stamp only
+    where a single check owns everything beneath it, so an identical value below can
+    only be the same run; ``shown`` is the ancestor's displayed rendering, compared
+    at display precision. It sits inside the poll fragment, so it refreshes with
+    the grid; the freshness *alarm* stays the stale badge (ADR-0005), which is
+    normalized per check frequency. -#}
+{% macro card_time(node, shown="") -%}
+{%- if node.timestamp -%}
+{%- set moment = node.timestamp | localtime("%H:%M") -%}
+{%- if moment != shown %}<span class="status-card__time">{{ moment }}{{ next_update(node.run.next_run_at if node.run else none, moment) }}</span>{% endif -%}
+{%- endif -%}
 {%- endmacro %}
 {#- One popover row: **one node**, never one line (ADR-0036). The popover is capped,
     so a node with twenty pinned findings contributes one row carrying a count — the
@@ -135,7 +135,7 @@
     line to point at. -#}
 {% macro maintenance_row(row) -%}
 {%- set href = url_for('status', branch=row.path | url_branch, reason=row.slug) ~ '#pinned-reason' if row.slug else url_for('status', branch=row.path | url_branch) -%}
-<li class="maintenance-pop__item"><span class="maintenance-pop__row"><a class="maintenance-pop__path" href="{{ href }}">{{ row.path }}</a>{% if row.quiet %} <span class="maintenance-pop__lines">{% if row.pinned %}+ {{ row.quiet }} reason{{ 's' if row.quiet != 1 else '' }}{% elif row.quiet >= row.total %}all {{ row.total }} reason{{ 's' if row.total != 1 else '' }}{% else %}{{ row.quiet }} of {{ row.total }} reasons{% endif %}</span>{% endif %} <span class="maintenance-pop__left">{% if row.quiet > 1 and not row.pinned %}next {% endif %}{{ row.remaining }}</span></span>{% if row.note and row.note != 'maintenance' %}<span class="maintenance-pop__reason">{{ row.note | shorten(80) }}</span>{% endif %}{% if row.set_by %}<span class="maintenance-pop__by">{{ row.set_by }}</span>{% endif %}</li>
+<li class="maintenance-pop__item"><span class="maintenance-pop__row"><a class="maintenance-pop__path" href="{{ href }}">{{ row.path }}</a>{% if row.quiet %} <span class="maintenance-pop__lines">{% if row.pinned %}+ {{ row.quiet }} reason{{ 's' if row.quiet != 1 else '' }}{% elif row.quiet >= row.total %}all {{ row.total }} reason{{ 's' if row.total != 1 else '' }}{% else %}{{ row.quiet }} of {{ row.total }} reasons{% endif %}</span>{% endif %} <span class="maintenance-pop__left">{% if row.quiet > 1 and not row.pinned %}next {% endif %}{{ row.remaining }}</span></span>{% if row.note and row.note != 'maintenance' %}<span class="maintenance-pop__reason">{{ row.note | markdown_inline }}</span>{% endif %}{% if row.set_by %}<span class="maintenance-pop__by">{{ row.set_by }}</span>{% endif %}</li>
 {%- endmacro %}
 {% macro maintenance_pip(card_path, rows) -%}
 <button type="button" class="maintenance-pip" aria-haspopup="true" aria-expanded="false" aria-label="show maintenance under {{ card_path }}"><svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" focusable="false"><rect x="4" y="3.5" width="2.7" height="9" rx="0.7" fill="currentColor"/><rect x="9.3" y="3.5" width="2.7" height="9" rx="0.7" fill="currentColor"/></svg></button><template class="maintenance-pop-src" data-pop-for="{{ card_path }}"><ul class="maintenance-pop__list">
@@ -144,7 +144,7 @@
 {%- endfor %}
 </ul></template>
 {%- endmacro %}
-{#- The admin pin control (backlog #35): a card head's door to maintenance — an
+{#- The admin pin control (ADR-0014): a card head's door to maintenance — an
     outline pause-bars link to the node's own page (the no-JS fallback carries the
     form), upgraded by pin.js to the #pin-card dialog. Quiet until the card is
     hovered (CSS), always visible to keyboard focus. Cards only, deliberately: a
@@ -160,7 +160,7 @@
    aria-label="maintenance for {{ node.path }}"
    data-pin-path="{{ node.path }}" data-pin-name="{{ node.name }}"
    {%- if node.children %} data-pin-kids="1"{% endif %}
-   {%- if node.maintenance_entry %} data-pin-pinned="1" data-pin-expires="{{ node.maintenance_entry.expires_at | localtime }}" data-pin-by="{{ node.maintenance_entry.set_by }}" data-pin-reason="{{ node.maintenance_entry.reason }}" data-pin-token="{{ node.maintenance_entry.set_at }}"{% endif %}><svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" focusable="false"><rect x="4" y="3.5" width="2.7" height="9" rx="0.7" fill="none" stroke="currentColor" stroke-width="1.5"/><rect x="9.3" y="3.5" width="2.7" height="9" rx="0.7" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></a>
+   {%- if node.maintenance_entry %} data-pin-pinned="1" data-pin-expires="{{ node.maintenance_entry.expires_at | localtime }}" data-pin-by="{{ node.maintenance_entry.set_by }}" data-pin-reason="{{ node.maintenance_entry.reason }}" data-pin-token="{{ node.maintenance_entry.set_at }}"{% endif %}><svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" focusable="false"><rect x="4" y="3.5" width="2.7" height="9" rx="0.7" fill="none" stroke="currentColor" stroke-width="1.5"/><rect x="9.3" y="3.5" width="2.7" height="9" rx="0.7" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></a>{% if node.maintenance_entry and node.maintenance_entry.reason and node.maintenance_entry.reason != 'maintenance' %}<template class="pin-control__reason-source">{{ node.maintenance_entry.reason | markdown }}</template>{% endif %}
 {%- endmacro %}
 {#- Branch density (ADR-0024): render one level of a card's descendants — a quiet
     leaf as an inline chip, everything else as a box — and, in the dense view, cap the
@@ -171,7 +171,7 @@
     ``branch_cap`` does nothing and every node renders as a box. ``depth0`` carries the
     render-depth ceiling (``max_depth``) down the recursion. The render constants are
     passed explicitly so the macro never depends on call-site context. -#}
-{% macro render_nodes(children, depth0, parent_path, dense, max_depth, branch_cap, reason_cap) -%}
+{% macro render_nodes(children, depth0, parent_path, dense, max_depth, branch_cap, reason_cap, shown_time="") -%}
 {%- set ns = namespace(quiet_boxes=0) -%}
 {%- for child in children -%}
 {%- if dense and not child.children and child.code.name not in ('WARN', 'ERROR') -%}
@@ -189,14 +189,39 @@
     {%- if dense and is_quiet %}{% set ns.quiet_boxes = ns.quiet_boxes + 1 %}{% endif -%}
     <div class="status-node s-{{ child.code | status_slug }}{% if node_dim %} dim{% endif %}{% if dense and is_quiet and ns.quiet_boxes > branch_cap %} is-extra{% endif %}">
         <div class="status-node__self" data-path="{{ child.path }}">
-            {{ status_cue(child.code, labeled=not is_quiet) }}<a class="status-node__name"
+            {{ status_cue(child.code) }}<a class="status-node__name"
                href="{{ url_for('status', branch=child.path | url_branch) }}">{{ child.name }}</a>
-            {% if child.title %}<span class="node-title">{{ child.title | markdown_inline }}</span>{% endif %}
-            {% if child.stale %}<span class="status-stale">stale{% if not child.children %} · {{ child.age_seconds | round | int | duration }} ago{% endif %}</span>{% endif %}{{ reported_suffix(child, word=True) }}
+            {#- The middle claims the slack between name and state with zero say in
+                line-fitting (basis 0): the title ellipses inside it, and the
+                `node.actions` chips sit absolutely at its right edge — **over the
+                title** when the two would collide, because a chip is something to
+                click and a title is a nicety. Chips therefore cost the head line
+                no width at all: name and state alone decide whether a row fits. -#}
+            <span class="status-head__middle">{% if child.title %}<span class="node-title">{{ child.title | markdown_inline }}</span>{% endif %}
+            {#- The `node.actions` slot, on a nested box as on a card head. A failing
+                **leaf** almost always sits here rather than on a card — a card is the
+                top of a subtree and usually a container with no reading of its own —
+                so leaving boxes out put a deployment's node action nowhere the eye
+                already is, and left the ticket-for-this-check gesture reachable only
+                by drilling into the leaf's own page. The filler declines what it does
+                not want, and the rail collapses when nobody fills it, so a deployment
+                with no extension pays one empty span per box. A quiet leaf is a chip,
+                not a box, and carries none — nothing quiet is worth acting on. -#}
+            <span class="node-actions">{{ slot('node.actions', node=child, surface='grid') }}</span></span>
+            {#- The box's state cluster, right-aligned like a card head's: staleness,
+                the check time where the topmost-visible rule puts it here (ADR-0044;
+                `box_time` also threads the suppression to the children below), and
+                the status word — which a box used to lack, so its time dangled
+                displaced after the title and its problem cue had to be aria-named.
+                The word now speaks on every box, like on every card, so the box's
+                one leading cue is decorative and a second cue in here would only
+                duplicate the shape. -#}
+            {%- set box_time = child.timestamp | localtime("%H:%M") if child.timestamp else "" -%}
+            <span class="status-node__state">{% if child.stale %}<span class="status-stale">stale{% if not child.children %} · {{ child.age_seconds | round | int | duration }} ago{% endif %}</span> {% endif %}{{ card_time(child, shown_time) }}{{ child.code.name.lower() }}{{ reported_suffix(child) }}<button type="button" class="reason-chevron" tabindex="-1" aria-hidden="true"></button></span>
             {{ pin_banner(child) }}{{ reason_block(child, reason_cap) }}
         </div>
         {%- if has_kids -%}
-        <div class="status-node__children node-children" data-branch="{{ child.path }}">{{ render_nodes(child.children, depth0 + 1, child.path, dense, max_depth, branch_cap, reason_cap) }}</div>
+        <div class="status-node__children node-children" data-branch="{{ child.path }}">{{ render_nodes(child.children, depth0 + 1, child.path, dense, max_depth, branch_cap, reason_cap, box_time or shown_time) }}</div>
         {%- endif -%}
     </div>
 {%- endif -%}
@@ -270,13 +295,20 @@
     </p>
 {% else %}
     {%- if branch and max_depth >= 1 %}{{ viewed_head(node, reason_cap) }}{% endif %}
+    {#- What the head displays is what the cards below suppress (ADR-0044): the
+        viewed head is the topmost visible node, and it renders exactly when it has
+        something of its own to say — which a written sole-check container does. -#}
+    {%- set head_shown = node.timestamp | localtime("%H:%M")
+        if (branch and max_depth >= 1 and node.timestamp
+            and (node.maintenance_entry or node.reason or node.stale
+                 or node.own_code.name != 'UNDEFINED')) else "" -%}
     <div class="status-grid">
         {% if max_depth < 1 %}
             {# depth 0 — a single card for the viewed node: its rolled-up "overall" light #}
             <div class="status-card s-{{ node.code | status_slug }}{% if node.code.name == 'OK' %} dim{% endif %}">
                 <div class="status-card__head" data-path="{{ node.path }}">
                     <span class="status-card__name">{{ node.name }}</span>
-                    {% if node.title %}<span class="node-title">{{ node.title | markdown_inline }}</span>{% endif %}
+                    <span class="status-head__middle">{% if node.title %}<span class="node-title">{{ node.title | markdown_inline }}</span>{% endif %}
                     {#- The same `node.actions` slot the depth-1 cards carry. At
                         depth 0 this card *is* the viewed node, so an action whose
                         subject is the node belongs here more plainly than
@@ -284,7 +316,7 @@
                         per-reason slot, so leaving this one out made a
                         deployment's node action vanish at one depth setting while
                         its reason action stayed. -#}
-                    <span class="node-actions">{{ slot('node.actions', node=node, surface='grid') }}</span>
+                    <span class="node-actions">{{ slot('node.actions', node=node, surface='grid') }}</span></span>
                     <span class="status-card__state">
                         {% if node.stale %}<span class="status-stale">stale</span>{% endif %}
                         {% if node.path in maintenance_ancestors %}{{ maintenance_pip(node.path, maintenance_rows) }}{% endif %}{{ card_time(node) }}{{ status_cue(node.code) }}{{ node.code.name.lower() }}{{ reported_suffix(node) }}<button type="button" class="reason-chevron" tabindex="-1" aria-hidden="true"></button>
@@ -305,7 +337,7 @@
                 <div class="status-card__head" data-path="{{ system.path }}">
                     <a class="status-card__name"
                        href="{{ url_for('status', branch=system.path | url_branch) }}">{{ system.name }}</a>
-                    {% if system.title %}<span class="node-title">{{ system.title | markdown_inline }}</span>{% endif %}
+                    <span class="status-head__middle">{% if system.title %}<span class="node-title">{{ system.title | markdown_inline }}</span>{% endif %}
                     {#- The `node.actions` slot (ADR-0034, second slot): an action
                         whose subject is the **whole node**, not one of its reason
                         lines — which is where it belongs when a node's reasons are
@@ -313,20 +345,47 @@
                         filler, like every slot; it collapses to nothing when
                         nobody fills it. Cards only, like the pin control: a deep
                         box's own page carries it one drill-down away. -#}
-                    <span class="node-actions">{{ slot('node.actions', node=system, surface='grid') }}</span>
+                    <span class="node-actions">{{ slot('node.actions', node=system, surface='grid') }}</span></span>
                     <span class="status-card__state">
                         {% if system.stale %}<span class="status-stale">stale</span>{% endif %}
-                        {% if system.path in maintenance_ancestors %}{{ maintenance_pip(system.path, maintenance_rows) }}{% endif %}{{ card_time(system) }}{{ status_cue(system.code) }}{{ system.code.name.lower() }}{{ reported_suffix(system) }}<button type="button" class="reason-chevron" tabindex="-1" aria-hidden="true"></button>{% if is_admin and layout != 'kiosk' %}{{ pin_control(system) }}{% endif %}
+                        {% if system.path in maintenance_ancestors %}{{ maintenance_pip(system.path, maintenance_rows) }}{% endif %}{{ card_time(system, shown=head_shown) }}{{ status_cue(system.code) }}{{ system.code.name.lower() }}{{ reported_suffix(system) }}<button type="button" class="reason-chevron" tabindex="-1" aria-hidden="true"></button>{% if is_admin and layout != 'kiosk' %}{{ pin_control(system) }}{% endif %}
                     </span>
                 </div>
                 <div class="status-panel">
                     {{ pin_banner(system) }}{{ reason_block(system, reason_cap) }}
                     {% if card_has_kids %}
-                    <div class="node-children" data-branch="{{ system.path }}">{{ render_nodes(system.children, 0, system.path, dense, max_depth, branch_cap, reason_cap) }}</div>
+                    <div class="node-children" data-branch="{{ system.path }}">{{ render_nodes(system.children, 0, system.path, dense, max_depth, branch_cap, reason_cap, (system.timestamp | localtime("%H:%M") if system.timestamp else head_shown)) }}</div>
                     {% endif %}
                 </div>
             </div>
         {% endfor %}
         {% endif %}
     </div>
+    {#- The viewed node's own facts, **below** its children (ADR-0044 decision 8):
+        the head line says what this node is, the grid says what is under it, and
+        the details come last — a forty-line report above the grid would push the
+        dashboard the reader came for off the screen.
+
+        Inside `#status-grid` deliberately, unlike the maintenance card beneath it:
+        `report` is an **output of the run** and changes with every tick, so a
+        frozen roster beside a live grid would be the one part of the page quietly
+        going wrong. The maintenance card holds an open form and must not be
+        swapped; this block holds none.
+
+        Rendered only when the node has something of its own to say. A container two
+        checks share has nothing here by construction — the snapshot withholds its
+        text and its run facts (decision 1) — and its Time card could only say "not
+        yet observed" about a node neither check writes. -#}
+    {%- if branch and layout != 'kiosk'
+           and (node.timestamp or node.config or node.report) %}
+    <div class="mt-3" style="max-width: 820px">
+        {#- The block's cards are h3s, and this page's only other heading is the
+            band's h1 — so without this the outline jumps a level and a screen
+            reader meets three headings belonging to nothing. Named, not
+            decorative: it says *whose* time and report these are, which the
+            sighted reader gets from the breadcrumb overhead. -#}
+        <h2 class="visually-hidden">{{ node.name }}</h2>
+        {% include '_node_facts.html' %}
+    </div>
+    {%- endif %}
 {% endif %}

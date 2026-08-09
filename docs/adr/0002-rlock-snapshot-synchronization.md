@@ -38,7 +38,7 @@ atomic** under the GIL. Concurrent mutation during a read can cause torn reads o
 ## Alternatives considered
 - **Rely on the GIL alone** — incorrect for compound operations; rejected.
 - **Per-node locks** — more concurrency, but more complexity and deadlock risk;
-  premature for phase 1.
+  premature for the initial build.
 - **Immutable copy-on-write tree with an atomic reference swap** — elegant,
-  lock-free reads, but more machinery than phase 1 warrants. A candidate for
-  later if needed.
+  lock-free reads, but more machinery than the initial build warrants. A
+  candidate for later if needed.

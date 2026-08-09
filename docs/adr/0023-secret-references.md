@@ -46,7 +46,7 @@
 ## Context
 [ADR-0003](0003-config-and-secrets-via-env-file.md) put all secrets in a git-ignored
 `.env`, read through the process environment, and had a check reference a secret **by
-its environment-variable name**; its phase-2 note anticipated "a proper secret
+its environment-variable name**; its closing note anticipated "a proper secret
 manager" once a deployment grew. That point has come: a deployment wants its check
 credentials (e.g. a GitHub token) in **AWS Secrets Manager**, another store — e.g.
 **Parameter Store** — may serve other secrets, possibly both **in the same

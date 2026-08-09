@@ -1,0 +1,28 @@
+{#- The one theme line the server cannot render: resolving `auto`.
+
+    Every other theme is written onto <body> server-side (ADR-0029), but `auto`
+    means *what the OS is asking for*, and only the browser knows that. The
+    stylesheet follows it through a prefers-color-scheme query; Bootstrap's own
+    chrome needs a concrete `data-bs-theme`, so these three lines set it.
+
+    Two properties are load-bearing, and both are why this is inline rather than a
+    file under static/:
+
+    * **First thing inside <body>.** It has to land before anything paints, or a
+      page flashes light chrome on a dark canvas. A `defer`red external script runs
+      after the document is parsed — far too late — and a blocking `<script src>`
+      would put a request in front of the first paint on every cold load.
+    * **It reads `document.body`,** which exists at this point precisely because the
+      tag sits inside it.
+
+    Included by both documents that have a <body> of their own: the shared header,
+    and the login page, which includes no header. It is **one** partial rather than
+    a copy in each because an inline script is what a Content-Security-Policy has to
+    name by hash (ADR-0048) — and there is no sense in spending two hashes on one
+    script. -#}
+<script>
+    if (document.body.dataset.lsTheme === 'auto' &&
+        window.matchMedia('(prefers-color-scheme: dark)').matches) {
+        document.body.setAttribute('data-bs-theme', 'dark');
+    }
+</script>

@@ -4,7 +4,7 @@ A branch check's aspect leaves are **type-inherent** (ADR-0025), so their labels
 live **with the check** rather than be copy-pasted into ``nodes.yaml``. A check reads a
 ``subnodes:`` block from its config — ``name -> {title, about}`` — in the same file its
 root ``about`` / ``title`` live in, and passes each through on the matching child
-``CheckResult`` (Phase-4 fill-empty carries it; ``nodes.yaml`` still overrides per path,
+``CheckResult`` (fill-empty carries it; ``nodes.yaml`` still overrides per path,
 as a last resort). A check that also ships built-in defaults (e.g. ``host-metrics``'
 per-aspect ``about``) layers the two with :func:`resolve_text`: the config value when
 present, the default otherwise — and the config may **extend** the default rather than
@@ -24,6 +24,11 @@ from typing import Any
 
 from little_sister import values
 from little_sister.errors import CheckError
+
+#: Everything public here is contract — promised through the `little_sister.checks`
+#: facade, which re-exports exactly these three (architecture.md §11, ADR-0049).
+#: A plugin imports them from the package; this module path is the library's.
+__all__ = ["expand_tokens", "parse_subnodes", "resolve_text"]
 
 
 def parse_subnodes(config: dict[str, Any]) -> dict[str, dict[str, str]]:

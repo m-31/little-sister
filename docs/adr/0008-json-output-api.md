@@ -115,7 +115,7 @@ readers** — a display client (wants the rolled-up code) and a federating paren
 - Read-only means a leaked token exposes status, not control — a deliberately small
   blast radius for the first cut (a new required `.env` key, fail-fast per ADR-0003).
 
-> **Update (2026-06-26):** the envelope gained the Phase-2 node-metadata fields —
+> **Update (2026-06-26):** the envelope gained the node-metadata fields —
 > `about` (ADR-0012), `title` (ADR-0017), `config` (ADR-0013), all **raw Markdown**
 > (the client renders, ADR-0018) — and a nullable **`maintenance_details`** object
 > (`reason` / `set_by` / `set_at` / `expires_at`, ADR-0014) beside the existing

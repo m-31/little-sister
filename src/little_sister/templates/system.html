@@ -21,6 +21,125 @@
             {% include '_system_info.html' %}
         </div>
 
+        {# The registered check types and who answers for each. A type may come from
+           a separately released package (ADR-0051), so this is the only place an
+           operator can read which code — and which version — is behind a `type:`
+           name in their YAML. Always shown: there are always the built-ins, and the
+           point is the comparison between them and everything else.
+
+           Split, though. The types this configuration runs come first; the rest
+           fold into a disclosure, because on a small deployment they are most of
+           the card and none of the question being asked. They stay reachable
+           because a registered-but-unused type is the proof a freshly installed
+           plugin took — see `_type_roster`, which owns the reasoning. #}
+        {%- macro type_table(rows) %}
+                <table class="table table-sm align-middle mb-0">
+                    <thead>
+                        <tr><th>Type</th><th>Module</th><th>Version</th><th>From</th></tr>
+                    </thead>
+                    <tbody>
+                        {% for origin, count in rows %}
+                        <tr>
+                            {#- "used by", because a bare count under a type name
+                                reads as something the *package* brought — two
+                                checks shipped — when it is the opposite: how many
+                                checks in this deployment's configuration name this
+                                type. A package contributing one type to two checks
+                                is the ordinary case, so the ambiguous phrasing was
+                                wrong most of the time. -#}
+                            <td><code>{{ origin.type_name }}</code>
+                                {%- if count %}<br><span class="text-muted small">used by {{ count }} check{{ 's' if count != 1 else '' }}</span>{% endif %}</td>
+                            {#- The loaded path under the module name, because the
+                                version beside it is the installed metadata's claim:
+                                a source copy earlier on the path shadows an
+                                installed distribution of the same name, and then
+                                the version is answering for code that is not
+                                running. Exactly the case somebody reads this table
+                                to diagnose, so the table shows both. -#}
+                            <td class="text-muted">{{ origin.module }}
+                                {% if origin.path %}<br><small>{{ origin.path }}</small>{% endif %}</td>
+                            <td class="text-muted">{% if origin.version %}{{ origin.version }}{% else %}&mdash;{% endif %}</td>
+                            <td class="text-muted">{% if origin.builtin %}built-in{% elif origin.distribution %}{{ origin.distribution }}{% else %}source{% endif %}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+        {%- endmacro %}
+        <div class="card mb-3">
+            <div class="card-body">
+                <h3 class="h6 text-muted text-uppercase">Check types</h3>
+                {% if types_in_use %}
+                {{ type_table(types_in_use) }}
+                {% if types_folded %}
+                {#- The count belongs in the summary: a closed disclosure has to say
+                    what it is hiding, or an operator looking for a type they cannot
+                    find has no reason to open it. #}
+                <details class="mt-2">
+                    <summary class="text-muted small">{{ types_folded | length }} more registered type{{ 's' if types_folded | length != 1 else '' }}, unused by this configuration</summary>
+                    <div class="mt-2">{{ type_table(types_folded) }}</div>
+                </details>
+                {% endif %}
+                {% else %}
+                {#- Nothing to split against (no engine, or no checks) — and that is
+                    the moment the roster matters most, so it is shown whole. #}
+                {{ type_table(types_folded) }}
+                {% endif %}
+            </div>
+        </div>
+
+        {# What is installed beside the library. A package reaches this instance
+           through four seams and the tables below are each about one of them, so
+           until this card the *version* of a package that registers no check type
+           was unreadable from the running instance — see `_registering_packages`.
+           One row per installation, not per contribution: the loaded path and the
+           release belong to the package, and printing them on every slot row would
+           say the same thing twice for a package that fills two. Absent when
+           nothing but the library registered anything. #}
+        {% if packages %}
+        <div class="card mb-3">
+            <div class="card-body">
+                <h3 class="h6 text-muted text-uppercase">Packages</h3>
+                <table class="table table-sm align-middle mb-0">
+                    {#- Two columns, not three. The loaded path is the longest thing
+                        on this page — an absolute site-packages path, most of it
+                        the same prefix on every row — and a column of its own left
+                        it a narrow ribbon breaking at the hyphen in "site-packages"
+                        while squeezing everything either side of it. Under the name
+                        it gets the table's whole width, which is what a path that
+                        long needs to stay readable. -#}
+                    <thead>
+                        <tr><th>Package</th><th>Registers</th></tr>
+                    </thead>
+                    <tbody>
+                        {% for row in packages %}
+                        <tr>
+                            {#- The import name is what every other table on this
+                                page prints, so it leads; the distribution and
+                                version sit beside it because that pair is what an
+                                operator compares against what they installed. A
+                                package with no installed metadata is a copy on the
+                                path — the shadowing case, worth saying out loud. -#}
+                            <td><code>{{ row.origin.package }}</code>
+                                <span class="text-muted small">{% if row.origin.distribution %}· {{ row.origin.distribution }} {{ row.origin.version }}{% else %}· source{% endif %}</span>
+                                {%- if row.origin.path %}<br><small class="text-muted">{{ row.origin.path }}</small>{% endif %}</td>
+                            {#- Each registration is one fact and must not break
+                                across lines: "slot reason.actions" split after
+                                "slot" reads as two entries, and the column is
+                                narrow enough for that to happen. The list still
+                                wraps *between* items — that is what the breaks
+                                are for. -#}
+                            <td class="text-muted small">
+                                {%- for item in row.registers %}
+                                <span class="ls-system__register">{{ item }}</span>{% if not loop.last %}<br>{% endif %}
+                                {%- endfor %}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endif %}
+
         {# The extension seams (ADR-0034 / ADR-0035), outside #system-info because
            they are decided at import time and never move while the process runs —
            re-fetching them on the ~10s poll would say nothing new. Shown only when
@@ -57,14 +176,50 @@
                 </table>
                 {% endif %}
                 {% if extra_aspects %}
+                {#- Each name with the package that registered it: the name alone
+                    says the file is *declared*, which is not the question when the
+                    file is misbehaving. An owner is absent only where the caller
+                    could not be inferred, and then nothing is claimed. #}
                 <p class="text-muted small mb-0 mt-2">
                     Registered configuration aspects:
-                    {% for name in extra_aspects %}<code>config/{{ name }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
+                    {% for name, owner in extra_aspects %}<code>config/{{ name }}</code>{% if owner %} ({{ owner }}){% endif %}{% if not loop.last %}, {% endif %}{% endfor %}
                 </p>
                 {% endif %}
             </div>
         </div>
         {% endif %}
+
+        {# The effective Content-Security-Policy (ADR-0048 §7). Always shown, unlike
+           the extensions card above: there is always a policy, and the reason to
+           print it is that a source may come from a *package* — a request blocked
+           inside somebody else's code is undebuggable from here unless the page says
+           who asked for each origin. The header name is part of the answer: a
+           Report-Only policy reports and blocks nothing. #}
+        <div class="card mb-3">
+            <div class="card-body">
+                <h3 class="h6 text-muted text-uppercase">Content-Security-Policy</h3>
+                <p class="text-muted small mb-2"><code>{{ csp_header }}</code></p>
+                <table class="table table-sm align-middle mb-0">
+                    <thead>
+                        <tr><th>Directive</th><th>Sources</th></tr>
+                    </thead>
+                    <tbody>
+                        {% for directive, sources in csp_directives %}
+                        <tr>
+                            <td><code>{{ directive }}</code></td>
+                            <td>
+                                {%- for source in sources %}
+                                <code>{{ source.value }}</code>
+                                <span class="text-muted small">({{ source.by }})</span>
+                                {%- if not loop.last %}<br>{% endif %}
+                                {%- endfor %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
     </div>
 
 {% include '_page_end.html' %}

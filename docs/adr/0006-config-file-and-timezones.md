@@ -5,6 +5,14 @@
 - **Related:** [ADR-0003](0003-config-and-secrets-via-env-file.md) (secrets in `.env`).
 - **Register:** [`../decisions.md`](../decisions.md)
 
+> **Update (2026-08-03):** the configured timezone now also interprets an admin's
+> **unzoned maintenance expiry input**. A full date/time, a date shortcut, a time of
+> day and a weekday/time are wall-clock values in this zone; a timestamp carrying `Z`
+> or a numeric offset keeps that explicit offset. The resolved instant is converted
+> back to the existing naive server-local storage convention, so neither persisted
+> timestamps nor the JSON contract change. A nonexistent or ambiguous wall time at a
+> DST transition is refused instead of silently choosing an instant.
+
 ## Context
 General, non-secret options (starting with the **display timezone**) shouldn't be
 hard-coded. Secrets already live in `.env` (ADR-0003) and *what to monitor* lives

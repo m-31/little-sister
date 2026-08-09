@@ -21,6 +21,7 @@ venv/
 node_modules/
 # Ignore the deployment's real user list (the package ships users.example.yaml)
 /config/users.yaml
+/config/users/
 # Ignore runtime artifacts (logs, pidfile)
 /var/
 # Ignore coverage reports

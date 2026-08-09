@@ -1,17 +1,24 @@
-# Example user list for little-sister (ADR-0020).
+# Example user list for little-sister (ADR-0020, ADR-0031).
 #
-# Copy this to `users.yaml` in your deployment's working directory — or point
-# LITTLE_SISTER_USERS at a file elsewhere — and edit it. The real `users.yaml`
-# is git-ignored; this example is the shipped template.
+# Copy this to `config/users/users.yaml` — the directory form of the `users`
+# configuration aspect — and edit it. Put optional pictures in
+# `config/users/avatars/`. To keep the list outside the main tree, give it a
+# configuration root of its own and name that root first in
+# LITTLE_SISTER_CONFIG_DIR: this aspect does not layer, so the first root
+# declaring it wins whole. The real user aspect is git-ignored; this example is
+# the shipped template.
 #
 # Each top-level key is a login name. `admin: true` grants the admin-only
 # actions (e.g. setting maintenance); omit it for a viewer. Passwords are
-# plaintext for now (hashing is a later phase).
+# plaintext for now (hashing is a later phase). `avatar` is a bare file name in
+# `avatars/`; its extension may be omitted. Without one, the UI uses its packaged
+# neutral avatar.
 jdoe:
   firstname: "Jane"
   lastname: "Doe"
   password: "change-me"
   admin: true
+  # avatar: jdoe
 amorgan:
   firstname: "Alex"
   lastname: "Morgan"

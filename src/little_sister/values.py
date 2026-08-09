@@ -40,6 +40,10 @@ from typing import Any, Final
 
 from little_sister.errors import CheckError
 
+#: The check-authoring surface of this module (architecture.md §11, ADR-0049) —
+#: everything public here is promised, so the two cannot drift apart.
+__all__ = ["flag", "number", "real", "rows", "text"]
+
 #: Sentinel for "not in the bag at all" — distinct from a present ``None``, which is
 #: treated the same way but must not be confused with a legitimate falsy value.
 _MISSING: Final = object()

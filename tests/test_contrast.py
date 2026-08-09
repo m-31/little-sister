@@ -394,6 +394,89 @@ class MenuContrastTests(TestCase):
                         f"a silenced reason at opacity {dim} is {ratio:.2f}:1 "
                         f"on {palette[QUIET_SURFACE]}")
 
+    def test_a_coded_reason_line_clears_aa_on_its_own_tint(self):
+        """Every coded line (ADR-0042) paints its own tint pair at full
+        opacity — `.is-coded` resets the reason wash — so the pair *is* the
+        measurement, on every gated theme, independent of the card beneath. All
+        four states, because a mixed list sits on a vivid fill, where a
+        surfaceless line would inherit the drama; the quiet override keeps a
+        pinned coded line on the maintenance pair, measured above."""
+        for theme, selector, _ in THEMES:
+            palette = _tokens(self.blocks, selector)
+            for state in ("ok", "warn", "error", "undefined"):
+                with self.subTest(theme=theme, state=state):
+                    ratio = _ratio(_rgb(palette[f"--ls-tint-{state}-ink"]),
+                                   _rgb(palette[f"--ls-tint-{state}"]))
+                    if theme in UNGATED:
+                        self.assertGreater(ratio, 1.0)
+                        continue
+                    self.assertGreaterEqual(
+                        round(ratio, 2), AA,
+                        f"a coded {state} line is {ratio:.2f}:1 on its tint "
+                        f"in {theme}")
+
+    def test_a_coded_line_resets_the_reason_wash(self):
+        """The base reason rule carries `opacity: 0.95`; a line that paints its
+        own opaque surface must not inherit the wash, or the pair measured above
+        is not the pair rendered — the silenced-reason lesson, one rule over."""
+        sheet = STYLESHEET.read_text()
+        block = re.search(
+            r"\.status-node__reason\.is-coded,\s*"
+            r"\.check-reason\.is-coded\s*\{([^}]*)\}", sheet)
+        self.assertIsNotNone(block, "the .is-coded base rule is gone")
+        assert block is not None
+        self.assertIn("opacity: 1", block.group(1))
+
+    def test_the_state_clusters_hold_their_rows(self):
+        """A box's self row is a wrapping flex row and its state cluster never
+        breaks internally — a floated cluster dropped out of its box under
+        width pressure (action chips) and overlaid the next one, and a card's
+        state used to wrap between its time and its word. Structural, because
+        no rendered-count test can see a float escape its container."""
+        sheet = STYLESHEET.read_text()
+        self_row = re.search(r"\.status-node__self\s*\{([^}]*)\}", sheet)
+        self.assertIsNotNone(self_row, "the box self-row rule is gone")
+        assert self_row is not None
+        self.assertIn("display: flex", self_row.group(1))
+        self.assertIn("flex-wrap: wrap", self_row.group(1))
+        for selector in (r"\.status-node__state", r"\.status-card__state"):
+            block = re.search(selector + r"\s*\{([^}]*)\}", sheet)
+            with self.subTest(rule=selector):
+                self.assertIsNotNone(block)
+                assert block is not None
+                self.assertIn("white-space: nowrap", block.group(1))
+                self.assertIn("margin-left: auto", block.group(1))
+                self.assertNotIn("float", block.group(1))
+        # The standing second line is the deployment's opt-in (settings.yaml
+        # `card_status_line: below`, rendered as a body attribute): the compact
+        # default keeps the cluster beside the title, so the base rule must NOT
+        # carry the full basis — and the opted-in block must.
+        card_state = re.search(r"\.status-card__state\s*\{([^}]*)\}", sheet)
+        assert card_state is not None
+        self.assertNotIn("flex-basis", card_state.group(1))
+        below = re.search(
+            r"body\[data-ls-card-state=\"below\"\] \.status-card__state"
+            r"\s*\{([^}]*)\}", sheet)
+        self.assertIsNotNone(below, "the standing-second-line rule is gone")
+        assert below is not None
+        self.assertIn("flex-basis: 100%", below.group(1))
+        self.assertIn("text-align: right", below.group(1))
+        # The head's middle (title + action chips) has zero say in line-fitting:
+        # wrapping preempts shrinking, so only a zero-basis middle stays out of
+        # the equation — and the chips inside it sit absolutely, over the title
+        # where the two collide, costing the row no width at all.
+        middle = re.search(r"\.status-head__middle\s*\{([^}]*)\}", sheet)
+        self.assertIsNotNone(middle, "the head-middle rule is gone")
+        assert middle is not None
+        self.assertIn("flex: 1 1 0", middle.group(1))
+        self.assertIn("min-width: 0", middle.group(1))
+        self.assertIn("position: relative", middle.group(1))
+        chips = re.search(
+            r"\.status-head__middle > \.node-actions\s*\{([^}]*)\}", sheet)
+        self.assertIsNotNone(chips, "the overlaying-chips rule is gone")
+        assert chips is not None
+        self.assertIn("position: absolute", chips.group(1))
+
     def test_a_quiet_signal_clears_aa_as_the_mix_it_is(self):
         # A term at rest is a `color-mix` of the body ink and the muted furniture
         # — brighter than the ring it rides, quieter than the prose. Both ends

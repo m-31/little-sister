@@ -1,14 +1,14 @@
 import atexit
+import json
 import os
 import re
+from collections import Counter
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from functools import partial
-from pathlib import Path
 from secrets import token_hex
 from urllib.parse import parse_qs, urlencode, urlsplit
 
-import yaml
 from flask import (
     Flask,
     Response,
@@ -26,27 +26,33 @@ from flask.typing import ResponseReturnValue
 from jinja2 import ChoiceLoader, StrictUndefined
 from markupsafe import Markup
 
-from little_sister import __version__, link_probe, slots, watch_lines
+from little_sister import __version__, csp, link_probe, slots, watch_lines
 from little_sister.actions import register_builtin_fillers
 from little_sister.api import authenticate, parse_api_tokens, problem, status_envelope
 from little_sister.checks import CheckError, parse_duration
+from little_sister.checks.base import TypeOrigin, registered_types
 from little_sister.config import config
 from little_sister.config_dir import (
+    CONFIG_DIR_ENV,
+    aspect_owner,
     config_roots,
+    fatal,
     registered_aspects,
-    sole_aspect_file,
 )
-from little_sister.engine import Engine, create_engine
+from little_sister.copy_status import format_copy_markdown
+from little_sister.engine import Engine, EngineInfo, create_engine
 from little_sister.errors import ConfigError
 from little_sister.icons import known_names, read_icon
 from little_sister.links import LINKS_ASPECT, current_links
 from little_sister.logger import logger
 from little_sister.maintenance import MaintenanceEntry, MaintenanceStore
 from little_sister.nodes import load_nodes, resolve_metadata, run_consistency_pass
+from little_sister.origins import PackageOrigin, package_origin
 from little_sister.render import render_markdown, render_markdown_inline
 from little_sister.secrets import SecretError, resolve_setting
 from little_sister.status import HEARTBEAT_PATH, StatusCode
 from little_sister.tree import StatusSnapshot, status_tree
+from little_sister.users import load_users, read_avatar
 
 
 def _load_dotenv(path: str = ".env") -> None:
@@ -170,6 +176,12 @@ def _inject_presentation() -> dict[str, object]:
         # the kiosk's exit is a write of this value — the way out is simply
         # choosing the default layout again
         "default_layout": DEFAULT_LAYOUT,
+        # Deployment-wide card head style (settings.yaml `card_status_line`):
+        # `below` gives every card a standing status line under its title row;
+        # the compact default keeps the cluster beside it. Rendered as a body
+        # attribute the stylesheet branches on; a per-viewer override is a
+        # later step (backlog).
+        "card_status_line": config.card_status_line,
     }
 
 
@@ -212,6 +224,143 @@ app.jinja_env.globals["extension_assets"] = _extension_assets
 # here rather than before the app import, because it is ours: a deployment's
 # registrations have already landed by now, and both kinds share one rail.
 register_builtin_fillers()
+
+
+# The one inline script the documents carry: the theme bootstrap, which resolves
+# `auto` before first paint and therefore cannot be a file (the partial says why).
+# One partial, so one hash — that is what folding the login page's copy away bought.
+_THEME_BOOTSTRAP = "_theme_bootstrap.html"
+
+# The text between a bare <script> and its close. Only our own partial is read with
+# this, and it holds exactly one such element with no attributes.
+_INLINE_SCRIPT = re.compile(r"<script>(.*?)</script>", re.DOTALL)
+
+# The header the first policy ships under (ADR-0048 §6): it reports, it blocks
+# nothing. Enforcement — and which directives graduate first — is a later decision.
+CSP_HEADER = "Content-Security-Policy-Report-Only"
+
+# A violation report is small; anything larger is not one, and this endpoint takes no
+# authentication (a violation on the login page has no session), so it is bounded
+# before it is parsed rather than after.
+CSP_REPORT_LIMIT = 64 * 1024
+
+# Every control character in a reported field becomes a space before it is logged: a
+# report is attacker-influenced text, and a newline in it would forge a second log
+# line. `\x85` and `\u2028`/`\u2029` are in here because some log readers break lines
+# on them too.
+_CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")
+
+# How much of one reported field reaches the log. A report is attacker-influenced
+# text — a blocked URI is whatever the page tried to load — and one line per
+# violation is the whole point of logging them.
+CSP_FIELD_LIMIT = 200
+
+
+def _inline_scripts() -> tuple[str, ...]:
+    """The exact text of every inline script our pages carry, for :func:`csp.assemble`.
+
+    Read from the rendered partial rather than written out again here: a browser
+    hashes the element's text content byte for byte, so a second copy of it in Python
+    would be a copy that can drift — which is the failure this returns nothing for
+    instead. Rendered through the app's own environment, so it is the same bytes the
+    include emits.
+    """
+    try:
+        rendered = app.jinja_env.get_template(_THEME_BOOTSTRAP).render()
+    except Exception:
+        logger.exception(
+            "csp: %s could not be rendered, so its hash is not in the policy — the "
+            "theme bootstrap will be reported on every page (ADR-0048)",
+            _THEME_BOOTSTRAP)
+        return ()
+    # An HTML parser normalizes CRLF to LF in an element's text before the hash is
+    # taken, so a CRLF checkout would otherwise hash bytes no browser ever sees.
+    found = tuple(match.group(1).replace("\r\n", "\n")
+                  for match in _INLINE_SCRIPT.finditer(rendered))
+    if not found:
+        logger.warning(
+            "csp: no inline <script> found in %s, so its hash is not in the policy "
+            "(ADR-0048)", _THEME_BOOTSTRAP)
+    return found
+
+
+# The Content-Security-Policy, assembled **here** — at application creation, after
+# every registration has run and the configuration is loaded, and never at module
+# import, because import is when a dependent package's contributions are still
+# arriving (ADR-0048 §1). There is deliberately no policy constant to find.
+csp_policy = csp.assemble(inline_scripts=_inline_scripts())
+logger.info("csp: %s: %s", CSP_HEADER, csp_policy.header())
+
+
+@app.after_request
+def _content_security_policy(response: Response) -> Response:
+    """Attach the assembled policy to every document (ADR-0048).
+
+    The application's first ``after_request`` hook. HTML only: the policy governs how
+    a *document* may be built, so putting it on the JSON API's responses or on a
+    static file would be noise a browser ignores anyway. The ~10s poll fragments are
+    HTML and do carry it, which costs a header and is honest — they are page content.
+    """
+    if response.mimetype == "text/html":
+        response.headers[CSP_HEADER] = csp_policy.header()
+    return response
+
+
+@app.route(csp.REPORT_PATH, methods=["POST"])
+def csp_report() -> ResponseReturnValue:
+    """Log one violation report at ``WARNING`` (ADR-0048 §6).
+
+    **No login gate, deliberately:** a violation on the login page has no session,
+    and a report the browser cannot deliver measures nothing. So the endpoint is
+    bounded instead — one log line per report, each field truncated — and it stores
+    nothing, which is what keeps this slice clear of the persistence decision.
+
+    The body is read **from the stream with a limit**, not measured by
+    ``Content-Length`` and then parsed: this is the one route with no session behind
+    it, and a chunked request carries no length to measure. So the read itself is what
+    refuses an oversized body, rather than a header the sender chooses.
+    """
+    body = request.stream.read(CSP_REPORT_LIMIT + 1)
+    if len(body) > CSP_REPORT_LIMIT:
+        logger.warning(
+            "csp: a violation report over %d bytes was refused unread",
+            CSP_REPORT_LIMIT)
+        return "", 204
+    # Parsed here rather than through `get_json`, which would read the stream itself:
+    # browsers post this as application/csp-report, so there is no content type to
+    # negotiate either way.
+    try:
+        payload = json.loads(body)
+    except (ValueError, UnicodeDecodeError):
+        payload = None
+    report = payload.get("csp-report") if isinstance(payload, dict) else None
+    if not isinstance(report, dict):
+        logger.warning("csp: a violation report arrived that was not one")
+        return "", 204
+
+    def field(*names: str) -> str:
+        """One reported value, from the first name present — flattened and truncated.
+
+        A report is **attacker-influenced text**: a blocked URI is whatever the page
+        tried to load. So every control character becomes a space before anything is
+        logged, because a newline would otherwise forge a second, arbitrary log line —
+        and one line per violation is the whole point of logging them.
+
+        Several names because browsers disagree: `effective-directive` is the current
+        field and Safari still sends only the deprecated `violated-directive`.
+        """
+        for name in names:
+            if name in report:
+                flat = _CONTROL.sub(" ", str(report[name]))
+                return flat[:CSP_FIELD_LIMIT] or "?"
+        return "?"
+
+    logger.warning(
+        "csp: %s violated on %s — blocked %s (source %s line %s)",
+        field("effective-directive", "violated-directive"),
+        field("document-uri"), field("blocked-uri"), field("source-file"),
+        field("line-number"))
+    return "", 204
 
 
 # Characters a browser does not read the way this code would. A backslash is
@@ -753,33 +902,41 @@ def _session_key() -> str:
 
 app.secret_key = _session_key()
 
-USERS_ASPECT = "users"
+# The retired single-file user override (ADR-0046). A hard cut: the name is never
+# honored again, and `users.py` does not know it ever existed. It is read here, once,
+# for the opposite purpose — to **refuse**. ADR-0031 §7 retired LITTLE_SISTER_CHECKS_DIR
+# by never reading it at all, which was right there because that removal announced
+# itself (no checks, no start); this one would not. A deployment that upgrades with the
+# variable still set in its unit file, and a user list also in its configuration tree,
+# would come up looking healthy while authenticating against a *different* list.
+RETIRED_USERS_ENV = "LITTLE_SISTER_USERS"
 
-# Load the allowed users from a deployment-controlled location (ADR-0020):
-# LITTLE_SISTER_USERS names a single file and bypasses layering; otherwise the
-# `users` aspect of the configuration directory (ADR-0031). Users are the one
-# aspect that does **not** merge across roots — the first root declaring it wins
+
+def _refuse_retired_users_override() -> None:
+    """Stop the process while the retired user-list variable is set (ADR-0046)."""
+    if not os.environ.get(RETIRED_USERS_ENV):
+        return
+    raise fatal(
+        f"{RETIRED_USERS_ENV} is set, but it is no longer read (ADR-0046) — the user "
+        f"list comes from the {CONFIG_DIR_ENV} roots only. Move that file into a "
+        f"configuration root and name the root first, e.g. "
+        f"{CONFIG_DIR_ENV}=/etc/little-sister/identity:config, then unset "
+        f"{RETIRED_USERS_ENV}. Refusing rather than ignoring it: the two can name "
+        f"different user lists, and starting on the wrong one is silent.")
+
+
+# Load the allowed users from a deployment-controlled location: the `users` aspect of
+# the configuration path-list, in either legal form (ADR-0046/0031/0045). Users are the
+# one aspect that does **not** merge across roots — the first root declaring it wins
 # whole, because merging identities across layers is a security question wearing a
-# convenience costume.
-_users_override = os.environ.get("LITTLE_SISTER_USERS", "")
-_users_path: Path | None = (Path(_users_override) if _users_override
-                            else sole_aspect_file(USERS_ASPECT))
-if _users_path is None:
-    raise FileNotFoundError(
-        f"user list not found — no {USERS_ASPECT}.yaml in any configuration root "
-        f"({', '.join(str(root.resolve()) for root in config_roots())}). Add "
-        f"config/{USERS_ASPECT}.yaml (see users.example.yaml), or set "
-        f"LITTLE_SISTER_USERS to a file elsewhere.")
-try:
-    with open(_users_path, encoding="utf-8") as users_file:
-        users = yaml.safe_load(users_file)
-except FileNotFoundError as exc:
-    raise FileNotFoundError(
-        f"user list not found at {str(_users_path)!r} — set LITTLE_SISTER_USERS "
-        f"or place a {USERS_ASPECT}.yaml in a configuration root (see "
-        f"users.example.yaml).") from exc
+# convenience costume. That rule is also what retired the single-file override above: a
+# users-only root named first says the same thing with the mechanism already here.
+_refuse_retired_users_override()
+_users_config = load_users()
+users = _users_config.users
+user_avatars = _users_config.avatars
 
-logger.info("little-sister started with %d configured user(s).", len(users or {}))
+logger.info("little-sister started with %d configured user(s).", len(users))
 
 # API tokens for the JSON backend (ADR-0008): "name=token,name2=token2" — set
 # directly, or as a value that is itself a secret reference (ADR-0023 update
@@ -836,6 +993,20 @@ def _inject_engine_error() -> dict[str, str | None]:
     partial can render its engine-not-started alert without per-route plumbing.
     (The login page does not include the header, so nothing leaks pre-login.)"""
     return {"engine_error": engine_error}
+
+
+@app.context_processor
+def _inject_user_avatar() -> dict[str, str]:
+    """Give the shared settings trigger the session user's avatar URL.
+
+    The default is a public packaged asset. A custom picture goes through the
+    login-gated, username-free route below, so neither the URL nor the template
+    exposes the configured user roster (ADR-0045).
+    """
+    username = session.get("username", "")
+    url = (url_for("user_avatar") if username in user_avatars
+           else url_for("static", filename="default-avatar.svg"))
+    return {"user_avatar_url": url}
 
 
 def _seed_node_metadata(engine: Engine) -> None:
@@ -986,7 +1157,15 @@ def status(branch: str = "") -> ResponseReturnValue:
                                branch=branch, since=since, focus=focus,
                                focus_orphan=focus_orphan,
                                is_admin=session.get('admin', False),
-                               maintenance_default=config.maintenance_default_expiry)
+                               maintenance_default=config.maintenance_default_expiry,
+                               maintenance_timezone=config.timezone)
+    # A branch page renders the same node-facts block as the leaf page (ADR-0044
+    # decision 8), so it needs the same `since`: the start of the node's current
+    # **own**-status period, from its own transition log — a container has one of
+    # those like any other node, which is half of why the block can be shared.
+    # None on the overview root, which is nobody's node.
+    branch_periods = status_tree.history(branch) if branch and node else []
+    since = branch_periods[-1].since if branch_periods else None
     # Lift the engine self-heartbeat into the status strip (ADR-0024) before filtering,
     # so it shows there always — never as a card, never hidden by hide-ok.
     node, heartbeat = _split_heartbeat(node)
@@ -1019,6 +1198,7 @@ def status(branch: str = "") -> ResponseReturnValue:
     rendered_at = _format_local(now)
     if request.args.get('fragment'):
         body = render_template('_status_grid.html', node=node, branch=branch,
+                               since=since,
                                max_depth=depth, hide_ok=hide_ok,
                                hide_idle=hide_idle, dense=dense,
                                is_admin=session.get('admin', False),
@@ -1033,11 +1213,12 @@ def status(branch: str = "") -> ResponseReturnValue:
         node_meta = _node_meta_map(node) | _node_meta_map(heartbeat)
         body = render_template('status.html', username=session['username'],
                                firstname=session['firstname'], node=node,
-                               branch=branch, max_depth=depth,
+                               branch=branch, since=since, max_depth=depth,
                                depth_limit=MAX_DEPTH, hide_ok=hide_ok,
                                hide_idle=hide_idle, dense=dense,
                                is_admin=session.get('admin', False),
                                maintenance_default=config.maintenance_default_expiry,
+                               maintenance_timezone=config.timezone,
                                heartbeat=heartbeat, node_meta=node_meta,
                                rendered_at=rendered_at,
                                reason_cap=config.reason_cap,
@@ -1094,20 +1275,186 @@ MIN_MAINTENANCE_SECONDS = 1
 MAX_MAINTENANCE_SECONDS = 365 * 24 * 3600
 
 
-class _BadDuration(Exception):
-    """A duration this cannot turn into a positive, bounded window. Carries the
-    sentence the form shows."""
+class _BadExpiry(Exception):
+    """An expiry the maintenance form cannot resolve safely. Carries the sentence
+    the refusal page shows."""
 
 
-def _maintenance_seconds(raw: str) -> int:
-    """Seconds for a maintenance window: an explicit duration (``2h`` / ``3d``) when
-    given, else the configured default (ADR-0014).
+_FULL_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_FULL_TIMESTAMP = re.compile(
+    r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?"
+    r"(?:[zZ]|[+-]\d{2}:\d{2})?$")
+_MONTH_DAY = re.compile(r"^(\d{2})-(\d{2})$")
+_CLOCK = re.compile(r"^(\d{2}):(\d{2})$")
+_WEEKDAY_CLOCK = re.compile(
+    r"^(mon(?:day)?|tue(?:sday)?|wed(?:nesday)?|thu(?:rsday)?|"
+    r"fri(?:day)?|sat(?:urday)?|sun(?:day)?)\s+(\d{2}):(\d{2})$",
+    re.IGNORECASE)
+_WEEKDAY = re.compile(
+    r"^(mon(?:day)?|tue(?:sday)?|wed(?:nesday)?|thu(?:rsday)?|"
+    r"fri(?:day)?|sat(?:urday)?|sun(?:day)?)$",
+    re.IGNORECASE)
+_WEEKDAYS = {
+    "mon": 0, "monday": 0,
+    "tue": 1, "tuesday": 1,
+    "wed": 2, "wednesday": 2,
+    "thu": 3, "thursday": 3,
+    "fri": 4, "friday": 4,
+    "sat": 5, "saturday": 5,
+    "sun": 6, "sunday": 6,
+}
 
-    Raises :class:`_BadDuration` for anything that is not a positive, bounded number
-    of seconds. The **configured default** is the one value that still falls back
-    rather than refusing — a deployment's own `settings.yaml` typo must not make the
-    form unusable, and the hard fallback is a week.
+
+def _expiry_help(text: str) -> _BadExpiry:
+    return _BadExpiry(
+        f"{text!r} is not a duration or expiry. Use 2h, 17s, "
+        f"2026-07-10 18:00, 07-10, 17, 18:00, Friday or Fri 18:00. "
+        f"Times without an offset use {config.timezone}.")
+
+
+def _server_local(moment: datetime) -> datetime:
+    """The existing timestamp convention: naive server-local (ADR-0006). Calling
+    ``astimezone`` without an argument converts at *moment*, including a DST change
+    between now and the expiry, rather than retaining today's fixed UTC offset."""
+    return moment.astimezone().replace(tzinfo=None)
+
+
+def _configured_wall_time(wall: datetime, source: str) -> datetime:
+    """Attach the configured timezone to one naive wall time, refusing both holes
+    and folds. ``zoneinfo`` accepts either silently; round-tripping both folds via
+    UTC tells a normal instant (one unique result) from a missing one (none) and an
+    ambiguous one (two). An explicit offset never comes through this function."""
+    choices: dict[datetime, datetime] = {}
+    for fold in (0, 1):
+        aware = wall.replace(tzinfo=config.tzinfo, fold=fold)
+        round_trip = aware.astimezone(UTC).astimezone(config.tzinfo)
+        if round_trip.replace(tzinfo=None) == wall:
+            choices[aware.astimezone(UTC)] = aware
+    if len(choices) != 1:
+        raise _BadExpiry(
+            f"{source!r} is not an unambiguous local time in {config.timezone}. "
+            f"Use an explicit UTC offset for a clock change.")
+    return next(iter(choices.values()))
+
+
+def _wall(year: int, month: int, day: int, hour: int = 0,
+          minute: int = 0, second: int = 0) -> datetime | None:
+    """Build a calendar wall time, or ``None`` for a date/time that does not
+    exist. Calendar absence is distinct from a DST hole, which is diagnosed after
+    a valid wall time has been built."""
+    try:
+        return datetime(year, month, day, hour, minute, second)
+    except ValueError:
+        return None
+
+
+def _next_month_day(month: int, day: int, now: datetime,
+                    source: str) -> datetime:
+    local_now = now.astimezone(config.tzinfo)
+    # Eight years covers two leap-day opportunities. The one-year guard below will
+    # refuse a distant result; the wider search lets it report the range rather than
+    # pretending 02-29 is malformed.
+    for year in range(local_now.year, local_now.year + 9):
+        wall = _wall(year, month, day)
+        if wall is None:
+            continue
+        candidate = _configured_wall_time(wall, source)
+        if candidate.astimezone(UTC) > now:
+            return candidate
+    raise _expiry_help(source)
+
+
+def _next_day_of_month(day: int, now: datetime, source: str) -> datetime:
+    local_now = now.astimezone(config.tzinfo)
+    year, month = local_now.year, local_now.month
+    # A numbered day recurs within two months, but twelve keeps this helper plain
+    # and makes the no-clamping rule obvious.
+    for _ in range(12):
+        wall = _wall(year, month, day)
+        if wall is not None:
+            candidate = _configured_wall_time(wall, source)
+            if candidate.astimezone(UTC) > now:
+                return candidate
+        month += 1
+        if month == 13:
+            year += 1
+            month = 1
+    raise _expiry_help(source)
+
+
+def _clock_candidate(hour: int, minute: int, now: datetime,
+                     source: str) -> datetime:
+    local_now = now.astimezone(config.tzinfo)
+    wall = _wall(local_now.year, local_now.month, local_now.day, hour, minute)
+    if wall is None:
+        raise _expiry_help(source)
+    candidate = _configured_wall_time(wall, source)
+    if candidate.astimezone(UTC) <= now:
+        tomorrow = local_now.date() + timedelta(days=1)
+        wall = _wall(tomorrow.year, tomorrow.month, tomorrow.day, hour, minute)
+        assert wall is not None
+        candidate = _configured_wall_time(wall, source)
+    return candidate
+
+
+def _weekday_candidate(weekday: int, hour: int, minute: int, now: datetime,
+                       source: str, *, allow_today: bool = True) -> datetime:
+    local_now = now.astimezone(config.tzinfo)
+    days = (weekday - local_now.weekday()) % 7
+    if days == 0 and not allow_today:
+        days = 7
+    wanted = local_now.date() + timedelta(days=days)
+    wall = _wall(wanted.year, wanted.month, wanted.day, hour, minute)
+    if wall is None:
+        raise _expiry_help(source)
+    candidate = _configured_wall_time(wall, source)
+    if candidate.astimezone(UTC) <= now:
+        wanted += timedelta(days=7)
+        wall = _wall(wanted.year, wanted.month, wanted.day, hour, minute)
+        assert wall is not None
+        candidate = _configured_wall_time(wall, source)
+    return candidate
+
+
+def _bounded_expiry(candidate: datetime, now: datetime, source: str) -> datetime:
+    seconds = (candidate.astimezone(UTC) - now).total_seconds()
+    if seconds < MIN_MAINTENANCE_SECONDS:
+        raise _BadExpiry(
+            f"A maintenance expiry has to be in the future — {source!r} is not.")
+    if seconds > MAX_MAINTENANCE_SECONDS:
+        raise _BadExpiry(
+            f"{source!r} is longer than a year, which is longer than a maintenance "
+            f"window is ever meant to be. Pick something sooner.")
+    return _server_local(candidate)
+
+
+def _duration_expiry(text: str, now: datetime) -> datetime:
+    try:
+        seconds = parse_duration(text, _DEFAULT_MAINTENANCE_SECONDS)
+    except (CheckError, OverflowError, ValueError) as error:
+        raise _expiry_help(text) from error
+    if seconds < MIN_MAINTENANCE_SECONDS:
+        raise _BadExpiry(
+            f"A maintenance window has to be in the future — {text!r} is not. "
+            f"Use 2h, 3d, 90m or explicit seconds such as 17s.")
+    if seconds > MAX_MAINTENANCE_SECONDS:
+        raise _BadExpiry(
+            f"{text!r} is longer than a year, which is longer than a maintenance "
+            f"window is ever meant to be. Pick something shorter.")
+    return _server_local(now + timedelta(seconds=seconds))
+
+
+def _maintenance_expiry(raw: str, *, now: datetime | None = None) -> datetime:
+    """Resolve the maintenance form's duration-or-expiry field (ADR-0014).
+
+    ``now`` is captured once by the route and is always compared as an instant.
+    Blank uses the configured *duration* default; it is the one value that falls
+    back rather than refusing, so a deployment typo cannot make the form unusable.
+    All explicit calendar shortcuts are resolved in the configured timezone and
+    the result crosses the boundary in the existing naive server-local format.
     """
+    instant = now or datetime.now(UTC)
+    instant = instant.astimezone(UTC)
     text = raw.strip()
     if not text:
         try:
@@ -1117,22 +1464,50 @@ def _maintenance_seconds(raw: str) -> int:
             fallback = _DEFAULT_MAINTENANCE_SECONDS
         if not MIN_MAINTENANCE_SECONDS <= fallback <= MAX_MAINTENANCE_SECONDS:
             fallback = _DEFAULT_MAINTENANCE_SECONDS
-        return fallback
+        return _server_local(instant + timedelta(seconds=fallback))
+
+    # A bare integer belongs to the calendar, not to the duration grammar. This
+    # is the form's only intentional compatibility cut: write ``17s`` for seconds.
+    if text.isdecimal():
+        day = int(text)
+        if not 1 <= day <= 31:
+            raise _expiry_help(text)
+        return _bounded_expiry(
+            _next_day_of_month(day, instant, text), instant, text)
+
+    # Keep every unit-suffixed duration the shared parser already accepts. It is
+    # deliberately not widened: all other spellings below are calendar forms.
+    if text[-1].lower() in {"s", "m", "h", "d"}:
+        return _duration_expiry(text, instant)
+
     try:
-        seconds = parse_duration(text, _DEFAULT_MAINTENANCE_SECONDS)
-    except (CheckError, OverflowError, ValueError) as error:
-        raise _BadDuration(
-            f"{text!r} is not a duration — write it as 2h, 3d, 90m or a number "
-            f"of seconds.") from error
-    if seconds < MIN_MAINTENANCE_SECONDS:
-        raise _BadDuration(
-            f"A maintenance window has to be in the future — {text!r} is not. "
-            f"Write it as 2h, 3d, 90m or a number of seconds.")
-    if seconds > MAX_MAINTENANCE_SECONDS:
-        raise _BadDuration(
-            f"{text!r} is longer than a year, which is longer than a maintenance "
-            f"window is ever meant to be. Pick something shorter.")
-    return seconds
+        if _FULL_DATE.fullmatch(text):
+            parsed_date = datetime.fromisoformat(text)
+            candidate = _configured_wall_time(parsed_date, text)
+        elif _FULL_TIMESTAMP.fullmatch(text):
+            parsed = datetime.fromisoformat(
+                text[:-1] + "+00:00" if text[-1].lower() == "z" else text)
+            candidate = (parsed if parsed.tzinfo is not None
+                         else _configured_wall_time(parsed, text))
+        elif match := _MONTH_DAY.fullmatch(text):
+            candidate = _next_month_day(
+                int(match.group(1)), int(match.group(2)), instant, text)
+        elif match := _CLOCK.fullmatch(text):
+            candidate = _clock_candidate(
+                int(match.group(1)), int(match.group(2)), instant, text)
+        elif match := _WEEKDAY_CLOCK.fullmatch(text):
+            candidate = _weekday_candidate(
+                _WEEKDAYS[match.group(1).lower()], int(match.group(2)),
+                int(match.group(3)), instant, text)
+        elif match := _WEEKDAY.fullmatch(text):
+            candidate = _weekday_candidate(
+                _WEEKDAYS[match.group(1).lower()], 12, 0, instant, text,
+                allow_today=False)
+        else:
+            raise _expiry_help(text)
+    except ValueError as error:
+        raise _expiry_help(text) from error
+    return _bounded_expiry(candidate, instant, text)
 
 
 @app.route('/maintenance', methods=['POST'])
@@ -1177,15 +1552,15 @@ def maintenance() -> ResponseReturnValue:
     elif clearing:
         write = status_tree.clear_maintenance(path, expected_set_at=token)
     else:
+        now = datetime.now(UTC)
         try:
-            seconds = _maintenance_seconds(duration)
-        except _BadDuration as bad:
+            expires_at = _maintenance_expiry(duration, now=now)
+        except _BadExpiry as bad:
             # Nothing is written and the admin's words come back — the same
             # posture as a refused compare-and-set, for the same reason: a write
             # that silently did something other than what was asked is the thing
             # this route is not allowed to do (ADR-0014 amendment).
             return refused(problem=str(bad), stored=None)
-        expires_at = datetime.now() + timedelta(seconds=seconds)
         # A blank reason on an **edit** means "I did not touch this field", so the
         # stored text stays; on a new pin there is nothing to keep and the literal
         # `maintenance` is the honest placeholder.
@@ -1219,9 +1594,9 @@ def _maintenance_refused(*, path: str, slug: str, back: str, clearing: bool,
                          stored: MaintenanceEntry | None) -> ResponseReturnValue:
     """The page a refused write lands on: nothing was saved, here is why, and here
     are your own words back. One page for both refusals — a stale token and a
-    duration we will not accept — because the admin's situation is the same.
+    duration or expiry we will not accept — because the admin's situation is the same.
 
-    On a bad duration the form carries the **original** token, because nothing about
+    On a bad expiry the form carries the **original** token, because nothing about
     the stored pin moved; a refused compare-and-set is the case that needs a
     refreshed one, and that branch reads it off the entry it is showing.
     """
@@ -1230,7 +1605,8 @@ def _maintenance_refused(*, path: str, slug: str, back: str, clearing: bool,
         firstname=session['firstname'], path=path, back=back,
         clearing=clearing, stored=stored, slug=slug, problem=problem,
         mine=mine, duration=duration, token=token,
-        maintenance_default=config.maintenance_default_expiry)
+        maintenance_default=config.maintenance_default_expiry,
+        maintenance_timezone=config.timezone)
 
 
 @app.route('/maintenance', methods=['GET'])
@@ -1262,6 +1638,92 @@ def events() -> ResponseReturnValue:
                            firstname=session['firstname'], events=recent)
 
 
+def _type_roster(
+        info: EngineInfo | None,
+) -> tuple[list[tuple[TypeOrigin, int]], list[tuple[TypeOrigin, int]]]:
+    """The registered check types, split into the ones this configuration uses and
+    the ones it merely could — each paired with how many checks use it (0 in the
+    second list, which is what the split means).
+
+    Two questions land on this roster and only one of them is urgent. *Which code
+    answers for `type: github`, at which version* is a live diagnostic, and it can
+    only ever concern the handful of types the configuration actually names. *What
+    may I write in my YAML* is discovery: it needs the whole list, but it can wait
+    behind a disclosure. So the used types come first, carrying their count, and
+    the rest fold away — a card that was mostly rows nobody had asked about.
+
+    Folded rather than dropped, because the roster is also the only place a freshly
+    installed plugin can be seen to have registered *before* any check uses it —
+    the same silent failure the extensions card exists to catch. Dropping the
+    unused ones would make "installed, registered, waiting" indistinguishable from
+    "the entry point never fired".
+
+    With no engine — or an engine with no checks — nothing is known to be in use,
+    so the first list is empty and the caller renders the second one flat. That is
+    not a fallback so much as the case that most wants the roster: a start refused
+    for an unknown `type:` leaves exactly this page with no engine behind it.
+    """
+    counts: Counter[str] = (Counter(check.type_name for check in info.checks)
+                            if info is not None else Counter())
+    in_use = [(origin, counts[origin.type_name]) for origin in registered_types()
+              if counts[origin.type_name]]
+    folded = [(origin, 0) for origin in registered_types()
+              if not counts[origin.type_name]]
+    return in_use, folded
+
+
+@dataclass(frozen=True)
+class PackageRow:
+    """One package on ``/system``'s inventory, with everything it registered."""
+    origin: PackageOrigin
+    registers: tuple[str, ...]
+
+
+def _registering_packages() -> list[PackageRow]:
+    """Every package outside the library that registered anything, with where it
+    was loaded from and what it contributed.
+
+    A package reaches this instance through four seams — a check type, a slot
+    filler, an asset, a configuration aspect (ADR-0051, ADR-0034, ADR-0037,
+    ADR-0035) — and until this card only the first reported a version, because the
+    check-type roster is the one that carries an origin. So an extension that
+    registers **no check type** was the one thing on the page whose release could
+    not be read off the running instance at all: the seam tables name a package and
+    stop there. That is the wrong way round — the version is a property of the
+    installation, not of the seam it happens to reach us through, and repeating it
+    on each seam's rows would print it once per slot for a package that fills two.
+
+    The library itself is left out on purpose: the page header already carries its
+    version, and every row here is meant to be something somebody added.
+    """
+    registers: dict[str, set[str]] = {}
+    for origin in registered_types():
+        registers.setdefault(origin.package, set()).add(f"type {origin.type_name}")
+    # Extension fillers only — the library's own declarative actions fill the same
+    # slots through the same seam (ADR-0038) and would put `little_sister` here.
+    #
+    # A filler names the package its *templates* live under, which may be a
+    # submodule (`x.chips`). The row is keyed by the top-level package instead,
+    # because an installation is what carries a distribution and a version — one
+    # row per install, or a package that registers from two modules gets two rows
+    # and neither is the thing that was installed. The seam's own table below keeps
+    # printing the name the filler was registered with.
+    for filler in slots.extension_fillers():
+        registers.setdefault(filler.package.split(".")[0],
+                             set()).add(f"slot {filler.slot}")
+    for asset in slots.assets():
+        registers.setdefault(asset.package.split(".")[0],
+                             set()).add(f"asset {asset.member}")
+    for aspect in registered_aspects():
+        # An aspect whose registrant could not be inferred is left unattributed
+        # here rather than guessed; the extensions card still lists the name.
+        if owner := aspect_owner(aspect):
+            registers.setdefault(owner, set()).add(f"config/{aspect}")
+    return [PackageRow(origin=package_origin(package),
+                       registers=tuple(sorted(registers[package])))
+            for package in sorted(registers) if package != "little_sister"]
+
+
 @app.route('/system')
 def system() -> ResponseReturnValue:
     if 'username' not in session:
@@ -1282,12 +1744,30 @@ def system() -> ResponseReturnValue:
         # aspects a dependent package added (ADR-0035). A seam nobody can see
         # from the running instance is indistinguishable from one that silently
         # did not take.
+        #
+        # The check-type roster is here for that reason too, and one more: a type
+        # may now be registered by a separately released package (ADR-0051), so
+        # "which code answers for `type: github`, at which version" is no longer
+        # derivable from this repository at all — only from the running process.
+        # It is split against the engine's checks (`_type_roster`) so the types
+        # this configuration actually runs come first and the rest fold away.
+        #
+        # The assembled policy is here for the same reason and one more: a source
+        # is contributed by a *package*, so a request blocked inside somebody
+        # else's code is undebuggable from this instance unless the page says who
+        # asked for each origin (ADR-0048 §7).
+        in_use, folded = _type_roster(info)
+        aspects = [(name, aspect_owner(name)) for name in registered_aspects()]
         body = render_template('system.html', username=session['username'],
                                firstname=session['firstname'],
                                version=__version__, info=info,
                                rendered_at=rendered_at,
+                               types_in_use=in_use, types_folded=folded,
                                slot_fillers=slots.all_fillers(),
-                               extra_aspects=registered_aspects())
+                               packages=_registering_packages(),
+                               extra_aspects=aspects,
+                               csp_header=CSP_HEADER,
+                               csp_directives=csp_policy.directives)
     response = make_response(body)
     response.headers['X-Rendered-At'] = rendered_at
     return response
@@ -1295,10 +1775,17 @@ def system() -> ResponseReturnValue:
 
 @app.route('/copy')
 def copy() -> ResponseReturnValue:
-    if 'username' in session:
-        return render_template('text.html', username=session['username'],
-                               firstname=session['firstname'])
-    return redirect('/login')
+    if 'username' not in session:
+        return redirect('/login')
+    # One immutable read for both representations: the rich HTML is rendered from
+    # the canonical Markdown below, so a check update can never put two different
+    # incidents on the same page (ADR-0002).
+    markdown = format_copy_markdown(status_tree.snapshot(""))
+    rich = render_markdown(markdown) if markdown else Markup("")
+    return render_template(
+        'text.html', username=session['username'],
+        firstname=session['firstname'], copy_markdown=markdown,
+        copy_html=rich, copy_html_text=str(rich))
 
 
 @app.route('/links')
@@ -1455,6 +1942,32 @@ def link_icon(variant: str, name: str) -> ResponseReturnValue:
     # Private: the surface is login-gated. Short, because an operator who swaps an
     # icon file is watching this page while they do it — the ETag makes the repeat
     # request cheap without making the swap invisible.
+    response.headers['Cache-Control'] = 'private, max-age=300'
+    response.add_etag()
+    return response.make_conditional(request)
+
+
+@app.route('/user/avatar')
+def user_avatar() -> ResponseReturnValue:
+    """Serve only the signed-in user's selected avatar (ADR-0045).
+
+    There is no username or path parameter. Resolution happened at startup from
+    a bare name inside the aspect's ``avatars/`` sandbox; the route only looks up
+    that result and reads its current bytes. If the file was removed under the
+    running process, the packaged neutral avatar is the honest fallback.
+    """
+    username = session.get('username')
+    if not username:
+        return redirect('/login')
+    avatar = user_avatars.get(str(username))
+    if avatar is None:
+        return redirect(url_for('static', filename='default-avatar.svg'))
+    try:
+        payload = read_avatar(avatar)
+    except (OSError, ValueError):
+        return redirect(url_for('static', filename='default-avatar.svg'))
+    response = make_response(payload)
+    response.mimetype = avatar.content_type
     response.headers['Cache-Control'] = 'private, max-age=300'
     response.add_etag()
     return response.make_conditional(request)

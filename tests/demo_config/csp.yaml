@@ -1,0 +1,20 @@
+# The deployment half of the Content-Security-Policy demo (ADR-0048 §5).
+#
+# `demo_wsgi.py` shows what a *package* may contribute — an origin, in code. This file
+# is the other half: a source the deployment adds, which `/system` then lists with this
+# path as its contributor, beside the package's and the library's own.
+#
+# The one below is an origin no package knew about — the host a check's Markdown would
+# embed an image from, which `img-src` does not otherwise allow. It is inert: nothing
+# in the demo loads from there. To see the policy actually catch something, follow the
+# recipe in `testing-the-gui.md`; to see a refusal, take the origin's `https://` away.
+img-src:
+  - https://assets.example.org
+
+# A policy **keyword** is the other thing only a deployment may say — a package
+# contributing one is refused, because a dependency able to relax the policy makes it
+# decorative for everyone else in the process. Left commented out on purpose: it is
+# the escape hatch, not the example to copy.
+#
+#   script-src:
+#     - "'unsafe-inline'"

@@ -2,9 +2,10 @@
 
 Mode 4 of the UI harness. Runs a real server, serves the vendored Bootstrap CSS
 and JS from disk (the dropdown needs the JS to open at all), and for every theme
-opens the gear menu and reads each row's *computed* colour and the background it
-actually lands on — compositing every translucent layer, folding stacked opacity
-— then reports the WCAG ratio.
+opens the gear menu, walks the `/links` rows and the **coded reason lines** of a
+seeded tree, reading each row's *computed* colour and the background it actually
+lands on — compositing every translucent layer, folding stacked opacity — then
+reports the WCAG ratio.
 
     npm i --prefix var/bootstrap bootstrap@5.3.2     # once; var/ is gitignored
     uv run python tests/sweep_contrast.py
@@ -35,13 +36,23 @@ from wsgiref.simple_server import WSGIRequestHandler, WSGIServer, make_server
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE.parent))
 
-os.environ.setdefault("LITTLE_SISTER_CONFIG_DIR", str(_HERE / "demo_config"))
-os.environ.setdefault("LITTLE_SISTER_USERS",
-                      str(_HERE / "fixtures" / "users.yaml"))
+os.environ.setdefault(
+    "LITTLE_SISTER_CONFIG_DIR",
+    os.pathsep.join((str(_HERE / "fixtures" / "config"),
+                     str(_HERE / "demo_config"))))
 os.environ.setdefault("SECRET_KEY", "contrast-sweep")
 os.environ.setdefault("LITTLE_SISTER_ENGINE", "0")
 
+from little_sister import app as app_module  # noqa: E402
 from little_sister.app import app  # noqa: E402
+from tests.ui_fixtures import coded_workflow_tree  # noqa: E402
+
+# The engine is off, so the tree the routes read is whatever we put there. Mode 1's
+# coded-entry fixture is exactly the page this sweep needs — every tint at once on a
+# card that rolled up to ERROR — and sharing it means the sheet you look at and the
+# ratios measured here are the same roster (ui_fixtures.coded_workflow_tree).
+app_module.status_tree = coded_workflow_tree()
+CODED_PATH = "ci/actions"          # the seeded node's member leaf page
 
 BOOTSTRAP = _HERE.parent / "var" / "bootstrap" / "node_modules" / "bootstrap" / "dist"
 AA = 4.5
@@ -86,6 +97,41 @@ ROWS = (
 PAGE_ROWS = (
     (".ls-links__recheck .btn", True),
     (".ls-links__probe", False),
+)
+
+# The coded reason lines (ADR-0042), which are the one row that paints **its own**
+# surface: `.is-coded` resets the base reason rule's `opacity: 0.95` to 1 precisely
+# so the declared tint pair is the rendered one. `tests/test_contrast.py` measures
+# all four pairs from the sheet's own inks and asserts that reset from the
+# stylesheet text; what it cannot see is the page — these lines sit *inside* a card
+# that rolled up to ERROR and paints a vivid fill of its own, and a pair that is
+# right in the tokens can still arrive re-composited. That is the same shape as both
+# surfaces this sweep has already found (a Bootstrap dropdown's inherited ink, an
+# outline button's #6c757d): right in our tokens, wrong on the page.
+#
+# No hover state: nothing washes a reason line on hover — the card's hover only
+# raises the action chips' opacity — so the rest reading is the whole reading.
+CODED_ROWS = (
+    (".status-node__reason.is-coded.s-error", False),
+    (".status-node__reason.is-coded.s-ok", False),
+    (".status-node__reason.is-coded.s-ok.is-running", False),
+    (".status-node__reason.is-coded.s-warn", False),
+    (".status-node__reason.is-coded.s-undefined", False),
+    # The pin's tint outranks the code it covers, which is the louder fact — and it
+    # is a *different* pair on the same surface, so it is measured, not assumed.
+    (".status-node__reason.is-coded.is-quiet", False),
+)
+
+# The same lines on the member leaf page, where the surface under them is the page's
+# alert rather than a card fill — a second composite of the same declared pairs, and
+# where the uncoded advisory the card folds is visible.
+LEAF_ROWS = (
+    (".check-reason.is-coded.s-error", False),
+    (".check-reason.is-coded.s-ok", False),
+    (".check-reason.is-coded.s-warn", False),
+    (".check-reason.is-coded.s-undefined", False),
+    (".check-reason.is-coded.is-quiet", False),
+    (".check-reason:not(.is-coded)", False),
 )
 
 # Read one row as the eye gets it. Two traps are why this is not three lines:
@@ -216,14 +262,14 @@ def main() -> int:
                             findings.append(
                                 f"{label} {selector} [{state}] {value:.2f}:1")
                             verdict += " (gated)"
-                        print(f"{label:16} {selector[:34]:34} {state:5} "
+                        print(f"{label:16} {selector[:44]:44} {state:5} "
                               f"{hexed(seen['ink']):9} {hexed(seen['surface']):9} "
                               f"{value:6.2f}{verdict}")
                     page.hover(park)
 
-            print(f"{'theme':16} {'row':34} {'state':5} "
+            print(f"{'theme':16} {'row':44} {'state':5} "
                   f"{'ink':9} {'on':9} {'ratio':>6}")
-            print("-" * 90)
+            print("-" * 100)
             for label, theme, scheme in CASES:
                 page.emulate_media(color_scheme=scheme)
                 page.context.add_cookies([{
@@ -238,11 +284,16 @@ def main() -> int:
                 # on the surface Bootstrap paints under the menu
                 page.goto(f"{base}/links")
                 walk(label, PAGE_ROWS, "h1")
+                # and the coded lines, on the card fill and then on the leaf page
+                page.goto(f"{base}/status")
+                walk(label, CODED_ROWS, "#ls-settings")
+                page.goto(f"{base}/status/{CODED_PATH}")
+                walk(label, LEAF_ROWS, "#ls-settings")
             browser.close()
     finally:
         server.shutdown()
 
-    print("-" * 90)
+    print("-" * 100)
     for finding in findings:
         print(f"FAIL {finding}")
     print("all gated themes clear AA" if not findings

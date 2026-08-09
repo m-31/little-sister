@@ -97,6 +97,25 @@ class ConfigTests(TestCase):
             path.write_text("maintenance_cap: -3\n")
             self.assertEqual(load_config(path).maintenance_cap, 0)
 
+    def test_card_status_line_defaults_beside(self):
+        cfg = load_config(Path(tempfile.gettempdir()) / "ls-no-such-config.yaml")
+        self.assertEqual(cfg.card_status_line, "beside")
+
+    def test_card_status_line_reads_below(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.yaml"
+            path.write_text("card_status_line: below\n")
+            self.assertEqual(load_config(path).card_status_line, "below")
+
+    def test_card_status_line_junk_falls_back_with_a_warning(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.yaml"
+            path.write_text("card_status_line: sideways\n")
+            with self.assertLogs("little_sister", level="WARNING") as logs:
+                cfg = load_config(path)
+        self.assertEqual(cfg.card_status_line, "beside")
+        self.assertTrue(any("card_status_line" in line for line in logs.output))
+
 
 class SettingsLayeringTests(TestCase):
     """The `settings` aspect layers across configuration roots (ADR-0031):

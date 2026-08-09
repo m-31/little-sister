@@ -43,22 +43,28 @@
                    sends nothing) is told apart from a fresh visit — lets the switches
                    persist and a default-on switch turn off. #}
                 <input type="hidden" name="view" value="1">
+                {#- Each control below carries `data-ls-submit`: prefs.js submits this
+                    form when one changes, so a switch needs no Apply. It was an
+                    `onchange` attribute on every input until a Content-Security-Policy
+                    made inline handlers the thing worth removing (ADR-0048); the
+                    <noscript> button at the end is what a JS-less browser applies a
+                    choice with, as in the settings menu. -#}
                 <div class="form-check form-switch">
                     <input class="form-check-input" type="checkbox" role="switch"
                            id="hide_ok" name="hide_ok" value="1"
-                           {% if hide_ok %}checked{% endif %} onchange="this.form.submit()">
+                           {% if hide_ok %}checked{% endif %} data-ls-submit>
                     <label class="form-check-label" for="hide_ok">hide ok</label>
                 </div>
                 <div class="form-check form-switch">
                     <input class="form-check-input" type="checkbox" role="switch"
                            id="hide_idle" name="hide_idle" value="1"
-                           {% if hide_idle %}checked{% endif %} onchange="this.form.submit()">
+                           {% if hide_idle %}checked{% endif %} data-ls-submit>
                     <label class="form-check-label" for="hide_idle">hide idle</label>
                 </div>
                 <div class="form-check form-switch">
                     <input class="form-check-input" type="checkbox" role="switch"
                            id="dense" name="dense" value="1"
-                           {% if dense %}checked{% endif %} onchange="this.form.submit()">
+                           {% if dense %}checked{% endif %} data-ls-submit>
                     <label class="form-check-label" for="dense">chips</label>
                 </div>
                 <div class="status-filters__depth">
@@ -66,8 +72,11 @@
                     <input class="form-control form-control-sm status-depth"
                            type="number" id="depth" name="depth"
                            min="0" max="{{ depth_limit }}" value="{{ max_depth }}"
-                           onchange="this.form.submit()">
+                           data-ls-submit>
                 </div>
+                <noscript>
+                    <button class="btn btn-sm btn-primary" type="submit">Apply</button>
+                </noscript>
             </form>
             {%- endif %}
         </div>

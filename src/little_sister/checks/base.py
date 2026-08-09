@@ -9,17 +9,21 @@ optional failure retry — ``retry_interval`` / ``retry_attempts`` (ADR-0033).
 from __future__ import annotations
 
 import abc
-from collections.abc import Callable
+import re
+import sys
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar
 
 from little_sister import secrets
 from little_sister.errors import CheckError as CheckError
+from little_sister.origins import release_of
 from little_sister.reasons import (
     ReasonEntry,
     ReasonError,
     ReasonInput,
+    derive_code,
     normalize,
 )
 from little_sister.status import StatusCode, join_path, leaf_name, split_path
@@ -44,9 +48,21 @@ class CheckResult:
     node, and ``config`` is the parameters the check ran with — display metadata
     (Markdown) carried onto the node like ``description`` (ADR-0013).
 
+    ``report`` is **what the run found**, as against ``config``'s what it ran
+    *with* (ADR-0044): Markdown, written through on every run, shown on the
+    node's page and never on a card. It is **never a status claim** — anything
+    that should alarm is a reason, and this field must not become a second,
+    quieter reason channel. What separates the two is status, not volume: a list
+    whose items each carry a verdict is entries (capped on the card); a list
+    whose items carry none is scope, and belongs here — the roster is presence,
+    an entry is a claim. Unlike ``config``, whose root value comes from
+    :meth:`Check.config_summary`, ``report`` rides the result on the root as on
+    every child: it is an output of *this* run, so only the run can produce it.
+
     ``reason`` is **keyed** (ADR-0036): a check may hand over a plain string, a
-    list of strings, a ``{slug: text}`` mapping or a list of ``(slug, text)``
-    pairs, and ``__post_init__`` normalizes all four into ``reason_entries``.
+    list of strings, a ``{slug: text}`` mapping, a list of ``(slug, text)``
+    pairs or a list of :class:`~little_sister.reasons.Entry`, and
+    ``__post_init__`` normalizes them all into ``reason_entries``.
     A mapping or a pairs list declares its entries **members** — individually
     suppressible, so an operator can pin the one finding they are working on; a
     sequence of strings needs ``entries=True`` to say the same, which exists so a
@@ -54,6 +70,18 @@ class CheckResult:
     per-entry pins without restructuring its return. Everything else is **prose**:
     keyed like all reasons, but one condition in several paragraphs, whose unit of
     suppression stays the node pin.
+
+    **An entry may carry its own code** (ADR-0042), and then the *node's* code is
+    derived rather than declared: hand over ``Entry(slug, text, code=…)`` lines
+    and **omit ``code``** — declaring both is refused here, loudly, because a
+    silently ignored code would be believed. The stored code is the worst of the
+    entries' own codes (``UNDEFINED`` ignored; an **empty** entry set reads
+    ``OK`` — the check ran, enumerated, and found nothing). ``Entry.running``
+    marks a line whose subject has work in flight — display only, never severity.
+    A result with prose, or with entries that all carry the node's code, keeps
+    declaring ``code`` exactly as before; the engine's failure path is prose and
+    is untouched (ADR-0040). ``stored_code`` is always the concrete code the
+    engine upserts — declared or derived.
 
     ``about`` (subject metadata — what the node *is*) and ``title`` (a short
     display label) are the **type-inherent** labels a branch check gives the
@@ -65,12 +93,13 @@ class CheckResult:
     freezes at its first fill (stable identity, not live status — text that
     changes with the observation belongs in ``reason``).
     """
-    code: StatusCode
+    code: StatusCode | None = None
     reason: ReasonInput = field(default_factory=list)
     name: str = ""
     description: str = ""
     children: tuple[CheckResult, ...] = ()
     config: str = ""
+    report: str = ""
     about: str = ""
     title: str = ""
     entries: bool = False
@@ -78,12 +107,16 @@ class CheckResult:
     reason_entries: tuple[ReasonEntry, ...] = field(
         init=False, default=(), repr=False, compare=False)
     members: bool = field(init=False, default=False, repr=False, compare=False)
+    #: The concrete code the engine stores — the declared ``code``, or the one
+    #: derived from coded entries (ADR-0042). Always a ``StatusCode``.
+    stored_code: StatusCode = field(
+        init=False, default=StatusCode.UNDEFINED, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         for child in self.children:
             if not child.name:
                 raise CheckError("a child CheckResult must have a 'name'")
-        # Normalize where the outside world enters (ADR-0026): four accepted input
+        # Normalize where the outside world enters (ADR-0026): five accepted input
         # forms, one internal one. A malformed slug is the check author's error and
         # surfaces as a failing check, not as a silent re-key.
         try:
@@ -92,6 +125,35 @@ class CheckResult:
             raise CheckError(str(error)) from error
         object.__setattr__(self, "reason_entries", entries)
         object.__setattr__(self, "members", members)
+        # The ADR-0042 seam: a node with coded entries declares no code of its
+        # own — every claim it makes is attributable to a line — and declaring
+        # both is refused rather than silently resolved, the way a check YAML
+        # naming `name:` is refused (ADR-0016).
+        coded = any(entry.code is not None for entry in entries)
+        if self.code is not None:
+            if coded:
+                raise CheckError(
+                    "a result may declare a code or code its entries, never "
+                    "both — a silently ignored code would be believed "
+                    "(ADR-0042)")
+            object.__setattr__(self, "stored_code", self.code)
+            return
+        if coded:
+            object.__setattr__(self, "stored_code", derive_code(entries))
+            return
+        # No code and nothing to derive one from. The one legal shape is the
+        # *entry-bearing empty set* — the check enumerated and found nothing,
+        # said by an empty mapping or by `entries=True` beside an empty list —
+        # which reads OK (ADR-0042: "nothing to report" is not "nothing
+        # reported"). Anything else is a result that made claims with no
+        # severity anywhere, and is the check author's error.
+        if not entries and (self.entries or isinstance(self.reason, Mapping)):
+            object.__setattr__(self, "stored_code", StatusCode.OK)
+            return
+        raise CheckError(
+            "a result must declare a code, or hand over entries that carry "
+            "their own (an empty entry-bearing set — an empty mapping, or "
+            "entries=True beside an empty list — reads OK) (ADR-0042)")
 
     @property
     def reason_texts(self) -> list[str]:
@@ -101,14 +163,146 @@ class CheckResult:
 
 CHECK_TYPES: dict[str, type[Check]] = {}
 
+#: The **check API epoch** (ADR-0051). It bumps only when the check-authoring
+#: surface of architecture.md §11 changes in a way a check type can notice — a name
+#: removed or renamed, a documented behavior changed. Adding a name does not bump
+#: it, and neither does anything else in a release: a plugin should not have to
+#: follow the library's version, only the part of it that is its own contract.
+API_VERSION = 1
+
+
+def require_api(version: int, *, by: str = "") -> None:
+    """Refuse at import unless this library speaks the check API ``version``.
+
+    What a package built against a tag actually depends on is the *surface*, not
+    the release — so it declares the epoch it was written for, from its
+    ``__init__`` beside its `@register` imports, and a mismatch stops the process
+    at startup with both numbers in the message instead of at the first run of one
+    check, inside a name that moved.
+
+    The install-time floor (``little-sister >= x`` in the package's metadata) is
+    still the first line: it keeps a *too old* library from being installed at all.
+    This is the second, for the upgrade the floor cannot see — a library that moved
+    past the epoch the plugin was built for.
+
+    ``by`` names the package in the message; the calling module's name is used when
+    it is not given, which is right for the ordinary one-line call site.
+    """
+    if version == API_VERSION:
+        return
+    who = by or _calling_module()
+    direction = ("newer than" if version > API_VERSION else "older than")
+    raise CheckError(
+        f"{who} was built for little-sister check API v{version}, which is "
+        f"{direction} the v{API_VERSION} this little-sister ({_library_version()}) "
+        f"speaks. Install a build of {who} for v{API_VERSION}, or a little-sister "
+        f"that speaks v{version} (ADR-0051).")
+
+
+def _calling_module() -> str:
+    """The module that called into here — the package to name in a refusal."""
+    frame = sys._getframe(2) if hasattr(sys, "_getframe") else None
+    name = frame.f_globals.get("__name__", "") if frame is not None else ""
+    return str(name) or "a dependent package"
+
+
+def _library_version() -> str:
+    """little-sister's own version, for a message. Imported late: ``little_sister``
+    imports nothing from here, and this keeps it that way."""
+    from little_sister import __version__
+    return __version__
+
 
 def register(type_name: str) -> Callable[[type[Check]], type[Check]]:
-    """Class decorator registering a check under its ``type`` name."""
+    """Class decorator registering a check under its ``type`` name.
+
+    A name is claimed **once** (ADR-0051). Type names stay bare — `type: github`,
+    not a namespaced spelling — so two packages can now claim one, and the registry
+    has no answer: import order would pick the winner and every check of the losing
+    package would silently run somebody else's code, against the losing package's
+    configuration. So the second claim **refuses**, naming both classes.
+
+    Re-registering the *same* class is not a conflict — a module re-imported under
+    a reloading server re-runs its decorators, and refusing that would refuse the
+    server.
+    """
     def decorator(cls: type[Check]) -> type[Check]:
+        claimed = CHECK_TYPES.get(type_name)
+        if claimed is not None and not _same_class(claimed, cls):
+            raise CheckError(
+                f"two packages claim check type {type_name!r}: "
+                f"{_where(claimed)} registered it and {_where(cls)} claims it too. "
+                f"A type name answers for exactly one class — rename one of them, "
+                f"or install only one of the packages (ADR-0051).")
         cls.type_name = type_name
         CHECK_TYPES[type_name] = cls
         return cls
     return decorator
+
+
+def _same_class(claimed: type[Check], cls: type[Check]) -> bool:
+    """Whether these are one class — by identity, or the same name in the same
+    module, which is what a reload produces.
+
+    The name match is deliberately restricted to **module-level** classes. A class
+    built inside a function carries ``<locals>`` in its qualified name, and a factory
+    called twice produces two genuinely different classes that share both names —
+    accepting those as "a reload" would silently let the second overwrite the first,
+    which is the whole failure this refusal exists to prevent.
+    """
+    if claimed is cls:
+        return True
+    if "." in cls.__qualname__ or "." in claimed.__qualname__:
+        return False
+    return ((claimed.__module__, claimed.__qualname__)
+            == (cls.__module__, cls.__qualname__))
+
+
+def _where(cls: type[Check]) -> str:
+    """Where a check class comes from, for a refusal message."""
+    return f"{cls.__module__}.{cls.__qualname__}"
+
+
+@dataclass(frozen=True)
+class TypeOrigin:
+    """Where one registered check type came from — what ``/system`` shows.
+
+    Once a type can arrive from a separately released package, "which code is
+    answering for `type: github`, at which version" stops being derivable from this
+    repository at all. An operator diagnosing a check has to be able to read it off
+    the running instance, the way the slot fillers and the assembled policy already
+    are (ADR-0051).
+    """
+    type_name: str
+    module: str
+    package: str
+    distribution: str
+    version: str
+    #: Where the module was actually **loaded from**. The version beside it is the
+    #: installed *metadata's* claim, and the two can disagree — a source copy on the
+    #: path shadows an installed distribution of the same name, and the metadata
+    #: keeps answering for code that is not running. That case is the one an
+    #: operator comes to this page for, so the page shows both.
+    path: str
+
+    @property
+    def builtin(self) -> bool:
+        """Whether the library itself registered this type."""
+        return self.package == "little_sister"
+
+
+def registered_types() -> list[TypeOrigin]:
+    """Every registered check type with its origin, by type name."""
+    origins: list[TypeOrigin] = []
+    for type_name, cls in sorted(CHECK_TYPES.items()):
+        package = cls.__module__.split(".")[0]
+        distribution, release = release_of(package)
+        module = sys.modules.get(cls.__module__)
+        origins.append(TypeOrigin(type_name=type_name, module=cls.__module__,
+                                  package=package, distribution=distribution,
+                                  version=release,
+                                  path=getattr(module, "__file__", "") or ""))
+    return origins
 
 
 class Check(abc.ABC):
@@ -166,9 +360,17 @@ class Check(abc.ABC):
         """The curated parameters this check ran with, as Markdown, for its detail
         page (ADR-0013). Operator-authored and safe for all viewers — secrets stay
         in ``.env`` (ADR-0003). Override to declare a small allow-list (see
-        :func:`config_markdown`); the default is empty. A **branch** check leaves
-        this empty (its container node is shared) and tags each child result's
-        ``config`` instead."""
+        :func:`config_markdown`); the default is empty.
+
+        Where it goes for a **branch** check depends on **who owns the container**
+        (ADR-0044 decision 1), not on the check being a branch check: own that
+        node alone and its whole-check text belongs there; **share** it with
+        another check — the ``host-metrics`` + ``qnap-metrics`` shape — and this
+        stays empty, with each child result's ``config`` tagged instead. A shared
+        container withholds the text either way (two checks have no one answer,
+        the rule that already withholds its timestamp and run facts), so a check
+        with whole-check information to publish should own its own node. The same
+        rule governs ``CheckResult.report``."""
         return ""
 
     def resolve_secret(self, reference: str) -> str:
@@ -341,12 +543,15 @@ def parse_secret_refs(config: dict[str, Any], *names: str) -> dict[str, str]:
 
 # Inline-active Markdown punctuation: emphasis (*), code spans (`), links and the
 # escape char itself ([ ] \). Escaping these neutralises the constructs that turn
-# untrusted text into formatting or a link. Deliberately omitted: raw HTML and
+# untrusted text into formatting or a link. Linkification also recognizes a bare
+# HTTP(S) scheme, so ``plain`` breaks that scheme token without changing its rendered
+# text. Deliberately omitted: raw HTML and
 # unsafe link schemes (already handled by the renderer — html-off, validated
 # links, ADR-0018); ``_`` (literal between word characters in CommonMark, so
 # ``MD0_DATA`` / ``debug_df_raw`` stay clean); and block markers (#, -, >) which
 # are at worst cosmetic — keeping everyday text free of escape noise.
 _MD_ESCAPE = {ord(ch): f"\\{ch}" for ch in "\\`*[]"}
+_WEB_URL_SCHEME = re.compile(r"\bhttps?://", re.IGNORECASE)
 
 
 def plain(text: object) -> str:
@@ -354,7 +559,9 @@ def plain(text: object) -> str:
     line — renders **literally** in a reason (ADR-0018). Use it when folding
     external output into a reason; for multi-line / log output prefer
     :func:`code`."""
-    return str(text).translate(_MD_ESCAPE)
+    escaped = str(text).translate(_MD_ESCAPE)
+    return _WEB_URL_SCHEME.sub(
+        lambda match: match.group().replace(":", r"\:"), escaped)
 
 
 def code(text: object) -> str:
@@ -371,8 +578,10 @@ def code(text: object) -> str:
 def config_markdown(fields: dict[str, str | None]) -> str:
     """Render an allow-list of ``label -> value`` config fields as a Markdown
     bullet list (ADR-0013), in declaration order. Empty / ``None`` values are
-    dropped, so a check can list optional fields without emitting blanks. The list
-    shows as plain text until the Markdown renderer lands (`plan.md`)."""
+    dropped, so a check can list optional fields without emitting blanks. The
+    result is rendered as Markdown (ADR-0018), so a value carrying Markdown
+    punctuation is interpreted — fold it through :func:`plain` first where it is
+    not operator-authored."""
     lines = [f"- **{label}:** {value}"
              for label, value in fields.items() if value]
     return "\n".join(lines)

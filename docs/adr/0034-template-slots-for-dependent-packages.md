@@ -33,6 +33,24 @@
 > `.reason-action`: an action is an action, and a second visual language for one gesture
 > would be the extension seam leaking into the design.
 
+> **Update (2026-08-03):** `node.actions` is offered on **every box the grid draws**,
+> not only on card heads — each nested box under a card carries it too. The first
+> deployment to fill it found the gap by rendering: a card is the *top* of a subtree
+> and is usually a container with no reading of its own, so a filler that declines a
+> node with nothing to say declines exactly the nodes that have card heads, while the
+> failing **leaf** — the node an action is nearly always about — sits in a nested box
+> that carried no slot at all. The two rules were individually defensible and together
+> they put the chip nowhere the eye already was, leaving it reachable only by drilling
+> into the leaf's own page.
+>
+> Nothing about the seam changes: the context is the same, the filler still declines
+> what it does not want, and the rail still collapses when nobody fills it — a
+> deployment with no extension pays one empty `<span>` per box. A **quiet leaf** is
+> drawn as a chip rather than a box and carries no slot, which is the right line:
+> nothing quiet is worth acting on. This is a widening of the roster's `where`, which
+> §11 of `architecture.md` names as part of the version contract, so it is recorded
+> here rather than left to the template.
+
 ## Context
 
 little-sister is a library; the real deployment lives in a private repository that

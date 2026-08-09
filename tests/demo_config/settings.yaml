@@ -40,3 +40,7 @@ stacktrace: true
 #                  does not get re-checked at retry speed indefinitely.
 retry_interval: 2s
 retry_attempts: 6
+
+# The standing second head line (card_status_line: below) — here to be seen, and
+# because the demo's short names would otherwise never show the two-line shape.
+card_status_line: below

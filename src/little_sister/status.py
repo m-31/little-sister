@@ -3,33 +3,16 @@ from __future__ import annotations
 from collections import OrderedDict
 from collections.abc import Iterable
 from datetime import datetime
-from enum import Enum, auto
 from typing import Self
 
+# The vocabulary lives in the leaf module `codes` (it must be importable from
+# `reasons.py`, which this module imports — ADR-0042); these re-exports keep the
+# published spelling, `from little_sister.status import StatusCode`, working
+# unchanged (architecture.md §11).
+from little_sister.codes import StatusCode as StatusCode
+from little_sister.codes import is_valid_status_code as is_valid_status_code
+from little_sister.codes import worst_of as worst_of
 from little_sister.reasons import ReasonInput, normalize
-
-
-class StatusCode(Enum):
-    """These are the possible status codes."""
-    MAINTENANCE = auto()
-    OK = auto()
-    WARN = auto()
-    ERROR = auto()
-    UNDEFINED = auto()
-
-
-# Severity used when accumulating a parent's status (ADR-0039). Only OK/WARN/ERROR
-# are ranked; MAINTENANCE and UNDEFINED are excluded *before* this map is used.
-_SEVERITY: dict[StatusCode, int] = {
-    StatusCode.OK: 0,
-    StatusCode.WARN: 1,
-    StatusCode.ERROR: 2,
-}
-
-
-def worst_of(codes: Iterable[StatusCode]) -> StatusCode:
-    """The most severe of `OK` / `WARN` / `ERROR` codes (others must be excluded)."""
-    return max(codes, key=lambda code: _SEVERITY[code])
 
 
 def effective_code(own: StatusCode, child_codes: Iterable[StatusCode]) -> StatusCode:
@@ -62,10 +45,6 @@ def effective_code(own: StatusCode, child_codes: Iterable[StatusCode]) -> Status
     if counted:
         return worst_of(counted)
     return StatusCode.MAINTENANCE if silenced else StatusCode.UNDEFINED
-
-
-def is_valid_status_code(value: str) -> bool:
-    return value.upper() in StatusCode.__members__
 
 
 # --- Node paths (ADR-0016): absolute, '/'-separated; a segment may contain '.'. ---
@@ -155,6 +134,11 @@ class Status:
         # Curated config the check ran with — display metadata, not status
         # (ADR-0013); Markdown, shown on the detail page.
         self.config: str = ""
+        # What the run *found*, as against what it ran *with* (ADR-0044): the
+        # outputs field beside `config`, written through on every run, Markdown,
+        # shown on the node's own page and never on a card. Never a status claim —
+        # anything that should alarm is a reason.
+        self.report: str = ""
         # Subject metadata: what this node *is* (location, kind, context), distinct
         # from `description` (what its check does). Markdown; seeded at startup from
         # nodes.yaml / the owning check (ADR-0012).

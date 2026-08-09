@@ -1,0 +1,24 @@
+{#- The `→ 22:30` next-update suffix (ADR-0044 decision 5, as amended): the check
+    time's companion wherever that time shows, for the nodes that carry run facts —
+    the sole-check mount and the ancestors that inherit its stamp. **Absolute, at
+    minute precision like the check time itself** (seconds earn their room nowhere
+    on the grid), and **suppressed when it would render identical to the shown
+    check time** — an arrow to the very value beside it says nothing, so a
+    sub-minute schedule shows a bare time and the arrow appears exactly when it
+    adds information. Absolute is freeze-safety: when polling fails, the
+    client-side staleness dims the page and leaves it on screen, and a frozen
+    relative "in 4m" is a lie that still looks live, while a frozen `→ 22:30`
+    stays true and recedes into the past. A stalled check shows a next update
+    already gone by — honest, and the staleness WARN beside it carries the alarm.
+
+    ``moment_hm`` is the ``%H:%M`` form of the check time actually shown beside
+    this suffix, so the suppression compares at display precision, in display
+    timezone. Kept in its own side-effect-free partial: importing a macro executes
+    the source template's body, so shared macros must not live in a page partial
+    (the `_status_cue.html` lesson). -#}
+{% macro next_update(next_iso, moment_hm) -%}
+{%- if next_iso -%}
+{%- set next_hm = next_iso | localtime("%H:%M") -%}
+{%- if next_hm != moment_hm %} → {{ next_hm }}{% endif -%}
+{%- endif -%}
+{%- endmacro %}

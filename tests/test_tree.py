@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from unittest import TestCase
 
 from little_sister.maintenance import MaintenanceEntry
+from little_sister.reasons import Entry
 from little_sister.status import HEARTBEAT_PATH, StatusCode
 from little_sister.tree import Event, StatusTree
 
@@ -505,17 +506,34 @@ class MountTimestampTests(TestCase):
             self.assertEqual(self._stamp(tree, host),
                              self._stamp(tree, host + "/host_metrics"))
 
-    def test_two_checks_on_one_mount_stay_one_mount(self):
-        # host-metrics + a memory probe on one host node: they re-stamp the same
-        # mount in turn, so the question still has one answer and the ancestors
-        # inherit (the rule counts mounts, not checks).
+    def test_two_checks_on_one_mount_block_the_ancestors(self):
+        # host-metrics + a hardware probe on one host node (the ADR-0044 amendment
+        # of ADR-0027, reversing the earlier reading): the shared node's own last
+        # write answers for *itself* (rule 2), but inherited upward that single
+        # value would present one check's run time as both checks' — rule 4's
+        # ambiguity, now enforced by counting checks per path rather than paths.
         tree = StatusTree()
         tree.set_check_mount("/system/node_a/metrics")
         tree.set_check_mount("/system/node_a/metrics")
         tree.upsert("/system/node_a/metrics", StatusCode.OK)
-        mount = self._stamp(tree, "/system/node_a/metrics")
-        self.assertIsNotNone(mount)
-        self.assertEqual(self._stamp(tree), mount)
+        self.assertIsNotNone(self._stamp(tree, "/system/node_a/metrics"))
+        self.assertIsNone(self._stamp(tree, "/system/node_a"))
+        self.assertIsNone(self._stamp(tree))
+
+    def test_a_shared_mount_beside_a_sole_one_still_blocks_the_root(self):
+        # Two checks on one path count as two: the root covers three checks in
+        # total, so nothing is inherited anywhere above the mounts themselves.
+        tree = StatusTree()
+        tree.set_check_mount("/shared/host")
+        tree.set_check_mount("/shared/host")
+        tree.set_check_mount("/site/disk")
+        tree.upsert("/shared/host", StatusCode.OK)
+        tree.upsert("/site/disk", StatusCode.OK)
+        self.assertIsNone(self._stamp(tree))
+        self.assertIsNone(self._stamp(tree, "/shared"))
+        # the sole-check side keeps its own inheritance
+        self.assertEqual(self._stamp(tree, "/site"),
+                         self._stamp(tree, "/site/disk"))
 
     def test_never_run_sole_mount_yields_none(self):
         # Registration alone is not an observation — and it does not create the node
@@ -581,6 +599,218 @@ class MountTimestampTests(TestCase):
         self.assertEqual(container.age_seconds, 0.0)
         # The mount itself is long overdue, and that *does* roll up as `stale`.
         self.assertTrue(container.stale)
+
+
+class RunFactsTests(TestCase):
+    """Resolution of the owning check's last-run facts (ADR-0044): present
+    exactly where the subtree holds **one** check — the sole mount and the
+    unwritten ancestors above it — and withheld everywhere the timestamp
+    roll-up refuses a stamp, by the same count."""
+
+    @staticmethod
+    def _run(tree, path=""):
+        snap = tree.snapshot(path)
+        assert snap is not None
+        return snap.run
+
+    def test_the_sole_mount_carries_its_facts(self):
+        tree = StatusTree()
+        tree.set_check_mount("/svc/github")
+        tree.upsert("/svc/github", StatusCode.OK)
+        tree.set_run_facts("/svc/github", wall_seconds=1.25,
+                           next_run_at="2026-08-06T09:20:00")
+        facts = self._run(tree, "/svc/github")
+        assert facts is not None
+        self.assertEqual(facts.wall_seconds, 1.25)
+        self.assertEqual(facts.next_run_at, "2026-08-06T09:20:00")
+
+    def test_unwritten_ancestors_inherit_the_facts_with_the_stamp(self):
+        # Safe for the same reason the inherited stamp is: above a sole mount,
+        # one check owns everything below, so the facts can only be that run's.
+        tree = StatusTree()
+        tree.set_check_mount("/svc/github")
+        tree.upsert("/svc/github", StatusCode.OK)
+        tree.set_run_facts("/svc/github", wall_seconds=0.5,
+                           next_run_at="2026-08-06T09:20:00")
+        mount = self._run(tree, "/svc/github")
+        self.assertIsNotNone(mount)
+        self.assertEqual(self._run(tree, "/svc"), mount)
+        self.assertEqual(self._run(tree), mount)
+
+    def test_a_leaf_below_a_branch_mount_carries_none(self):
+        # The leaf's next update belongs to the node where the check is named,
+        # one level up — nothing rolls *down*.
+        tree = StatusTree()
+        tree.set_check_mount("/svc/github")
+        tree.upsert("/svc/github", StatusCode.OK)
+        tree.upsert("/svc/github/actions", StatusCode.OK)
+        tree.set_run_facts("/svc/github", wall_seconds=0.5,
+                           next_run_at="2026-08-06T09:20:00")
+        self.assertIsNotNone(self._run(tree, "/svc/github"))
+        self.assertIsNone(self._run(tree, "/svc/github/actions"))
+
+    def test_a_shared_mount_and_its_ancestors_carry_none(self):
+        # Two checks on one path: facts were written (last writer wins in the
+        # registry), and the count is what keeps them off every snapshot — a
+        # value that flips between two checks' runs is rule 4's ambiguity,
+        # run-facts edition (ADR-0044 decision 1).
+        tree = StatusTree()
+        tree.set_check_mount("/system/node_a/metrics")
+        tree.set_check_mount("/system/node_a/metrics")
+        tree.upsert("/system/node_a/metrics", StatusCode.OK)
+        tree.set_run_facts("/system/node_a/metrics", wall_seconds=0.2,
+                           next_run_at="2026-08-06T09:20:00")
+        self.assertIsNone(self._run(tree, "/system/node_a/metrics"))
+        self.assertIsNone(self._run(tree, "/system/node_a"))
+        self.assertIsNone(self._run(tree))
+
+    def test_two_sole_mounts_keep_their_own_and_block_the_root(self):
+        tree = StatusTree()
+        for path, next_at in (("/a/check_1", "2026-08-06T09:20:00"),
+                              ("/b/check_2", "2026-08-06T09:25:00")):
+            tree.set_check_mount(path)
+            tree.upsert(path, StatusCode.OK)
+            tree.set_run_facts(path, wall_seconds=0.1, next_run_at=next_at)
+        side_a = self._run(tree, "/a")
+        side_b = self._run(tree, "/b")
+        assert side_a is not None and side_b is not None
+        self.assertEqual(side_a.next_run_at, "2026-08-06T09:20:00")
+        self.assertEqual(side_b.next_run_at, "2026-08-06T09:25:00")
+        self.assertIsNone(self._run(tree))
+
+    def test_rewriting_replaces_the_facts(self):
+        tree = StatusTree()
+        tree.set_check_mount("/svc/github")
+        tree.upsert("/svc/github", StatusCode.OK)
+        tree.set_run_facts("/svc/github", wall_seconds=1.0,
+                           next_run_at="2026-08-06T09:20:00")
+        tree.set_run_facts("/svc/github", wall_seconds=2.0, next_run_at=None)
+        facts = self._run(tree, "/svc/github")
+        assert facts is not None
+        self.assertEqual(facts.wall_seconds, 2.0)
+        self.assertIsNone(facts.next_run_at)
+
+
+class ReportTests(TestCase):
+    """`report` — what the run **found** (ADR-0044 decision 6) — beside `config`'s
+    what it ran **with**, and the ownership rule both answer to: the check's own
+    text belongs to the check that owns the node **alone** (decision 1)."""
+
+    @staticmethod
+    def _node(tree, path):
+        snap = tree.snapshot(path)
+        assert snap is not None
+        return snap
+
+    def test_report_writes_through_every_run(self):
+        tree = StatusTree()
+        tree.upsert("/svc/github", StatusCode.OK, report="- alpha\n- beta")
+        self.assertEqual(self._node(tree, "/svc/github").report,
+                         "- alpha\n- beta")
+        tree.upsert("/svc/github", StatusCode.OK, report="- alpha")
+        self.assertEqual(self._node(tree, "/svc/github").report, "- alpha")
+
+    def test_an_empty_report_clears_the_last_one(self):
+        # The distinguishing property against `about` (seeded once) and against
+        # config's don't-clobber guard: a roster the current run no longer finds
+        # must not outlive the run that found it.
+        tree = StatusTree()
+        tree.upsert("/svc/github", StatusCode.OK, report="- alpha")
+        tree.upsert("/svc/github", StatusCode.OK, report="")
+        self.assertEqual(self._node(tree, "/svc/github").report, "")
+
+    def test_an_omitted_report_leaves_the_stored_one_alone(self):
+        # `None` is "no opinion" for every upsert field; only the engine's
+        # per-run call, which always passes the result's value, clears.
+        tree = StatusTree()
+        tree.upsert("/svc/github", StatusCode.OK, report="- alpha")
+        tree.upsert("/svc/github", StatusCode.WARN, "slow")
+        self.assertEqual(self._node(tree, "/svc/github").report, "- alpha")
+
+    def test_report_is_not_a_transition(self):
+        # Display metadata, like config: changing it emits no event (ADR-0044
+        # decision 6 — anything that should alarm is a reason).
+        tree = StatusTree()
+        tree.upsert("/svc/github", StatusCode.OK, report="- alpha")
+        self.assertFalse(tree.upsert("/svc/github", StatusCode.OK,
+                                     report="- beta"))
+
+    def test_a_sole_mount_publishes_its_config_and_report(self):
+        tree = StatusTree()
+        tree.set_check_mount("/svc/github")
+        tree.upsert("/svc/github", StatusCode.OK,
+                    config="- **scope:** org", report="- alpha")
+        node = self._node(tree, "/svc/github")
+        self.assertEqual(node.config, "- **scope:** org")
+        self.assertEqual(node.report, "- alpha")
+
+    def test_a_shared_mount_publishes_neither(self):
+        # One rule over four facts (decision 1): where two checks share a node,
+        # the run time and the run facts are already withheld, and the check's
+        # own **text** goes the same way — a value that flips between two
+        # checks' runs is worse than no value at all.
+        tree = StatusTree()
+        tree.set_check_mount("/system/node_a")
+        tree.set_check_mount("/system/node_a")
+        tree.upsert("/system/node_a", StatusCode.OK,
+                    config="- **host:** a", report="- alpha")
+        node = self._node(tree, "/system/node_a")
+        self.assertEqual(node.config, "")
+        self.assertEqual(node.report, "")
+
+    def test_a_child_below_a_shared_mount_keeps_its_own_text(self):
+        # The withholding condition is the node's **own** mount count, not the
+        # subtree's: per-child text is exactly where a shared container's checks
+        # are told to put it (decision 7), so it must survive there.
+        tree = StatusTree()
+        tree.set_check_mount("/system/node_a")
+        tree.set_check_mount("/system/node_a")
+        tree.upsert("/system/node_a", StatusCode.OK, report="- shared")
+        tree.upsert("/system/node_a/disk", StatusCode.OK,
+                    config="- **threshold:** 90%", report="- /dev/sda1")
+        child = self._node(tree, "/system/node_a/disk")
+        self.assertEqual(child.config, "- **threshold:** 90%")
+        self.assertEqual(child.report, "- /dev/sda1")
+
+    def test_the_stored_text_survives_the_withholding(self):
+        # Withheld at the snapshot, not destroyed in the tree: drop one of the
+        # two checks and the surviving owner's text answers again (the ADR-0032
+        # rule-3 shape — a policy is not implemented by writing a different
+        # value into the tree).
+        tree = StatusTree()
+        tree.set_check_mount("/system/node_a")
+        tree.upsert("/system/node_a", StatusCode.OK, report="- alpha")
+        self.assertEqual(self._node(tree, "/system/node_a").report, "- alpha")
+        tree.set_check_mount("/system/node_a")
+        self.assertEqual(self._node(tree, "/system/node_a").report, "")
+
+
+class UnwrittenNodeHistoryTests(TestCase):
+    """A pin can land on a container **no check has ever written** — `_emit` says
+    so outright and stamps the event with the moment the admin acted. History then
+    has a real transition and no observation to bound it, which used to trip an
+    `assert node.timestamp is not None`: `/history/<that container>` was a 500,
+    and the branch page asking for its own period would have been another."""
+
+    def test_a_pinned_unwritten_container_has_an_unbounded_period(self):
+        tree = StatusTree()
+        tree.upsert("/system/alpha/disk", StatusCode.OK)
+        tree.set_maintenance("/system/alpha", "rebuild",
+                             expires_at=datetime.now() + timedelta(days=1),
+                             set_by="pan")
+        periods = tree.history("/system/alpha")
+        self.assertEqual(len(periods), 1)
+        self.assertEqual(periods[-1].code, StatusCode.MAINTENANCE)
+        self.assertIsNotNone(periods[-1].since)
+        self.assertIsNone(periods[-1].until)
+
+    def test_an_observed_node_still_ends_at_its_last_check(self):
+        tree = StatusTree()
+        tree.upsert("/svc/api", StatusCode.OK)
+        tree.upsert("/svc/api", StatusCode.ERROR, "down")
+        snap = tree.snapshot("/svc/api")
+        assert snap is not None
+        self.assertEqual(tree.history("/svc/api")[-1].until, snap.timestamp)
 
 
 class SiblingOrderingTests(TestCase):
@@ -992,3 +1222,83 @@ class EntryMaintenanceTests(TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class CodedEntryRollupTests(TestCase):
+    """Coded entries (ADR-0042): the virtual-children roll-up, made literal.
+
+    The stored code is what the engine derived at the seam and passed in; what
+    these tests exercise is the snapshot's *own* derivation over the lines —
+    pins applied, each unsuppressed line contributing its own code where it has
+    one and the reported code where it does not."""
+
+    def setUp(self):
+        self.tree = StatusTree(maintenance_store=_RecordingStore())
+        self.far = datetime.now() + timedelta(days=1)
+
+    def _jobs(self, **codes):
+        return [Entry(slug, f"job {slug}", code) for slug, code in codes.items()]
+
+    def _pin(self, slug, path="/ci/actions"):
+        return self.tree.set_entry_maintenance(
+            path, slug, "rerunning", expires_at=self.far, set_by="ada",
+            expected_set_at=None)
+
+    def _snap(self, path="/ci/actions"):
+        snap = self.tree.snapshot(path)
+        assert snap is not None
+        return snap
+
+    def test_the_lines_carry_their_codes_into_the_snapshot(self):
+        self.tree.upsert("/ci/actions", StatusCode.ERROR,
+                         self._jobs(build=StatusCode.ERROR, test=StatusCode.OK))
+        snap = self._snap()
+        self.assertEqual({line.slug: line.code for line in snap.reasons},
+                         {"build": StatusCode.ERROR, "test": StatusCode.OK})
+        self.assertEqual(snap.own_code, StatusCode.ERROR)
+
+    def test_pinning_the_one_red_line_turns_the_node_ok(self):
+        # the point of the feature: silence the failing finding and the node
+        # reads the worst of what is left — here, the healthy remainder
+        self.tree.upsert("/ci/actions", StatusCode.ERROR,
+                         self._jobs(build=StatusCode.ERROR, test=StatusCode.OK,
+                                    deploy=StatusCode.OK))
+        self._pin("build")
+        snap = self._snap()
+        self.assertEqual(snap.own_code, StatusCode.OK)
+        self.assertEqual(snap.code, StatusCode.OK)
+        self.assertEqual(snap.reported_code, StatusCode.ERROR)  # kept beside it
+
+    def test_pinning_every_coded_line_reads_maintenance(self):
+        self.tree.upsert("/ci/actions", StatusCode.ERROR,
+                         self._jobs(build=StatusCode.ERROR, test=StatusCode.OK))
+        self._pin("build")
+        self._pin("test")
+        self.assertEqual(self._snap().own_code, StatusCode.MAINTENANCE)
+
+    def test_an_undefined_line_is_ignored_when_siblings_report(self):
+        self.tree.upsert("/ci/actions", StatusCode.OK,
+                         self._jobs(new=StatusCode.UNDEFINED,
+                                    test=StatusCode.OK))
+        self.assertEqual(self._snap().own_code, StatusCode.OK)
+
+    def test_an_uncoded_line_still_carries_the_reported_code(self):
+        # mixed set: the uncoded line contributes the node's reported status,
+        # which keeps every pre-ADR-0042 check bit-for-bit unchanged
+        self.tree.upsert("/ci/actions", StatusCode.ERROR,
+                         [Entry("ok-job", "passed", StatusCode.OK),
+                          Entry("note", "advisory text")])
+        self.assertEqual(self._snap().own_code, StatusCode.ERROR)
+        self._pin("note")
+        self.assertEqual(self._snap().own_code, StatusCode.OK)
+
+    def test_running_travels_to_the_snapshot_and_stays_display(self):
+        self.tree.upsert("/ci/actions", StatusCode.ERROR,
+                         [Entry("build", "failed after 8m · #4216 running 2m",
+                                StatusCode.ERROR, running=True),
+                          Entry("test", "passed", StatusCode.OK)])
+        snap = self._snap()
+        running = {line.slug: line.running for line in snap.reasons}
+        self.assertEqual(running, {"build": True, "test": False})
+        # display only: the red line's rerun changes nothing about the roll-up
+        self.assertEqual(snap.own_code, StatusCode.ERROR)

@@ -34,6 +34,7 @@ from pathlib import Path
 
 from little_sister.errors import ConfigError
 from little_sister.logger import logger
+from little_sister.origins import calling_package
 
 CONFIG_DIR_ENV = "LITTLE_SISTER_CONFIG_DIR"
 DEFAULT_CONFIG_DIR = "config"
@@ -76,13 +77,21 @@ BUILTIN_ASPECTS: dict[str, Aspect] = {
     # The declarative action list (ADR-0038). Layered like the checks rather than
     # merged: a site root *adds* its actions to a base root's.
     "actions": Aspect("actions", as_file=True, as_directory=False),
+    # The deployment's last word on the Content-Security-Policy (ADR-0048 §5): the
+    # sources it adds, and the one place a policy keyword may be taken at all.
+    # Layered like the actions rather than merged — a policy is a union, so a site
+    # root *adds* its sources and there is nothing to overwrite.
+    # `little_sister.csp` is the loader.
+    "csp": Aspect("csp", as_file=True, as_directory=False),
     # Both forms: one file until the deployment ships icon files of its own, a
     # directory holding `links.yaml` beside them once it does, so the aspect grows
     # without a second migration (ADR-0030). `little_sister.links` is the loader.
     "links": Aspect("links", as_file=True, as_directory=True),
     "nodes": Aspect("nodes", as_file=True, as_directory=False),
     "settings": Aspect("settings", as_file=True, as_directory=False),
-    "users": Aspect("users", as_file=True, as_directory=False),
+    # One file until the deployment adds per-user pictures; then `users.yaml`
+    # moves inside the directory beside `avatars/` (ADR-0045).
+    "users": Aspect("users", as_file=True, as_directory=True),
 }
 
 # Every aspect this process knows: the built-ins, plus whatever dependent packages
@@ -93,6 +102,11 @@ ASPECTS: dict[str, Aspect] = dict(BUILTIN_ASPECTS)
 # An aspect name is a bare directory/file stem — it is turned straight into a path
 # under a configuration root, so it may not carry a separator, a dot or a `..`.
 _ASPECT_NAME = re.compile(r"[a-z][a-z0-9_-]*")
+
+# Which package registered each extension aspect, for `/system`. Separate from
+# ASPECTS because the shape table is what the resolver reads and attribution is not
+# its business; keyed by the same name, cleared with it.
+_ASPECT_OWNERS: dict[str, str] = {}
 
 # Roots already scanned for unrecognized candidates, so the warning is emitted once
 # per root per process and not once per aspect lookup. Keyed by resolved path.
@@ -131,6 +145,12 @@ def register_aspect(name: str, *, as_file: bool = True,
     Every refusal is a warning and a skip, never an exception: the library's own
     aspects are the floor, and an extension may not move it — a registration that
     tries to redefine ``checks`` or ``users`` is dropped with both shapes named.
+
+    **The registrant is recorded**, inferred from the calling package, so ``/system``
+    can say whose ``config/<name>.yaml`` an operator is looking at. A name alone
+    answers *is this file declared*; it does not answer *who reads it*, which is the
+    question when the file is misbehaving and the answer is a package you did not
+    write. Only the winning registration is attributed — a refused one owns nothing.
     """
     if not _ASPECT_NAME.fullmatch(name):
         logger.warning(
@@ -157,6 +177,7 @@ def register_aspect(name: str, *, as_file: bool = True,
             existing.shape(), aspect.shape())
         return
     ASPECTS[name] = aspect
+    _ASPECT_OWNERS[name] = calling_package()
 
 
 def registered_aspects() -> tuple[str, ...]:
@@ -164,6 +185,13 @@ def registered_aspects() -> tuple[str, ...]:
     registered aspect is visible from the running instance and not only from a log
     line at startup."""
     return tuple(sorted(set(ASPECTS) - set(BUILTIN_ASPECTS)))
+
+
+def aspect_owner(name: str) -> str:
+    """The package that registered ``name``, or ``""`` for a built-in (and for a
+    registration made from a frameless interpreter, where the caller is unknowable —
+    a missing attribution reads better on the page than a guessed one)."""
+    return _ASPECT_OWNERS.get(name, "")
 
 
 def forget_aspects() -> None:
@@ -174,6 +202,7 @@ def forget_aspects() -> None:
     """
     ASPECTS.clear()
     ASPECTS.update(BUILTIN_ASPECTS)
+    _ASPECT_OWNERS.clear()
 
 
 def fatal(message: str) -> ConfigError:

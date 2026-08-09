@@ -1,4 +1,4 @@
-/* Reason overflow (#9) — the show-all / collapse control.
+/* Reason overflow (ADR-0024) — the show-all / collapse control.
  *
  * A card clamps its reasons to a line budget (the block's ``--reason-lines``, from
  * config.yaml ``reason_cap``); the overflow stays in the DOM, clipped by CSS and
@@ -29,7 +29,8 @@
     var observer = null;
 
     // The chevron lives in the header: a card's block uses the server-rendered slot
-    // after the status word; a nested node's block gets one pinned to its name row.
+    // after the status word, and a nested node's block finds the same slot in its
+    // state cluster; creating a pinned one is the fallback for a row without it.
     function chevronFor(block) {
         var nodeSelf = block.closest(".status-node__self");
         if (nodeSelf) {

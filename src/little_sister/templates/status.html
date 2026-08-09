@@ -19,7 +19,7 @@
         </div>
 
         {% if is_admin and branch and node and layout != 'kiosk' %}
-        {#- The viewed node's own maintenance card (backlog #35): the subtree
+        {#- The viewed node's own maintenance card (ADR-0014): the subtree
             page is a dashboard of the children, so without it a pin on this
             node is invisible here — and the branch pin, which the model and
             POST /maintenance always supported, finally has a page. Outside
@@ -43,8 +43,8 @@
     <script src="{{ url_for('static', filename='js/poll.js') }}"
             data-target="status-grid"></script>
 
-    {# Reason overflow (#9): clamps each card's reason block to its line budget with
-       an in-place header chevron (▼/▲) that survives the ~10s fragment swap
+    {# Reason overflow (ADR-0024): clamps each card's reason block to its line
+       budget with an in-place header chevron (▼/▲) that survives the ~10s fragment swap
        (event-delegated on #status-grid, the ADR-0019 pattern). #}
     <script src="{{ url_for('static', filename='js/reasons.js') }}"></script>
 
@@ -52,6 +52,7 @@
        boxes, toggled in place and re-applied across the ~10s fragment swap
        (event-delegated on #status-grid, the ADR-0019 pattern). #}
     <script src="{{ url_for('static', filename='js/branches.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/maintenance-edit.js') }}"></script>
 
     {# Inspection popover (ADR-0019): static node metadata preloaded with the page
        (not the polled fragment), rendered into a hover card client-side. #}

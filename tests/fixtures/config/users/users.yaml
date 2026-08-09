@@ -1,0 +1,10 @@
+# Test fixture user list: the `users` aspect of tests/fixtures/config, which the
+# harnesses name as the first configuration root (see tests/conftest.py). Directory
+# form, so `avatars/` beside this file is where `avatar:` below resolves (ADR-0045).
+# Matches the login used across the web/api tests. Not a real deployment file.
+pan:
+  firstname: "Peter"
+  lastname: "Pan"
+  password: "12345678"
+  admin: true
+  avatar: pan

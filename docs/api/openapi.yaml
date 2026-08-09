@@ -286,8 +286,10 @@ components:
       properties:
         reason:
           type: string
-          description: Why the node was put under maintenance.
-          examples: ["disk swap"]
+          description: >-
+            Why the node was put under maintenance, as raw Markdown for the client
+            to render through its own safe renderer.
+          examples: ["**Disk swap** — see [runbook](https://ops.example/runbook)"]
         set_by:
           type: string
           description: The admin who set it.

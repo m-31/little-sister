@@ -8,7 +8,8 @@ the Python class behind `type:` — is
 
 - Put your check configs directly in `config/checks/`. `checks` is one **aspect** of
   the deployment's configuration directory, alongside `nodes.yaml`, `settings.yaml`
-  and `users.yaml` ([ADR-0031](../../docs/adr/0031-deployment-config-directory.md));
+  and the file- or directory-form `users` aspect
+  ([ADR-0031](../../docs/adr/0031-deployment-config-directory.md));
   it is always a directory, because its unit of data is the file — one check per
   `*.yaml`.
 - The built-in SSH / metrics checks ship their scripts **inside the package**

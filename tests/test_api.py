@@ -66,6 +66,15 @@ class JsonApiTests(TestCase):
         self.assertEqual(node["about"], "the **billing** db")
         self.assertEqual(node["title"], "prod")
 
+    def test_report_stays_off_the_envelope(self):
+        # Web-only until the client contract round (ADR-0044, riding ADR-0008's
+        # batched revision), like `reported_code` and the run facts before it: a
+        # client must not be shown a field one release and a rename the next.
+        self.tree.upsert("/db", StatusCode.OK, report="- 14 repositories")
+        node = self.client.get("/status/db", headers=JSON).get_json()["status"]
+        self.assertNotIn("report", node)
+        self.assertNotIn("run", node)
+
     def test_timestamps_are_utc_z(self):
         self.tree.upsert("/db", StatusCode.OK)
         body = self.client.get("/status/db", headers=JSON).get_json()

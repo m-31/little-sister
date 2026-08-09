@@ -48,7 +48,7 @@ concerns.
    info-log a host / container that has checks but no `about`. A config defect
    surfaces visibly, not as silent emptiness.
 5. **Markdown, rendered later.** `about` and the leaf descriptions are Markdown; they
-   show as plain text until the Phase 2 rendering item adds a renderer.
+   show as plain text until the Markdown-rendering item adds a renderer.
 
 ## Consequences
 - Host and container nodes (and satellite graft-points) get human context, while
@@ -61,9 +61,11 @@ concerns.
   one-check-per-node case with no extra file.
 - Curated **links** are deliberately **deferred**; when built
   they'll be **structured** (not buried in `about`) so the `/links` page and clients
-  can use them.
+  can use them. *(Settled later by [ADR-0030](0030-curated-links.md): they became a
+  page of their own, configured per deployment — a node grows no `links:` field, and
+  a node's own links ride in its Markdown.)*
 - The JSON envelope ([ADR-0008](0008-json-output-api.md)) is unchanged here; whether
-  `about` joins it is the Phase 2 API item.
+  `about` joins it is the API-envelope round's decision.
 
 - **Where each field surfaces** (with the later popover, [ADR-0019](0019-inspection-popover.md)):
   a leaf's `description` shows on its **detail page**; `about` (and `title`) show on the
