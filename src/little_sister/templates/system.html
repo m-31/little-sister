@@ -32,13 +32,19 @@
            the card and none of the question being asked. They stay reachable
            because a registered-but-unused type is the proof a freshly installed
            plugin took — see `_type_roster`, which owns the reasoning. #}
+        {#- Top-aligned, alone among this page's tables, because alone among them
+            a row here can grow: opening "used by 9 checks" stretches the Type cell
+            down a list of node paths, and centering put Module, Version and From
+            halfway down that list, beside nothing they describe. They answer for
+            the type named at the top of the row, so that is where they sit. -#}
         {%- macro type_table(rows) %}
-                <table class="table table-sm align-middle mb-0">
+                <table class="table table-sm align-top mb-0">
                     <thead>
                         <tr><th>Type</th><th>Module</th><th>Version</th><th>From</th></tr>
                     </thead>
                     <tbody>
-                        {% for origin, count in rows %}
+                        {% for row in rows %}
+                        {%- set origin = row.origin %}
                         <tr>
                             {#- "used by", because a bare count under a type name
                                 reads as something the *package* brought — two
@@ -46,18 +52,46 @@
                                 checks in this deployment's configuration name this
                                 type. A package contributing one type to two checks
                                 is the ordinary case, so the ambiguous phrasing was
-                                wrong most of the time. -#}
+                                wrong most of the time.
+
+                                And the count opens. It is the right summary at a
+                                glance, but it was the one number on this page that
+                                the page could not substantiate — *two of what?* —
+                                while every other card here names its subjects. A
+                                disclosure rather than a tooltip: the list is as
+                                long as the deployment is large, and it has to
+                                survive a keyboard and a screenshot. The unused
+                                types below have no list, and say so by not
+                                offering one. -#}
                             <td><code>{{ origin.type_name }}</code>
-                                {%- if count %}<br><span class="text-muted small">used by {{ count }} check{{ 's' if count != 1 else '' }}</span>{% endif %}</td>
+                                {%- if row.count %}
+                                <details class="ls-system__used">
+                                    <summary class="text-muted small">used by {{ row.count }} check{{ 's' if row.count != 1 else '' }}</summary>
+                                    {#- The node path, not the check's name: the
+                                        path is the thing the reader can go and
+                                        look at, so each is a link to that node. -#}
+                                    <ul class="ls-system__checks small mb-0">
+                                        {%- for path in row.paths %}
+                                        <li><a href="{{ url_for('status', branch=path | url_branch) }}">{{ path }}</a></li>
+                                        {%- endfor %}
+                                    </ul>
+                                </details>
+                                {%- endif %}</td>
                             {#- The loaded path under the module name, because the
                                 version beside it is the installed metadata's claim:
                                 a source copy earlier on the path shadows an
                                 installed distribution of the same name, and then
                                 the version is answering for code that is not
                                 running. Exactly the case somebody reads this table
-                                to diagnose, so the table shows both. -#}
+                                to diagnose, so the table shows both.
+
+                                Against a root the reader has, not absolutely: the
+                                diagnostic is *which root*, and nine tenths of an
+                                absolute path is the same prefix on every row —
+                                starting with somebody's home directory. The whole
+                                string stays one hover away. -#}
                             <td class="text-muted">{{ origin.module }}
-                                {% if origin.path %}<br><small>{{ origin.path }}</small>{% endif %}</td>
+                                {% if origin.path %}<br><small title="{{ origin.path }}">{{ origin.path | loaded_from }}</small>{% endif %}</td>
                             <td class="text-muted">{% if origin.version %}{{ origin.version }}{% else %}&mdash;{% endif %}</td>
                             <td class="text-muted">{% if origin.builtin %}built-in{% elif origin.distribution %}{{ origin.distribution }}{% else %}source{% endif %}</td>
                         </tr>
@@ -100,13 +134,15 @@
             <div class="card-body">
                 <h3 class="h6 text-muted text-uppercase">Packages</h3>
                 <table class="table table-sm align-middle mb-0">
-                    {#- Two columns, not three. The loaded path is the longest thing
-                        on this page — an absolute site-packages path, most of it
-                        the same prefix on every row — and a column of its own left
-                        it a narrow ribbon breaking at the hyphen in "site-packages"
-                        while squeezing everything either side of it. Under the name
-                        it gets the table's whole width, which is what a path that
-                        long needs to stay readable. -#}
+                    {#- Two columns, not three. A column of its own left the loaded
+                        path a narrow ribbon breaking at the hyphen in
+                        "site-packages" while squeezing everything either side of
+                        it; under the name it has the table's whole width and needs
+                        none of it, now that the path is drawn against a root
+                        (`loaded_from`) instead of absolutely. The column stays a
+                        column because what it holds is one thing — this package's
+                        identity: what it is called, what was installed, and where
+                        that turned out to be. -#}
                     <thead>
                         <tr><th>Package</th><th>Registers</th></tr>
                     </thead>
@@ -121,7 +157,7 @@
                                 path — the shadowing case, worth saying out loud. -#}
                             <td><code>{{ row.origin.package }}</code>
                                 <span class="text-muted small">{% if row.origin.distribution %}· {{ row.origin.distribution }} {{ row.origin.version }}{% else %}· source{% endif %}</span>
-                                {%- if row.origin.path %}<br><small class="text-muted">{{ row.origin.path }}</small>{% endif %}</td>
+                                {%- if row.origin.path %}<br><small class="text-muted" title="{{ row.origin.path }}">{{ row.origin.path | loaded_from }}</small>{% endif %}</td>
                             {#- Each registration is one fact and must not break
                                 across lines: "slot reason.actions" split after
                                 "slot" reads as two entries, and the column is

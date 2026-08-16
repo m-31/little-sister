@@ -1,8 +1,9 @@
-"""The budgeted failure retry (ADR-0033).
+"""The budgeted failure retry (ADR-0033, amended by ADR-0060 decision 4).
 
 A non-OK completion pulls the check's armed next slot to the retry interval —
-earlier, never later — at most ``retry_attempts`` times per failure episode; an
-OK ends the episode and re-arms the budget; staleness keeps judging by the
+earlier, never later — at most ``retry_attempts`` times per episode. **Any change
+of the reading ends an episode and re-arms the budget**, not only an OK, and a
+completed ``UNDEFINED`` arms nothing at all. Staleness keeps judging by the
 nominal frequency; ``/system`` says when a slot is a retry slot.
 """
 
@@ -18,7 +19,7 @@ os.environ.setdefault("SECRET_KEY", "test-key")
 
 from little_sister import app as app_module
 from little_sister import engine as engine_module
-from little_sister.checks import Check, CheckError, CheckResult
+from little_sister.checks import Check, CheckError, CheckResult, Entry
 from little_sister.config import load_config
 from little_sister.engine import CheckInfo, Engine, EngineInfo
 from little_sister.status import StatusCode
@@ -88,6 +89,71 @@ class RetrySchedulingTests(TestCase):
         self.assertEqual(item.next_due, self.now + 300)
         check.result = CheckResult(StatusCode.WARN, ["hm"])
         self._run(engine, item)                            # a WARN triggers too
+        self.assertEqual(item.retry_used, 1)
+        self.assertEqual(item.next_due, self.now + 30)
+
+    def test_a_change_of_reading_rearms_the_budget(self):
+        """ADR-0060 decision 4(a). ADR-0033 re-armed only on an `OK`, which assumed a
+        non-OK check was a failing one. A check whose *ordinary* state is non-OK then
+        spent its budget in the first cycles and had no fast look left on the day its
+        reading finally changed — which is the one day it is worth paying for."""
+        check = _Probe(path="/svc", frequency_seconds=300,
+                       retry_interval_seconds=30, retry_attempts=2)
+        engine, _tree, item = self._engine(check)
+        check.result = CheckResult(StatusCode.WARN, ["queue"])
+        for _ in range(3):                                 # spend it, then some
+            self._run(engine, item)
+        self.assertEqual(item.retry_used, 2)
+
+        check.result = CheckResult(StatusCode.ERROR, ["down"])
+        self._run(engine, item)
+        self.assertEqual(item.retry_used, 1)               # a new episode
+        self.assertEqual(item.next_due, self.now + 30)
+        self.assertTrue(item.retrying)
+
+    def test_a_steady_reading_does_not_rearm(self):
+        """The other half, and the one that keeps ADR-0033's promise intact: a burst
+        is bounded because an unchanged reading is not news. Without this the budget
+        would refill every run and a three-day outage would fast-cycle throughout."""
+        check = _Probe(path="/svc", frequency_seconds=300,
+                       retry_interval_seconds=30, retry_attempts=2)
+        engine, _tree, item = self._engine(check)
+        check.result = CheckResult(StatusCode.WARN, ["queue"])
+        for _ in range(5):
+            self._run(engine, item)
+        self.assertEqual(item.retry_used, 2)               # never refilled
+        self.assertEqual(item.next_due, self.now + 300)    # nominal
+        self.assertFalse(item.retrying)
+
+    def test_a_completed_undefined_arms_nothing(self):
+        """ADR-0060 decision 4(b): a line that makes no claim is not a failure to
+        confirm. The live case is `github-rate-limit` on an installation that reports
+        no limit for a resource — a derived `UNDEFINED` every run, forever, where
+        asking again in thirty seconds cannot change the answer."""
+        check = _Probe(path="/svc", frequency_seconds=300,
+                       retry_interval_seconds=30, retry_attempts=2)
+        engine, _tree, item = self._engine(check)
+        check.result = CheckResult(
+            reason=[Entry("core", "no limit for this resource",
+                          StatusCode.UNDEFINED)])
+        self.assertIs(check.result.stored_code, StatusCode.UNDEFINED)
+        for _ in range(3):
+            self._run(engine, item)
+        self.assertEqual(item.retry_used, 0)               # nothing spent
+        self.assertEqual(item.next_due, self.now + 300)    # nothing pulled in
+        self.assertFalse(item.retrying)
+
+    def test_an_unknown_that_becomes_a_failure_still_arms(self):
+        """The complement, so *unknown arms nothing* cannot quietly become *a check
+        that was ever unknown can never retry again*."""
+        check = _Probe(path="/svc", frequency_seconds=300,
+                       retry_interval_seconds=30, retry_attempts=2)
+        engine, _tree, item = self._engine(check)
+        check.result = CheckResult(
+            reason=[Entry("core", "no limit", StatusCode.UNDEFINED)])
+        self._run(engine, item)
+        check.result = CheckResult(StatusCode.ERROR, ["gone"])
+        self._run(engine, item)
         self.assertEqual(item.retry_used, 1)
         self.assertEqual(item.next_due, self.now + 30)
 

@@ -34,6 +34,16 @@ maintenance_cap: 5
 # is included in the startup config-load log.
 card_status_line: beside
 
+# How dashboard cards spend a wide grid's columns (ADR-0056). `flow` is the
+# default: a root with a large subtree may take spare tracks from the stable
+# width-priced span plan, so two tall cards widen and shorten instead of leaving
+# columns empty. `plain` withholds the plan entirely — every card keeps one
+# ordinary track, the same grid a browser without JavaScript shows. Display
+# only, never semantics; anything except `flow` or `plain` warns, names both
+# choices, and falls back to `flow`. A per-viewer value and a possible `packed`
+# mode are later steps of this same key, never a second switch.
+dashboard_columns: flow
+
 # Default maintenance window when an admin sets maintenance without an explicit
 # duration (e.g. 12h, 7d). Maintenance always expires — there is no indefinite pin.
 maintenance_default_expiry: 7d

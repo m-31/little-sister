@@ -43,7 +43,7 @@ class HostMetricsCheckTests(TestCase):
     def _run(self, directory, stdout, *, returncode=0, stderr="", **extra):
         check = self._check(directory, **extra)
         completed = subprocess.CompletedProcess([], returncode, stdout, stderr)
-        with mock.patch("little_sister.checks.ssh.transport.subprocess.run",
+        with mock.patch("little_sister.checks.ssh.connection.subprocess.run",
                         return_value=completed) as run:
             return check.run(), run
 
@@ -316,7 +316,7 @@ class HostMetricsCheckTests(TestCase):
         with tempfile.TemporaryDirectory() as directory:
             check = self._check(directory, timeout="2s")
             with mock.patch(
-                    "little_sister.checks.ssh.transport.subprocess.run",
+                    "little_sister.checks.ssh.connection.subprocess.run",
                     side_effect=subprocess.TimeoutExpired("ssh", 2)):
                 result = check.run()
         ssh = self._kids(result)["ssh"]

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 #
-# Start little-sister under gunicorn, in the background, safely.
+# Start this instance under gunicorn, in the background, safely. `instance.sh`
+# beside this file says which instance that is, and what gunicorn serves.
 #
 # Behavior around the bind port:
 #   * Port free                       -> start gunicorn.
@@ -58,7 +59,7 @@ if [ -n "$existing" ]; then
     exit 1
   fi
   restart_master="$(master_of "$existing")"
-  echo "little-sister already running on :${PORT} (PID ${restart_master}); will restart it."
+  echo "${NAME} already running on :${PORT} (PID ${restart_master}); will restart it."
 fi
 
 # --- Dependencies & environment ---------------------------------------------
@@ -76,7 +77,7 @@ if [ -n "$(listeners)" ]; then
 fi
 
 # --- Launch (the nohup part) -------------------------------------------------
-echo "Starting little-sister on ${HOST}:${PORT}..."
+echo "Starting ${NAME} on ${HOST}:${PORT}..."
 mkdir -p var          # runtime artifacts (gunicorn log + pidfile) live under var/
 nohup gunicorn --workers 1 --threads 8 --bind "${HOST}:${PORT}" \
       --pid "$PID_FILE" "$APP" > "$LOG" 2>&1 &
@@ -106,7 +107,7 @@ for _ in $(seq 1 "$START_TIMEOUT"); do
       echo "left running: the dashboard shows the same message. ./stop.sh ends it." >&2
       exit 1
     fi
-    echo "little-sister is up (PID ${app_pid}); logging to ${LOG}."
+    echo "${NAME} is up (PID ${app_pid}); logging to ${LOG}."
     if [ "$status" -ge 500 ]; then
       echo "WARNING: ${PROBE_PATH} answered HTTP ${status}: it is serving, but" >&2
       echo "erroring -- check ${LOG}." >&2

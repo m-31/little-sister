@@ -33,6 +33,33 @@
 > `.reason-action`: an action is an action, and a second visual language for one gesture
 > would be the extension seam leaking into the design.
 
+> **Update (2026-08-15):** `reason.actions` grows one context name, `line` — the
+> whole [`ReasonLine`](../architecture.md), carrying the entry's **slug**, its own
+> `code`, its `running` flag and whatever is pinned on it. Decision 7's `reason`
+> stays exactly what it was, the line's unshortened text, and every filler written
+> against it is untouched. The library's own **copy chip** is the first filler to
+> need the addition: it links one line to a document of its own
+> (`/copy/<path>?reason=<slug>`), and a URL needs the slug.
+>
+> Recovering the entry from `index` was possible — the surfaces pass `loop.index0`
+> over the very list the slug lives in — and is precisely what
+> [ADR-0036](0036-addressable-reasons.md) decision 3 refuses: an index moves when an
+> entry is inserted above it, so an action built on one would silently address a
+> different finding the next time the check reports, with nothing to notice it by.
+>
+> **And a rule the roster was missing, which this addition is the proof of: a
+> provider is handed exactly what it asks for.** A context that grows would
+> otherwise break every provider that spelled its keywords out — a `TypeError`,
+> a logged failure, and a deployment quietly losing its chips on an upgrade of
+> *ours*. So the renderer reads the provider's signature and passes the names it
+> declares, or everything when it declares `**kwargs`. This is
+> [ADR-0049](0049-the-check-authoring-surface.md)'s growing-fields problem reached
+> from the other side: a check type must take `**kwargs` because the loader cannot
+> see what a constructor wants, and here the caller *can* look — so the burden is
+> ours rather than the extension author's, which is the right way round for a seam
+> somebody else's code depends on. Adding a name to a slot's context stays a
+> compatible change; it is now compatible in fact and not only on paper.
+
 > **Update (2026-08-03):** `node.actions` is offered on **every box the grid draws**,
 > not only on card heads — each nested box under a card carries it too. The first
 > deployment to fill it found the gap by rendering: a card is the *top* of a subtree

@@ -36,7 +36,8 @@ where **maintenance settings** are kept) through narrow seams, leaving the core
 untouched. A deployment's private checks live in their **own repository** that consumes
 the core as a library, and such extensions (e.g. AWS, Keycloak or GitHub integrations)
 can grow into **installable packages**; distribution follows the same arc, from a git
-repository toward **PyPI**. The core stays simple — every extension is opt-in, and a
+repository to a package index. The core itself has finished that arc — it installs from
+**PyPI** — and each extension travels it when it would have a second user. The core stays simple — every extension is opt-in, and a
 plain internal install needs none of it.
 
 **The name** is the inversion it sounds like. Big Brother watches *you*; little

@@ -46,24 +46,20 @@ answer**, which the page reports in its own muted words rather than as a death.
 """
 from __future__ import annotations
 
-import http.client
 import math
 import socket
 import ssl
 import threading
-import urllib.error
-import urllib.request
 from collections.abc import Mapping
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime
-from email.message import Message
-from typing import IO
 
-from little_sister import __version__
 from little_sister.checks import CheckError, parse_duration
+from little_sister.fetch import USER_AGENT, fetch
 from little_sister.links import DEFAULT_PROBE_INTERVAL, LinksConfig
 from little_sister.logger import logger
+from little_sister.transport import RemoteError
 
 #: How long one request may take. A probe pass now starts from a **request**
 #: thread's daemon child rather than from the engine's pool, so a hung internal host
@@ -138,6 +134,13 @@ class Verdict:
     ``alive`` is ``True`` (an agreed status), ``False`` (gone) or ``None`` (no
     answer). :attr:`detail` is short plain text for the page — never Markdown, and
     never the transport exception's full text, which names paths and proxies.
+
+    **Three-valued like** :class:`~little_sister.transport.Fault`, **and about a
+    different thing.** This is a claim about the *target*: whether the URL on the page
+    still leads somewhere. A `Fault` is a claim about the *asking* — whether a request
+    got an answer and what kind — and one does not derive the other, which is why
+    :func:`_transport_verdict` maps between them by hand rather than sharing a type.
+    Deliberate, and stated here so the next reader of both does not have to work it out.
     """
     url: str
     alive: bool | None
@@ -680,18 +683,6 @@ def _finish(current: _Pass) -> None:
     current.done.set()
 
 
-#: Everything a single probe may fail with, so **one** bad target costs its own
-#: verdict and not the pass. `URLError` is an `OSError`, and so are the transport
-#: failures underneath it; `ValueError` is what a URL urllib cannot open at all
-#: raises. `http.client.HTTPException` is the one that is **neither** — `urlopen`
-#: re-raises `BadStatusLine` and `InvalidURL` unwrapped out of `getresponse()`, so a
-#: server answering garbage (an SSH port named as `http://host:22/`, a typo'd port)
-#: escaped this function entirely, took down the whole sweep, and left every
-#: remaining target without an answer. `_is_due` then read that as "never asked" and
-#: started another doomed pass on every single open.
-_TRANSPORT_FAILURES = (OSError, ValueError, http.client.HTTPException)
-
-
 def _probe(url: str, alive: frozenset[int]) -> Verdict:
     """Ask one URL whether it is still there.
 
@@ -701,16 +692,9 @@ def _probe(url: str, alive: frozenset[int]) -> Verdict:
     now = datetime.now()
     try:
         status = _request(url, "HEAD")
-    except urllib.error.HTTPError as error:
-        status = int(error.code)
         if status in RETRY_WITH_GET:
-            try:
-                status = _request(url, "GET")
-            except urllib.error.HTTPError as retry:
-                status = int(retry.code)
-            except _TRANSPORT_FAILURES as retry:
-                return _transport_verdict(url, retry, now)
-    except _TRANSPORT_FAILURES as error:
+            status = _request(url, "GET")
+    except RemoteError as error:
         return _transport_verdict(url, error, now)
 
     if status in alive:
@@ -720,38 +704,36 @@ def _probe(url: str, alive: frozenset[int]) -> Verdict:
     return Verdict(url, None, f"HTTP {status}", now)
 
 
-class _KeepRedirects(urllib.request.HTTPRedirectHandler):
-    """A handler that reports a redirect instead of following it.
-
-    ``301`` and ``302`` are in the default ``alive:`` list, which they could never
-    reach if urllib quietly followed them — the reader would be told about the page
-    at the end of the chain, which may be a login wall or a homepage that answers
-    ``200`` for everything. A moved entry is alive **and** worth seeing as moved.
-    """
-
-    def redirect_request(self, req: urllib.request.Request, fp: IO[bytes],
-                         code: int, msg: str, headers: Message,
-                         newurl: str) -> urllib.request.Request | None:
-        return None
-
-
-#: One opener for every probe: no redirect following, and a user agent that says who
-#: is knocking. The default (``Python-urllib``) is exactly the string a corporate
-#: filter is most likely to answer with a ``403`` nobody can interpret. It is a
-#: *default* opener otherwise, so it honors the ``http_proxy`` / ``https_proxy``
-#: environment a deployment behind an outbound proxy already sets — and a
-#: deployment that wants none of this switches both ``check:`` keys off, which
-#: leaves the target list empty and the probe code untouched.
-_opener = urllib.request.build_opener(_KeepRedirects)
-_opener.addheaders = [("User-Agent", f"little-sister/{__version__} (link probe)")]
+#: Which subsystem is knocking, appended to the library's own agent — a server log
+#: that shows a probe every quarter hour is entitled to say what is probing it.
+_AGENT = f"{USER_AGENT} (link probe)"
 
 
 def _request(url: str, method: str) -> int:
-    """One request's status code. The URL is operator-configured (trusted), the
-    same standing this project's ``http`` check works under."""
-    request = urllib.request.Request(url, method=method)
-    with _opener.open(request, timeout=REQUEST_TIMEOUT) as response:
-        return int(response.status)
+    """One request's status code, whatever that status is.
+
+    **Redirects are reported, not followed.** ``301`` and ``302`` are in the default
+    ``alive:`` list, which they could never reach if urllib quietly followed them —
+    the reader would be told about the page at the end of the chain, which may be a
+    login wall or a homepage that answers ``200`` for everything. A moved entry is
+    alive **and** worth seeing as moved.
+
+    No body is read: a probe has no use for one, and this is the only reader on the
+    page's own clock. The URL is operator-configured (trusted), the same standing this
+    project's ``http`` check works under.
+
+    **And no ``deadline=``, which is right here for a different reason than in the
+    ``http`` check.** ``fetch``'s deadline bounds a *body* read, and with
+    ``read_body=False`` there is no body read to bound. What bounds a probe that never
+    comes back is the mechanism this module already has: the pass reaches its own
+    deadline, **abandons** what has not answered, records what did, and gets out of the
+    way (ADR-0030, amended 2026-08-02). Passing a ``Deadline`` as well would put a
+    second, weaker clock beside a working one — weaker because it could only fire
+    between chunks of a body nobody asks for.
+    """
+    return fetch(url, timeout=REQUEST_TIMEOUT, follow_redirects=False,
+                 method=method, headers={"User-Agent": _AGENT},
+                 read_body=False).status
 
 
 def _transport_verdict(url: str, error: Exception, now: datetime) -> Verdict:
@@ -763,7 +745,8 @@ def _transport_verdict(url: str, error: Exception, now: datetime) -> Verdict:
     wolf. The wording is ours rather than the exception's, which names proxies and
     certificate paths a page has no business showing.
     """
-    reason = getattr(error, "reason", error)
+    original = error.__cause__ if isinstance(error, RemoteError) else error
+    reason = getattr(original, "reason", original)
     if isinstance(reason, socket.gaierror):
         return Verdict(url, False, "host not found", now)
     if isinstance(reason, ConnectionRefusedError):

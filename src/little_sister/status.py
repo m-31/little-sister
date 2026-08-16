@@ -146,6 +146,12 @@ class Status:
         # A short display label, briefer than `about` (ADR-0017); same sources. The
         # path/name identity stays the addressing key.
         self.title: str = ""
+        # A declared rank among this node's siblings (ADR-0055); the snapshot sorts
+        # by `(order, name)`, and an undeclared rank reads 0. `None` means **nobody
+        # said**, which is what keeps a configured `order: 0` distinguishable from
+        # silence — a deployment overruling a rank the check declared has to be able
+        # to name the default value like any other.
+        self.order: int | None = None
         # The marker that an admin pin is on this node (ADR-0032 rule 4, ADR-0041).
         # It is *not* sticky and holds no value: the check keeps writing underneath
         # it and the snapshot derives MAINTENANCE from it, so the node never forgets

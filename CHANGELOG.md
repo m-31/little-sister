@@ -8,6 +8,402 @@ contract versions **separately** — see `docs/api/openapi.yaml` `info.version`.
 
 ## [Unreleased]
 
+## [0.3.12] - 2026-08-17
+
+### Changed
+
+- **The default log level is now `INFO`, and `LOG_LEVEL` names it**
+  ([ADR-0049](docs/adr/0049-the-check-authoring-surface.md), amended). This reaches
+  only installations that let little-sister configure logging: an application that
+  sets up its own — before importing `little_sister.app` — keeps its level exactly as
+  it did, and `LOG_LEVEL` does not reach it.
+
+  The old default was `DEBUG`, which collects no line little-sister writes, since
+  nothing in it logs below `INFO`, and every line written by everything installed
+  beside it. One deployment's log ran two thirds AWS SDK request detail nobody had
+  asked for. `LOG_LEVEL=DEBUG` asks for the old behavior back for a debugging
+  session; an unrecognized name falls back to `INFO` and says so in the log it just
+  opened.
+  - A dependency that is chatty at `INFO` is quieted the way it always was, by
+    capping **its own** logger — `logging.getLogger("botocore").setLevel(WARNING)`,
+    beside the check-type registrations. That adds no handler to the root logger, so
+    the default setup still runs: quieting a dependency does not cost you ownership
+    of logging.
+
+- **A title with no word in it no longer stands in for a node's name**
+  ([ADR-0061](docs/adr/0061-decoration-is-not-a-label.md)). Most surfaces draw the
+  name and the title side by side; two draw the title *instead of* the name — the
+  `/copy` hand-off and the inspection popover's card — which is right while a title is
+  a word, and wrong for a glyph. A node titled `🔴` used to paste into a ticket as a
+  circle and nothing else, in the one surface with no chips and no styling to carry
+  the meaning. It now reads `critical 🔴`, name first.
+  - The test is `isalnum` per character, so it is a **Unicode** one: a Japanese,
+    Cyrillic or Greek title is a word and is unaffected; an emoji, an arrow or a
+    bullet is not. A digit counts.
+  - **Only nodes whose titles are already wordless change**, and only on those two
+    surfaces — nothing that was drawn stops being drawn. Display only, as before: the
+    tree still stores the title and the JSON envelope still emits it, so a client
+    drawing its own chips keeps its own decision about the glyph.
+- **The fast failure retry now re-arms whenever a check's reading changes**, not only
+  when it goes `OK` — and a run that reports `UNDEFINED` no longer arms it at all
+  ([ADR-0033](docs/adr/0033-budgeted-failure-retry.md), amended by
+  [ADR-0060](docs/adr/0060-a-line-makes-no-claim.md) decision 4). Only deployments
+  that set `retry_interval` are affected.
+
+  The old rule assumed a non-`OK` check was a failing one. Since a node's code can be
+  derived from its lines, a check can sit at `WARN` for weeks as its *ordinary* state —
+  and it then spent `retry_attempts` in its first few cycles and had none left on the
+  day its reading actually changed, which is the one day a second look is worth
+  paying for. Nothing said so either: `/system` marks only a pulled-in slot, so a
+  spent budget looked exactly like a check that never had one.
+
+  A burst is still bounded, because an unchanged reading is not news: a three-day
+  outage costs `retry_attempts` fast runs and then normal cadence, exactly as before.
+  What changed is that the budget comes back when the news does.
+
+### Added
+
+- **`follow_redirects:` on the `http` check**, default `true` — which is what the check
+  has always done, so nothing changes until you ask it to. Set it `false` and a `3xx`
+  becomes the reading rather than a step on the way to one: list the redirect codes you
+  accept in `expected_status` (`[200, 301]`), and a *new* redirect turns the check. That
+  is the stricter reading, and it is the one worth having where a `200` at the end of a
+  chain might be a login wall rather than the page you asked for. The node's config
+  summary says which reading is in force, because the two differ on the same URL.
+
+  It must be a real boolean: `follow_redirects: "false"` — quoted, as YAML makes easy —
+  is refused when the check loads rather than read as true. A switch that can silently
+  mean its opposite is worse than no switch.
+
+- **A check can say what a failed request means, in one vocabulary.** Everything a
+  check type may import is promised by name (`docs/architecture.md` §11), and until
+  now nothing on that list said a word about a request that does not answer — so
+  every check reading a remote API decided four things for itself: how long one
+  request may take, what bounds a run that asks fifty times, what is worth asking
+  again, and what a failure *means*. `little_sister.transport` now promises the
+  **policy** for all four, and no client:
+
+  - **`Deadline`** — a run's budget, with `budget(timeout)` clamping a per-request
+    timeout to what the run has left. That clamp is what makes a check's `timeout:`
+    a bound: without it a fifteen-second request can start with two seconds left
+    and overrun by thirteen.
+  - **`Fault`** — *transient* / *answered* / *malformed*, decided by status and
+    never by message text. Three states rather than two, because "they answered
+    with something unusable" is not the same fact as "they answered no", and a
+    check whose error type cannot tell them apart cannot report the difference.
+  - **`RemoteError`** — carries the status and the fault; `fault` is required with
+    no default, and it is meant to be subclassed, so a package keeps its own error
+    class and messages.
+  - **`DeadlineExceeded`** — deliberately *not* a `RemoteError`, so a handler that
+    turns a failure into one line per item cannot turn one run-level fact into
+    forty item-level ones.
+  - **`ask`** — one bounded retry: only a transient fault, only while attempts
+    remain, and only while the deadline can still afford the backoff.
+
+  There is **no I/O and no HTTP** in it, which is the point: a check whose transport
+  is a vendor SDK wears the same policy while the SDK does the socket work. It
+  promises **no** mapping from a fault to a status code either — for an `http` check
+  the endpoint *is* the subject of the measurement, while for a check reading an API
+  to grade something else it is the instrument, and only the check knows which it
+  has. Adding names does not move the check API epoch, which stays at **1**.
+
+- **And one place that makes the request.** `little_sister.fetch` promises `fetch`,
+  `Response` and `fault_for`. `fetch` makes one request and hands back a `Response`
+  for **every** status — a `500` is an answer, not an exception, which is what lets a
+  check whose measurement *is* the status use it at all. Only a request that never
+  reached a status raises, as a transient `RemoteError` carrying the original
+  exception as `__cause__`.
+
+  Five things that used to be decided per call site are now decided once:
+  `timeout` and `follow_redirects` are **required arguments** (a request with no
+  timeout, and a redirect policy nobody chose, are the two defects this keeps
+  rediscovering); every request identifies itself as `little-sister/<version>` rather
+  than as `Python-urllib`, which an outbound filter is far more likely to answer with
+  an uninterpretable `403`; proxies and the system trust store are honored as the
+  environment sets them, and certificate verification **cannot** be switched off; and
+  a response body is read in bounded chunks against a 16 MiB cap.
+
+  That last part closes a hole worth naming: `urlopen(timeout=…)` bounds one **socket
+  operation**, not a request, so a server sending one byte every few seconds never times
+  out. Given a `Deadline`, `fetch` reads the body against the run's clock and gives up
+  when the budget is gone.
+
+  It reads with `read1` to manage it, and that is the whole of why it works: `read(n)`
+  blocks until it has all *n* bytes, so against a trickle the first call would not return
+  until the body was complete, and the clock would be consulted once — after the overrun
+  it was there to prevent. Measured against a real socket, a 1.5-second budget gave up
+  after **7.8 seconds** that way, and after 1.6 with `read1`. Two limits are stated rather
+  than implied: the clock bites only when a `deadline` is given *and* a body is actually
+  read, and it does not reach the status line and headers, which urllib reads inside its
+  own opener — a server trickling *those* is bounded only by the socket timeout per read.
+
+- **A service that answers *not now* is understood.** `retry_after(headers)` reads the
+  standard `Retry-After` header — both forms it may take, a number of seconds or an
+  HTTP-date — and returns seconds, or nothing at all if the value is unreadable.
+  `RemoteError` carries the number as `retry_after`, and `ask` waits that long instead
+  of its own backoff, still only while the run's budget allows it: a two-second pause
+  is absorbed, a ten-minute one is refused and reported rather than taken, because a
+  wait outliving the budget a check granted is not a request's to spend.
+
+  There is deliberately **no separate fault for a throttle**. Being asked to wait is
+  already *transient* — asking again could change the answer — and no status identifies
+  one: a service may answer `403` or `429` when it means *not yet*, while a bare `403`
+  may equally mean *not visible to this credential*. Only a caller that knows the
+  service can tell those apart, so classifying a throttle is the caller's, and a
+  service's own reset header is its dialect rather than something this library guesses
+  at. For the same reason `fault_for` still reads a `429` as *answered*: a `429` with
+  no `Retry-After` may be nothing more than crawler protection, and pressing a service
+  that is already complaining about volume is how access gets withdrawn.
+
+### Changed
+
+- **The built-in `http` check and the links page now share one request path.** The
+  `http` check keeps following redirects and keeps reporting any transport failure as
+  `ERROR` — the endpoint is what it measures — and now identifies itself by name like
+  every other request. The links page keeps reporting a redirect instead of following
+  it, and keeps its own three-way reading of what a failure means for a link.
+
+- **The SSH connection module is now `checks/ssh/connection.py`** (was
+  `transport.py`), naming what it holds rather than the layer it sits in and freeing
+  `transport` for the policy above. `SshConnection` and `RemoteResult` are imported
+  from `little_sister.checks.ssh` as before, so nothing outside the package changes.
+
+- **Copy one node, not just the tree.** A leaf's detail page now carries the same
+  two clipboard buttons as `/copy`, aimed at that node. What they hand over is
+  what an operator otherwise retypes into a ticket: the node's name, title and
+  **path**, when it was **observed** and since when it has held that status, the
+  **next update**, how long the **last run** took, how often it is checked, what
+  the run **reported**, what it ran **with**, and every reason line **in full** —
+  a truncated API error included. Both formats come from one document, and one
+  formatter writes it and the tree hand-off, so the node cannot describe itself
+  one way on its own page and another inside `/copy`.
+
+  **Every instant names its offset** — `2026-01-15 10:00:00 +01:00` — in both
+  documents, including a maintenance pin's expiry on `/copy`. The pages render
+  local time and say nothing about the zone, which is right for a screen somebody
+  is standing in front of and useless in a document read somewhere else.
+
+  **A pin does not change what is copied.** A pin changes what the tree *reports*;
+  it does not change what the check *measured*, and a hand-off is about the
+  measurement — so the document keeps the reading and says a pin is in force,
+  instead of quietly presenting the pinned code as the answer.
+
+  **A reason line that declared a code of its own keeps it**, in both documents: a
+  line's cue sits before its text, so a healthy workflow under a failing node reads
+  as healthy in a pasted incident too, and a line that declared no code takes no
+  cue because it carries its node's. A line whose subject is **running** says so in
+  words — the page renders that as an italic, and a document has no glance to serve.
+
+  Containers get no buttons: their page is a dashboard of their children, and the
+  hand-off for a subtree is `/copy`.
+
+- **Copy one finding.** The line an operator is actually opening a ticket about is
+  one of twenty on a node, and both documents above carry the other nineteen. Every
+  reason line that a check declared as a **member** now has a **Copy** chip beside
+  it — on the dashboard and on the detail page — leading to a page that hands over
+  that line alone, with the node's title, path and observation so a pasted finding
+  still says where it came from. Nothing else: the run's facts, the report and the
+  configuration describe the node, and the button that carries them is one click
+  away. Reasons that are **prose** get no chip — a failure message and its stack
+  trace are one condition, and half of one condition is not a hand-off.
+
+  `/copy` grew a path for it: `/copy/<node>` is that node's document and
+  `/copy/<node>?reason=<slug>` is one line's, so every hand-off now has a URL that
+  can itself be pasted into the ticket. The chip is an ordinary link, which is what
+  keeps the documents *out of* the pages that offer them — a node with two hundred
+  findings would otherwise carry two hundred documents on every render.
+
+### Changed
+
+- **A slot's context provider now receives the names it declares.** `reason.actions`
+  gained a `line` name (the whole reason entry — slug, code, `running`, any pin),
+  and a provider that spelled its keyword arguments out would have broken on the
+  addition: a `TypeError`, a logged failure, and a deployment quietly losing its
+  chips on an upgrade of little-sister. Providers are now handed exactly the
+  parameters they declare, or everything when they declare `**kwargs`, so a filler
+  written against an earlier context keeps working untouched and a new one can ask
+  for what it needs. No action is required of any existing extension.
+
+- **The clipboard buttons are named after what they write.** *Copy rich text* is
+  now **Copy Rich HTML**: the clipboard member is `text/html`, not RTF, and
+  *Copy Markdown* beside it read as though the other one were not text. Every page
+  that offers a document — `/copy` and its per-node and per-line pages, and a
+  leaf's detail page — renders one partial, so the pair keeps meaning the same
+  thing wherever it appears.
+
+- **`little_sister.spans` — how a span of time is written**, on the public API
+  surface (`architecture.md` §11) so a check type outside this repository can
+  write *"the backup took 2h 7m"* into a reason line and match the page it renders
+  onto. Three functions, because there are three readings: `format_span` for a
+  span whose size *is* the information (a runtime, a countdown), `coarse_span` for
+  one where it is approximately the information (*how long ago*, *how much is
+  left*) and the value has to stay true on a page nobody is re-rendering, and
+  `format_duration` for a **configured** interval written back in the units
+  somebody typed it in (`900` is `15m`, where a measured span would say `15m 0s`).
+  `parse_duration` reads a span from a config; these write one to a screen.
+
+### Fixed
+
+- **A span no longer stays in seconds however large it grows.** The `/system`
+  page rendered a quarter-hour wait as `in 812s` beside a two-minute run reading
+  `115 s`, and a check stale for two hours read `7500s`, because each surface
+  formatted its own. They all call `format_span` now, which changes units as the
+  value grows — `412 ms`, `3.1 s`, `43 s`, `1m 55s`, `2h 7m`, `1d 3h` — so the
+  number stays about the same width whatever the span. Affects the `elapsed`
+  Jinja filter, the system page's Running / Next run / Last run cells and its
+  uptime card, and the staleness line on the dashboard and the check page. A
+  *configured* interval still renders through `duration` in the units the config
+  wrote it in (`15m`), which is a different question and a different answer.
+
+- **A check type that does not accept a new common field now fails with a message
+  that names it.** The fields every check shares grow — `order` is the newest — and
+  each becomes a keyword argument the loader passes to a check's constructor. A check
+  type written outside this repository that spells those keywords out instead of
+  taking `**kwargs` used to fail with a bare `TypeError` from inside the loader,
+  naming neither the configuration file nor the check type. It is now a `CheckError`
+  naming the file, the type and the keyword it refused, and saying what to do about
+  it. A `TypeError` raised *inside* a constructor is deliberately left alone, so a
+  real defect in a check is never relabelled as this.
+
+### Added
+
+- **A check can declare the order of its own nodes.** Siblings have always rendered
+  alphabetically, which is wrong wherever the set has an order of its own: a severity
+  band row read `critical high informational low medium`, filing *nothing to do* third,
+  and `low` before `medium` is a wrong statement about severity. `CheckResult` now
+  carries an `order: int = 0` and the tree sorts siblings by `(order, name)` — a
+  negative value pulls a node up, a positive one pushes it down, and ties still break
+  by name. A deployment can overrule any of it from its own configuration — `order:`
+  sits beside `title:` and `about:`, both inline on a check and in `nodes.yaml`
+  ([ADR-0055](docs/adr/0055-sibling-order.md)).
+
+  `0` is the rank an unranked node carries, so a node given it sorts with them — ahead
+  of every positive rank and behind every negative one. Stating `order: 0` on one child
+  of a ranked set therefore moves that child to the *front*; putting a whole set back to
+  plain alphabetical order means stating it on every sibling.
+
+  **Nothing changes for a deployment that declares no ranks.** The default `0` on every
+  node reproduces the previous alphabetical order exactly. Where a rank *is* declared,
+  a node's `children` move in the JSON envelope as well as on the dashboard. The API
+  spec had promised plain name order, so it moves to **1.3.0** and now documents
+  `(rank, name)`; `schema_version` stays `1`, as it did for the nullable `timestamp`.
+  The rank itself is not an envelope field yet — it ships with the batched
+  client-contract revision.
+
+- **`/system` now says which checks a check type is used by.** The check-type roster
+  printed *used by 2 checks* under a type name and nothing else, so the one number on
+  that page an operator might doubt was the one number the page could not
+  substantiate — *two of what?*, when a type named in two check files, rendering in two
+  different branches of the tree, is the ordinary case. The count is still what the row
+  leads with, and it now opens into the node path of every check behind it, each a link
+  to that node. A type nothing uses offers no list. Everything else on the page already
+  named its subjects; this row does too.
+
+### Changed
+
+- **`/system` no longer prints an absolute path to every loaded module.** Both tables
+  that say where something was loaded from — the check-type roster and the package
+  inventory — showed the whole string, which on a real deployment is
+  `/Users/<someone>/…/.venv/lib/python3.14/site-packages/little_sister_github/github.py`:
+  nine tenths of it the same prefix on every row, and the leading part somebody's home
+  directory on a page that is read over a shoulder and pasted into tickets. The path is
+  now drawn against the nearest root the reader has — `site-packages/…` for an
+  installed package, `./…` for one under the working directory — which is what the path
+  was for in the first place: a source copy shadowing an installed distribution of the
+  same name still reads as one at a glance. A module under neither root keeps its full
+  path, which is itself the answer to *where did this come from*, and the whole string
+  is still one hover away. Display only: the origin objects are unchanged.
+
+- **Large dashboard roots now spend only columns their nested flow can use.**
+  Each root gets stable useful-width steps derived from the visible tree, view depth
+  and configured reason-line budget. A step that cannot open another nested column
+  is skipped, so the layout can jump directly from span one to three; a deeply
+  linear root remains one track, and a spare that buys no shorter flow stays empty.
+  Among useful next steps, the greatest modeled-height reduction per track wins.
+  The representative lopsided four-track fixture still splits 1:3.
+
+  Status, current reasons, measured card height and chip/box painting never enter
+  the model, so a status-only poll cannot move a root. A larger configured reason
+  budget does deliberately give potential reason hosts more stable weight.
+  Consecutive quiet chips now share a full-row wrapper, allowing full boxes at the
+  same mixed level to use nested columns while the chips keep wrapping compactly.
+  Poll fragments send only plan-change breakpoints instead of 32 complete plans;
+  an 80-root overview therefore carries one unchanged plan rather than roughly
+  2,560 repeated spans. The auto-fill grid remains the no-JavaScript fallback
+  ([ADR-0056](docs/adr/0056-stable-useful-dashboard-flow.md)).
+
+  Spans are priced at the width the grid actually resolved, and the tallest card
+  in a row spends first. The first flow model evaluated every span at the 330 px
+  track minimum, while real `auto-fill` tracks are almost always wider: two equal
+  roots on a real four-track grid were allocated one wide card beside a 1,949 px
+  tower where a 2 + 2 split paints 1,137 px twice, and a root branching four wide
+  at its second level missed a 1,763 → 918 px step by a few pixels of track
+  slack. Breakpoints are therefore keyed in **pixels of grid width** — the script
+  measures the grid and selects the last applicable band; track counts remain
+  only as the safety clamp — and the allocator now hands the next useful step to
+  the currently **tallest** card, since a grid row is exactly as tall as its
+  tallest member (summed-gain greed measurably gave one of two equal roots twelve
+  of fourteen tracks). A structural test pins the model's five width constants to
+  `overview.css`, so a stylesheet change turns a silently wrong layout into a red
+  test. New `settings.yaml` key `dashboard_columns: flow | plain` — `plain`
+  withholds the span plan entirely, leaving the plain auto-fill grid a browser
+  without JavaScript shows; anything else warns and falls back to `flow`. The
+  key is an enum on purpose: a per-viewer value and a possible `packed` mode are
+  later steps of the same control.
+
+  A wider viewport can no longer paint a worse wall. At the exact width where
+  CSS `auto-fill` fits one more 330 px track, every track snaps back to its
+  minimum — one extra pixel of viewport turned a 1,582 px page into a 2,567 px
+  one, because the half-and-half split physically lost its nested columns to an
+  odd number of minimum tracks. A published band now names the track count its
+  plan was priced for and the script sets the grid to exactly that many equal
+  tracks, so the four wide tracks simply stay; candidates are compared by
+  modeled page height, may never drop below `min(roots, auto-fill)` tracks (a
+  single page-wide banner is often the modeled-shortest page, and is still
+  wrong), and an incumbent band yields only to a strictly better challenger.
+  The floor is a track-width rule — a chosen track never stretches wider than
+  the widest track auto-fill itself can produce — and it constrains new counts
+  only: the incumbent's own count stays challengeable, because a card's nested
+  column count can flip inside an unchanged band and re-chunk its children
+  into worse rows, and the dodge is a re-span at that same count or a return
+  to a count the old roots-based floor would have banned. The
+  wider-never-worse property is tested on both sides of every model event —
+  across the hand-built counterexample walls and a seeded randomized sweep —
+  as an invariant the sweep maintains, not a theorem. Its final form is
+  narrower still: a card's own nested auto-fit can re-chunk at a column flip
+  with no outer dodge in existence, so the planner promises no harmful outer
+  snap and never-worse-than-the-best-available-choice; strict monotonicity is
+  asserted only where no undodgeable inner re-chunk exists. A Chromium
+  boundary test (an opt-in `browser` dependency group, documented with its
+  command; skipped without a browser) walks the snap boundary and holds the
+  model's nested flips to within one pixel of paint — the column tolerance is
+  now genuinely sub-pixel. Bands publish in **tenths of a pixel**, the model's
+  own unit, and the script scales its measurement to match: rounding
+  thresholds up to whole pixels left a band up to 0.9px late against a
+  browser's fractional width, long enough for a wall to carry a plan far worse
+  than an available one.
+  All-ones plans keep riding auto-fill, so flat walls ship one band and paint
+  byte-identically. Deep deployments also stop paying a per-poll modeling tax:
+  the height model now merges children's pieces bottom-up instead of re-walking
+  the subtree at every threshold (ten thousand leaves: 6.7 s → ~150 ms) and the
+  finished layout is memoized on the depth-limited tree shape, so a status-only
+  poll costs a lookup.
+
+- **A node title that only repeats its name is no longer drawn.** Where a check has
+  nothing better to say it hands back the name again with a capital letter, so a row of
+  severity bands read `critical Critical`, `medium Medium`, `none None` — twice the
+  width and no second fact, on a card whose chips already compete for one line. The
+  title is now suppressed wherever it would say the same thing as the name it sits
+  beside: the dashboard's chips, box and card heads and heartbeat strip, the page band,
+  the hover card, the maintenance table and the `/copy` hand-off. "The same thing" folds
+  case, `_` / `-` / a space and runs of whitespace, so `pull_requests` beside
+  *Pull requests* and `code_scanning_alerts` beside *Code-scanning alerts* both count;
+  a title that adds anything at all is untouched.
+
+  This is a **display** change only. The JSON API still emits `title` exactly as before
+  — a client that renders its own chips makes its own decision about the word — and a
+  `nodes.yaml` title is stored as written.
+
 ## [0.3.11] - 2026-08-09
 
 ### Changed
@@ -28,11 +424,7 @@ contract versions **separately** — see `docs/api/openapi.yaml` `info.version`.
 ### Added
 
 - **A check type can now be a package of its own, and the boundary is enforced.**
-  [`docs/plugin-repository.md`](docs/plugin-repository.md) is the procedure — whether
-  a type deserves a repository at all, the repository template, what travels and what
-  stays with the deployment, a cutover order that is green at every step, the
-  private-strings sweep, the extra seams a *surface* extension brings, and how a
-  deployment consumes the result. Three things in the library back it up:
+  Three things in the library back it up:
 
   - **The check API epoch.** `little_sister.checks.API_VERSION` is **1**. It moves
     only when a promised name leaves the check-authoring surface or a documented

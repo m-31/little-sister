@@ -1,12 +1,45 @@
 # ADR-0024 — Dashboard layout: bounded heights, positional stability
 
-- **Status:** Accepted
+- **Status:** Superseded by ADR-0056
 - **Date:** 2026-07-20
 - **Related:** [ADR-0005](0005-dashboard-freshness-and-self-monitoring.md) (the
   `little-sister` heartbeat this strips out of the grid),
   [ADR-0019](0019-inspection-popover.md) (the hover card a collapsed chip keeps),
   [ADR-0012](0012-node-metadata.md) (the `title`/`about` the chips and strip carry).
 - **Register:** [`../decisions.md`](../decisions.md)
+
+> **Update (2026-08-15):** The positional-stability rule grows one topology-only
+> case. A card may span several ordinary grid tracks when the current row has spare
+> tracks, but its span remains a pure function of the **filtered, depth-limited node
+> set**, source order and available track count — never of live status, reasons,
+> rendered height or whether dense mode paints a leaf as a chip. The server counts
+> each visible card/box/chip node once, including nodes folded behind `+N more`, and
+> precomputes deterministic plans: every card starts at one track; within each
+> consecutive source-order row, each spare goes to the greatest `weight / span`
+> among the cards still eligible for one. A card is eligible while **both** hold —
+> its weight is above the internal budget of 16 nodes per track, and its span is
+> below its own **branch limit**, the widest sibling set anywhere in its visible
+> subtree. Thus weights 30 and 66 split a four-track row 1:3; a calm leaf, a
+> three-node root and a single-child chain stay narrow, the chain because it
+> branches one wide however heavy it grows. A wider card spends the width only at a
+> descendant level containing multiple direct full node boxes; single-child
+> wrappers stay full-width and any level containing leaf chips keeps its inline
+> chip flow. `dashboard-layout.js` selects the server plan after initial render, a
+> resize and the poll's fragment swap. The original auto-fill CSS remains the
+> no-JavaScript or malformed-data fallback. The snapshot and JSON envelope are
+> unchanged.
+>
+> **Amendment (2026-08-15, same day):** the budget is the **entry price** for
+> widening a root, not a ceiling on how far it widens. The first implementation
+> stopped a card at `weight / budget` tracks, which is right only while the roots
+> differ enough for one of them to stay hungry. Two roots of roughly equal, genuine
+> size — the shape of a live overview whose two teams watch the same aspects — both
+> stopped at two tracks and left every further column empty however wide the
+> viewport grew, which is the condition this update exists to end. The branch limit
+> above replaces that ceiling: it refuses width a card could only paint as
+> whitespace, and it is a topology fact, so it is as stable as the weight. A spare
+> track with no eligible taker still stays empty — that remains the right answer for
+> a row of small or linear roots.
 
 ## Context
 

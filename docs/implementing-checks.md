@@ -11,15 +11,15 @@ in this repo, the types a **deployment** adds through the public `CHECK_TYPES` s
 adds through the same seam. The class is identical in all three; only §4
 (registration timing) differs, and §9 says which of the three a type belongs in.
 
-That third one is not a plan any more. A type that outgrows the deployment it was
-written in gets a repository of its own and arrives as an ordinary dependency —
-`little-sister-github`, `little-sister-wiz` and `little-sister-jira` all did, and
-their move was the evolution of this seam it was always described as, not a rewrite.
-[`plugin-repository.md`](plugin-repository.md) is the procedure.
+A type that outgrows the deployment it was written in gets a repository of its own 
+and arrives as an ordinary dependency —
+`little-sister-github` and `little-sister-wiz` both did (and `little-sister-jira`
+made the same move as a surface extension, with no check type of its own), and that
+was the evolution of this seam it was always described as, not a rewrite.
 
 > Grounded in `src/little_sister/checks/` (`base.py`, `loader.py`, the built-in
-> types) and `app.py`. If a name here drifts from the source, the source wins —
-> update this doc.
+> types), `transport.py`, `fetch.py` and `app.py`. If a name here drifts from the
+> source, the source wins — update this doc.
 
 ---
 
@@ -32,6 +32,14 @@ web and JSON surfaces read. A check is a **pure function of the world → a resu
 never touches identity, timestamps, maintenance or event history — those belong to the
 tree ([ADR-0007](adr/0007-check-result-branches.md)).
 
+One question shapes almost everything else, and it is worth answering before you write
+a line: **is the thing you talk to the subject of your measurement, or the instrument
+you measure something else with?** An `http` check's URL is its subject — failing to
+answer *is* the reading. A check that reads an API to grade forty repositories has an
+instrument, and grading those repositories for the API's bad minute is the bug the
+transport vocabulary exists to prevent ([ADR-0058](adr/0058-transport-policy-vocabulary.md)).
+§7 says what each answer costs you.
+
 Two things that sound alike but aren't:
 
 - **Authoring** a check — writing a `checks/*.yaml` that configures an existing type.
@@ -43,10 +51,17 @@ Two things that sound alike but aren't:
 
 ## 2. The `Check` contract
 
-Everything is imported from the package `little_sister.checks` — the **check-authoring
-surface** of the version contract ([`architecture.md`](architecture.md) §11), which
-promises those names and leaves the modules beneath the package free to move. A check
-type is a subclass of `Check` decorated with `@register("<type>")`:
+The names a check may import are the **check-authoring surface** of the version
+contract ([`architecture.md`](architecture.md) §11). Most of them live in the package
+`little_sister.checks`, and the surface also promises `little_sister.status`
+(`StatusCode`, `join_path`), `reasons`, `values`, `spans`, `transport` and `fetch` —
+seven modules, listed in §11, and all but `spans` also pinned by an append-only
+snapshot (§4). Nothing outside that block is part of the **check-authoring** surface —
+though the contract is wider than this document: §11 also promises `CHECK_TYPES`,
+`little_sister.app:app`, `little_sister.secrets`, the slot and CSP seams and the
+`LITTLE_SISTER_*` variables (§4).
+
+A check type is a subclass of `Check` decorated with `@register("<type>")`:
 
 ```python
 from __future__ import annotations
@@ -90,8 +105,10 @@ class ExampleCheck(Check):
 
 What the base class gives you and expects:
 
-- **`run(self) -> CheckResult`** — the one abstract method. Bound by
-  `self.timeout_seconds`; a non-OK result must carry a reason.
+- **`run(self) -> CheckResult`** — the one abstract method, and **the engine does not
+  bound it.** Python cannot kill a thread, so a hung `run()` occupies a pool worker
+  until it returns; `self.timeout_seconds` is a budget **you** enforce (§7). A non-OK
+  result must carry a reason.
 - **Construction from YAML** — `Check.from_config(config, base_dir)` merges the common
   fields (`_parse_common`) with your `_extra_from_config(...)` and calls the
   constructor. You override only `_extra_from_config`; you never parse `path` /
@@ -99,9 +116,20 @@ What the base class gives you and expects:
 - **Common fields** (parsed for you, all keyword-only on `__init__`): `path`
   (**required**, absolute and slash-separated, e.g. `/hosts/example.org`,
   [ADR-0016](adr/0016-node-addressing.md)), `description`, `about`, `title`,
-  `frequency_seconds`, `timeout_seconds`. Durations accept `30s` / `15m` / `2h` /
-  `1d` or a bare number. **`name:` in YAML is rejected** — it was merged into `path`
-  (ADR-0016).
+  `order` ([ADR-0055](adr/0055-sibling-order.md)), `frequency_seconds`,
+  `timeout_seconds`, and `retry_interval_seconds` / `retry_attempts`
+  ([ADR-0033](adr/0033-budgeted-failure-retry.md) — `None` inherits the deployment
+  default, `0` switches the fast retry off for this check). Durations accept `30s` /
+  `15m` / `2h` / `1d` or a bare number. **`name:` in YAML is rejected** — it was
+  merged into `path` (ADR-0016).
+- **Take `**kwargs` and forward them**, as the sketch above does — do not spell the
+  common fields out in your own `__init__`. That list **grows**: `order` joined it in
+  one minor release and the two retry fields in another, and a constructor naming the
+  fields one by one stops binding the day the next one lands, even though every name
+  it imports still resolves ([ADR-0049](adr/0049-the-check-authoring-surface.md)'s
+  update note). If yours does refuse a keyword, the loader says so with the file, the
+  type and every refused keyword named, rather than raising a bare `TypeError` from
+  inside itself.
 - **`config_summary(self) -> str`** *(optional)* — Markdown display metadata for the
   detail page ([ADR-0013](adr/0013-check-config-on-node.md)). Build it with
   `config_markdown({"label": value, ...})`; **never** put a secret in here. Default
@@ -109,10 +137,13 @@ What the base class gives you and expects:
 - **`resolve_secret(self, reference)`** — resolve a credential **in the
   constructor** and keep the value; see §6
   ([ADR-0023](adr/0023-secret-references.md)).
-- **`owned_nodes(self) -> set[str]`** *(optional)* — override only for a **branch**
-  check (see §3): return the child subtrees you own, *not* the shared container node,
-  so peers can share it ([ADR-0015](adr/0015-check-discovery-union.md)). Leaf checks
-  get the default (`{self.path}`).
+- **`owned_nodes(self) -> set[str]`** *(optional)* — override only when your check
+  **shares** its container node with a peer: return your child subtrees, built with
+  `join_path(self.path, name)` so the container stays unowned and the peers coexist
+  ([ADR-0015](adr/0015-check-discovery-union.md)). A branch check that owns its
+  container outright — most of them — keeps the default `{self.path}`. Build the paths
+  with `join_path` rather than by hand, or every plugin re-derives ADR-0016's
+  normalization by guesswork.
 
 Raise **`CheckError`** for any bad configuration; the loader names the offending file.
 
@@ -124,17 +155,29 @@ Raise **`CheckError`** for any bad configuration; the loader names the offending
 
 ```python
 CheckResult(
-    code:        StatusCode | None,        # required — unless the entries carry their own (ADR-0042)
-    reason:      list[str] = [],           # required when not OK; rendered as Markdown
-    name:        str = "",                 # a child's id under its parent; empty on the root
-    description: str = "",                 # node metadata
+    code:        StatusCode | None = None, # declare one, OR code your entries — never both
+    reason:      ReasonInput = [],         # five accepted shapes, below; rendered as Markdown
+    name:        str = "",                 # a child's id under its parent; ignored on the root
+    description: str = "",                 # child-only; the root's comes from the check's YAML
     children:    tuple[CheckResult, ...] = (),
     config:      str = "",                 # per-child config markdown (branch checks)
     report:      str = "",                 # what this run FOUND, markdown; root and children (ADR-0044)
     about:       str = "",                 # subnode subject label; child-only, fills empty (ADR-0025)
     title:       str = "",                 # subnode short label; child-only, fills empty (ADR-0025)
+    order:       int = 0,                  # sibling rank; root AND children, fills unset (ADR-0055)
+    entries:     bool = False,             # declare plain strings to be members (ADR-0036)
 )
 ```
+
+`reason` takes five shapes: a `str`, a `Sequence[str]`, a `Mapping[str, str]` of
+slug → text, a sequence of `(slug, text)` pairs, or a sequence of `Entry`. The last
+mapping and the pairs list declare **members** — individually addressable,
+individually pinnable lines ([ADR-0036](adr/0036-addressable-reasons.md)); a sequence
+of `Entry` does so by shape, when an entry carries a `code` or `running`. Otherwise
+`entries=True` declares them, which is how a plain string sequence becomes members and
+one of the two ways to hand over an *entry-bearing empty set* — an empty mapping is the
+other. A non-OK result carrying no reason is not refused by the
+constructor, but it is wrong: say why.
 
 - **Leaf** — the common case: `CheckResult(StatusCode.OK)` or
   `CheckResult(StatusCode.ERROR, ["what went wrong"])`.
@@ -144,24 +187,51 @@ CheckResult(
   ([ADR-0007](adr/0007-check-result-branches.md)). **Every child must set `name`**
   (enforced in `__post_init__`). This is exactly how one check can own a
   discovered-at-runtime tree — e.g. a repository check → one child per **aspect**
-  (pull requests, security findings, …), each listing the repositories it flags (or a
-  child per repository — both are just `children`).
+  (pull requests, security findings, …), each listing the repositories it flags. A
+  check shaped this way should let a deployment switch an aspect off; that is §10.
 - **Roll-up** — a container's displayed status is the **worst-of** its subtree; the
-  tree computes that on read. So a branch root is normally `OK` and child problems
-  surface through the roll-up. Use the **root's own** code for a check-wide failure:
-  if discovery itself fails (bad token, API down), return
-  `CheckResult(StatusCode.ERROR, ["discovery failed: …"])` with **no children**, and
-  the whole branch goes red.
-- **Status codes** — a check returns `StatusCode.OK`, `WARN`, or `ERROR`.
-  `MAINTENANCE` / `UNDEFINED` are the tree's concern, not a check's (an *entry* may
-  additionally carry `UNDEFINED` — a run that has never concluded; see the coded
-  entries below). `coerce_code(...)`
-  turns a config string (e.g. `stale_code: WARN`) into a `StatusCode`.
+  tree computes that on read. What a branch root carries follows §2's question: a
+  check that **shares** its container returns `UNDEFINED` there and owns only its
+  child subtrees, so the container belongs to nobody and simply rolls up (ADR-0015 —
+  all three built-in metrics checks do this); a check that **owns** its container
+  grades it, and child problems still surface through the roll-up.
+- **When discovery itself fails**, the answer depends on who failed
+  ([ADR-0060](adr/0060-a-line-makes-no-claim.md) decision 3). A failure the service
+  **answered** — an owner or team that is not there, a credential that may not look —
+  is a defect somebody must fix, and stays
+  `CheckResult(StatusCode.ERROR, ["discovery failed: …"])`.
+  A **transient** failure — a 5xx, a dropped connection, a throttle — is *we could not
+  ask*, and grading the whole tree for it is the thing that rule exists to stop:
+  return `WARN` naming the coverage gap. Either way return **no children**, and note
+  what that does and does not do: omitted children are **not pruned** (ADR-0007), so
+  the subtree keeps the last good run's readings and their timestamps, and freshness
+  ([ADR-0005](adr/0005-dashboard-freshness-and-self-monitoring.md)) is left to say
+  honestly that they are old. In the `ERROR` case the root's own code dominates the
+  roll-up anyway; in the `WARN` case the last reading is the best knowledge anyone
+  has, which is the point.
+- **Status codes** — a check declares `StatusCode.OK`, `WARN`, or `ERROR` on a node.
+  `MAINTENANCE` is the tree's alone. An **entry** may additionally carry `UNDEFINED`,
+  and since [ADR-0060](adr/0060-a-line-makes-no-claim.md) that means one specific
+  thing: *this line makes no claim about its subject* — a claim you withheld, almost
+  always because you could not ask. (*Never reported yet* is the **node**-level
+  meaning of the same code, and not yours to write.) `coerce_code(...)` turns a config
+  string (e.g. `stale_code: WARN`) into a `StatusCode`.
+- **If you withhold claims, grade the node you own.** `UNDEFINED` lines are skipped by
+  the derivation, so a node whose lines are *all* withheld derives `UNDEFINED` — and
+  an `UNDEFINED` own code is skipped again in favor of children, which is how an
+  aspect that read nothing at all comes to render green. So a check that could not
+  look owes its own node a **`WARN`** saying so (ADR-0060 decisions 1–2). Where your
+  other lines carry codes you cannot declare a node code beside them, so say it
+  **through a line of its own**; count only the *could-not-ask* kind, and name
+  coverage rather than any one subject.
 - **Coded entries** ([ADR-0042](adr/0042-entries-carry-their-own-code.md)) — where
   one node's lines have verdicts of their own (this workflow failed, that one
   passed), hand over `Entry` values and **omit `code`**; the node's stored code is
-  then derived (worst-of the entries' codes, `UNDEFINED` ignored, an empty
-  entry-bearing set reading `OK` — "nothing to report" is not "nothing reported"):
+  then derived: worst-of the entries' own codes, an entry declaring none contributing
+  nothing, `UNDEFINED` skipped — with two stated defaults at the ends, an **empty**
+  entry-bearing set reading `OK` ("nothing to report" is not "nothing reported") and
+  an **all-`UNDEFINED`** set reading `UNDEFINED`, which is the case the bullet above
+  is about:
 
   ```python
   from little_sister.checks import Entry
@@ -187,6 +257,13 @@ CheckResult(
   with a pin that silences the whole band, while a coded line keeps its pin when
   its state moves. Emitting healthy lines is a per-aspect choice, off by default;
   a run in flight should always produce a line.
+- **A slug is an identifier, never a position** ([ADR-0050](adr/0050-slugs-from-provider-identifiers.md)).
+  Build a member's key with `slug(*parts)` from what the provider minted — the issue
+  number, the alert id, the workflow and branch — and never from the rendered text or
+  the line's index, because a pin holds that key and a re-ordered list would move it.
+  `derived_slug(text)` is the fallback where you have nothing better than your own
+  wording. Name the **subject first** by convention (`slug(repository, "pr", 42)`);
+  see `architecture.md` §4.3 for what a subject is and why it is not a child.
 - **Reasons are Markdown** — fold untrusted text in safely: `plain(text)` escapes an
   inline value (a path, an error, an API message); `code(text)` fences multi-line /
   log output as a verbatim block ([ADR-0018](adr/0018-markdown-rendering.md)). Never
@@ -211,15 +288,24 @@ CheckResult(
   **shared** with another check, tag the owned children instead — a shared node
   publishes neither `config` nor `report`, by the same rule that withholds its
   timestamp. A check with whole-check information to publish should own its own node.
+- **If you discover your own scope, you owe a coverage backstop**
+  ([ADR-0043](adr/0043-coverage-backstop.md)). A filter that selects nothing must not
+  read as a clean bill of health: report the scope, and grade the check's own node
+  **`WARN`** when it is empty, naming the filter that produced it. Carry your own
+  `expect_min`-shaped knob for "too few" — core provides none and needs to know none —
+  built as one comparison whose default is `1` and which **floors at `1`**, so a
+  deployment cannot switch the backstop off by configuration. The subject children
+  still render when the scope is empty: a leaf you can see is empty is a leaf you can
+  see is being watched.
 - **Subnode labels — `about` / `title`** — a branch check can caption the subnodes it
   emits by setting a child's `about` (subject: what the aspect *is* and how it grades)
   and, rarely, `title` (a short label) ([ADR-0025](adr/0025-check-provided-subnode-metadata.md)).
   Set these only for **type-inherent** identity — a label the same in every deployment
   (a metrics type's `disk` / `memory` aspects) — and leave **deployment-specific**
   identity (this host's location, this box's role) to the deployment's `nodes.yaml`.
-  They are **ignored on the root** (like `name`) and **fill an empty node field only**,
-  so a `nodes.yaml` declaration always wins and the label freezes at its first fill;
-  text that changes with each run belongs in `reason`, not here.
+  They are **ignored on the root** (like `name` and `description`) and **fill an empty
+  node field only**, so a `nodes.yaml` declaration always wins and the label freezes at
+  its first fill; text that changes with each run belongs in `reason`, not here.
 
 ---
 
@@ -230,7 +316,9 @@ The loader resolves each YAML `type:` through the **`CHECK_TYPES`** registry
 (`app.py` calls `_start_engine_once()` → `create_engine()` → `load_checks()` at
 import). So a type must be in `CHECK_TYPES` **before `little_sister.app` is imported**.
 `@register(...)` populates the registry as a side effect of importing the module that
-defines the class — the whole game is making that import happen first.
+defines the class — the whole game is making that import happen first. A **type name
+is claimed once**: a second class registering a name already taken refuses at startup
+naming both ([ADR-0051](adr/0051-what-startup-refuses.md)).
 
 **In a deployment** — add a thin WSGI wrapper that imports its checks, then the app:
 
@@ -255,17 +343,39 @@ slot) also registers **secret resolvers** (§6), **template slot fillers**
 ([ADR-0034](adr/0034-template-slots-for-dependent-packages.md)) and **configuration
 aspects** ([ADR-0035](adr/0035-registering-a-config-aspect.md)).
 
-The `# isort: off` fence is not decoration, and `# noqa: E402` is not superstition:
-the app import must follow the registrations, so it cannot sit with the others at
-the top of the file. Do not carry the `noqa` into a file where nothing sits between
-the two imports — with this repo's ruff selection an unused one is itself an error.
+The `# isort: off` fence is not decoration. Note that this file needs **no**
+`# noqa: E402`: nothing sits between the two imports, and with this repo's ruff
+selection an unused `noqa` is itself an error.
 
-**In an installed package** — identical, and it is *still a wrapper*: the deployment
-writes `import little_sister_github` in the same slot, and the package's
-`__init__.py` does the importing that registers. What a package changes is who
-maintains the type and on what version line, not how it arrives. Discovery without
-an import — an entry point that would let a deployment install a type and write no
-line at all — does not exist yet; when it does, that import is what it replaces.
+**In an installed package** — same seam, plus one thing a deployment wrapper does not
+have. The package's `__init__.py` declares the **API epoch** it was built for, and
+that declaration is what sits between the imports:
+
+```python
+# little_sister_example/__init__.py
+from little_sister.checks import require_api
+
+require_api(1)                       # refuses at startup on a mismatch, naming both
+
+from little_sister_example import (  # noqa: E402  registers the type
+    example,
+)
+
+__all__ = ["example"]                # or `# noqa: F401` — an unused import is an error
+```
+
+`API_VERSION` is the library's current epoch and `require_api(version, *, by="")` is
+how a package pins the one it was written against ([ADR-0051](adr/0051-what-startup-refuses.md)).
+A version **floor** in `pyproject.toml` cannot express this — a floor has no ceiling,
+so it cannot see a library that has moved *past* your epoch. The surface itself is
+pinned from the other side by an append-only snapshot,
+`tests/fixtures/check_api_v1.txt`: a name may join the surface within an epoch, but no
+name leaves it without the epoch moving. The deployment still writes
+`import little_sister_example` in the same slot as any other registration; what a
+package changes is who maintains the type and on what version line, not how it
+arrives. Discovery without an import — an entry point that would let a deployment
+install a type and write no line at all — does not exist yet; when it does, that
+import is what it replaces.
 
 **In the library** — the built-ins do the same thing via a side-effect import in
 `little_sister/checks/__init__.py` (it imports `http`, `file`, `command`, `ssh`).
@@ -289,8 +399,38 @@ it before importing `little_sister.app`.
   `config/checks/` holds checks and nothing else
   ([ADR-0015](adr/0015-check-discovery-union.md),
   [ADR-0031](adr/0031-deployment-config-directory.md)). A restart re-reads them.
-- **Relative paths resolve against the config file's own directory** (`base_dir` in
-  `_extra_from_config`) — e.g. a bundled script sits next to its YAML.
+- **Read values with `little_sister.values`, not by hand**
+  ([ADR-0026](adr/0026-reading-values-from-decoded-bags.md)). `text`, `number`, `real`
+  and `rows` narrow a YAML value at the seam and take one line on what goes wrong: an
+  **absent** key takes your default (`text`, `number` and `real` also take
+  `required=True`, which raises instead); a key that is **present but uncoercible
+  always raises** `CheckError`, and never quietly falls back — a threshold that reads
+  `"twenty"` is a mistake somebody must see, not a reason to grade on `0`. All four
+  take `where=`, which names the block the value came from so the message sends a
+  reader to the right line of the right file. `flag` is the deliberate exception: a
+  truthiness read, no `required=`, no `where=`, and it never raises.
+  `parse_duration` reads the duration grammar, `coerce_code` a status name, and
+  `parse_secret_refs` the `secrets:` block (§6).
+- **`base_dir` is the config file's own directory**, handed to `_extra_from_config`,
+  and resolving your relative paths against it is the **convention** — `command`'s
+  `working_dir:`, the ssh `script:` — not a rule the library enforces. Two built-ins
+  deviate on purpose: the `file` check resolves a relative path under `$HOME`, and a
+  built-in's *default* script is looked up through
+  [ADR-0021](adr/0021-script-resolution.md)'s search order, with `base_dir` in the
+  middle of it. Say which you do in `config_summary()`.
+- **Sibling order — `order`** — siblings render alphabetically, which is right until
+  the set has an order of its own: a severity band row reads
+  `critical high informational low medium`, filing *nothing to do* third. Set
+  `order` and the snapshot sorts by `(order, name)` — a negative value pulls a node
+  up, a positive one pushes it down, ties break by name, and the default `0` is
+  exactly the alphabetical behaviour, so a check that says nothing changes nothing
+  ([ADR-0055](adr/0055-sibling-order.md)). Unlike `about` / `title` it is read on the
+  **root** as well as on children, so a leaf check can rank the node it owns — which
+  also means a root rank competes with **other checks'** nodes on the same wall; rank a
+  root only where your check genuinely knows where it belongs, and expect a deployment
+  to overrule you from its own config. It is a rank, not a status: set it from what the
+  node is *about*, never from what it is reporting this minute — a row that re-sorts on
+  every poll cannot be read.
 - **Node metadata** (`title`, `about`) resolves **per field** by precedence:
   `nodes.yaml` keyed by node path **>** the check **>** empty
   ([ADR-0012](adr/0012-node-metadata.md) / [ADR-0017](adr/0017-node-title.md)). For a
@@ -298,7 +438,14 @@ it before importing `little_sister.app`.
   for the **subnodes a branch check emits** it is the child `CheckResult`'s
   `about` / `title`, which fill an empty field only
   ([ADR-0025](adr/0025-check-provided-subnode-metadata.md); see §3). A container node no
-  single check owns can still be labeled via `nodes.yaml`.
+  single check owns can still be labeled via `nodes.yaml`. **`order` follows the same
+  precedence** — `nodes.yaml` **>** an inline `order:` on the check **>** the
+  `CheckResult`'s — with one difference: a stated `order: 0` in either file is a real
+  declaration, whereas a check's `0` means it said nothing. Stating it is how a
+  deployment overrules a rank a check set; it is *not* a request for alphabetical
+  order, because `0` is the rank the unranked carry, so a zeroed node sorts ahead of
+  every positively-ranked sibling. Putting a whole ranked set back to the alphabet
+  takes an `order: 0` on each of them ([ADR-0055](adr/0055-sibling-order.md)).
 - **Where a branch check gets its subnode labels.** The `CheckResult.about` / `title` a
   branch check emits can be **hardcoded** (a per-aspect default in code, like
   `host-metrics`' built-in `about`s) or read from the check's **own config** — a
@@ -314,8 +461,8 @@ it before importing `little_sister.app`.
   times in one deployment (one check per team) then carries its prose once instead of once
   per config file.
 - **Ownership** — two checks may not own overlapping nodes; the loader rejects the
-  whole load with a named conflict. A branch check overrides `owned_nodes()` to own
-  its child subtrees (not the shared container) so peers can coexist (ADR-0015).
+  whole load with a named conflict. A branch check that shares a container overrides
+  `owned_nodes()` to own its child subtrees only (§2), so peers can coexist (ADR-0015).
 
 ---
 
@@ -341,13 +488,22 @@ import-before-app slot as the check types (§4); the library ships no store clie
 - **Resolve at construction, never in `run()`.** Call
   `self.resolve_secret(reference)` from the constructor and keep the value — cloud
   stores bill per read, and rotation is a restart, like any other config change.
-- **The failure split is handled for you.** A malformed reference (unknown scheme)
-  raises `CheckError`, so the load fails loudly like any config typo. A well-formed
-  reference that cannot be resolved (store unreachable, secret absent) is recorded on
-  the check, and the engine **pins** it: the node shows `ERROR` with
-  *"secret unresolvable: …"*, `run()` is never called, and there is no retry until
-  restart. Don't wrap `resolve_secret` in your own try/except — the return value and
-  the pinning already do the right thing.
+- **The failure split is handled for you.** A **malformed** reference raises
+  `CheckError` and the load fails loudly like any config typo — that covers an empty
+  value, a scheme with no address, a scheme no resolver is registered for, and, the
+  one that matters most, a value carrying **no `scheme://` at all**. That last case is
+  why the grammar is strict: a credential pasted where its reference belongs fails to
+  parse instead of being looked up, and the message never quotes what it rejected. A
+  **well-formed** reference that cannot be resolved (store unreachable, secret absent)
+  is recorded on the check instead, and the engine **pins** it: the node shows `ERROR`
+  with *"secret unresolvable: …"*, `run()` is never called, and there is no retry until
+  restart.
+- **Don't validate the resolved value yourself.** `resolve_secret` returns `""` on a
+  failed resolution and records the failure; a constructor that answers with
+  `raise CheckError("token is empty")` converts one pinned, visible, explained node
+  into a **whole-load failure**, which is exactly the outcome ADR-0023 chose the pin to
+  avoid — one unreachable store must not take down all monitoring and leave an empty,
+  unexplained tree.
 - **Parse the block with `parse_secret_refs(config, "token", …)`** in
   `_extra_from_config`, and resolve what it returns in the constructor. Every name
   you list is required — deliberately: a default reference baked into the check type
@@ -359,31 +515,150 @@ import-before-app slot as the check types (§4); the library ships no store clie
 
 ---
 
-## 7. External I/O: timeouts, failure, rate limits
+## 7. External I/O: the run's budget, and what a failure means
 
-- **Bound every call** by `self.timeout_seconds`. The engine relies on checks to time
-  themselves out (the built-ins pass `timeout=self.timeout_seconds` to `urllib` /
-  `subprocess`); custom checks must too.
-- **Never raise out of `run()` for an expected failure.** Catch transport / API errors
-  and return `CheckResult(StatusCode.ERROR, [plain(str(err))])` — see `http.py` for the
-  pattern.
-- **Respect the upstream's rate limits.** Batch where you can, keep `frequency` sane,
-  and prefer few calls per run. (API-specific tactics belong in the check's own doc.)
-- **Keep dependencies light.** The built-ins use stdlib `urllib`; matching that keeps
-  a plugin thin and its extraction clean — and that is measured, not hoped for: both
-  check types extracted so far reached their provider over stdlib `urllib` and ship
-  with little-sister as their only dependency.
+Two questions. The library gives you the vocabulary for the first and refuses to
+answer the second at all. Everything here is promised by name (`little_sister.transport`,
+`little_sister.fetch`; [`architecture.md`](architecture.md) §11), and
+[ADR-0058](adr/0058-transport-policy-vocabulary.md) is the record.
+
+### The budget is the run's, not the request's
+
+**`timeout:` bounds the whole run**, one request at a time inside it. Build a
+`Deadline` from `self.timeout_seconds` at the top of `run()` and pass it down:
+
+```python
+from little_sister.fetch import fetch
+from little_sister.transport import Deadline, DeadlineExceeded, Fault, RemoteError
+
+deadline = Deadline(self.timeout_seconds)
+# `request_timeout` is a field this check parsed itself — the common fields
+# carry the run's budget, not a per-request one (§2).
+response = fetch(url, timeout=self.request_timeout,
+                 follow_redirects=False, deadline=deadline)
+```
+
+`deadline.budget(t)` clamps each request to what the run has left, `expired()` says
+whether to start one at all, and `affords(wait)` vetoes a backoff that would outlive
+the run. **Spending `timeout_seconds` directly as a socket timeout is the anti-pattern
+this replaced**: a check that asks fifty times then has fifty budgets and no bound —
+which is how a slow provider once wedged a run indefinitely. The single-request case
+is the exception, and the built-in `http` check is it: with one request the clamp is
+`min(t, t)`, so it passes no deadline and says so in a comment.
+
+One honest residual: a deadline does not reach the **status line and headers**, which
+urllib reads inside `opener.open` before `fetch` has a stream. A server trickling
+those is bounded only by the socket timeout per read. It is stated rather than
+implied.
+
+### `fetch` makes the request; `ask` retries it
+
+`fetch(url, *, timeout, follow_redirects, …)` is the one place the library opens a
+socket. Both keywords are **required** — a request with no timeout is the defect this
+project keeps rediscovering, and a redirect policy assumed rather than chosen is the
+one above it. It returns a `Response` for **every** status, `500` included: a status
+is an answer, not an exception. Two things still raise: a failure that never reached a
+status, as a `RemoteError` with `Fault.TRANSIENT`; and a body over `max_bytes`, as
+`Fault.MALFORMED` — it arrived and cannot be used.
+
+`ask(operation, *, deadline, backoff=…)` wraps one bounded retry around a call,
+spending a service's own `Retry-After` in place of its backoff when there is one and
+the deadline affords it.
+
+**`ask` is not the ADR-0033 retry, and the two are worth keeping apart in your head.**
+`ask` re-tries a *request*, inside one run and inside the run's own budget,
+invisible to the scheduler — one second by default, or whatever the service asked for
+when it said so. `retry_interval_seconds` / `retry_attempts` (§2) re-schedule a *check*
+between runs. Different mechanism, different budget, same English word.
+
+### A `Fault` says what happened; only you can say what it means
+
+`Fault` has three members, set **by status and never by message text**: `TRANSIENT`
+(we could not ask — a 5xx, a timeout, a transport failure; the only member `ask`
+retries), `ANSWERED` (a 4xx — absent, or not visible to this credential), and
+`MALFORMED` (it arrived and cannot be used — no status at all). `fault_for(status)`
+gives this family's reading of a status you consider a failure. `RemoteError` takes
+`fault` **required, with no default** — the classification is the decision this
+vocabulary exists to make consistent, and a default would be that decision taken by
+whoever forgot to pass it. **Subclass `RemoteError`** and keep your own error class,
+your own message prefixes and every `except` clause you already have.
+
+There is deliberately **no mapping from a `Fault` to a `StatusCode`**, because that
+mapping depends on the question from §1:
+
+- **The endpoint is your subject.** Failing to answer *is* the reading. Map it
+  straight to `ERROR` on your node. `checks/http.py` is the example, and it is the
+  short case.
+- **The endpoint is your instrument.** Then a failure is not a finding about the
+  thing you were grading ([ADR-0060](adr/0060-a-line-makes-no-claim.md)). For each
+  subject you could not read, emit a line coded `UNDEFINED` — *this line makes no
+  claim* — so its subject is not painted amber for somebody else's outage. Grade your
+  **own** node `WARN` for the coverage gap (§3). And **do not overwrite a last-known
+  reading**: if you read nothing, omit the node rather than replacing its lines, and
+  ADR-0007's no-prune rule keeps the last good reading with its own timestamp until
+  freshness calls it old.
+
+`DeadlineExceeded` is deliberately **not** a `RemoteError`. Catch `RemoteError` per
+item, so one subject's failure becomes one line; let `DeadlineExceeded` reach a single
+run-level handler, keep the children that finished, and say **once** that the run was
+cut short. If it arrived as a `RemoteError`, one run-level fact would be spelled as
+forty item-level ones.
+
+### Throttles, and what stays yours
+
+A service answering *not now* is `TRANSIENT` and carries a number, not a fourth fault.
+`fetch.retry_after(headers)` reads the standard `Retry-After` in both forms RFC 9110
+allows; attach it as `RemoteError(..., fault=Fault.TRANSIENT, retry_after=…)` and
+`ask` will spend it inside your deadline. What stays in your package is the **vendor's
+dialect**: no status identifies a throttle — a service may answer `403` or `429` for
+it, and a bare `403` may equally mean *not visible to this credential* — so
+`fault_for` classifies `429` as `ANSWERED`, and a throttle is only retried if you say
+so. Beyond that: batch where you can, keep `frequency` sane, and prefer few calls per
+run.
+
+### Never raise out of `run()`
+
+Not because the engine cannot cope — it can, and turns any escaping exception into an
+`ERROR` node carrying `check error: …` plus a short traceback
+([ADR-0040](adr/0040-what-a-failing-check-becomes.md)). Because that node is ugly, it
+says nothing an operator can act on, and it replaces every line your check had
+published. Catch what you expect and say it properly.
+
+**Keep dependencies light.** Both extracted check-type packages — three check types
+between them — reach their provider through `little_sister.fetch` and
+`little_sister.transport`, and ship with little-sister as their only dependency. That
+is measured, not hoped for, and it is what keeps an extraction cheap.
 
 ---
 
 ## 8. Testing & the gate
 
-- Match the repo's discipline: keep **`ruff` + `mypy` + `pytest`** green.
+- **The gate is five commands**, byte-identical across the family and run by
+  `hooks/pre-commit`: `ruff check`, `shellcheck` over the tracked shell files, `mypy`,
+  `mypy --python-version 3.11` (the floor `requires-python` promises,
+  [ADR-0054](adr/0054-python-floor-and-development-version.md)), and `pytest -q`.
+  Keep all five green.
+- **`mypy` runs over `src` only** — tests are not type-checked. Where a test double
+  has to model a real object's shape, nothing mechanical will tell you it drifted;
+  say so in the double.
 - **Unit-test `run()` against recorded fixtures / a fake transport — no live network
-  in tests.** Assert the returned `code`, the `reason`, and (for a branch) the child
-  tree shape and names. For a check with a credential, substitute a fake resolver /
-  environment and cover both the resolved and the pinned path (see
+  in tests.** Patch the opener rather than the check: that keeps the seam at the
+  boundary the code is about. Assert the returned `code`, the `reason`, and (for a
+  branch) the child tree shape and names. For a check with a credential, substitute a
+  fake resolver / environment and cover both the resolved and the pinned path (see
   `tests/test_secrets.py` for the patterns).
+- **A test double is a claim about the real thing, and it can be wrong.** One that
+  modeled a blocking `read` where the code needs `read1` hid a real overrun for a
+  release: the double answered instantly and the socket did not. Where the shape
+  matters, make the double **refuse** the method your code must not call.
+- **Test the sentence, not the mechanism**, and prove each test by a mutation that
+  breaks it. A correct mechanism has carried a false sentence through a fully covered,
+  fully green gate.
+- **Coverage: point it at your own package.** The library's
+  `--cov=little_sister` is the one setting a plugin must **adapt rather than copy** —
+  copied, it measures somebody else's code from your repository. There is no
+  `--cov-fail-under` anywhere, deliberately: coverage is a report, and it is not
+  evidence that a decision is tested.
 - **Smoke-test config loading** without starting the server:
 
   ```bash
@@ -401,18 +676,14 @@ import-before-app slot as the check types (§4); the library ships no store clie
 
 Build a deployment check type so it lifts out cleanly: a **self-contained module**
 (class + tests + an example YAML + a short doc), **minimal dependencies**, and
-credentials behind **secret references** (§6). This section is the *design*
-advice — what makes a type liftable. The **procedure** for actually lifting one, when
-it turns out to have a second user, is
-[`plugin-repository.md`](plugin-repository.md): the repository template, the cutover
-order that stays green at every step, the private-strings sweep an extraction out of
-a private deployment needs, and how a deployment then consumes the result.
+credentials behind **secret references** (§6). This section is the *design* advice —
+what makes a type liftable when it turns out to have a second user.
 
 The table below is no longer a prediction. Three extractions have run against it and
 every row that applied held — what could not move turned out to be configuration
-already, which is the same line arriving from the other direction. Only the two check
-types exercised the whole table; the surface extension has no credential and no
-subnode prose, so it tested the knob row alone.
+already, which is the same line arriving from the other direction. Only the two check-type
+packages — three check types between them — exercised the whole table; the surface
+extension has no credential and no subnode prose, so it tested the knob row alone.
 
 The line to build against is **type vs deployment**: what is true of the check *type*
 travels inside the package, what is true of one installation stays in that
@@ -433,3 +704,119 @@ credentials — one check per team. And the type's prose stops being a file the
 deployment can edit, so a label must be **extendable**, not only replaceable: that is
 what `{default}` in a `subnodes:` value buys (§3), letting a deployment append its own
 note to shipped text and still inherit the next version of it.
+
+---
+
+## 10. Aspects, and letting a deployment switch one off
+
+If your check emits **one child per aspect** (§3) — a container node with a named
+leaf per thing it measures — give every aspect an `enabled:` switch. Two check
+types in this family arrived at the same shape independently, which is the usual
+sign that it belongs in the how-to rather than in each of them.
+
+**Why a deployment needs one.** A type is installed for *some* of what it does.
+The aspects a given installation does not want are not merely noise on a wall:
+they are calls against a rate budget, and they are usually permissions somebody
+has to grant. A read the credential is not allowed to make reports a failure that
+is perfectly true and completely useless — nobody will fix it, because nothing is
+broken. Without a switch the options are a permanently red node, a maintenance pin
+nobody ever lifts, or a fork of the type.
+
+**The switch goes in the aspect's own block**, beside the knobs that shape it:
+
+```yaml
+security_advisories:
+  enabled: false              # this account has no Advanced Security
+  severities: [critical, high]
+```
+
+— not a check-level `aspects: [a, b, c]` roster. In its own block it is read where
+somebody configuring that aspect is already looking, and the block usually exists
+anyway. A roster has to be maintained against a list it does not own: when the type
+gains an aspect, every existing config either silently loses it or has to be edited,
+and neither is what the deployment asked for.
+
+**An aspect that says nothing is on.** The default is `True`, so every config
+written before the key existed still means what it meant. Adding the switch to a
+shipped type is therefore not a breaking change — where *removing* an aspect is,
+because its node path is what maintenance pins are held against.
+
+**Off means the node is not there** — not a node carrying "this aspect is switched
+off". That node is the thing somebody turned off in order to stop seeing — and on a
+check that repeats its aspects per account, a handful of them is a wall of cards
+saying nothing. **Skip the work, not only the node:** the paragraph about a
+permission nobody will grant only holds if the call is never made.
+
+**Then name what is off, on the check's card.** This is the obligation the previous
+rule creates, and the easiest one to skip. A node absent because its aspect is off
+looks exactly like a node absent because the check broke before reaching it, and
+`config_summary()` is the page an operator opens to find out which. Name the
+disabled aspects there — and *only* when there are some, or every card carries a
+row about a feature the check is not using.
+
+**Refuse a config that switches off every aspect.** It is not literally nothing —
+the root still reports what it discovered — but such a check makes no finding about
+any of it, while looking, from the dashboard, exactly like one that does. Deleting
+the check says that out loud; a config of `enabled: false` whispers it. Raise
+`CheckError` and name what to do instead.
+
+**Read the boolean strictly.** `bool("false")` is `True`, so a quoted YAML boolean
+would switch an aspect **on** while its config says off, and nothing downstream
+could notice — the aspect would simply report. A switch is worth less than nothing
+if it can silently mean its opposite:
+
+```python
+def _flag(value: object, where: str) -> bool:
+    if not isinstance(value, bool):
+        raise CheckError(f"{where} must be true or false")
+    return value
+```
+
+The same applies to every other boolean knob beside it: a quoted `show_healthy`
+listing a hundred healthy lines is the identical failure with a friendlier face.
+
+**The shape, in code.** A class-level roster the key is read against, and one
+accessor the tree is built from:
+
+```python
+class MyCheck(Check):
+    #: Every aspect this type can run, whether or not this check runs it.
+    ASPECTS = ("pull_requests", "security_advisories", "actions")
+
+    def active_aspects(self) -> tuple[str, ...]:
+        """The aspects this check runs, in ASPECTS order."""
+        return tuple(name for name in self.ASPECTS
+                     if self._block(name).enabled)
+
+    def run(self) -> CheckResult:
+        build = {"pull_requests": self._pull_requests,
+                 "security_advisories": self._security_advisories,
+                 "actions": self._actions}
+        return CheckResult(StatusCode.OK, [self._scope_reason()],
+                           children=tuple(build[name]()
+                                          for name in self.active_aspects()))
+```
+
+`_block(name)` is whatever holds that aspect's parsed settings — a per-aspect frozen
+dataclass, or a slice of one config object. Spell the mapping out rather than
+reaching for `getattr`: the attribute names are already written in the constructor,
+and `getattr` hands a type checker an `Any` at the one seam worth checking.
+
+Keeping `ASPECTS` complete — every aspect the *type* can run, not every aspect
+*this* check runs — matters twice: it is the roster `enabled:` is read against, so
+an unknown aspect name in a config can be refused, and it is what a rate or cost
+estimate has to be computed from before any of it is switched off.
+
+**A maintenance pin against a switched-off aspect survives.** Startup reaps pins no
+check root covers (ADR-0014 / ADR-0015), and a disabled aspect's path is still under
+its check's root, so the pin is left alone rather than reaped — it covers nothing
+while the aspect is off and applies again the moment it comes back. Expiry remains
+its backstop. That is the behavior you want for "off for the migration", and it is
+worth knowing before somebody reports the pin as a leak.
+
+**Where this may end up.** Two implementations of a rule are two implementations;
+the family's line is that plumbing solved once is not solved again, so a third
+check type needing `_flag` and this roster is the point at which they stop being a
+pattern in a how-to and become something the check-authoring surface offers
+(`architecture.md` §11). Offering it is a version-contract commitment, so it waits
+for the third — not for the second.

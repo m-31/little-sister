@@ -215,10 +215,14 @@ def derive_code(entries: Sequence[Entry]) -> StatusCode:
 
     Worst-of over the entries' **own** codes; an entry that declares none
     contributes nothing here (it carries the node's — that is, the value this
-    function returns); ``UNDEFINED`` (a run that has never concluded) is ignored,
-    as everywhere (ADR-0039). Two stated tie-breaks: entries whose codes are all
-    ``UNDEFINED`` leave the node ``UNDEFINED`` — nothing has reported — while an
-    **empty** entry set reads ``OK``: the check ran, enumerated, and found
+    function returns); ``UNDEFINED`` is ignored, as everywhere (ADR-0039). On an
+    **entry** that code means *this line makes no claim about its subject* — a
+    claim withheld on purpose (ADR-0060), which is a different sentence from the
+    node-level *nothing has reported yet* and skipped for the same reason. Two
+    stated tie-breaks: entries whose codes are all ``UNDEFINED`` leave the node
+    ``UNDEFINED`` — every line withheld its claim, which is when ADR-0060 says the
+    check owes its own node a ``WARN`` — while an **empty** entry set reads
+    ``OK``: the check ran, enumerated, and found
     nothing, and "nothing to report" is not "nothing reported". Pins do not reach
     this function — suppression is joined at snapshot time (ADR-0032 rule 3).
     """

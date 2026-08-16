@@ -16,8 +16,8 @@ from typing import Any
 
 from little_sister import values
 from little_sister.checks.base import Check, CheckError, CheckResult, code, plain
+from little_sister.checks.ssh.connection import RemoteResult, SshConnection
 from little_sister.checks.ssh.metrics import oneline, strip_ssh_notices
-from little_sister.checks.ssh.transport import RemoteResult, SshConnection
 from little_sister.status import StatusCode
 
 DEFAULT_MAX_CHARS = 1000

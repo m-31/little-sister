@@ -31,7 +31,7 @@ class QnapMetricsCheckTests(TestCase):
     def _run(self, directory, stdout, *, returncode=0, stderr="", **extra):
         check = self._check(directory, **extra)
         completed = subprocess.CompletedProcess([], returncode, stdout, stderr)
-        with mock.patch("little_sister.checks.ssh.transport.subprocess.run",
+        with mock.patch("little_sister.checks.ssh.connection.subprocess.run",
                         return_value=completed):
             return check.run()
 

@@ -1,4 +1,16 @@
-# ShellCheck configuration.
-# start.sh and stop.sh `source ./lib.sh`; let ShellCheck follow it so the shared
-# variables and functions resolve (otherwise: SC1091 + SC2154 false positives).
+# ShellCheck configuration — identical in every repository of the family that
+# carries shell scripts, because the two idioms below are family-wide.
+#
+# `external-sources=true` is permission to read a sourced file at all. Without it
+# `. ./lib.sh` is SC1091 and every variable or function the library defines is
+# SC2154 at the call site — a page of false positives that would make the check
+# worth switching off.
+#
+# `source-path=SCRIPTDIR` is what makes that permission usable for the release
+# wrappers, which source their library as `"$(dirname "$0")/lib.sh"` — a path
+# ShellCheck cannot resolve statically, so being allowed to follow it is not
+# enough; it also has to be told where to look. Measured rather than assumed:
+# with permission alone the seven wrappers report SC1091 each, and with this line
+# they report nothing.
 external-sources=true
+source-path=SCRIPTDIR

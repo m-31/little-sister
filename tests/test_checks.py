@@ -2,11 +2,19 @@ import os
 import tempfile
 import time
 import unittest
-import urllib.error
+from email.message import Message
 from pathlib import Path
 from unittest import TestCase, mock
 
-from little_sister.checks import CheckError, Entry, code, load_checks, parse_duration
+from little_sister.checks import (
+    CHECK_TYPES,
+    Check,
+    CheckError,
+    Entry,
+    code,
+    load_checks,
+    parse_duration,
+)
 from little_sister.checks.base import CheckResult
 from little_sister.checks.command import CommandCheck
 from little_sister.checks.file import FileFreshnessCheck
@@ -17,20 +25,11 @@ from little_sister.checks.ssh.host_metrics import DEFAULT_THRESHOLDS, HostMetric
 from little_sister.checks.ssh.qnap_metrics import QnapMetricsCheck
 from little_sister.checks.ssh.script import ScriptCheck
 from little_sister.errors import ConfigError
+from little_sister.fetch import Response
 from little_sister.status import StatusCode
+from little_sister.transport import Fault, RemoteError
 
 HERE = Path(".")
-
-
-class _FakeResponse:
-    def __init__(self, status: int) -> None:
-        self.status = status
-
-    def __enter__(self) -> "_FakeResponse":
-        return self
-
-    def __exit__(self, *args: object) -> bool:
-        return False
 
 
 class DurationTests(TestCase):
@@ -72,31 +71,126 @@ class HttpCheckTests(TestCase):
         config.update(extra)
         return HttpCheck.from_config(config, HERE)
 
+    @staticmethod
+    def _answering(status):
+        """`fetch` hands back a status whatever it is — a 503 is an answer, and for
+        this check the answer *is* the measurement."""
+        return mock.patch("little_sister.checks.http.fetch",
+                          return_value=Response(status=status, url="http://x",
+                                                headers=Message(), body=b""))
+
     def test_ok_when_status_expected(self):
-        with mock.patch("little_sister.checks.http.urllib.request.urlopen",
-                        return_value=_FakeResponse(200)):
+        with self._answering(200):
             self.assertEqual(self._check().run().code, StatusCode.OK)
 
     def test_error_on_unexpected_http_status(self):
-        error = urllib.error.HTTPError("http://x", 503, "down", {}, None)  # type: ignore[arg-type]
-        with mock.patch("little_sister.checks.http.urllib.request.urlopen",
-                        side_effect=error):
+        with self._answering(503):
             result = self._check().run()
         self.assertEqual(result.code, StatusCode.ERROR)
         self.assertIn("503", result.reason[0])
 
+    # --- `follow_redirects:`, and the two readings it chooses between ---------
+
+    @staticmethod
+    def _asked():
+        """`fetch` recording the keyword arguments it was called with."""
+        return mock.patch(
+            "little_sister.checks.http.fetch",
+            return_value=Response(status=200, url="http://x",
+                                  headers=Message(), body=b""))
+
+    def test_redirects_are_followed_unless_the_config_says_otherwise(self):
+        """The default is today's behavior, and it has to stay that way: a check
+        written against a URL that answers 200 after a 301 would turn red on upgrade,
+        on a config nobody edited."""
+        with self._asked() as fetched:
+            self._check().run()
+        self.assertIs(fetched.call_args.kwargs["follow_redirects"], True)
+
+    def test_a_config_can_ask_for_the_stricter_reading(self):
+        """The point of the key: with redirects reported, a `200` at the end of a chain
+        is no longer proof the page is there — a login wall answers one too."""
+        with self._asked() as fetched:
+            self._check(follow_redirects=False).run()
+        self.assertIs(fetched.call_args.kwargs["follow_redirects"], False)
+
+    def test_a_reported_redirect_is_the_reading(self):
+        """End to end: not following turns the 3xx into the status this check grades,
+        so a deployment that wants it accepts the codes it means to in
+        `expected_status`."""
+        with self._answering(301):
+            moved = self._check(follow_redirects=False).run()
+        self.assertEqual(moved.code, StatusCode.ERROR)
+        self.assertIn("301", moved.reason[0])
+        with self._answering(301):
+            allowed = self._check(follow_redirects=False,
+                                  expected_status=[200, 301]).run()
+        self.assertEqual(allowed.code, StatusCode.OK)
+
+    def test_a_quoted_boolean_is_refused_rather_than_read_as_true(self):
+        """`bool("false")` is `True`, so a quoted YAML boolean would switch following
+        **on** while the config says off, and nothing downstream could notice. A switch
+        that can silently mean its opposite is worth less than none."""
+        for bad in ("false", "true", "no", 0, 1, [], {}):
+            with self.assertRaises(CheckError) as caught:
+                self._check(follow_redirects=bad)
+            self.assertIn("follow_redirects", str(caught.exception))
+
+    def test_an_absent_key_is_the_default_and_not_a_refusal(self):
+        """`None` is what an absent key reads as, and it must not reach the strict
+        parser — otherwise every config that never mentioned this key would fail to
+        load."""
+        self.assertIs(self._check().follow_redirects, True)
+        self.assertIs(self._check(follow_redirects=None).follow_redirects, True)
+
+    # --- and the refusal nothing exercised (roadmap item 6) -------------------
+
+    def test_the_policy_has_exactly_one_default(self):
+        """`follow_redirects` is required on `__init__`, so the default lives in exactly
+        one place — where the config is read.
+
+        Every instance comes through `from_config`, which always supplies the key, so
+        a default on `__init__` would be **unreachable** — a second statement of the
+        policy, free to drift out of step with the first while no test could tell. A
+        mutation proved it: flipping that default broke nothing at all.
+        """
+        with self.assertRaises(TypeError):
+            HttpCheck(url="http://x", expected_status={200}, path="/web")
+
+    def test_a_config_with_no_url_is_refused_at_load(self):
+        """One of two branches this suite never reached. Refused at load, where
+        little-sister's refusal to start makes it one loud event, rather than at the
+        first run — or at the first run that happens to matter."""
+        for config in ({"type": "http", "path": "/web"},
+                       {"type": "http", "path": "/web", "url": ""}):
+            with self.assertRaises(CheckError) as caught:
+                HttpCheck.from_config(config, HERE)
+            self.assertIn("requires a 'url'", str(caught.exception))
+
     def test_error_on_transport_failure(self):
-        with mock.patch("little_sister.checks.http.urllib.request.urlopen",
-                        side_effect=urllib.error.URLError("boom")):
+        # The endpoint is the subject of this measurement, so a failure to answer is
+        # the reading — this check needs nothing from the fault vocabulary.
+        with mock.patch("little_sister.checks.http.fetch",
+                        side_effect=RemoteError("request failed for GET http://x: "
+                                                "boom", fault=Fault.TRANSIENT)):
             result = self._check().run()
         self.assertEqual(result.code, StatusCode.ERROR)
         self.assertIn("request failed", result.reason[0])
 
     def test_expected_status_list(self):
-        with mock.patch("little_sister.checks.http.urllib.request.urlopen",
-                        return_value=_FakeResponse(204)):
+        with self._answering(204):
             self.assertEqual(
                 self._check(expected_status=[200, 204]).run().code, StatusCode.OK)
+
+    def test_it_follows_redirects_and_reads_no_body(self):
+        # Both are decisions, not defaults. Following is what it has always done, so a
+        # check whose URL answers 200 after a 301 does not turn red on upgrade; and a
+        # check that wants a status has no use for the page behind it.
+        with mock.patch("little_sister.checks.http.fetch",
+                        return_value=Response(200, "http://x", Message(), b"")) as f:
+            self._check().run()
+        self.assertEqual(f.call_args.kwargs["follow_redirects"], True)
+        self.assertEqual(f.call_args.kwargs["read_body"], False)
 
 
 class FileFreshnessTests(TestCase):
@@ -380,6 +474,18 @@ class ConfigSummaryTests(TestCase):
         self.assertIn("http://x", summary)
         self.assertIn("200, 204", summary)
 
+    def test_http_summary_names_the_redirect_reading(self):
+        """The two readings differ on the same URL, so an operator looking at a verdict
+        they did not expect needs to know which one was taken — and `follow_redirects`
+        is not visible anywhere else on the node."""
+        followed = HttpCheck.from_config(
+            {"type": "http", "path": "/web", "url": "http://x"}, HERE)
+        self.assertIn("followed", followed.config_summary())
+        reported = HttpCheck.from_config(
+            {"type": "http", "path": "/web", "url": "http://x",
+             "follow_redirects": False}, HERE)
+        self.assertIn("reported", reported.config_summary())
+
     def test_file_summary_lists_path(self):
         check = FileFreshnessCheck.from_config(
             {"type": "file", "path": "/hb", "file": "/tmp/beat", "max_age": "20m"},
@@ -415,6 +521,81 @@ class ConfigSummaryTests(TestCase):
         self.assertEqual(qnap.config_summary(), "")
 
 
+class ConstructorRefusalTests(TestCase):
+    """A common field growing must stay diagnosable for a check type nobody here
+    wrote (ADR-0049 promises names, not a frozen constructor signature)."""
+
+    class _Enumerating(Check):
+        """A third-party shape: the common keywords spelled out instead of
+        `**kwargs`. Deliberately does *not* list `order`, so it reproduces what
+        adding a common field does to a check written before it."""
+
+        type_name = "enumerating-for-test"
+
+        def __init__(self, *, path: str, description: str = "", about: str = "",
+                     title: str = "", frequency_seconds: int = 900,
+                     timeout_seconds: float = 30.0,
+                     retry_interval_seconds: int | None = None,
+                     retry_attempts: int | None = None) -> None:
+            super().__init__(
+                path=path, description=description, about=about, title=title,
+                frequency_seconds=frequency_seconds,
+                timeout_seconds=timeout_seconds,
+                retry_interval_seconds=retry_interval_seconds,
+                retry_attempts=retry_attempts)
+
+        def run(self) -> CheckResult:
+            return CheckResult(StatusCode.OK)
+
+    class _BrokenBody(Check):
+        """A check whose constructor *binds* and then fails on its own bug."""
+
+        type_name = "broken-body-for-test"
+
+        def __init__(self, **kwargs: object) -> None:
+            super().__init__(**kwargs)   # type: ignore[arg-type]
+            raise TypeError("the check's own bug")
+
+        def run(self) -> CheckResult:
+            return CheckResult(StatusCode.OK)
+
+    def test_a_constructor_that_will_not_bind_names_the_type_and_the_keyword(self):
+        with self.assertRaises(CheckError) as caught:
+            self._Enumerating.from_config({"type": "x", "path": "/a/thing"}, HERE)
+        message = str(caught.exception)
+        self.assertIn("enumerating-for-test", message)
+        self.assertIn("'order'", message)
+        self.assertIn("**kwargs", message)
+
+    def test_the_loader_puts_the_file_name_in_front_of_it(self):
+        # The whole point: a bare TypeError escaped the loader's `except
+        # CheckError`, so the operator got neither the file nor the type.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "checks").mkdir()
+            (root / "checks" / "thing.yaml").write_text(
+                "type: enumerating-for-test\npath: /a/thing\n")
+            with mock.patch.dict(
+                    CHECK_TYPES,
+                    {"enumerating-for-test": self._Enumerating}, clear=False):
+                with self.assertRaises(CheckError) as caught:
+                    load_checks(root)
+        self.assertIn("thing.yaml", str(caught.exception))
+
+    def test_a_type_error_from_inside_the_constructor_is_not_relabelled(self):
+        # Relabelling this would send its author looking in the wrong place.
+        with self.assertRaises(TypeError) as caught:
+            self._BrokenBody.from_config({"type": "x", "path": "/a/thing"}, HERE)
+        self.assertNotIsInstance(caught.exception, CheckError)
+        self.assertIn("the check's own bug", str(caught.exception))
+
+    def test_a_kwargs_constructor_is_untouched(self):
+        # The shape every built-in and all three plugins use: nothing to report.
+        check = HttpCheck.from_config(
+            {"type": "http", "path": "/web", "url": "http://x"}, HERE)
+        self.assertEqual(check.path, "/web")
+
+
 class InlineAboutTests(TestCase):
     def test_about_is_parsed_from_config(self):
         check = HttpCheck.from_config(
@@ -435,6 +616,29 @@ class InlineAboutTests(TestCase):
         bare = HttpCheck.from_config(
             {"type": "http", "path": "/web", "url": "http://x"}, HERE)
         self.assertEqual(bare.title, "")
+
+    def test_order_is_parsed_beside_the_labels(self):
+        # ADR-0055: a rank belongs in the same file that already states this node's
+        # title and about. It used to load and vanish, which is the failure mode the
+        # ADR refuses one paragraph away, for the non-numeric case.
+        check = HttpCheck.from_config(
+            {"type": "http", "path": "/web", "url": "http://x", "order": 2}, HERE)
+        self.assertEqual(check.order, 2)
+
+    def test_order_defaults_to_unstated_and_a_written_zero_does_not(self):
+        bare = HttpCheck.from_config(
+            {"type": "http", "path": "/web", "url": "http://x"}, HERE)
+        self.assertIsNone(bare.order)
+        zero = HttpCheck.from_config(
+            {"type": "http", "path": "/web", "url": "http://x", "order": 0}, HERE)
+        self.assertEqual(zero.order, 0)      # a stated rank, not silence
+
+    def test_a_non_numeric_order_fails_the_load(self):
+        with self.assertRaises(CheckError) as caught:
+            HttpCheck.from_config(
+                {"type": "http", "path": "/web", "url": "http://x",
+                 "order": "soon"}, HERE)
+        self.assertIn("whole number", str(caught.exception))
 
 
 if __name__ == '__main__':

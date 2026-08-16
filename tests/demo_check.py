@@ -256,12 +256,20 @@ def _children(t: float, period: float) -> CheckResult:
     whose roll-up moves as the children change, and the demo's **branch head**: it
     owns its container alone, so that container carries the run facts, its
     ``config`` and a ``report`` (ADR-0044), and `/status/hosts/nas` is where the
-    node-facts block shows them."""
+    node-facts block shows them.
+
+    It is also where a **declared sibling rank** is visible (ADR-0055): these three
+    read *disk, memory, load* — the order somebody walking a host thinks in — and
+    the name sort would file `load` in the middle. Each child says its rank, so the
+    row is the check's to arrange; delete the ``order=`` arguments and the card
+    falls back to alphabetical, which is the whole demonstration."""
     f = t / period
-    memory = (CheckResult(StatusCode.WARN, ["memory at 84%"], name="memory")
-              if 0.4 <= f < 0.7 else CheckResult(StatusCode.OK, name="memory"))
-    load = (CheckResult(StatusCode.ERROR, ["load average 14.2 (8 cores)"], name="load")
-            if 0.6 <= f < 0.9 else CheckResult(StatusCode.OK, name="load"))
+    memory = (CheckResult(StatusCode.WARN, ["memory at 84%"], name="memory", order=2)
+              if 0.4 <= f < 0.7
+              else CheckResult(StatusCode.OK, name="memory", order=2))
+    load = (CheckResult(StatusCode.ERROR, ["load average 14.2 (8 cores)"],
+                        name="load", order=3)
+            if 0.6 <= f < 0.9 else CheckResult(StatusCode.OK, name="load", order=3))
     # What the run **found**, and nothing that alarms: a roster is presence, an
     # entry is a claim (ADR-0044 decision 6). The volume list moves with the loop
     # so the write-through is visible on the page — a report is an output of this
@@ -271,12 +279,123 @@ def _children(t: float, period: float) -> CheckResult:
     mounts = "\n".join(f"- `/vol{index + 1}` — 3.6 TB, ext4"
                        for index in range(volumes))
     return CheckResult(StatusCode.OK, children=(
-        CheckResult(StatusCode.OK, name="disk",
+        CheckResult(StatusCode.OK, name="disk", order=1,
                     report=f"Volumes in scope:\n\n{mounts}"), memory, load),
         report=(f"Enumerated **{volumes + 2} devices** on this host: "
                 f"{volumes} volume{'s' if volumes != 1 else ''}, one memory "
                 f"bank, one load average.\n\nNothing here carries a verdict — "
                 f"what would is a reason."))
+
+
+#: The severity bands a cloud-posture scanner reports, in the order they mean
+#: something — which is *not* their alphabetical order, and is the reason
+#: ADR-0055 exists. Each entry is `(name, rank, about)`; the **title** is the
+#: capitalized name, added deliberately so this one card demonstrates both halves
+#: of its phase at once: the bands sort by rank, and none of them draws a title
+#: that only repeats the name it sits beside.
+_BANDS = (
+    ("critical", 1, "Exploitable now, from outside. Page somebody."),
+    ("high", 2, "Exploitable, or trivially chained into something that is."),
+    ("medium", 3, "Worth a ticket this sprint."),
+    ("low", 4, "Worth knowing. Not worth an interrupt."),
+    ("informational", 5, "Nothing to do — inventory, posture notes, "
+                         "an unused key that is nonetheless recorded."),
+)
+
+#: What each band has found, per fifth of the loop. A row is one band's counts as
+#: the cycle turns, so the whole arc is legible here rather than assembled out of
+#: five sets of thresholds: quiet, an `informational`-only tree, a `medium`
+#: finding, a `high` one on top, and finally the `critical` that turns the card red
+#: — then everything clears at once, the way a scanner's next pass reads after a
+#: fix lands.
+_BAND_COUNTS: dict[str, tuple[int, ...]] = {
+    "critical":      (0, 0, 0, 0, 1),
+    "high":          (0, 0, 0, 2, 2),
+    "medium":        (0, 0, 3, 3, 3),
+    "low":           (0, 1, 1, 1, 1),
+    "informational": (4, 4, 4, 4, 4),
+}
+
+#: The findings each band can be carrying, taken from the front as the count grows.
+#: Distinct texts rather than one line repeated: a card showing the same sentence
+#: three times reads as a bug in the harness, and every scenario here has to be
+#: plausible enough that a reviewer trusts what it is demonstrating. They are also
+#: **constant across runs**, like `audit`'s, so a derived slug would keep its
+#: identity if this node were ever switched to members.
+_BAND_FINDINGS: dict[str, tuple[str, ...]] = {
+    "critical": (
+        "`api-gw-prod` — bucket is public **and** writable on the deploy path",
+    ),
+    "high": (
+        "`vpc-default` — security group allows `0.0.0.0/0` on port 22",
+        "`ci-runner` — long-lived access key, last rotated 14 months ago",
+    ),
+    "medium": (
+        "`billing-worker` — instance role is wider than the calls it makes",
+        "`assets-cdn` — TLS policy still permits TLS 1.0",
+        "`pg-main` — automated snapshots retained 3 days, policy says 14",
+    ),
+    "low": (
+        "`nas-backup` — encryption at rest uses the account default key",
+    ),
+    "informational": (
+        "`eu-central-1` — 41 resources inventoried, no posture change",
+        "`sandbox` — account is untagged; owner unknown, nothing running",
+        "`iam` — 2 unused roles recorded, neither reachable",
+        "`billing` — reserved-instance coverage 61%",
+    ),
+}
+
+
+def _band_code(name: str, count: int) -> StatusCode:
+    """What a band's own findings make it. Deliberately not one rule for all five:
+    a band's *name* is a severity, so `informational` is never an alarm however
+    many lines it carries, and `low` says its piece at WARN at most. This is the
+    mapping a real scanner plugin owns; the demo only has to be plausible."""
+    if not count:
+        return StatusCode.OK
+    if name in ("informational", "low"):
+        return StatusCode.OK
+    if name == "medium":
+        return StatusCode.WARN
+    return StatusCode.ERROR
+
+
+@_scenario("severity")
+def _severity(t: float, period: float) -> CheckResult:
+    """A cloud-posture scanner reporting into **severity bands** — the demo's
+    ADR-0055 node, and the shape the `wiz` plugin publishes.
+
+    Five children, each declaring its `order`, so the row reads
+    *critical high medium low informational* rather than the alphabetical
+    *critical high informational low medium* that files **nothing to do** third and
+    puts **low before medium**. Delete the `order=` argument below and the row
+    falls back to alphabetical on the next poll: that is the demonstration, and
+    also the proof that a check declaring nothing is unaffected.
+
+    Each band also carries a `title` that is only its own name capitalized — what a
+    check hands back when it has nothing better to say — so the chips must read
+    `critical`, never `critical Critical`. Both rules on one card.
+
+    The counts turn over five phases (`_BAND_COUNTS`), so the roll-up climbs
+    green → amber → red and clears, with the *order of the chips never moving* —
+    which is the property the rank has and a sort by live grade would not.
+    """
+    phase = min(int(t / period * len(_BAND_COUNTS["critical"])),
+                len(_BAND_COUNTS["critical"]) - 1)
+    children = []
+    for name, rank, about in _BANDS:
+        count = _BAND_COUNTS[name][phase]
+        children.append(CheckResult(
+            _band_code(name, count),
+            list(_BAND_FINDINGS[name][:count]),
+            name=name, title=name.capitalize(), about=about, order=rank,
+            report=f"{count} open finding{'' if count == 1 else 's'} "
+                   f"in this band."))
+    return CheckResult(StatusCode.OK, children=tuple(children),
+                       report=f"Scanned **41 resources** across 3 accounts; "
+                              f"{sum(_BAND_COUNTS[n][phase] for n, _, _ in _BANDS)} "
+                              f"open finding(s) in total.")
 
 
 @register("demo")

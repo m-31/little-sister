@@ -44,3 +44,15 @@ little_sister.values number
 little_sister.values real
 little_sister.values rows
 little_sister.values text
+little_sister.spans coarse_span
+little_sister.spans format_duration
+little_sister.spans format_span
+little_sister.transport Deadline
+little_sister.transport DeadlineExceeded
+little_sister.transport Fault
+little_sister.transport RemoteError
+little_sister.transport ask
+little_sister.fetch Response
+little_sister.fetch fault_for
+little_sister.fetch fetch
+little_sister.fetch retry_after

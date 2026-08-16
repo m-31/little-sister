@@ -15,3 +15,16 @@ timeout: 10s                 # per-run timeout
 # --- request ---------------------------------------------------------------
 url: https://example.com     # the URL to GET (required)
 # expected_status: 200       # an int, or a list e.g. [200, 204] (default: 200)
+
+# Whether a 3xx is followed or reported. Default `true`, which is what this check has
+# always done. Both readings are right somewhere, and they differ on the same URL:
+#
+#   true   — the status is whatever answers at the end of the chain. A site that has
+#            moved keeps reporting OK, and a login wall answering 200 also reads as OK.
+#   false  — a 3xx is the reading. Put the redirect codes you accept in
+#            `expected_status` (e.g. [200, 301]) and a *new* redirect turns the check,
+#            which is the point: `200` behind a chain is not proof the page is there.
+#
+# Must be a real boolean. `follow_redirects: "false"` is refused at load rather than
+# read as true, because a switch that can mean its opposite is worse than none.
+# follow_redirects: true

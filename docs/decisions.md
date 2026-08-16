@@ -397,7 +397,13 @@ the sensitive scripts never drift.
 
 → Full record: [`adr/0021-script-resolution.md`](adr/0021-script-resolution.md)
 
-### Node sibling ordering — natural, case-insensitive (no ADR)
+### Node sibling ordering — natural, case-insensitive (no ADR) — superseded by [ADR-0055](adr/0055-sibling-order.md)
+> Superseded by [ADR-0055](adr/0055-sibling-order.md) (*Sibling order: alphabetical,
+> unless somebody declares a rank*), which restates the name sort unchanged and puts a
+> **declared rank** in front of it. What is no longer true below is the last sentence's
+> flat refusal of a curated order: a rank a check or a `nodes.yaml` entry states **on
+> purpose** is now honoured. Insertion order and live-grade order stay rejected.
+
 **Q:** Sibling nodes render in **insertion order** (check / discovery order), which is
 undetermined and not a useful order. How should they be ordered?
 
@@ -410,7 +416,38 @@ which would jump on each poll); a branch check's curated leaf order (e.g. host-m
 disk/memory/cpu/load) is **not** preserved — uniform alphabetical wins on predictability.
 Small, low-risk display change — recorded here, no ADR.
 
-### ADR-0024 — Dashboard layout: bounded heights, positional stability
+### A title that only repeats the name is not drawn (no ADR)
+**Q:** A node's `title` is a nicety beside its `name` (ADR-0017), and a check with
+nothing better to say hands back the name again with a capital letter. Severity bands
+are the visible case: every `github` / `wiz` band chip reads `critical Critical`,
+`medium Medium`, `none None` — twice the width, twice the reading, no second fact, on a
+card whose chips already compete for one line (ADR-0024/0028). Where does that get
+fixed?
+
+**A:** **In the view, in one place** — `titles.py`, whose single predicate every surface
+calls: the grid's leaf chips, box and card head lines and the heartbeat strip, the page
+band beside the breadcrumb, the inspection popover (ADR-0019), the `/maintenance` pin
+table and the `/copy` hand-off. It folds **case**, `_` / `-` / a space, and runs of
+whitespace, so `pull_requests` and *Pull requests* are one string and so are
+`code_scanning_alerts` and *Code-scanning alerts* — the hyphen deliberately included,
+because that is the same duplication wearing better typography. Nothing else folds: a
+title that adds anything at all survives. The comparison is on the **raw** values,
+before the Markdown renderer (ADR-0018), which leaves one asymmetry accepted on purpose
+— `_critical_` folds to the name and goes, `**Critical**` does not — because closing it
+means parsing Markdown in what was meant to be a string comparison, and the error it can
+make is keeping a redundant title rather than dropping a meaningful one.
+
+It is **display, never data**: the check said something and the tree stored it, so this
+is not a `title = None` in the snapshot. The JSON envelope keeps emitting the field
+(dropping one would be an ADR-0008 contract change) and a client rendering its own chips
+keeps its own decision about the word. Small, low-risk display change — recorded here,
+no ADR.
+
+### ADR-0024 — Dashboard layout: bounded heights, positional stability — superseded by [ADR-0056](adr/0056-stable-useful-dashboard-flow.md)
+> Superseded by [ADR-0056](adr/0056-stable-useful-dashboard-flow.md), which
+> restates the density, heartbeat and maintenance rules while replacing the
+> visible-node budget allocator.
+
 **Q:** Top-level cards differ wildly in height (a fifteen-disk host beside the
 one-line `little-sister` heartbeat), so the grid looks ragged and an erupting node
 reflows its neighbors. But whoever knows the wall relies on **where** a card is, so
@@ -426,6 +463,19 @@ keeps its full box and reason; and the always-tiny `little-sister` heartbeat
 line. Its `/little-sister` path is **reserved** at load so nothing user-configured
 can hide behind the one-line bar. Packing layouts and `nodes.yaml` size hints are
 rejected — both move cards on a state change, against the position rule.
+
+The same rule now spends **spare grid tracks from stable topology**. The server
+counts the card and every descendant the current depth/filter can render, independent
+of status, reasons and chip presentation, and allocates each consecutive row from
+those weights and the viewport's ordinary-track count. Every root starts at one
+track; a spare goes to the greatest `weight / span` among the roots still eligible,
+and a root is eligible while its weight exceeds the internal 16-nodes-per-track
+budget — the entry price for widening, not a ceiling on it — and its span is below
+its **branch limit**, the widest sibling set anywhere in its visible subtree. A
+wider root grids only a genuine descendant branch of full boxes — never a
+single-child wrapper or an inline chip run. Node-set, depth/filter and viewport
+changes may reflow; a status-only poll may not. The old auto-fill grid remains the
+no-JavaScript fallback.
 
 → Full record: [`adr/0024-dashboard-layout.md`](adr/0024-dashboard-layout.md)
 
@@ -895,6 +945,18 @@ that carried no slot at all. A quiet leaf stays a chip and carries none. Nothing
 about the seam changes; this widens the roster's `where`, which is part of the
 version contract, so it is recorded rather than left to the template.
 
+*Amended 2026-08-15 — `line`, and what a provider is handed.* `reason.actions`
+gains the context name **`line`**: the whole reason entry, carrying the **slug** an
+action needs to address one finding, plus its own code, its `running` flag and any
+pin. `reason` stays the line's text and no existing filler moves. Recovering the
+entry from `index` was possible and is what
+[ADR-0036](adr/0036-addressable-reasons.md) decision 3 refuses — an index moves when
+an entry is inserted above it. With it comes the rule the roster was missing: **a
+provider receives the names it declares**, or all of them when it declares
+`**kwargs`, so a growing context can never cost a filler written against an earlier
+one its chip. Adding a name was always called a compatible change; this is what
+makes it one in fact.
+
 → Full record: [`adr/0034-template-slots-for-dependent-packages.md`](adr/0034-template-slots-for-dependent-packages.md)
 
 ### ADR-0035 — A dependent package registers its own configuration aspect
@@ -1363,6 +1425,14 @@ sets up its own logging keeps its handlers *and its level* and gets little-siste
 records in them. Writing that down fixed a real defect: the root `setLevel(DEBUG)` ran
 outside that guard.
 
+**Update (2026-08-16):** the level *inside* the guard is now **INFO**, named by
+`LOG_LEVEL` when a deployment wants another. `DEBUG` collected no record the library
+writes — nothing in it logs below INFO — and every record its dependencies write; one
+deployment's log was two thirds AWS SDK request detail. The variable is part of the
+default and stops where the default does, so it cannot overrule an application that
+chose its own level. A chatty dependency is still capped by its **own** logger name,
+which adds no handler and so leaves the default running.
+
 → Full record: [`adr/0049-the-check-authoring-surface.md`](adr/0049-the-check-authoring-surface.md)
 
 ### ADR-0050 — A declared slug comes from the provider's identifiers
@@ -1415,7 +1485,7 @@ answers for it.
 → Full record: [`adr/0051-what-startup-refuses.md`](adr/0051-what-startup-refuses.md)
 
 ### ADR-0052 — Plugin names: one convention for a git dependency and a published one
-**Q:** The first plugins are consumed as **git dependencies**; an index comes later.
+**Q:** The first plugins were consumed as **git dependencies**, with an index to come.
 A distribution name is the most expensive identifier in the system to change — a
 rename is a new project for every consumer, and the old name stays on the index for
 whoever asks next. Do the names chosen now survive publication unchanged?
@@ -1438,4 +1508,191 @@ refusal name two projects that say what they claim and gives entry-point discove
 obvious key later.
 
 → Full record: [`adr/0052-plugin-names.md`](adr/0052-plugin-names.md)
+
+### ADR-0056 — Dashboard layout follows stable, useful flow
+*Supersedes ADR-0024 and restates its still-live dashboard decisions in full.*
+
+**Q:** The stable-topology allocator kept roots from moving on status changes, but
+visible node count, a 16-node entry price and one maximum branch factor did not say
+which widths a nested tree could actually use. A two-track span could leave height
+unchanged, `reason_cap: 30` was invisible to the weight, a chip at a mixed level
+disabled its boxes' grid, and an 80-root poll repeated 32 complete plans. How can
+the grid spend useful width without reading live pixels or reasons?
+
+**A:** Keep ADR-0024's position rule and density surfaces, but derive a **stable flow
+profile** for each root from the filtered, depth-limited topology, configured
+`reason_cap`, the stylesheet's 330 px nested track and its per-level insets.
+Every visible node is a potential reason host and its stable cost scales by
+`ceil(reason_cap / 6)`. Current status, reasons, measured height
+and chip/box painting never enter. Only a span that removes at least one modeled row
+per added track becomes a useful step, so profiles may skip two or remain one for a
+linear chain. Within each source-order row the currently tallest root with a
+fitting next step wins — a row is as tall as its tallest card — with the better
+reduction per track breaking height ties, atomically; a spare with no useful step
+stays empty. Consecutive quiet chips share a full-row wrapper, retaining their
+inline wrap while full boxes at the same mixed level can grid. Each span is priced
+at the width it actually has, and a published band names the **track count** its
+plan was priced for: the server publishes `(tenths, tracks, plan)` breakpoints in
+integer tenths of a pixel — the model's own unit, so a band is never late against
+a fractional measurement — and the browser sets the grid to exactly that many
+equal tracks and selects the last applicable band from its measured width, scaled
+by ten, after first paint, resize and poll swap — so the width where auto-fill
+snaps every track back to its minimum no longer makes one more pixel of viewport
+paint a taller page. No candidate may stretch a track wider than auto-fill itself
+ever could (~676 px, one track just short of a second fitting), which rules out
+the page-wide banner while leaving the moderate counts a dodge needs; the count a
+band already holds is exempt from that floor, so a widening viewport never
+disqualifies the plan holding the page. An incumbent band yields only to a
+strictly better challenger, and `tracks 0` rides auto-fill for all-ones plans, so
+a flat wall stays one band. The promise is the best **legal** outer choice at
+every width, not a page that never grows: a card's own nested auto-fit can
+re-chunk at a column flip no outer count can dodge. A structural test pins the model's five constants to
+`overview.css`, the layout is memoized on the depth-limited tree shape, and
+`settings.yaml` `dashboard_columns: plain` withholds the plan entirely. The
+auto-fill CSS remains the fallback.
+
+The full restatement also keeps bounded reason blocks and minimum heights, quiet
+leaf chips, `branch_cap` folds that never hide warn/error boxes, the reserved
+`/little-sister` status-band pill, maintenance pips plus the global pill and
+`/maintenance` page, and reason-entry separators.
+
+→ Full record: [`adr/0056-stable-useful-dashboard-flow.md`](adr/0056-stable-useful-dashboard-flow.md)
+
+### ADR-0055 — Sibling order: alphabetical, unless somebody declares a rank
+*Supersedes the* Node sibling ordering *entry above, restating its name sort in full.*
+
+**Q:** Siblings sort by name at every level, which is right for the reason it was
+chosen — order must be a property of the node set, never of registration order or of a
+live status. But a **severity band set is inherently ordered**, and the name sort
+destroys exactly that: `wiz` files `informational` between `high` and `low`, and
+`github` puts `low` before `medium`, which is a wrong statement about severity. Can a
+check say what its own children's order is without re-opening insertion order?
+
+**A:** Sort by **`(order, name)`** — a declared rank first, then the same natural,
+case-insensitive name order as before, once in the snapshot. `CheckResult` grows
+`order: int = 0`, so **a check that says nothing gets exactly today's behaviour** and
+cannot accidentally publish its loop: the rank is declared, never incidental. It is
+read on the result **root** as well as its children, unlike `about` / `title`
+(ADR-0025), because the check is what *knows* the order and a rank is not identity —
+without that a leaf check could not rank the node it owns. `order:` is also readable
+**inline on a check** and in `nodes.yaml`, both of which overrule the result, per field
+and in that order. A stated **`0` is a real declaration** — the only way to overrule a
+rank by naming the default value, which is why the node's field is nullable — but it is
+**not** a request for alphabetical: `0` is the rank the unranked carry, so a zeroed node
+sorts ahead of every positive rank, and putting a whole ranked set back to the alphabet
+takes an `order: 0` per sibling. One consequence is named rather than left implicit: a
+root rank is compared against **other checks'** cards, so an installed plugin can nudge
+a wall's layout, and the deployment's answer is to state the order itself. Ordering by the live **grade** stays rejected (it
+jumps on every poll), so ADR-0024's positional stability holds. The envelope's
+`children` order moves with the snapshot and is accepted (ADR-0008); the rank as a
+**field** waits for the client contract round rather than arriving piecemeal.
+
+→ Full record: [`adr/0055-sibling-order.md`](adr/0055-sibling-order.md)
+
+### ADR-0061 — Decoration cannot substitute for the thing it decorates
+**Q:** Since ADR-0017's 2026-08-10 update a title that only repeats the node's name is
+not drawn. Most surfaces draw the name and the title side by side, so that is the whole
+question there — but two draw the title **instead of** the name: `/copy`, which labels
+an item with the title when there is one, and the inspection popover, whose card
+carries `title` and `about` and no name at all. Both are right while a title is a word:
+a node titled *Cluster A* is better named that way in a pasted document. Two plugins now
+want a **glyph** as a severity band's title — 🔴 for `critical` — which is a clear win
+on a chip, where the band's name sits beside it and carries the word. What should those
+two surfaces do with it?
+
+**A:** **A title with no letter and no digit in it cannot stand in for a name**, so it
+is drawn **with** the name instead: `critical 🔴`, name first, in the chip's own order.
+Otherwise `/copy` — the surface defined as *read somewhere with no chips and no
+styling* — would paste a bare circle into a ticket that outlives the person who pasted
+it, and a colour name is the one thing a reader cannot reconstruct from a colour. A
+package cannot fix this from outside: raw HTML in a title is escaped (ADR-0018), so
+`aria-hidden` and a `title=` attribute are both unavailable to a check. The predicate is
+`isalnum` per character, which makes it a **Unicode** test on purpose — a Japanese,
+Cyrillic or Greek title is a word and keeps every right a word has, while an emoji, an
+arrow and a bullet are not; a digit counts, because deciding that `42` is not a name
+would be a second decision hiding inside this one. The fold rule runs **first**, so a
+title of `Critical` still simply disappears and only a wordless one reaches the new
+case. `label_parts` returns the two halves rather than a joined string: a title is
+authored Markdown and keeps that contract, a name is structural data that each surface
+escapes its own way, so the decision is in one place and the drawing stays where it was.
+Like ADR-0017's update this is **display only** — the snapshot keeps the title and the
+JSON envelope keeps emitting it, because a client drawing its own chips is entitled to
+its own decision about the glyph. Accepted with one wart: a card headed `critical 🔴`
+repeats the chip beneath it, which is what a heading does, and the alternative would
+have given one predicate two answers for a case no shipped band is.
+
+→ Full record: [`adr/0061-decoration-is-not-a-label.md`](adr/0061-decoration-is-not-a-label.md)
+
+### ADR-0060 — A line makes no claim; the node says it could not look
+**Q:** `UNDEFINED` meant *nobody has reported this node yet*, and ADR-0042 then let a
+check hand a line that same code **on purpose** — *this line makes no claim*. Two
+different statements, one spelling, and the roll-up ignores both. So a check that read
+one service to grade another could not tell the tree *I could not look* apart from *I
+have nothing to report*: in the sharpest case a severity band rendered `OK` while
+nothing at all had been read, because a watched band is `OK` when empty. Does the model
+need a sixth code to tell chosen-unknown from not-yet-measured?
+
+**A:** **No — two sentences on two different things.** The **line** keeps `UNDEFINED`
+and makes no claim about its subject; the **node the check owns** says `WARN`, meaning
+the instrument is degraded and this reading is incomplete. That is ADR-0058's
+subject-versus-instrument split one layer up, and it costs no consumer, no envelope and
+no client — where a sixth code would cost all of them, against a vocabulary closed on
+purpose. `WARN` specifically, because an `UNDEFINED` **own** code is skipped in favor of
+a node's children, which is exactly how a blind container came to defer to bands that
+had nothing to say; a `WARN` is counted. This is ADR-0043's invariant reaching one case
+further — an *unread* scope is not silently green either — and like it, a rule checks
+are reviewed against rather than machinery core enforces. Two properties keep the line
+from becoming noise: it counts the **could-not-ask** kind only (a refused subject
+already grades on its own line), and it names coverage, never a subject. Alongside it,
+**a read failure never replaces a last-known reading**: a node write rebinds the whole
+entry set, so a check that could not read **omits** the node and ADR-0007's no-prune
+rule leaves the previous entries and their timestamp together, with freshness left to
+say honestly that they are old — which also settles a failed **discovery** (its own
+coverage failure and nothing else; a failure the service *answered* stays `ERROR`).
+Two narrow amendments to **ADR-0033** follow, each from a fact that record did not
+have: the budget re-arms on **any change** of the stored code and not only on an `OK`,
+because ADR-0042 made chronically non-`OK` ordinary and such a check spends its retries
+once and never gets them back — invisibly, since `/system` marks only a pulled-in slot;
+and a completed run reporting `UNDEFINED` **does not arm** the retry, a withheld claim
+being nothing to confirm. Deliberately left: the age of a carried reading goes in the
+line's own words, not into a per-reason stamp the envelope would have to carry.
+
+→ Full record: [`adr/0060-a-line-makes-no-claim.md`](adr/0060-a-line-makes-no-claim.md)
+
+### ADR-0058 — `little_sister.transport`: a vocabulary for asking something that might not answer
+**Q:** Nothing on the check-authoring surface says what a check should do about a
+request that fails, so every check that reads a remote API decides four things for
+itself — how long one request may take, what bounds a run that asks fifty times, what
+is worth asking again, and what a failure *means*. Offer a shared HTTP client? Take a
+general HTTP library? Or something else?
+
+**A:** Share the **policy**, never the client. `little_sister/transport.py` — stdlib
+only, no I/O, importing nothing from `little_sister` — promises five names: `Deadline`
+(with `budget(timeout)`, the clamp to what is left of the run that makes a deadline a
+bound rather than a suggestion, and `affords(wait)`), `DeadlineExceeded` (deliberately
+**not** a `RemoteError`, so a per-item handler cannot spell one run-level fact as forty
+item-level lines), `Fault` (**three** states — *transient* / *answered* / *malformed* —
+because a boolean spells a garbage payload identically to a `404`, and those grade
+differently), `RemoteError` (status + fault, `fault` **required with no default**,
+designed to be subclassed) and `ask` (one bounded retry whose backoff the deadline can
+veto). A check builds the deadline from its own `timeout_seconds`, which also settles
+what `timeout:` bounds — **the whole run**, one request at a time inside it. There is
+deliberately **no** mapping from a `Fault` to a `StatusCode`: for an `http` check the
+endpoint *is* the subject of the measurement, for a check reading an API to grade
+something else it is the *instrument*, so the mapping is one line at the call site and
+waits on the chosen-`UNDEFINED` question. A check whose transport is a vendor SDK
+replaces the *implementation* and still wears the policy; a check-type package may take
+`httpx` or `requests` where the library may not — and neither would help where it
+counts, since neither has a total-request timeout. The SSH package's `transport.py`
+becomes `connection.py` to free the name. **Amended the same day** for a service that
+answers *not now*: `RemoteError` carries an optional `retry_after`, `ask` spends it in
+place of its own backoff when the deadline affords it, and `fetch` parses the standard
+`Retry-After` header — but there is **no fourth `Fault`**, because a throttle is already
+transient and no status can identify one (both `403` and `429` are used for it, and a
+bare `403` also means *not visible to this credential*), so only a package that speaks
+the service's dialect can classify it. The principle underneath: **a check and an HTTP
+request are different realms**, and this module serves the second — `Deadline` is the one
+place they touch.
+
+→ Full record: [`adr/0058-transport-policy-vocabulary.md`](adr/0058-transport-policy-vocabulary.md)
 

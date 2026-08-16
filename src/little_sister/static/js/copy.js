@@ -1,6 +1,10 @@
 /* Copy one server-produced status document as Markdown or rich HTML.
  *
- * Both formats come from the same immutable tree snapshot. The server embeds the
+ * Two pages offer one: `/copy` hands over the whole tree, a leaf's detail page
+ * hands over that one node. Both arrive here as the same three elements, so this
+ * script knows nothing about which document it is moving.
+ *
+ * Both formats come from the same immutable snapshot. The server embeds the
  * hardened HTML as JSON and leaves the Markdown in a selectable textarea; this
  * script only moves those bytes into the browser clipboard after a user click.
  */
@@ -90,10 +94,10 @@
                     richCopied = false;
                 }
                 if (richCopied) {
-                    announce('Rich text copied.');
+                    announce('Rich HTML copied.');
                 } else {
                     await writePlain(markdown);
-                    announce('Rich text is unavailable; Markdown copied instead.');
+                    announce('Rich HTML is unavailable; Markdown copied instead.');
                 }
             } else {
                 await writePlain(markdown);

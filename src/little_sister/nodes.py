@@ -1,8 +1,12 @@
 """Node metadata: the ``nodes`` aspect's declarations + the startup consistency pass.
 
-A node's display metadata — ``about`` (subject metadata, what it *is*; ADR-0012) and
-``title`` (a short display label; ADR-0017) — is fed by precedence: a ``nodes.yaml``
-declaration keyed by path **>** the inline value on the owning check **>** empty.
+A node's display metadata — ``about`` (subject metadata, what it *is*; ADR-0012),
+``title`` (a short display label; ADR-0017) and ``order`` (its declared rank among
+its siblings; ADR-0055) — is fed by precedence: a ``nodes.yaml``
+declaration keyed by path **>** the inline value on the owning check **>** unstated.
+All three are seeded onto the tree here, at startup, before the first tick — which
+is what puts them ahead of the fourth source ``order`` and the labels also have: the
+values a running ``CheckResult`` carries, which fill an unset field and no more.
 The file is optional and is the ``nodes`` aspect of the configuration directory —
 ``config/nodes.yaml`` in each root of the path-list (ADR-0031) — so it can reach
 container / host nodes no single check owns. The consistency pass flags declarations
@@ -25,18 +29,38 @@ from little_sister.status import (
     on_same_line,
     split_path,
 )
+from little_sister.values import number
 
 
 @dataclass(frozen=True)
 class NodeMeta:
-    """Per-node display metadata seeded at startup: ``about`` + ``title``."""
+    """Per-node display metadata seeded at startup: ``about``, ``title``, ``order``.
+
+    ``order`` is the declared sibling rank (ADR-0055) and is ``None`` when neither
+    source mentions it — **not** ``0``, which is a rank an author may state on
+    purpose, and the only way a declaration can overrule a check's rank by naming
+    the default value. It is not a request for alphabetical: ``0`` is the rank the
+    unranked carry, so it sorts a node *with* them, ahead of every positive rank,
+    rather than back at its alphabetical place — putting a whole ranked set back to
+    the alphabet takes an ``order: 0`` per sibling. Every other field uses the empty
+    string for the same "nobody said", which works there because no author ever
+    means an empty label.
+    """
     about: str = ""
     title: str = ""
+    order: int | None = None
+
+    @property
+    def declares(self) -> bool:
+        """Whether this entry says anything at all. An entry that does not is
+        dropped at parse time, so a stray key cannot become a node declaration."""
+        return bool(self.about) or bool(self.title) or self.order is not None
 
     def merged_over(self, base: NodeMeta) -> NodeMeta:
-        """This entry's fields, each falling back to ``base`` when empty."""
+        """This entry's fields, each falling back to ``base`` where unstated."""
         return NodeMeta(about=self.about or base.about,
-                        title=self.title or base.title)
+                        title=self.title or base.title,
+                        order=base.order if self.order is None else self.order)
 
 
 NODES_ASPECT = "nodes"
@@ -72,11 +96,23 @@ def load_nodes(config_dir: str | Path | None = None) -> dict[str, NodeMeta]:
 
 def resolve_metadata(checks: list[Check],
                      nodes: dict[str, NodeMeta]) -> dict[str, NodeMeta]:
-    """Merge node metadata by precedence — ``nodes.yaml`` > inline-on-check > empty,
-    **per field** (ADR-0012 / ADR-0017) — into one ``path -> NodeMeta`` map."""
+    """Merge node metadata by precedence — ``nodes.yaml`` > inline-on-check >
+    unstated, **per field** (ADR-0012 / ADR-0017 / ADR-0055) — into one
+    ``path -> NodeMeta`` map.
+
+    ``order`` joins the labels here rather than being a ``nodes.yaml``-only key: a
+    deployment writes ``title:`` and ``about:`` for a node in its check file, and a
+    rank that had to move to a second file — with the *same* precedence and the
+    *same* per-field merge — would be a rule with no reason behind it. It is only
+    the check's **root** that an inline key can reach, which is exactly the node
+    that file is about; a branch's subnodes are ranked from the ``CheckResult``,
+    where their names exist.
+    """
     meta: dict[str, NodeMeta] = {
-        check.path: NodeMeta(about=check.about, title=check.title)
-        for check in checks if check.about or check.title}
+        check.path: NodeMeta(about=check.about, title=check.title,
+                             order=check.order)
+        for check in checks
+        if check.about or check.title or check.order is not None}
     for path, entry in nodes.items():
         meta[path] = entry.merged_over(meta.get(path, NodeMeta()))
     return meta
@@ -117,8 +153,8 @@ def _containers(checks: list[Check]) -> set[str]:
 
 def _read_nodes_file(node_file: Path) -> dict[str, NodeMeta]:
     """Parse one ``nodes.yaml`` into ``path -> NodeMeta``. Each value is a mapping
-    (``{about: …, title: …}``) or a bare-string shorthand for ``about`` alone; an
-    entry with neither field is dropped."""
+    (``{about: …, title: …, order: …}``) or a bare-string shorthand for ``about``
+    alone; an entry stating none of the three is dropped."""
     try:
         with open(node_file, encoding="utf-8") as handle:
             data = yaml.safe_load(handle) or {}
@@ -128,14 +164,21 @@ def _read_nodes_file(node_file: Path) -> dict[str, NodeMeta]:
         raise CheckError(f"{node_file.name}: top-level YAML must be a mapping")
     nodes: dict[str, NodeMeta] = {}
     for node_path, value in data.items():
-        entry = _meta_of(value)
-        if entry.about or entry.title:
+        entry = _meta_of(value, f"{node_file.name}: {node_path}")
+        if entry.declares:
             nodes[join_path(str(node_path))] = entry   # canonical absolute path
     return nodes
 
 
-def _meta_of(value: Any) -> NodeMeta:
+def _meta_of(value: Any, where: str) -> NodeMeta:
     if isinstance(value, dict):
+        # `order` is read only when the key is *present*: `values.number` cannot
+        # tell an absent key from a stated `0`, and that difference is the whole
+        # point of the field (ADR-0055). A non-numeric rank raises CheckError —
+        # a silently ignored one would leave the row in an order nobody chose.
+        order = (number(value, "order", where=where)
+                 if value.get("order") is not None else None)
         return NodeMeta(about=str(value.get("about", "")),
-                        title=str(value.get("title", "")))
+                        title=str(value.get("title", "")),
+                        order=order)
     return NodeMeta(about=str(value) if value else "")

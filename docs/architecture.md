@@ -63,7 +63,11 @@ little-sister/
 │   ├── icon_pack/       # the built-in marks (our own drawn glyphs) + manifest
 │   ├── nodes.py         # the `nodes` aspect's metadata + startup consistency pass
 │   ├── render.py        # safe server-side Markdown → HTML (markdown-it-py)
-│   ├── copy_status.py   # the canonical non-OK Markdown incident outline
+│   ├── titles.py        # a title that repeats the name, or has no word in it
+│   ├── paths.py         # a loaded-from path, drawn against a root the reader has
+│   ├── copy_status.py   # the canonical incident hand-off: the tree's outline,
+│   │                    # one node's and one reason's, from one formatter
+│   ├── copy_action.py   # the built-in copy chip, in the reason.actions slot
 │   ├── slots.py         # template slots a dependent package fills (ADR-0034)
 │   │                    # and the assets it ships for them (ADR-0037)
 │   ├── actions.py       # the declarative action list, config/actions.yaml (ADR-0038)
@@ -106,9 +110,8 @@ same shape as this one, a generated branch and an annotated tag
 ([ADR-0022](adr/0022-generated-release-branch.md)) — and each registers into the seams
 §11 promises.
 
-Giving a type a repository of its own is
-[`plugin-repository.md`](plugin-repository.md); it is a decision about whether the
-type would ever have a second user, not a step every type takes.
+Giving a type a repository of its own is a decision about whether the type would ever
+have a second user, not a step every type takes.
 
 The direction is what keeps the seams honest: a plugin may only write against §11,
 so the library can move anything else; and a deployment may install a plugin the
@@ -193,6 +196,84 @@ Methods: `update(code, reason)` (record an observation), `touch()` (re-stamp onl
 into `_coerce_code` / `_coerce_reason`.
 
 ### 4.3 Aggregation (roll-up)
+
+**A node has two kinds of child, and they grade by one rule.** The real ones are in
+`__children`. The **virtual** ones are its own member reasons: a node whose `members`
+is true is not carrying one condition in several paragraphs, it is carrying a set of
+reasons, and each of those is a child the tree does not hold
+([ADR-0036](adr/0036-addressable-reasons.md) decision 7; the
+[ADR-0032](adr/0032-status-contribution-boundary.md) amendment). A virtual child has
+the two things grading needs and the one thing a person needs: an **identifier** (its
+slug — declared via `slug(*parts)`, or content-hashed to `h-` plus ten hex digits of
+its SHA-1 when the check has nothing better than its own wording), a **code of its
+own** where the check declared one
+([ADR-0042](adr/0042-entries-carry-their-own-code.md)), and — through the
+`(path, slug)` side table — its own **pin**, so one line of a node can be silenced
+without silencing the node.
+
+**A pin holds an identifier, and only a reason has one.** That is why maintenance is
+per line and never per anything coarser, and it is worth saying before the next
+paragraph introduces something coarser.
+
+**What a reason is *about* is a subject, and a subject is not a child.** Several
+reasons commonly share one — a repository with a failed build *and* a run awaiting
+approval has two coded lines under one `actions` aspect — and reading *how is that
+repository doing* means taking the worst of their codes.
+
+Grouping is free, but only under one rule. The **ranking** is associative: `worst_of`
+answers the same however it is bracketed. `derive_code`'s **fallbacks** are not — it
+answers `OK` when nothing was counted, so a subject that folded its reasons with
+`derive_code` and handed the result up would turn a node's `UNDEFINED` into a green
+one. So: **a subject with no coded reason contributes nothing**, exactly as an uncoded
+reason does; with that, a node grades identically whether its reasons are folded
+directly or through their subjects. (`worst_of` ranks three codes and raises on the
+rest, so any subject reading filters before it folds, as `derive_code` already does.)
+Where the check declared no codes at all and the node carries one — a severity band —
+there is nothing to fold, and every subject under it reads the band's code.
+
+A subject is a **lens**: no slug, so nothing pins it; no storage, so nothing holds it;
+no contribution of its own, since its reasons already contribute. It is not even
+recoverable from the data. A declared slug is built from identifiers the provider
+minted rather than from rendered text
+([ADR-0050](adr/0050-slugs-from-provider-identifiers.md)) and by convention names the
+subject first — `slug(repository, "pr", 42)` — but the parts are joined with `-` and
+`-` is legal *inside* a part, so a subject cannot be parsed back out of a slug.
+Grouping by subject would need a check to carry it explicitly; nothing does today, and
+grading never has to.
+
+The construction exists because a check whose subjects are discovered at run time —
+every open pull request across forty repositories, every alert a scanner reports —
+would otherwise have to choose between a node per subject, which is a tree nobody reads
+([ADR-0043](adr/0043-coverage-backstop.md) rejected exactly that), and a paragraph per
+subject, which nothing can address, grade or pin. The virtual child is the third
+answer: an identifier per line without a path per line. A check that has subjects hands
+over reasons and lets its node's code be **derived**; a check with one condition to
+describe hands over prose and declares its code. Declaring a code *and* handing over
+coded reasons is refused (`CheckError`), because then two things would grade the same
+node.
+
+**Presence is the check's choice, not a signal.** A reason set may report every subject
+it looked at — `github-rate-limit` gives one line per API budget, healthy ones
+included — or only the ones worth acting on, which is the habit of `github`'s aspects
+and is a habit rather than a rule (its `actions` aspect carries a `show_healthy` switch
+for the opposite). What no reader may do is take an absent line for good news: that an
+unwatched scope must not look like a clean one is the coverage backstop's whole job
+([ADR-0043](adr/0043-coverage-backstop.md)).
+
+The folding happens **twice**, and the two folds are not the same function.
+`derive_code` (`reasons.py`) runs at the check boundary, over the entries' own codes
+alone: an entry that declares none contributes nothing, and pins never reach it.
+`_own_code` (`tree.py`) runs at snapshot time with the contribution rules joined in,
+so there an uncoded entry contributes the node's reported code and a pinned one is
+skipped as `MAINTENANCE` (§4.4). What both do alike — and it is the part that matters
+here — is **ignore `UNDEFINED`**, exactly as the roll-up over real children does.
+
+What a virtual child does **not** have is a clock or a history of its own: freshness,
+staleness (§4.4) and the event log are all node-grained, and an entry inherits its
+node's `timestamp`. So a node written every run looks equally fresh in every line,
+whatever each line's reading is actually based on — the standing constraint on any
+check that would report some subjects from this run and others from an earlier one.
+
 `get_status_code()` rolls a node's effective status up from itself and its children
 per [ADR-0039](adr/0039-status-rollup-semantics.md), which is `status.effective_code`
 applied recursively:
@@ -223,7 +304,7 @@ they are *silenced* leave the parent `MAINTENANCE`, children that merely have no
 reported leave it `UNDEFINED`. That is the edge case
 [ADR-0032](adr/0032-status-contribution-boundary.md)'s amendment left open, answered
 the way the same model already answers it one level down — a node whose *virtual*
-children (its member reason entries) are all pinned reads `MAINTENANCE`
+children are all pinned reads `MAINTENANCE`
 ([ADR-0036](adr/0036-addressable-reasons.md)) — because real and virtual children
 must not read differently in one model.
 
@@ -365,10 +446,16 @@ holds one root `Status` and a bounded `deque` of `Event`s behind one `RLock`.
   a dead check. This is the one transform that turns a stored reading into an own
   status, and both grains of maintenance now live inside it rather than beside it.
 - `snapshot(path="", now=None)` — an immutable `StatusSnapshot` copied under the
-  lock. It **orders siblings** by name — natural and case-insensitive, so `node2`
-  precedes `node10` (`_sort_key`) — at every level, so the dashboard and the JSON
+  lock. It **orders siblings** by `(declared rank, name)` — the name half natural and
+  case-insensitive, so `node2` precedes `node10` (`_sibling_key` over `_sort_key`) —
+  at every level, so the dashboard and the JSON
   envelope read a deterministic order while the live tree keeps insertion order
-  (decisions.md, "Node sibling ordering"). It also computes **freshness** (ADR-0005):
+  ([ADR-0055](adr/0055-sibling-order.md)). A rank nobody declared reads `0`, so an
+  unranked set is plain alphabetical; a check states one on a `CheckResult` and a
+  deployment overrules it from its own config, where a stated `0` is a declaration of
+  the default rank rather than a request for alphabetical (§4.5).
+  Ordering by the live grade is deliberately not offered — it would re-sort on every
+  poll. It also computes **freshness** (ADR-0005):
   a node not observed within ~2× its `frequency` is flagged `stale` and its `code` is
   degraded to at least `WARN` (worse-of, rolled up) — including a **pinned** node,
   whose reading is what staleness judges. The aggregation rule itself is the reusable
@@ -435,13 +522,16 @@ itself lives in `errors.py` so `values` stays importable from `config.py` /
 `maintenance.py` without pulling in the check registry.
 Built-ins:
 
-- **`http`** — GET a URL; OK when the status is in `expected_status` (stdlib `urllib`).
+- **`http`** — GET a URL; OK when the status is in `expected_status`. A `3xx` is
+  followed or reported per `follow_redirects` (default: followed); the body is
+  never read. Requests go through `little_sister.fetch` (ADR-0058), as every
+  request in the library does.
 - **`file`** — heartbeat: OK while a file's mtime is within `max_age` (default 20m),
   else `stale_code`. Relative `file` paths resolve under the executing user's `$HOME`.
 - **`command`** — run a shell string or argv; OK on exit 0; reason = captured
   `stdout` / `stderr` / `both`, shortened to `max_chars` from `tail` / `head`
   (stdlib `subprocess`, per-check timeout).
-The **SSH family** runs over one transport, `SshConnection` (`checks/ssh/transport.py`):
+The **SSH family** runs over one connection, `SshConnection` (`checks/ssh/connection.py`):
 a value object that carries the connection block (`host` / `user` / `port` /
 `identity_file` / `options` / `sudo` / `timeout`), builds the `ssh` argv (`BatchMode`
 forced; the legacy SHA-1 `ssh-rsa` algorithm **off by default**, applied after the
@@ -532,7 +622,7 @@ checks share (stdlib `subprocess`; the external `ssh` binary). The five checks:
   measures; the grading lives in the check. It carries no description, so it
   shares the host node without overwriting `host-metrics`'.
 
-The family lives in the `checks/ssh/` package: `transport.py` (`SshConnection`),
+The family lives in the `checks/ssh/` package: `connection.py` (`SshConnection`),
 `metrics.py` (the pure toolkit), `connect.py` / `command.py` / `script.py`, and the
 domain checks `host_metrics.py` / `qnap_metrics.py` / `macos_memory.py` — over
 `SshCheckBase` (the shared connection block) and `SshScriptCheck` (adds script
@@ -618,6 +708,46 @@ check-root coverage test) and info-logs a container that has checks but no `abou
 server-side ([ADR-0018](adr/0018-markdown-rendering.md), §4.7). `title` follows the node name (ellipsed) on a card, and the
 `status / …` breadcrumb in the **page header** of both a branch view and a leaf's
 detail page (whose body still shows the name + description) ([ADR-0017](adr/0017-node-title.md)).
+A node also carries an **`order`** — its declared rank among its siblings
+([ADR-0055](adr/0055-sibling-order.md)), resolved by the same per-field precedence as
+the labels: a `nodes.yaml` `order:` **>** an inline `order:` on the check **>** the
+`order` on the `CheckResult` it returns **>** unstated. Unlike the labels it is read on
+a result's **root** as well as its children, and unlike them a stated `0` is a real
+declaration rather than silence — which is what lets a deployment overrule a check's
+rank by naming the default value, so the node's field is nullable while the snapshot's
+is a plain `int`. A zeroed node sorts **with the unranked**, ahead of every positive
+rank; that is a rank, not a request for alphabetical, and returning a whole ranked set
+to the alphabet takes an `order: 0` per sibling.
+
+**A title that only repeats the name is not drawn** (`titles.py`). Where a check has
+nothing better to say it hands back the name again with a capital letter, and a row of
+severity-band chips then reads `critical Critical`, `medium Medium` — twice the width,
+no second fact. One predicate answers for every surface: the grid's leaf chips, box and
+card head lines and the heartbeat strip, the page band beside the breadcrumb, the
+inspection popover, the `/maintenance` pin table and the `/copy` hand-off. It folds
+**case**, `_` / `-` / a space, and runs of whitespace — so `pull_requests` and
+*Pull requests* are one string, and so are `code_scanning_alerts` and
+*Code-scanning alerts* — and nothing else: a title that adds anything at all survives.
+
+**And a title with no word in it cannot stand in for the name**
+([ADR-0061](adr/0061-decoration-is-not-a-label.md)). Most of those surfaces draw the
+name and the title side by side, so the rule above is all they need. Two draw the
+title *instead of* the name — the `/copy` hand-off and the inspection popover's card —
+and that is right while a title is a **word**: a node titled *Cluster A* is better
+named that way in a pasted document. It stops being right for a **glyph**: a severity
+band titled 🔴 would paste into a ticket as a circle and nothing else. So a title with
+no letter and no digit in it (`isalnum`, a Unicode test — 日本語 is a word, → is not) is
+drawn **with** its name there, `critical 🔴`, in the chip's own order. `label_parts`
+returns the two halves rather than a joined string, because a title is authored
+Markdown and a name is structural data each surface escapes its own way.
+
+Both are **view** rules: the snapshot stores the title and the JSON envelope emits it,
+whatever a surface decides to draw.
+The comparison is on the **raw** values, before the Markdown renderer (§4.7). This is
+**display, never data**: the snapshot keeps the title and the JSON envelope keeps
+emitting it ([ADR-0008](adr/0008-json-output-api.md)), because a client rendering its
+own chips is entitled to its own decision about the word.
+
 A leaf's `description` surfaces **only** on its detail page (the dashboard popover shows
 `title` + `about`, [ADR-0019](adr/0019-inspection-popover.md)); a **branch node's
 `description` is stored but deliberately not displayed** — a container's detail lives in
@@ -762,14 +892,14 @@ the `markdown` (block) and `markdown_inline` (one-line, no `<p>`) Jinja filters
 |-------|---------|-----------|
 | `/` | GET | Redirect to `/status`. |
 | `/login`, `/logout` | GET, POST / GET | Session login (stores `username`, name, and an `admin` flag) / clears the session. |
-| `/status`, `/status/<path:branch>` | GET | Renders the dashboard from a live snapshot (whole tree or a branch; the `path:` converter passes the slash-separated node path, ADR-0016). A **leaf** check renders its **detail** page. `hide_ok` / `hide_idle` filter the view; `depth` caps how deep the tree renders (clamped to `MAX_DEPTH`, remembered in a `depth` cookie); `fragment=1` returns just the grid (for the page's live polling). With `Accept: application/json` and a valid bearer token, the same routes return the subtree as JSON instead (ADR-0008). |
+| `/status`, `/status/<path:branch>` | GET | Renders the dashboard from a live snapshot (whole tree or a branch; the `path:` converter passes the slash-separated node path, ADR-0016). A **leaf** check renders its **detail** page. `hide_ok` / `hide_idle` filter the view; `depth` caps how deep the tree renders (clamped to `MAX_DEPTH`, remembered in a `depth` cookie); `fragment=1` returns just the grid (for the page's live polling). With `Accept: application/json` and a valid bearer token, the same routes return the subtree as JSON instead (ADR-0008). A **leaf** page also carries the node's own **hand-off** — the two clipboard buttons of `/copy` aimed at one node: the same document machinery (`copy_status.py`, one formatter for both) over what only this page knows — the path, the observation and the period it bounds, the next update, the run's wall time, the frequency, the report, the configuration and every reason line uncapped — each line with its own code cue and in-flight marker where it declared them, each instant naming its offset. A pin does not change it: the document keeps the **measurement** and says a pin is in force, rather than presenting the pinned code as the reading. Containers get no buttons — their hand-off is `/copy`. |
 | `/history/<path>` | GET | A node's status history (Status / Since / Until / Reason). |
 | `/maintenance` | GET, POST | **GET** — the full, uncapped maintenance overview as its own read-only page (the leaf-detail pattern), reached from the strip pill's "+N more": **one row per pin** — a node's own, or one of its reasons' ([ADR-0036](adr/0036-addressable-reasons.md)) — with the path, what the pin *silences* (the whole node, or one reason line), time left, rendered Markdown explaining *why* it is silenced, and authorship (*pinned by … , last changed by …*). *Silenced* and *Why* are two columns on purpose: both are called "reason" in the model and are not the same thing. An entry row links to its line as `/status/<branch>?reason=<slug>`; the slug is never rendered as text. **POST** — **admin only**: set/edit/clear a node's maintenance with a raw-Markdown reason and optional duration-or-expiry (blank uses the duration from `settings.yaml`), recording who set it. Unit-suffixed durations and full ISO date/times are accepted alongside `MM-DD`, a day-of-month, `HH:MM`, and weekday/time shortcuts; a bare weekday uses 12:00, and unzoned values use the configured timezone. The resolved expiry must be **at least one second and at most 365 days away**; invalid, past, ambiguous-DST or out-of-range input is refused with the admin's words returned, and a blank reason on an *edit* keeps the stored one ([ADR-0014](adr/0014-maintenance-persistence.md)). A `slug` field addresses **one reason** of the node instead of the node ([ADR-0036](adr/0036-addressable-reasons.md)) — never a path segment, since the natural slug for a discovered entry contains a `/`; redirects to the node — or back to the page the form was opened on, via a validated `next` (the card dialog's way home). Every form carries the entry's `set_at` as a hidden **compare-and-set token**, so a write against a pin someone else has since changed is **refused whole** and answered with the conflict page — both rendered stored text and the admin's raw source, who set the stored one and when, the admin's own words preserved and one click to take the stored ones instead ([ADR-0014](adr/0014-maintenance-persistence.md)). |
 | `/events` | GET | The transition log, newest first (When / Status / Service / Reason). A transition that reached nobody is **shown and marked** with the contribution rule that held it back ([ADR-0032](adr/0032-status-contribution-boundary.md) rule 5, [ADR-0041](adr/0041-maintenance-is-a-contribution-rule.md)) — it keeps the status color it would have alarmed in, and the chip beside the code is what says it did not. Marked events are what makes *did it break during the window?* answerable, and they are excluded from `/history`, which answers the other question. |
-| `/system` | GET | **Admin only** — engine uptime, pool size, check counts; per check its type and the in-flight / armed-next / last run, each a time of day plus interval. Carries the dashboard's freshness stamp and ~10s poll (`fragment=1` returns just the info block). Below it, outside the polled fragment because they are settled at startup: the **check-type roster** (§11) — the types this configuration runs first, each with the number of checks behind it, the rest folded into a disclosure so a registered-but-unused type stays readable without filling the card — the **package inventory** (§11), one row per installation outside the library with its distribution, version, loaded path and everything it registered, because a version belongs to the *installation* and a package that registers no check type would otherwise have one nowhere on the page — the **extension seams** (which package fills which slot, which configuration aspects were registered, and who registered each one) and the **effective Content-Security-Policy**, directive by directive, with the contributor of every source — a request blocked inside somebody else's package is otherwise undebuggable from the running instance (§5.4, [ADR-0048](adr/0048-an-assembled-content-security-policy.md)). |
+| `/system` | GET | **Admin only** — engine uptime, pool size, check counts; per check its type and the in-flight / armed-next / last run, each a time of day plus interval. Carries the dashboard's freshness stamp and ~10s poll (`fragment=1` returns just the info block). Below it, outside the polled fragment because they are settled at startup: the **check-type roster** (§11) — the types this configuration runs first, each with the number of checks behind it, a count that opens into the node path of every one of them so it can be believed without reading a config file, the rest folded into a disclosure so a registered-but-unused type stays readable without filling the card — the **package inventory** (§11), one row per installation outside the library with its distribution, version, loaded path and everything it registered, because a version belongs to the *installation* and a package that registers no check type would otherwise have one nowhere on the page — both tables print that loaded path **against a root the reader has** (`paths.py`): `site-packages/…` or `./…` under the working directory, whichever root is the nearer, because the diagnostic it carries is *which root the module came from* rather than the absolute string, nine tenths of which is the same prefix on every row and starts with somebody's home directory (the origins and the hover `title` keep it whole; a path under neither root stays long, which is the signal) — the **extension seams** (which package fills which slot, which configuration aspects were registered, and who registered each one) and the **effective Content-Security-Policy**, directive by directive, with the contributor of every source — a request blocked inside somebody else's package is otherwise undebuggable from the running instance (§5.4, [ADR-0048](adr/0048-an-assembled-content-security-policy.md)). |
 | `/about` | GET | The identity page — the gaze, the name and the reasoning behind it, the running instance's `__version__`, the repository link. Auth-gated like every other surface: it names the version of a live instance. |
 | `/preferences` | POST | Records this browser's **theme** and **layout** (§5.3, [ADR-0029](adr/0029-per-user-presentation-preferences.md)) and redirects back to the posting page. A value outside the roster is dropped in favor of what the browser already had; the return path is validated by `_safe_next` (a single leading `/`, and none of the characters a browser rewrites into a second one), so the hidden field cannot become an open redirect. |
-| `/copy` | GET | Auth-gated incident snapshot. One immutable root snapshot becomes one canonical Markdown document: every non-OK leaf (`WARN`, `ERROR`, `MAINTENANCE`, `UNDEFINED`) plus only the ancestors needed to locate it, in snapshot order; the synthetic root and wholly healthy branches are omitted. Leaves carry a non-colour emoji cue; authored check and maintenance explanations keep their Markdown, while node/per-reason maintenance also names who set it and its expiry. The page renders the rich preview through the same hardened Markdown renderer as every other surface. **Copy Markdown** writes `text/plain`; **Copy rich text** writes both `text/html` and the Markdown as `text/plain`, falling back honestly to plain/manual selection when clipboard access is unavailable. An all-OK tree gets an empty state rather than an empty clipboard action. |
+| `/copy`, `/copy/<path:branch>` | GET | Auth-gated incident hand-off, in three sizes from one route and one formatter: the **tree** (`/copy`), one **node** (`/copy/<branch>`) and one **reason line** (`/copy/<branch>?reason=<slug>` — the node a path, the entry a query value, [ADR-0036](adr/0036-addressable-reasons.md) decision 12, because a discovered entry's slug contains a `/`). A line's document is the line and just enough to locate it — the node's title, path and observation — and deliberately not the node's run facts, report or configuration, which the node's own document carries and which is where a secret reference would appear. An unmounted path and a slug this run does not report are both `404` with a page that says which: a suspended pin is not deleted, but a document made from its stored text would hand over a finding the check is no longer making. The tree document: one immutable root snapshot becomes one canonical Markdown document: every non-OK leaf (`WARN`, `ERROR`, `MAINTENANCE`, `UNDEFINED`) plus only the ancestors needed to locate it, in snapshot order; the synthetic root and wholly healthy branches are omitted. Leaves carry a non-colour emoji cue, and so does a **reason line that declared a code of its own** ([ADR-0042](adr/0042-entries-carry-their-own-code.md)) — a healthy workflow under a failing node has to read as healthy in a pasted document too, and a line that declared none takes no cue because it carries its node's. A line whose subject is **running** says so in words: the page's italic is the glance, and a document has none. Authored check and maintenance explanations keep their Markdown, while node/per-reason maintenance also names who set it and its expiry. Every instant it writes — a pin's expiry here, and the whole node document's time facts — names its **UTC offset**: the pages render local time and stay silent about the zone, which is right for a screen somebody is standing in front of, and wrong for a document read in another office. The page renders the rich preview through the same hardened Markdown renderer as every other surface. **Copy Markdown** writes `text/plain`; **Copy Rich HTML** writes both `text/html` and the Markdown as `text/plain`, falling back honestly to plain/manual selection when clipboard access is unavailable — the buttons are one partial (`_copy_controls.html`) shared with the leaf detail page, so the pair is named and ordered the same in both places, and the label names the clipboard member rather than claiming RTF. An all-OK tree gets an empty state rather than an empty clipboard action. |
 | `/links` | GET | The **shared toolbox**: this deployment's curated links (§7, [ADR-0030](adr/0030-curated-links.md)), one flat level of groups flowed into columns, each entry a mark and a title in the configured order. Icons resolve through the search path; a name nothing defines falls through to the entry's own origin favicon and then to a neutral glyph. Structural problems in the file are shown on the page — the person who maintains it is the one looking. A **client-side filter** sits above the columns and narrows by entry and group title. The configuration is re-read only when it changed, so an edit needs no restart. Opening the page is also what **triggers a reachability pass** (§7) when the newest answer is older than the configured interval — on a daemon thread, so the render never waits on the network. |
 | `/links/check` | POST | **Check now**: probes the links page's targets and redirects back to it, the return path validated by `_safe_next`. Unlike an open this one **waits**, under a deadline, joining the pass already running rather than starting a second — whatever has not answered by then keeps its previous verdict and age while the pass finishes behind the response, and the page says a pass is still going. A forced pass has a minimum gap, which is the whole of the abuse story; open to every logged-in viewer, not only an admin, because whoever maintains the file is not necessarily one (§7, [ADR-0030](adr/0030-curated-links.md)). |
 | `/links/icon/<variant>/<name>` | GET | One resolved icon, for the background `variant` names (`on-light` / `on-dark`). Serves every rung of the search path that holds bytes — the deployment's own file, a registered pack's package data, the built-in pack — so the page has one URL shape for all of them; a **remote** icon is 404 here and is emitted as its own URL rather than proxied. The name is a registry key and never builds a path. Auth-gated, `private` cache with an ETag (§7, [ADR-0030](adr/0030-curated-links.md)). |
@@ -779,8 +909,13 @@ the `markdown` (block) and `markdown_inline` (one-line, no `<p>`) Jinja filters
 | `/favicon.ico` | GET | Redirect to the static favicon. |
 
 Jinja filters back the views: `status_slug` (a CSS class suffix per code),
-`status_alert` (a Bootstrap alert class), `shorten`, `duration`, `elapsed`
-(a run's wall time: `412 ms` / `3.1 s` / `43 s`; `—` for none), `localtime`
+`status_alert` (a Bootstrap alert class), `shorten`, `duration` (a *configured*
+interval in the units the config wrote it in: `15m`, `1h` — a name for
+`little_sister.spans.format_duration`, which the copy document calls too),
+`elapsed`
+(a *measured* span — a run's wall time, a countdown, an uptime — as
+`little_sister.spans.format_span` writes it: `412 ms` / `3.1 s` / `43 s` /
+`1m 55s` / `2h 7m` / `1d 3h`; `—` for none), `localtime`
 (renders a timestamp in the configured timezone, §7 — an optional argument
 overrides the format, never the timezone), `url_branch`,
 `markdown` / `markdown_inline` (server-side Markdown → safe HTML, §4.7), and
@@ -1074,7 +1209,9 @@ raises rather than rendering blank):
   keep looking live while a frozen `→ 22:30` stays true and recedes; a stalled
   check honestly shows a next update already gone by, and the stale badge beside
   it carries the alarm; a node's short `title` (ADR-0017) follows the name (ellipsed, `.node-title`) on
-  a card and the breadcrumb in the page header; and a branch view shows the viewed
+  a card and the breadcrumb in the page header — unless it only repeats that name,
+  which no surface draws, and where a surface draws it *instead of* the name it comes
+  with the name unless it carries a word (§4.5); and a branch view shows the viewed
   node's `about` under its heading. Admin **maintenance**
   ([ADR-0014](adr/0014-maintenance-persistence.md)) is surfaced so a pin the roll-up and
   depth hide is still findable: a maintenance-tinted **pill** joins the status strip (a
@@ -1108,7 +1245,7 @@ raises rather than rendering blank):
   neither control, and the overview root deliberately carries no form — silencing
   everything stays a curl, not a click.
   To keep the everyday grid balanced **without moving cards**
-  ([ADR-0024](adr/0024-dashboard-layout.md)), a card's **quiet leaves** (OK or idle) collapse
+  ([ADR-0056](adr/0056-stable-useful-dashboard-flow.md)), a card's **quiet leaves** (OK or idle) collapse
   to compact name+color **chips** — an all-green host converges toward a wrapping
   chip row instead of a stack of boxes — while a **warn/error** leaf keeps its full
   box and reason so a problem stays legible; chips flow inline, so a run of quiet
@@ -1117,8 +1254,47 @@ raises rather than rendering blank):
   title/about). In that same dense view a branch also **caps the quiet sub-branch
   boxes** it shows to a configurable budget (`branch_cap`), folding the surplus behind
   an in-place **"+N more"** (`static/js/branches.js` keeps the reveal open across the ~10s poll swap) so a deeply-nested card can't tower over the grid — a
-  warn/error box is never folded. Card heights are **bounded**: the reason caps from above, a
-  `min-height` floor from below. The engine's own **heartbeat** (`/little-sister`,
+  warn/error box is never folded. Card heights are **bounded**: the reason caps from
+  above, a `min-height` floor from below. When a responsive row has **spare
+  ordinary-width tracks**, roots spend only widths their tree can use. The server
+  builds a stable flow profile from the filtered, depth-limited topology and
+  configured `reason_cap`: every visible node is a potential reason host and scales
+  by `ceil(reason_cap / default budget)`, and the width model follows the
+  stylesheet's 330 px nested tracks, gaps and per-level insets — five constants a
+  structural test pins to `overview.css`. It never reads current status,
+  reason count/text, measured height or chip/box painting. Every span is priced at
+  the width it actually has at a given grid width, not at the track minimum, and a
+  span is useful only when it removes at least one modeled row per added outer
+  track — so a profile can skip a span that opens no nested column, and a linear
+  chain has no wider step. Within each source-order row the currently tallest root
+  with a fitting step wins (a row is as tall as its tallest card; height ties fall
+  to the better reduction per track); an unusable spare remains empty.
+  The fragment carries only `(tenths, tracks, plan)` breakpoints where the band
+  changes — the smallest grid width **in integer tenths of a pixel** at which the
+  band applies, the model's own unit, so a band is never late against a browser
+  that measures fractionally; `static/js/dashboard-layout.js` measures the grid's
+  width, compares it scaled by ten, sets the named track count explicitly and
+  selects the latest applicable band after first
+  paint, resize and each poll swap — an explicit count is what stops the width
+  where auto-fill adds a track (and snaps every track to its 330 px minimum) from
+  painting a taller page out of a wider viewport. A candidate count may not
+  stretch a track wider than auto-fill itself ever could (one track just short of
+  a second fitting, ~676 px), which forbids the page-wide banner a single enormous
+  card would otherwise win while keeping the moderate counts a dodge needs — and
+  the count a band already holds is exempt, so a widening viewport can never
+  disqualify the plan that is holding the page. An incumbent yields only to a
+  strictly better challenger, all-ones plans ride auto-fill unchanged, and the
+  finished layout is memoized on the depth-limited tree shape. Choosing the best
+  legal outer count is not the same as never growing taller: a card's own nested
+  auto-fit can re-chunk at a column flip that no outer choice can dodge, which is
+  the documented limit of the outer planner rather than a defect. `settings.yaml`
+  `dashboard_columns: plain` withholds the plan, leaving the plain auto-fill grid. A wider card grids a branch containing at least two direct full
+  boxes. Consecutive quiet chips share a full-row `leaf-chip-run`, preserving their
+  compact inline wrap while full boxes at the same mixed level can grid; a
+  single-child wrapper and every node/reason box remain intact. The original
+  auto-fill grid is the no-JavaScript fallback, and a narrow viewport resolves to one
+  track without horizontal overflow ([ADR-0056](adr/0056-stable-useful-dashboard-flow.md)). The engine's own
+  **heartbeat** (`/little-sister`,
   ADR-0005) is lifted out of the grid into a compact **status-strip pill** at the top
   (fit-content — a side note under the "updated …" line, not a page-wide
   banner); it renders inside the polled fragment, so it
@@ -1288,9 +1464,16 @@ decides where a deployment's action belongs
 
 - **`reason.actions`** — beside every rendered reason line, on the dashboard grid
   (`_status_grid.html`'s `reason_block`) and on the leaf detail page (`check.html`),
-  with `node`, the **unshortened** `reason`, its `index` and the `surface`
+  with `node`, the **unshortened** `reason`, the whole `line` (its slug, its own
+  code, its `running` flag and any pin), its `index` and the `surface`
   (`grid` / `check`). The place for an action about **one** finding, where a node's
-  reasons are individually addressable members.
+  reasons are individually addressable members. A provider receives **the names it
+  declares** — or all of them if it declares `**kwargs` — so a context that grows
+  never costs a filler written against an earlier one its chip
+  ([ADR-0034](adr/0034-template-slots-for-dependent-packages.md), amended). The
+  library's own **copy chip** fills this slot: a link to
+  `/copy/<path>?reason=<slug>`, on member lines only, since prose has one thing to
+  hand over and it is the node.
 - **`node.actions`** — on every node the grid draws as a **box**: a card head and each
   nested box under it, plus beside the status on a leaf's own page, with `node` and
   `surface`. Boxes and not only cards because a card is the *top* of a subtree and is
@@ -1497,12 +1680,16 @@ icon registry keeps its built-in pack. `/system` marks each filler *built-in* or
   roots, later winning; override the whole thing with a single file via
   `LITTLE_SISTER_CONFIG`)
   holds display/runtime options: `timezone` (default `Europe/Berlin`), `time_format`,
-  the dashboard budgets `reason_cap` (default 6), `branch_cap` (default 3) and `maintenance_cap` (default 5) — the reason-line, quiet-sub-branch and maintenance-pin caps ([ADR-0024](adr/0024-dashboard-layout.md)) — `maintenance_default_expiry` (default `7d`, the window applied when an admin
+  the dashboard budgets `reason_cap` (default 6), `branch_cap` (default 3) and `maintenance_cap` (default 5) — the reason-line, quiet-sub-branch and maintenance-pin caps ([ADR-0056](adr/0056-stable-useful-dashboard-flow.md)) — `maintenance_default_expiry` (default `7d`, the window applied when an admin
   gives no explicit duration or expiry — ADR-0014), `stacktrace` (default **true** — a failing
   check's trace on its node, §4.6), `card_status_line` (default `beside` — the
   compact one-line card head; `below` gives every card a standing status line
   under its title row, a calmer grid that spends vertical space for it, rendered
-  as a `data-ls-card-state` body attribute the stylesheet branches on; §6) and
+  as a `data-ls-card-state` body attribute the stylesheet branches on; §6),
+  `dashboard_columns` (default `flow` — large roots may spend a wide grid's
+  spare columns per the stable width-priced plan,
+  [ADR-0056](adr/0056-stable-useful-dashboard-flow.md); `plain` withholds the
+  plan and keeps every card at one ordinary track, the no-JavaScript grid) and
   the **failure retry** — `retry_interval` /
   `retry_attempts` (default off / 2; [ADR-0033](adr/0033-budgeted-failure-retry.md),
   §4.6), both overridable per check — loaded once into `config.py`'s `Config`
@@ -1569,7 +1756,8 @@ blocks a commit on any failure (enable per clone with
 
 Test suites: `test_status.py` (the `Status` model + ADR-0039 roll-up),
 `test_tree.py` (the tree, events, history, maintenance + its persistence),
-`test_copy_status.py` (the canonical incident-copy outline),
+`test_copy_status.py` (the canonical incident-copy documents — the tree's outline
+and one node's — and the zoned instants both write),
 `test_checks.py` (the http/file/command checks + loader), the SSH family —
 `test_ssh.py` (transport, connect/command/script), `test_host_metrics.py`,
 `test_qnap_metrics.py`, `test_macos_memory.py` and `test_metrics_scripts.py` (the
@@ -1587,7 +1775,9 @@ pass), `test_metadata.py` (the shared subnode-metadata helpers),
 failure retry of ADR-0033), `test_config_dir.py` (the configuration roots, aspect
 forms and the startup contract of ADR-0031), `test_values.py` (typed reads out of a
 decoded bag, ADR-0026), `test_render.py` (Markdown rendering and the
-reason-assembly helpers, ADR-0018), `test_links.py` and `test_link_probe.py` (the
+reason-assembly helpers, ADR-0018), `test_titles.py` (what the fold treats as the
+same string, and the two emphasis spellings it splits on), `test_paths.py` (which
+root a loaded-from path is drawn against, and what stays long), `test_links.py` and `test_link_probe.py` (the
 `links` aspect and its reachability pass, ADR-0030), `test_icons.py` (icon names,
 the pack registry and resolution),
 `test_web.py` (the routes via the Flask test client), `test_web_pins.py` (branch
@@ -1646,9 +1836,7 @@ is explicit. A tag promises to keep these stable:
   rather than a rewrite. That evolution has run: `little-sister-github`,
   `little-sister-wiz` and `little-sister-jira` register here from packages of their
   own (§2). Discovery *without* that import — an entry point — does not exist yet.
-  The developer how-to is [`implementing-checks.md`](implementing-checks.md), and
-  the procedure for giving a type its own repository is
-  [`plugin-repository.md`](plugin-repository.md).
+  The developer how-to is [`implementing-checks.md`](implementing-checks.md).
 - **Check-authoring surface** — the names a check type written *outside* this
   repository may import ([ADR-0049](adr/0049-the-check-authoring-surface.md)). A
   registered type is code the library does not own, and once it lives behind a tag of
@@ -1670,13 +1858,119 @@ is explicit. A tag promises to keep these stable:
       StatusCode  join_path
   little_sister.values
       flag  number  real  rows  text
+  little_sister.spans
+      coarse_span  format_duration  format_span
+  little_sister.transport
+      Deadline  DeadlineExceeded  Fault  RemoteError  ask
+  little_sister.fetch
+      Response  fault_for  fetch  retry_after
   ```
+
+  `little_sister.spans` is on the list because a check writes a duration into a
+  reason line — *"the backup took 2h 7m"* — and one that formatted its own would
+  drift from the page it renders onto. It is the writing half of a pair whose
+  reading half, `parse_duration`, is already promised above; the two sit in
+  different modules because one is config parsing and the other is display, and
+  the display half is used by the library's own templates through the `elapsed`
+  and `duration` filters, each a name for one of these functions and not a second
+  implementation. `format_duration` is the third rendering and answers the
+  question the other two do not — how a **configured** interval is written back,
+  in the units somebody typed it in (`900` is `15m`) — which is why the copy
+  document can state a check's frequency in the same words as the page.
+
+  `little_sister.transport` is on the list because a check that reads a remote service
+  has to answer four things before it can report anything — how long one request may
+  take, what bounds a run that asks fifty times, what is worth asking again, and what
+  a failure *means* — and nothing on this surface used to say a word about any of them,
+  so every such check answered all four for itself
+  ([ADR-0058](adr/0058-transport-policy-vocabulary.md)). It promises the **policy** and
+  no client: `Deadline` (whose `budget(timeout)` clamps a per-request timeout to what
+  the run has left, which is what makes `timeout:` a bound — the engine does not bound
+  `run()`, §4.6), `DeadlineExceeded` (outside `RemoteError` on purpose, so a per-item
+  handler cannot spell one run-level fact as forty item-level ones), `Fault`
+  (*transient* / *answered* / *malformed*, set by status and never by message text),
+  `RemoteError` (status plus fault, `fault` required with no default, meant to be
+  subclassed) and `ask` (one bounded retry whose backoff the deadline can veto). It has
+  **no I/O and no HTTP in it**, which is what lets a check whose transport is a vendor
+  SDK wear the same policy; and it deliberately promises **no** mapping from a `Fault`
+  to a `StatusCode`, because for an `http` check the endpoint *is* the subject of the
+  measurement while for a check reading an API to grade something else it is the
+  *instrument*.
+
+  `little_sister.fetch` is the request itself, and it is on the list because the
+  vocabulary above is deliberately transport-free: something still has to open the
+  socket, and four call sites answering the same HTTP questions differently is what
+  this pair replaced. `fetch(url, *, timeout, follow_redirects, …)` makes **one**
+  request and returns a `Response` — a fact, for **every** status, `500` included.
+  A failure that never reached a status raises instead — a `RemoteError` with
+  `Fault.TRANSIENT` and the originating exception attached as `__cause__` — and so
+  does a body over the size cap, below. A caller
+  that wants this project's reading of a status it considers a failure asks
+  `fault_for(status)`: a 5xx is transient, anything else is answered.
+
+  Five things that used to differ per call site are settled there, and each is a
+  promise a dependent may rely on:
+
+  - **`timeout` and `follow_redirects` are required.** A request with no timeout is
+    the defect this project keeps rediscovering; a redirect policy assumed rather than
+    chosen is the one above it — following silently is how a login wall answering `200`
+    at the end of a chain reads as health, and refusing to follow is how a `301` reads
+    as *alive and moved*. Both are right somewhere, so neither is the default.
+  - **One `User-Agent`**, `little-sister/<version>`, because the default
+    `Python-urllib` is the string an outbound filter is most likely to answer with a
+    `403` nobody can interpret. A caller-supplied header wins, which is how a
+    subsystem adds which part of the process is knocking.
+  - **Proxies and TLS trust are the environment's**: a default opener otherwise, so
+    `http_proxy` / `https_proxy` and the system trust store apply (`SSL_CERT_FILE` /
+    `SSL_CERT_DIR` for an internal CA). There is deliberately **no way to switch
+    certificate verification off**.
+  - **A body is read in bounded chunks**, against `max_bytes` (16 MiB by default) and,
+    when a `deadline` is given, against the run's clock. Over the cap is
+    `Fault.MALFORMED` — it arrived and cannot be used.
+  - **A `deadline` clamps the socket timeout** to what the run has left, and a caller
+    with a spent budget gets `DeadlineExceeded` instead of a request issued with a
+    non-blocking socket.
+
+  - **A service that answers *not now* is read, not guessed at.** `retry_after(headers)`
+    returns the seconds the standard `Retry-After` header asks for — both forms RFC 9110
+    allows, delta-seconds and an HTTP-date, with a past date reading as `0.0` and an
+    unreadable value as `None`. What to *do* with the number is the caller's:
+    `RemoteError` carries it as `retry_after`, and `ask` spends it in place of its own
+    backoff **only** while the deadline affords it. Deliberately no `Fault` member for a
+    throttle — a throttle is already `TRANSIENT`, and no status identifies one, since a
+    service may answer `403` or `429` for it while a bare `403` may equally mean *not
+    visible to this credential*. Only a caller that speaks the service's dialect can
+    classify it, and a vendor's own reset header is that dialect, not this.
+
+  That last pair is what bounds a **dribbling server**, which `urlopen(timeout=…)` never
+  could: its timeout bounds one socket operation, so a byte every four seconds arrives
+  forever. The clock is read between chunks, with **`read1`** rather than `read` — a
+  `read(n)` blocks until it has all *n* bytes, so the first call would not return until
+  the trickle finished and the clock would be consulted only after the overrun it was
+  there to prevent. That is not a detail: it is the difference between the bound working
+  and merely being described (ADR-0058, amended 2026-08-16).
+
+  Three limits of it, stated rather than implied. The clock bites **only when a deadline
+  is given**. A caller passing `read_body=False` has no body read to bound, so a deadline
+  buys it nothing — which is why **neither built-in caller passes one**: the `http` check
+  makes a single request and reads no body, and the link prober bounds a hung probe by
+  abandoning the pass. And the clock does not reach the **status line and headers**, which
+  urllib reads inside its own opener before this module is handed a stream; a server
+  trickling *those* is bounded only by the socket timeout per read, which is the residual
+  for every caller.
 
   The subnode-metadata helpers are on that first list rather than under
   `checks.metadata` for exactly the reason above — the module they live in is not the
   promise. `join_path` is there because a **branch** check's `owned_nodes` override
   has to build absolute child paths, and hand-assembling them would make every plugin
   re-derive [ADR-0016](adr/0016-node-addressing.md)'s normalization by guesswork.
+
+  What the surface promises is **names**, not a frozen constructor signature. The
+  **common config fields grow** (`order` joined them with
+  [ADR-0055](adr/0055-sibling-order.md)), and each becomes a keyword argument
+  `from_config` passes on — so a check type must take `**kwargs` and forward them to
+  `super().__init__()`. One that spells the fields out stops binding when a field is
+  added, and is told so by a `CheckError` naming the file, the type and the keyword.
 
   **This surface is versioned as an epoch of its own** — `API_VERSION`, currently
   **1**. It bumps when a name above is removed or renamed, or a documented behavior
@@ -1698,14 +1992,17 @@ is explicit. A tag promises to keep these stable:
   registering package once — a check type is only one of four seams a package can
   arrive through (a slot filler, an asset, a configuration aspect are the others),
   and the release that answers for it belongs to the installation rather than to
-  the seam. `origins.py` is the single lookup both read.
+  the seam. `origins.py` is the single lookup both read, and `paths.py` the single
+  rule both print a loaded-from path through (§5.1).
 
   What each name *does* is documented where it is designed — `CheckResult`'s fields
   and `Check`'s keyword-only common fields in §4.5 and
   [`implementing-checks.md`](implementing-checks.md), the slug vocabulary in
   [ADR-0036](adr/0036-addressable-reasons.md) /
   [ADR-0050](adr/0050-slugs-from-provider-identifiers.md), the typed readers in
-  [ADR-0026](adr/0026-reading-values-from-decoded-bags.md) — and that documented
+  [ADR-0026](adr/0026-reading-values-from-decoded-bags.md), the transport policy and
+  the request that wears it in
+  [ADR-0058](adr/0058-transport-policy-vocabulary.md) — and that documented
   behavior travels with the name. Adding a name is compatible; removing or renaming
   one is a version bump and a new ADR, the slot rule above for the same reason.
   Deliberately **not** on the list: the engine, the tree, `app`, the templates, and
@@ -1723,17 +2020,29 @@ is explicit. A tag promises to keep these stable:
   importing `little_sister.app` (the same import-before-app slot as everything else
   here) keeps its handlers *and its level*, and little-sister's own records arrive
   there too; one that sets up none gets the default: the console (stderr) plus a log
-  file, whose path is `LOG_FILE` or `var/little-sister.log`. A plugin imports nothing
+  file, whose path is `LOG_FILE` or `var/little-sister.log`, at the level `LOG_LEVEL`
+  names or **INFO**. Both variables belong to that default and are consulted nowhere
+  else — against an application that configured its own logging, `LOG_LEVEL` does
+  nothing, because the level is then that application's to choose. An unrecognized
+  name falls back to INFO and says so in the log it just opened. A plugin imports
+  nothing
   from here — it calls `logging.getLogger(__name__)` like any Python library. The
   module and its
   `logger` object are **not** contract — what is promised is that the records reach
   whoever owns the root logger, which is the whole of what a dependent package needs.
   `tests/test_logger.py` holds it, because a library that quietly reconfigures
   logging is only noticed when somebody's log file is empty.
+  - **INFO rather than DEBUG, because nothing here logs below it.** A DEBUG root
+    collects no line the library writes and every line its dependencies write — the
+    caps on `httpx` and `markdown_it` are two such dependencies noticed one at a
+    time, and a deployment carrying an AWS check type was two thirds `botocore`
+    request detail. A deployment that wants that detail asks for it with
+    `LOG_LEVEL=DEBUG`; one that wants a *dependency* quiet caps that dependency's
+    own logger by name, which adds no handler and so leaves this default intact.
 - **Secret references** — `little_sister.secrets`: `resolve(reference)` /
   `register_resolver(scheme, resolver)` / `resolve_setting(value)` (an app setting
-  whose value may be a reference), the reference syntax itself (a bare env-var
-  name, or `scheme://address`), and `Check.resolve_secret` (resolve at construction,
+  whose value may be a reference), the reference syntax itself (`scheme://address`,
+  with no bare-name form), and `Check.resolve_secret` (resolve at construction,
   pin on failure — [ADR-0023](adr/0023-secret-references.md)). A deployment registers
   its resolvers in the same import-before-app slot as its check types.
 - **Environment contract** — how a deployment points the library at its own config

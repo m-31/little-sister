@@ -160,5 +160,8 @@ idle="$(printf '%s\n' "${cpu_line}" | sed -n 's/.*, \([0-9.]*\)% idle.*/\1/p')"
 [ -n "${idle}" ] && awk -v idle="${idle}" 'BEGIN{ printf "cpu_pct=%.0f\n", 100-idle }'
 
 # load average: "{ 1.20 1.10 1.05 }"
+# Splitting is the point: the value is `{ 1.20 1.10 1.05 }` and the braces and
+# numbers are wanted as separate positional parameters.
+# shellcheck disable=SC2046
 set -- $(sysctl -n vm.loadavg 2>/dev/null)
 [ -n "${2:-}" ] && { echo "load1=$2"; echo "load5=$3"; echo "load15=$4"; }

@@ -1,0 +1,33 @@
+# Live-demo check (Mode 2) — see tests/demo_check.py and docs/testing-the-gui.md.
+# The demo's **declared sibling rank** node (ADR-0055), and the shape a cloud-posture
+# plugin publishes: five severity bands as children, each declaring its `order`, so
+# the chips read critical / high / medium / low / informational instead of the
+# alphabetical order that files `informational` third and `low` before `medium`.
+#
+# The same card is where the title rule is visible: every band's title is its own
+# name capitalized — what a check hands back when it has nothing better to say — so
+# no chip reads `critical Critical`. This root's title *does* show, because
+# "Cloud posture" says something the node name does not.
+#
+# The counts turn over five phases, so the roll-up climbs green → amber → red and
+# clears while the order of the chips never moves. That is the property a declared
+# rank has and a sort by live grade would not: watch the colors travel along a row
+# that stays put.
+#
+# The `order:` below is the **third** source ADR-0055 defines, and the one that is
+# easiest to miss: a rank stated inline, beside the `title:` and `about:` this file
+# already writes for the same node. It is negative, so this card leads `/security`
+# ahead of the alphabetically-earlier `audit`. Delete it and the two go back to
+# `audit`, `wiz` — a positive number would not have shown anything, because `audit`
+# is unranked and an unranked node sits at 0.
+type: demo
+path: /security/wiz
+order: -1
+title: Cloud posture
+about: |
+  A cloud-posture scanner reporting into **severity bands** (a *synthetic* demo
+  node). Each band is a child node whose findings are its own; the band's name is
+  its severity, so `informational` never alarms however many lines it carries.
+scenario: severity
+frequency: 5s
+period: 100s

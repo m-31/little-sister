@@ -29,8 +29,8 @@ from little_sister.checks.base import (
     register,
 )
 from little_sister.checks.ssh.base import SshScriptCheck, parse_descriptions
+from little_sister.checks.ssh.connection import RemoteResult
 from little_sister.checks.ssh.metrics import grade, oneline, parse_metrics, unavailable
-from little_sister.checks.ssh.transport import RemoteResult
 from little_sister.status import StatusCode, join_path
 
 DEFAULT_SCRIPT = "qnap-health.sh"

@@ -43,6 +43,11 @@
     <script src="{{ url_for('static', filename='js/poll.js') }}"
             data-target="status-grid"></script>
 
+    {# Topology-weighted card spans (ADR-0024 update): the server sends stable
+       plans; this measures the responsive grid and reapplies the matching one
+       after initial render, a resize or the poll's fragment swap. #}
+    <script src="{{ url_for('static', filename='js/dashboard-layout.js') }}"></script>
+
     {# Reason overflow (ADR-0024): clamps each card's reason block to its line
        budget with an in-place header chevron (▼/▲) that survives the ~10s fragment swap
        (event-delegated on #status-grid, the ADR-0019 pattern). #}

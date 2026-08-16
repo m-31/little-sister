@@ -10,7 +10,7 @@
                 <div class="text-muted small">Started</div>
                 <div>{{ info.started_at | localtime }}</div>
                 <div class="text-muted small mt-2">Uptime</div>
-                <div>{{ (info.uptime_seconds | round | int) }}s</div>
+                <div>{{ info.uptime_seconds | elapsed }}</div>
             </div></div>
         </div>
         <div class="col-auto">
@@ -27,7 +27,10 @@
 
     {# The three schedule columns share one shape: a time of day (the
        configured timezone; the Started card anchors the date) plus a
-       muted interval. #}
+       muted interval. Every interval on this page goes through `elapsed`
+       (`little_sister.spans.format_span`) rather than being formatted where it
+       is shown — which is how a quarter-hour wait came to read `in 812s` beside
+       a two-minute run reading `115 s`. #}
     <table class="table table-sm align-middle">
         <thead>
             <tr><th>Check</th><th>Type</th><th>Frequency</th><th>Running</th><th>Next run</th><th>Last run</th></tr>
@@ -48,7 +51,7 @@
                     </td>
                     <td>
                         {{ c.next_run_at | localtime("%H:%M:%S") }}
-                        <span class="text-muted">· in {{ (c.next_in_seconds | round | int) }}s{% if c.retrying %} · retry {{ c.retry_attempt }}/{{ c.retry_attempts }}{% endif %}</span>
+                        <span class="text-muted">· in {{ c.next_in_seconds | elapsed }}{% if c.retrying %} · retry {{ c.retry_attempt }}/{{ c.retry_attempts }}{% endif %}</span>
                     </td>
                     <td>
                         {% if c.last_run_at %}

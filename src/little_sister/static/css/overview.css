@@ -346,7 +346,7 @@ body[data-ls-layout="topbar"] .ls-rail { display: none; }
 
 .status-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 330px), 1fr));
     gap: 1rem;
     align-items: start;
 }
@@ -1295,12 +1295,35 @@ body[data-ls-card-state="below"] .status-card__state {
     margin-top: 6px;
 }
 
+/* Stable-flow card spans (ADR-0056). A wide root spends useful span steps
+   only where the depth-aware server model predicts another nested column. Two or
+   more direct full boxes establish that grid here; a sole structural wrapper stays
+   full-width until its first branch point. A node box remains one intact grid item,
+   so neither it nor its reason block can split between columns. The top-level
+   auto-fill rule remains the readable no-JS fallback. */
+.status-card .node-children:has(> .status-node:nth-of-type(2)) {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 330px), 1fr));
+    gap: 0.4rem;
+    align-items: start;
+}
+.status-card .node-children:has(> .status-node:nth-of-type(2)) > .status-node {
+    margin-bottom: 0;
+}
+.status-card .node-children:has(> .status-node:nth-of-type(2)) > .leaf-chip-run,
+.status-card .node-children:has(> .status-node:nth-of-type(2)) > .branch-more {
+    grid-column: 1 / -1;
+}
+
 /* Leaf density (ADR-0024): a card's quiet (not warn/error) descendant leaves render
    as compact name+color chips instead of stacked boxes, so an all-green host
-   converges toward a wrapping chip row and holds a steadier height. A chip flows
-   inline; a problem leaf or a branch stays a full-width box that breaks the line,
-   so alphabetical sibling order survives the mix. A chip's reason (if any) is one
-   click away on its leaf page — the hover card still shows title/about. */
+   converges toward a wrapping chip row and holds a steadier height. Consecutive
+   chips share a full-row wrapper, which preserves compact inline flow while letting
+   full boxes at the same mixed level use the nested grid. A chip's reason (if any)
+   is one click away on its leaf page — the hover card still shows title/about. */
+.leaf-chip-run {
+    display: block;
+}
 .leaf-chip {
     display: inline-flex;
     align-items: baseline;
@@ -2312,3 +2335,14 @@ body[data-bs-theme="dark"] .ls-links__icon--dark { display: block; }
    The line breaks between items are the template's; this only stops the wrap
    inside one. */
 .ls-system__register { white-space: nowrap; }
+
+/* /system's check-type roster: the "used by N checks" count opens into the node
+   paths that produced it. No bullets — every line is already a path, and the
+   marker would compete with the disclosure's own triangle — and the indent is
+   that triangle's width, so the paths hang under the summary's text rather than
+   under the control. */
+.ls-system__checks {
+    list-style: none;
+    padding-left: 1.1rem;
+    margin-top: 0.25rem;
+}

@@ -7,10 +7,17 @@
 # "$(dirname "$0")"` first). It defines the bind target, the way we recognize
 # our own gunicorn, and the graceful-stop routine -- so start and stop always
 # agree on what "our process" means and never touch an unrelated service.
+#
+# **This file is byte-identical in every installation** — the library and both
+# deployments — and is compared on every commit (little-sister `release/family.toml`).
+# What is true of one installation and not the others is in `instance.sh` beside it,
+# which is the only one of these scripts that differs.
+
+# shellcheck source=instance.sh
+. ./instance.sh
 
 HOST="${LITTLE_SISTER_HOST:-0.0.0.0}"
 PORT="${LITTLE_SISTER_PORT:-8000}"
-APP="little_sister.app:app"
 LOG="var/gunicorn.log"
 PID_FILE="var/gunicorn.pid"
 STOP_TIMEOUT="${STOP_TIMEOUT:-50}"   # graceful-stop wait, in 0.2s steps (~10s)
@@ -21,16 +28,16 @@ require() {
 }
 
 # Resolve the user-list document exactly as the built-in `users` aspect does
-# (ADR-0031/0045). LITTLE_SISTER_CONFIG_DIR is a path-list: the first root declaring
+# (little-sister ADR-0031/0045). LITTLE_SISTER_CONFIG_DIR is a path-list: the first root declaring
 # the aspect wins, and that aspect may be a flat users.yaml/users.yml file or a
 # users/ directory containing exactly one users.yaml/users.yml document. One rule,
 # the same one the library applies — a deployment pinning one exact file names a
 # root that carries only that file, first.
 resolve_users_document() {
-  # The retired override (ADR-0046). Refused, not ignored, and refused here so
-  # ./start.sh stops before it forks a worker onto a different user list.
+  # The retired override (little-sister ADR-0046). Refused, not ignored, and refused
+  # here so ./start.sh stops before it forks a worker onto a different user list.
   if [ -n "${LITTLE_SISTER_USERS:-}" ]; then
-    echo "ERROR: LITTLE_SISTER_USERS is set, but it is no longer read (ADR-0046) — move that file into a configuration root, name the root first in LITTLE_SISTER_CONFIG_DIR, then unset it." >&2
+    echo "ERROR: LITTLE_SISTER_USERS is set, but it is no longer read (little-sister ADR-0046) — move that file into a configuration root, name the root first in LITTLE_SISTER_CONFIG_DIR, then unset it." >&2
     return 1
   fi
 
@@ -158,7 +165,7 @@ cmd_of() { ps -p "$1" -o command= 2>/dev/null || true; }
 # Is this PID one of *our* gunicorn processes, as opposed to some unrelated
 # service that merely happens to sit on the same port? We match the gunicorn
 # invocation together with our app target, which also survives gunicorn's
-# "gunicorn: master [little_sister.app:app]" process-title rewrite.
+# "gunicorn: master [$APP]" process-title rewrite.
 is_ours() {
   case "$(cmd_of "$1")" in
     *gunicorn*"$APP"*) return 0 ;;

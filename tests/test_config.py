@@ -116,6 +116,25 @@ class ConfigTests(TestCase):
         self.assertEqual(cfg.card_status_line, "beside")
         self.assertTrue(any("card_status_line" in line for line in logs.output))
 
+    def test_dashboard_columns_defaults_flow(self):
+        cfg = load_config(Path(tempfile.gettempdir()) / "ls-no-such-config.yaml")
+        self.assertEqual(cfg.dashboard_columns, "flow")
+
+    def test_dashboard_columns_reads_plain(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.yaml"
+            path.write_text("dashboard_columns: plain\n")
+            self.assertEqual(load_config(path).dashboard_columns, "plain")
+
+    def test_dashboard_columns_junk_falls_back_with_a_warning(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.yaml"
+            path.write_text("dashboard_columns: masonry\n")
+            with self.assertLogs("little_sister", level="WARNING") as logs:
+                cfg = load_config(path)
+        self.assertEqual(cfg.dashboard_columns, "flow")
+        self.assertTrue(any("dashboard_columns" in line for line in logs.output))
+
 
 class SettingsLayeringTests(TestCase):
     """The `settings` aspect layers across configuration roots (ADR-0031):

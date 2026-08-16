@@ -45,7 +45,7 @@ answer was *amber, saying so*.
    standing rule any discovery-shaped check satisfies.
 2. **Zero scope is a `WARN` on the check's own node**, with a reason naming the
    filter that produced it — *no repositories in scope (org acme, team platform,
-   prefix "quality-")*. `WARN` and not `ERROR`, following the heartbeat precedent:
+   prefix "testing-")*. `WARN` and not `ERROR`, following the heartbeat precedent:
    the check is working; what is wrong is the world or the configuration. A branch
    check declares its container's code, so this is expressible without touching the
    derived-entries rule ([ADR-0042](0042-entries-carry-their-own-code.md) applies to
@@ -53,8 +53,13 @@ answer was *amber, saying so*.
 3. **The scope itself is information and goes where information goes:** the *count*
    rides as an `OK` reason on the container — no new mechanism — and the *roster*
    belongs in the node's `report` ([ADR-0044](0044-run-facts-on-the-node.md)),
-   where forty names cost nothing. The roster is presence; an entry is a claim — a
-   subject only acquires an entry when something is wrong *about* it.
+   where forty names cost nothing. The roster is presence; an entry is a **claim**.
+   Which subjects get one is the check's own choice, and a **habit rather than a
+   rule**: `github`'s aspects tend to report only what is worth acting on (its
+   `actions` aspect carries a `show_healthy` switch for the opposite, and always
+   reports a run in flight), while `github-rate-limit` reports every budget it
+   watches, healthy ones included. The invariant above is what stops either habit
+   from letting an unwatched scope read as a clean one.
 4. **The expectation is the check's business, and zero is its degenerate case.** A
    deployment that knows the team has thirty repositories sets the check's own
    `expect_min` (e.g. `expect_min_repos: 20`) and the check reports `WARN` below
@@ -73,6 +78,23 @@ answer was *amber, saying so*.
    [ADR-0005](0005-dashboard-freshness-and-self-monitoring.md)), so core provides
    nothing for it; a check that wants it carries its own expectation, exactly like
    `expect_min`. Recorded here so the next job-shaped check does not re-ask.
+7. **A reason is a virtual child; what it is about is a subject.** Each line a
+   discovery-shaped check hands over is a **virtual child** of its node
+   ([ADR-0036](0036-addressable-reasons.md) decision 7): it has an identifier, a pin
+   of its own, and a code of its own where the check declared one
+   ([ADR-0042](0042-entries-carry-their-own-code.md)). What a line is *about* — a
+   repository, a workflow, an API budget — is its **subject**, and several lines
+   commonly share one: a repository with a failed build and a run awaiting approval
+   is one subject with two lines. A subject may be **read** as the worst of its
+   lines, and it stores nothing; what that reading has to respect to leave a node's
+   code unchanged is fold arithmetic, and belongs to the model rather than here —
+   [`../architecture.md`](../architecture.md) §4.3 states it once. The distinction
+   earns its keep in one place: **a pin holds an identifier, and only a reason has
+   one** — so maintenance is per line, and a subject is something to read rather than
+   something to act on. Naming one well is
+   [ADR-0050](0050-slugs-from-provider-identifiers.md)'s business: a slug is built
+   from identifiers the provider minted rather than from rendered text, which is why
+   a rename at the provider re-keys a subject's lines.
 
 ## Consequences
 
@@ -97,4 +119,7 @@ answer was *amber, saying so*.
 - **A node per discovered subject** — rejected: forty repositories times seven
   aspects is a tree nobody reads. Per-subject *identity* already exists in the
   entry slugs; what was missing was per-subject **presence**, which the roster
-  gives without paths, histories and pins per subject.
+  gives without paths, histories and pins per subject. What that leaves is decision
+  7's reading: a subject is a **grouping of the lines about it** — readable as the
+  worst of them, and owning none of the three things this alternative would have had
+  to buy for it.

@@ -1,0 +1,9 @@
+{#- The built-in copy chip (copy_action.py), rendered through the slot seam like
+    any other filler — so it lands in the same rail, wearing the same chip, as a
+    deployment's own.
+
+    A plain link, and deliberately not a new tab: unlike a ticket tracker this
+    target is little-sister's own page, and an operator who copied a line goes
+    back to the node they came from. The provider computed the href, percent
+    encoding and all; this only places it. -#}
+<a class="{{ chip }}" href="{{ href }}" title="Copy this line">Copy</a>

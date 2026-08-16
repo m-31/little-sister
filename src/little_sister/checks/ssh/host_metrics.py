@@ -29,6 +29,7 @@ from little_sister.checks.base import (
 )
 from little_sister.checks.metadata import parse_subnodes, resolve_text
 from little_sister.checks.ssh.base import SshScriptCheck, parse_descriptions
+from little_sister.checks.ssh.connection import RemoteResult
 from little_sister.checks.ssh.metrics import (
     grade,
     human_duration,
@@ -38,7 +39,6 @@ from little_sister.checks.ssh.metrics import (
     unavailable,
     volume_name,
 )
-from little_sister.checks.ssh.transport import RemoteResult
 from little_sister.status import StatusCode, join_path
 
 SSH_NODE_DESCRIPTION = "SSH connection used to collect the metrics"

@@ -146,6 +146,11 @@ class StatusSnapshot:
     report: str = ""
     about: str = ""
     title: str = ""
+    #: The declared sibling rank this node was sorted by (ADR-0055), ``0`` where
+    #: nobody declared one. Carried so a surface can *see* the order it was handed
+    #: rather than infer it; the JSON envelope does not emit it yet — that field
+    #: rides the client contract round with the others held back for it.
+    order: int = 0
     maintenance: bool = False
     maintenance_entry: MaintenanceEntry | None = None
     stale: bool = False
@@ -258,7 +263,8 @@ class StatusTree:
                config: str | None = None,
                report: str | None = None,
                about: str | None = None,
-               title: str | None = None) -> bool:
+               title: str | None = None,
+               order: int | None = None) -> bool:
         """Create-or-update the node at ``path`` and record a transition event if
         its own code changed. ``description`` / ``frequency_seconds`` / ``config``
         / ``report`` (inherited from the check) are stored when given — ``config``
@@ -286,6 +292,14 @@ class StatusTree:
         so it always wins; and once a label is filled it stays put (a later tick
         never rewrites it). Metadata, so no event either.
 
+        ``order`` is the check's declared sibling rank (ADR-0055) and fills the
+        same way — an **unset** field only, so ``set_order``'s startup seed from
+        the configuration wins and a later tick never rewrites it. "Unset" here is
+        ``None`` rather than a falsy value, which is the whole reason the node's
+        field is nullable: ``0`` is a rank a configuration may state on purpose,
+        and a deployment overruling what a check declared must be able to name the
+        default value like any other.
+
         A node under **maintenance** is written like any other: the pin is a
         contribution rule evaluated in the snapshot (ADR-0032 rule 3), not a value
         stamped into the tree, so the check keeps reporting and the tree keeps
@@ -305,6 +319,8 @@ class StatusTree:
                 node.about = about
             if title and not node.title:
                 node.title = title
+            if order is not None and node.order is None:
+                node.order = order
             old = node.code
             node.update(code, reason, members)
             if node.code == old:
@@ -324,6 +340,25 @@ class StatusTree:
         :meth:`set_about`, metadata only, no event. Thread-safe."""
         with self._lock:
             self._ensure_node(path).title = title
+
+    def set_order(self, path: str, order: int) -> None:
+        """Seed a node's declared sibling rank (ADR-0055) — like
+        :meth:`set_about`, metadata only, no event.
+
+        This is the **configured** half (``nodes.yaml``, or an inline ``order:`` on
+        the check), run at startup before the first tick, so it beats whatever the
+        check's result declares. ``0`` is a **real** declaration here and not a
+        no-op: it is the only way a deployment can overrule a rank a check set by
+        naming the default value.
+
+        What it does *not* do is put that one node back where the alphabet would
+        have it. ``0`` is the rank the unranked carry, so a node seeded with it
+        sorts ahead of every positively-ranked sibling: in a set the check ranked
+        ``1..5``, zeroing one child moves it to the **front**. Restoring plain
+        alphabetical order across a ranked set means seeding ``0`` on **every**
+        sibling. Thread-safe."""
+        with self._lock:
+            self._ensure_node(path).order = order
 
     def set_check_mount(self, path: str) -> None:
         """Register ``path`` as a **check mount** — the node a check writes its
@@ -772,12 +807,14 @@ class StatusTree:
         Nothing derived is stored on the nodes, so a topology change can never
         leave a stale roll-up behind.
         """
-        # Siblings render in natural, case-insensitive name order at every level —
-        # deterministic, independent of check/discovery order (decisions.md). The
-        # live tree keeps insertion order; only the snapshot is sorted.
+        # Siblings render by `(declared rank, natural case-insensitive name)` at
+        # every level — deterministic and independent of check/discovery order
+        # (ADR-0055). Nobody declaring a rank is the common case and leaves pure
+        # alphabetical, exactly as before; the live tree keeps insertion order and
+        # only the snapshot is sorted.
         results = tuple(
             self._snapshot_subtree(child, now)
-            for child in sorted(node.get_children(), key=lambda c: _sort_key(c.name))
+            for child in sorted(node.get_children(), key=_sibling_key)
         )
         children = tuple(result[0] for result in results)
         # Count the *checks* below (per mount path — the ADR-0044 amendment of
@@ -842,7 +879,7 @@ class StatusTree:
             description=node.description, frequency_seconds=node.frequency_seconds,
             config="" if shared else node.config,
             report="" if shared else node.report,
-            about=node.about, title=node.title,
+            about=node.about, title=node.title, order=node.order or 0,
             maintenance=node.maintenance,
             maintenance_entry=self._maintenance.get(node.path), stale=stale,
             age_seconds=age, children=children,
@@ -904,8 +941,21 @@ def _sort_key(name: str) -> str:
     """Natural, case-insensitive ordering key for a sibling node's name: each digit
     run is zero-padded so numbers compare numerically (``node2`` before ``node10``,
     not after), and the rest is lower-cased. Used to order children in the
-    snapshot (decisions.md)."""
+    snapshot (ADR-0055)."""
     return re.sub(r"\d+", lambda m: m.group().zfill(12), name.lower())
+
+
+def _sibling_key(node: Status) -> tuple[int, str]:
+    """Where a node sorts among its siblings: its **declared rank** first, then the
+    natural name order (ADR-0055).
+
+    An undeclared rank reads ``0`` — the same value a check that says nothing
+    hands over — so a set of siblings nobody ranked interleaves by name precisely
+    as it did before ranks existed, and one ranked node only moves relative to
+    that baseline. The rank says what a node is *about* (the severity it collects),
+    never what status it happens to carry this minute; ordering by the live grade
+    stays rejected, because a row that re-sorts on every poll cannot be read."""
+    return (node.order or 0, _sort_key(node.name))
 
 
 def _child_by_name(node: Status, name: str) -> Status | None:

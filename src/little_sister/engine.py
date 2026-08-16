@@ -100,15 +100,22 @@ class _Scheduled:
     running: bool = False
     # One-time schedule offset (see _stagger), spent at the first re-arm.
     stagger: float = 0.0
-    # The budgeted failure retry (ADR-0033), resolved per check at engine
-    # construction: the fast interval (0 = off) and the per-episode budget.
-    # `retry_used` counts the fast attempts of the current failure episode
-    # (an OK result re-arms it); `retrying` marks that the currently armed
+    # The budgeted failure retry (ADR-0033, amended by ADR-0060), resolved per
+    # check at engine construction: the fast interval (0 = off) and the
+    # per-episode budget. `retry_used` counts the fast attempts of the current
+    # episode and `last_code` is what ends one — **any** change of the stored
+    # code, not only an OK, because a check whose ordinary state is non-OK would
+    # otherwise spend its budget once and never get it back. It starts at
+    # `UNDEFINED` because that is the code a node carries before its first run —
+    # nothing observable turns on the choice, since a first reading either matches
+    # it or is news, but any other value would be a lie to whoever reads it in a
+    # debugger. `retrying` marks that the currently armed
     # slot is a retry slot, for the system page. In-memory only — a restart
     # forgets an episode, like the rest of the schedule.
     retry_interval_seconds: int = 0
     retry_attempts: int = 0
     retry_used: int = 0
+    last_code: StatusCode = StatusCode.UNDEFINED
     retrying: bool = False
     # The in-flight run: its wall-clock start and the monotonic mate, set when
     # execution begins (queue wait excluded), cleared when it finishes.
@@ -388,14 +395,32 @@ class Engine:
                     result.stored_code.name, elapsed_ms, detail)
         # A faster second look on failure (ADR-0033): a non-OK completion pulls
         # the armed slot earlier — never later — to the retry interval, at most
-        # `retry_attempts` times per failure episode; an OK ends the episode
-        # and re-arms the budget. A secret-pinned check (`ran` False) is
-        # excluded: it is pinned until restart (ADR-0023), so a fast retry
+        # `retry_attempts` times per episode. A secret-pinned check (`ran` False)
+        # is excluded: it is pinned until restart (ADR-0023), so a fast retry
         # would burn the pool confirming a result that cannot change.
+        #
+        # **An episode ends on any change of the reading** (ADR-0060 decision 4),
+        # not only on an OK as ADR-0033 first had it. That record assumed a non-OK
+        # check was a failing one; ADR-0042 then made a node's code derive from its
+        # lines, so a check can sit at WARN for weeks as its ordinary state — and
+        # under the old rule it spent its retries in the first few cycles and had
+        # none left on the day its reading actually changed. Confirmation is worth
+        # paying for when there is news, which is what a change is.
+        #
+        # **A completed UNDEFINED arms nothing.** A line that makes no claim is not
+        # a failure to confirm, and the case that reaches here is structural — a
+        # resource the provider gives no budget for — where asking again in ten
+        # seconds cannot change the answer.
         if ran and item.retry_interval_seconds > 0 and item.retry_attempts > 0:
             with self._lock:
-                if result.stored_code is StatusCode.OK:
+                # not `code`: that name is the Markdown fence helper in this
+                # module, and shadowing it here breaks the traceback branch above.
+                stored = result.stored_code
+                if stored is not item.last_code:
                     item.retry_used = 0
+                    item.last_code = stored
+                if stored is StatusCode.OK or stored is StatusCode.UNDEFINED:
+                    pass
                 elif item.retry_used < item.retry_attempts:
                     pulled = self._clock() + item.retry_interval_seconds
                     if pulled < item.next_due:
@@ -448,11 +473,19 @@ class Engine:
         sources (``nodes.yaml`` / the inline check), so its result labels are
         ignored like its ``name``; each child's fill an empty node field only, so a
         ``nodes.yaml`` override still wins.
+
+        ``order`` (ADR-0055) fills an unset field the same way but is read on the
+        **root too**, deliberately unlike the labels: a rank is not identity, and
+        the reason the labels are root-ignored — the root has its own inline source
+        in the check's YAML — does not hold for a rank, which has none. Zero is
+        passed as ``None`` because ``0`` *is* what a check declaring nothing means,
+        so it must not count as a declaration and shut out ``nodes.yaml``.
         """
         description = (check.description or None) if is_root else result.description
         config = (check.config_summary() or None) if is_root else result.config
         about = None if is_root else (result.about or None)
         title = None if is_root else (result.title or None)
+        order = result.order or None
         # The pre-normalized entries travel, not the raw input: the check has
         # already been through the one normalization (ADR-0036), and re-deriving
         # slugs here would be the same work done twice. `stored_code` is the
@@ -462,7 +495,7 @@ class Engine:
                           description=description,
                           frequency_seconds=check.frequency_seconds,
                           config=config, report=result.report,
-                          about=about, title=title)
+                          about=about, title=title, order=order)
         for child in result.children:
             self._store(join_path(path, child.name), child, check)
 

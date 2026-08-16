@@ -87,6 +87,9 @@ _df_sh() {
             _hdr=0
             continue
         fi
+        # Splitting the line into fields is the whole point here, and these are
+        # `df` columns — no path with a space reaches this far.
+        # shellcheck disable=SC2086
         set -- $_line
         [ $# -ge 4 ] || continue
         _fs=$1

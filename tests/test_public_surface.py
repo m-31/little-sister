@@ -81,8 +81,11 @@ def test_the_promise_block_parses_into_modules_and_names() -> None:
     otherwise leave every assertion below trivially satisfied."""
     assert set(SURFACE) == {
         "little_sister.checks",
+        "little_sister.fetch",
         "little_sister.reasons",
+        "little_sister.spans",
         "little_sister.status",
+        "little_sister.transport",
         "little_sister.values",
     }, ("the promised modules changed — if that is deliberate, this guard moves with "
         "the doc; it exists so a broken block cannot leave every check below "

@@ -49,13 +49,17 @@ from flask import render_template, session  # noqa: E402
 from little_sister import app as app_module  # noqa: E402
 from little_sister.app import (  # noqa: E402
     MAX_DEPTH,
+    _copy_style,
     _maintenance_rows,
     _maintenance_view,
     _node_meta_map,
     _split_heartbeat,
     app,
 )
-from little_sister.copy_status import format_copy_markdown  # noqa: E402
+from little_sister.copy_status import (  # noqa: E402
+    format_copy_markdown,
+    format_node_markdown,
+)
 from little_sister.render import render_markdown  # noqa: E402
 from tests.ui_fixtures import FIXTURES, FIXTURES_BY_NAME, Fixture  # noqa: E402
 
@@ -95,8 +99,15 @@ def render_page(fixture: Fixture) -> str:
             session["firstname"] = "Harness"
             session["admin"] = True
             template = "check.html" if fixture.detail else "status.html"
+            # The detail page's own hand-off, from the fixture's snapshot, so the
+            # sheet shows the real buttons and the real document behind them
+            # rather than an empty pair. The overview page has neither.
+            copy_markdown = (format_node_markdown(node, _copy_style())
+                             if fixture.detail else "")
             return render_template(
                 template,
+                copy_markdown=copy_markdown,
+                copy_html_text=str(render_markdown(copy_markdown)),
                 username="harness",
                 firstname="Harness",
                 node=node,
@@ -105,14 +116,15 @@ def render_page(fixture: Fixture) -> str:
                 depth_limit=MAX_DEPTH,
                 hide_ok=False,
                 hide_idle=False,
-                dense=True,
+                dense=fixture.dense,
                 is_admin=True,
                 maintenance_default=app_module.config.maintenance_default_expiry,
                 maintenance_timezone=app_module.config.timezone,
                 heartbeat=heartbeat,
                 node_meta=_node_meta_map(node) | _node_meta_map(heartbeat),
                 rendered_at=_RENDERED_AT,
-                reason_cap=app_module.config.reason_cap,
+                reason_cap=(fixture.reason_cap if fixture.reason_cap is not None
+                            else app_module.config.reason_cap),
                 branch_cap=app_module.config.branch_cap,
                 maintenance_cap=app_module.config.maintenance_cap,
                 maintenance_rows=maintenance_rows,
@@ -132,7 +144,8 @@ def render_page(fixture: Fixture) -> str:
 
 def render_copy_page() -> str:
     """Render the Copy page with the realistic multi-front incident fixture."""
-    markdown = format_copy_markdown(FIXTURES_BY_NAME["wall_incident"].build())
+    markdown = format_copy_markdown(
+        FIXTURES_BY_NAME["wall_incident"].build(), _copy_style())
     rich = render_markdown(markdown)
     with app.test_request_context("/copy"):
         session["username"] = "harness"
@@ -141,7 +154,7 @@ def render_copy_page() -> str:
         return render_template(
             "text.html", username="harness", firstname="Harness",
             copy_markdown=markdown, copy_html=rich,
-            copy_html_text=str(rich))
+            copy_html_text=str(rich), copy_preview=True)
 
 
 def _localize_static(html: str, out_dir: Path) -> str:

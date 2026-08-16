@@ -1,3 +1,4 @@
+import json
 import os
 import re
 import tempfile
@@ -26,6 +27,7 @@ from little_sister import app as app_module
 from little_sister.checks import code
 from little_sister.checks.base import registered_types
 from little_sister.config_dir import aspect_owner, forget_aspects, register_aspect
+from little_sister.copy_action import copy_context
 from little_sister.origins import package_origin
 from little_sister.reasons import Entry
 from little_sister.status import HEARTBEAT_PATH, StatusCode
@@ -68,7 +70,10 @@ class WebTests(TestCase):
 
         snapshot.assert_called_once_with("")
         self.assertIn("Copy Markdown", body)
-        self.assertIn("Copy rich text", body)
+        # The label names the clipboard member the button writes — `text/html`,
+        # never RTF — and it reads the same on the leaf detail page, which
+        # includes the same partial.
+        self.assertIn("Copy Rich HTML", body)
         self.assertIn("build ⛔", body)
         self.assertNotIn("healthy", body)
         self.assertIn("<strong>owner</strong>", body)  # rendered preview
@@ -482,6 +487,110 @@ class WebTests(TestCase):
         self.assertIn("Living-room NUC", body)            # follows the breadcrumb
         self.assertIn("node-title", body)
 
+    def test_redundant_title_is_not_drawn_on_a_quiet_leaf_chip(self):
+        # The case the rule exists for: a severity band whose chip reads
+        # `critical Critical` (`titles.py`). The chip keeps the name.
+        self._login()
+        # A quiet leaf collapses to a chip only below a card, so this needs the
+        # whole dashboard: `github` is the card, `severity` a box, `critical` the
+        # chip inside it.
+        self.tree.upsert("/github/severity/critical", StatusCode.OK)
+        self.tree.set_title("/github/severity/critical", "Critical")
+        body = self.client.get("/status").get_data(as_text=True)
+        self.assertIn("leaf-chip__name", body)
+        self.assertIn(">critical</span>", body)     # the name still shows
+        self.assertNotIn("node-title", body)
+        self.assertNotIn("Critical", body)
+
+    def test_redundant_title_is_not_drawn_on_a_box_head_or_a_card_head(self):
+        self._login()
+        # A warn leaf keeps its full box rather than collapsing to a chip, and a
+        # top-level node is a card head — two different lines, one rule.
+        self.tree.upsert("/github/pull_requests", StatusCode.WARN, "3 open")
+        self.tree.set_title("/github/pull_requests", "Pull requests")
+        self.tree.set_title("/github", "The forge")
+        body = self.client.get("/status").get_data(as_text=True)
+        self.assertIn("pull_requests", body)
+        self.assertIn("The forge", body)            # a real second fact survives
+        self.assertNotIn("Pull requests", body)
+
+    def test_redundant_title_is_not_drawn_in_the_page_band(self):
+        self._login()
+        self.tree.upsert("/github/severity/critical", StatusCode.ERROR, "one alert")
+        self.tree.set_title("/github/severity/critical", "Critical")
+        body = self.client.get(
+            "/status/github/severity/critical").get_data(as_text=True)
+        self.assertIn("critical", body)             # the breadcrumb still names it
+        self.assertNotIn("node-title--header", body)
+        self.assertNotIn("Critical", body)
+
+    def test_redundant_title_leaves_a_node_out_of_the_inspection_map(self):
+        # A hover card whose entire content is the word the chip already shows is
+        # worse than no hover card (ADR-0019), so the node drops out of the map.
+        self._login()
+        self.tree.upsert("/github/severity/critical", StatusCode.OK)
+        self.tree.set_title("/github/severity/critical", "Critical")
+        self.tree.upsert("/github/severity/low", StatusCode.OK)
+        self.tree.set_title("/github/severity/low", "Low")
+        self.tree.set_about("/github/severity/low", "nothing urgent")
+        meta = app_module._node_meta_map(self.tree.snapshot(""))
+        self.assertNotIn("/github/severity/critical", meta)
+        # `about` is untouched — only the title folded away.
+        self.assertEqual(list(meta["/github/severity/low"]), ["about"])
+
+    def test_a_glyph_title_heads_its_card_with_the_name(self):
+        # ADR-0061. The card carries no name of its own, so a band titled 🔴 would
+        # head a card with a bare circle — the same failure as `/copy`, in a place
+        # where the chip beneath happens to soften it. One rule, both surfaces.
+        self._login()
+        self.tree.upsert("/github/severity/critical", StatusCode.OK)
+        self.tree.set_title("/github/severity/critical", "🔴")
+        self.tree.set_about("/github/severity/critical", "fix immediately")
+        meta = app_module._node_meta_map(self.tree.snapshot(""))
+        self.assertIn("critical 🔴", meta["/github/severity/critical"]["title"])
+
+    def test_a_name_in_a_card_heading_is_not_read_as_markdown(self):
+        # The name half is structural data and this string is rendered as Markdown
+        # on its way into the card. Before this rule no name ever reached here.
+        self._login()
+        self.tree.upsert("/literal/*not-bold*", StatusCode.OK)
+        self.tree.set_title("/literal/*not-bold*", "🔴")
+        meta = app_module._node_meta_map(self.tree.snapshot(""))
+        title = meta["/literal/*not-bold*"]["title"]
+        self.assertIn("*not-bold*", title)
+        self.assertNotIn("<em>", title)
+
+    def test_a_word_still_heads_its_card_alone(self):
+        # Unchanged, and the reason the rule is narrow: a title that says something
+        # is a better heading than the name it replaces.
+        self._login()
+        self.tree.upsert("/services/api", StatusCode.OK)
+        self.tree.set_title("/services/api", "Order intake")
+        meta = app_module._node_meta_map(self.tree.snapshot(""))
+        self.assertIn("Order intake", meta["/services/api"]["title"])
+        self.assertNotIn("api Order intake", meta["/services/api"]["title"])
+
+    def test_the_tree_still_carries_a_title_the_page_declines_to_draw(self):
+        # The rule is display, never data (`titles.py`): the snapshot is the record
+        # of what the check said, and it does not move.
+        self._login()
+        self.tree.upsert("/github/severity/critical", StatusCode.OK)
+        self.tree.set_title("/github/severity/critical", "Critical")
+        node = self.tree.snapshot("/github/severity/critical")
+        self.assertEqual(node.title, "Critical")
+
+    def test_a_declared_rank_reaches_the_dashboard(self):
+        # The page renders the snapshot's child order, so ADR-0055 needs no
+        # template change — this is the guard that keeps it that way.
+        self._login()
+        for band in ("critical", "high", "informational", "low", "medium"):
+            self.tree.upsert(f"/wiz/{band}", StatusCode.OK,
+                             order=1 if band == "informational" else 0)
+        body = self.client.get("/status").get_data(as_text=True)
+        chips = re.findall(r'leaf-chip__name">([a-z]+)<', body)
+        self.assertEqual(
+            chips, ["critical", "high", "low", "medium", "informational"])
+
     def test_branch_view(self):
         self._login()
         self.tree.upsert("/services/web", StatusCode.OK)
@@ -638,6 +747,38 @@ class WebTests(TestCase):
         frag = self.client.get("/status?fragment=1").get_data(as_text=True)
         self.assertIn("js/branches.js", page)
         self.assertNotIn("js/branches.js", frag)
+
+    def test_dashboard_layout_script_ships_with_page_not_fragment(self):
+        self._login()
+        self.tree.upsert("/quality/github/actions", StatusCode.OK)
+        page = self.client.get("/status").get_data(as_text=True)
+        frag = self.client.get("/status?fragment=1").get_data(as_text=True)
+        self.assertIn("js/dashboard-layout.js", page)
+        self.assertNotIn("js/dashboard-layout.js", frag)
+        self.assertIn("data-layout-breakpoints", page)
+        # `/quality/github/actions` is a three-node chain: three visible nodes
+        # cost three stable rows, but nothing branches, so its only useful step
+        # is the ordinary one-track width.
+        self.assertIn('data-layout-weight="3"', page)
+        self.assertIn('data-layout-steps="1"', page)
+        self.assertIn("[[1, 0, [1]]]", page)
+
+    def test_plain_dashboard_columns_withholds_the_span_plan(self):
+        # settings.yaml `dashboard_columns: plain` (ADR-0056): the page keeps
+        # the ordinary auto-fill grid — no breakpoints, no per-card layout
+        # data — which is exactly the no-JavaScript rendering. The script may
+        # still ship; with nothing to read it clears spans and stands down.
+        self._login()
+        self.tree.upsert("/quality/github/actions", StatusCode.OK)
+        patched = replace(app_module.config, dashboard_columns="plain")
+        with mock.patch.object(app_module, "config", patched):
+            page = self.client.get("/status").get_data(as_text=True)
+            frag = self.client.get("/status?fragment=1").get_data(as_text=True)
+        self.assertNotIn("data-layout-breakpoints", page)
+        self.assertNotIn("data-layout-weight", page)
+        self.assertNotIn("data-layout-steps", page)
+        self.assertNotIn("data-layout-breakpoints", frag)
+        self.assertIn('class="status-grid"', page)
 
     def test_status_cue_marks_state_not_color_alone(self):
         # a11y: a per-state shape cue gives a non-color channel; it is decorative
@@ -1067,6 +1208,11 @@ class WebTests(TestCase):
         self.assertEqual(app_module._elapsed(0.412), "412 ms")
         self.assertEqual(app_module._elapsed(3.14159), "3.1 s")
         self.assertEqual(app_module._elapsed(42.7), "43 s")
+        # past a minute it climbs, which is the whole reason it exists: the
+        # system page used to render a two-minute run as `115 s`
+        self.assertEqual(app_module._elapsed(115), "1m 55s")
+        self.assertEqual(app_module._elapsed(7620), "2h 7m")
+        self.assertEqual(app_module._elapsed(97200), "1d 3h")
 
     def _system_body(self, checks):
         """Render /system against a stub engine reporting ``checks``."""
@@ -1103,7 +1249,7 @@ class WebTests(TestCase):
         self.assertIn("ssh-script", body)          # same-root checks stay apart
         # timestamps render as time of day in the configured tz (UTC+2 in July)
         self.assertIn("15:52:40", body)            # next run, check a
-        self.assertIn("· in 100s", body)
+        self.assertIn("· in 1m 40s", body)         # not `in 100s` — one reading
         self.assertIn("15:50:57", body)            # last run start, check a
         self.assertIn("· 412 ms", body)
         self.assertIn("15:51:00", body)            # running since, check b
@@ -1139,12 +1285,11 @@ class WebTests(TestCase):
         self._login()
         body = self._system_body((self._a_check("/svc/a", "http"),))
         self.assertIn("<code>http</code>", body)
-        self.assertIn("used by 1 check</span>", body)
-        self.assertLess(body.index("<code>http</code>"), body.index("<details"))
+        self.assertIn("used by 1 check</summary>", body)
+        fold = body.index("unused by this configuration")
+        self.assertLess(body.index("<code>http</code>"), fold)
         # …and a type nobody configured is still there, below the fold
-        self.assertIn("unused by this configuration", body)
-        self.assertGreater(body.index("<code>ssh-script</code>"),
-                           body.index("<details"))
+        self.assertGreater(body.index("<code>ssh-script</code>"), fold)
 
     def test_system_roster_counts_the_checks_behind_a_type(self):
         # one row per type, not per check — the count is what says how much of
@@ -1156,7 +1301,120 @@ class WebTests(TestCase):
         body = self._system_body((self._a_check("/svc/a", "http"),
                                   self._a_check("/svc/b", "http")))
         self.assertEqual(body.count("<code>http</code>"), 1)
-        self.assertIn("used by 2 checks</span>", body)
+        self.assertIn("used by 2 checks</summary>", body)
+
+    def _roster_disclosure(self, body, type_name):
+        """The `used by N …` disclosure on the roster row for ``type_name``, as
+        (summary text, the node paths it lists, the hrefs those paths link to)."""
+        row = body.split(f"<code>{type_name}</code>", 1)[1].split("</td>", 1)[0]
+        if "<details" not in row:
+            return None, [], []
+        block = row.split("<details", 1)[1]
+        summary = re.search(r"<summary[^>]*>(.*?)</summary>", block, re.S).group(1)
+        listed = re.findall(r'<li><a href="([^"]+)">([^<]+)</a></li>', block)
+        return summary.strip(), [text for _, text in listed], [
+            href for href, _ in listed]
+
+    def test_system_roster_count_opens_into_the_checks_that_produced_it(self):
+        # the count is the right summary at a glance, but it was the one number on
+        # this page the page could not substantiate: *two of what?* — and two check
+        # files naming one type, rendering in two different branches of the tree,
+        # is the ordinary case rather than a defect. So the number opens into the
+        # node paths behind it, each a link to that node, and an operator never has
+        # to read a config file to believe it.
+        self._login()
+        body = self._system_body((self._a_check("/quality/github", "http"),
+                                  self._a_check("/stress/github", "http")))
+
+        summary, paths, hrefs = self._roster_disclosure(body, "http")
+
+        self.assertEqual(summary, "used by 2 checks")
+        self.assertEqual(paths, ["/quality/github", "/stress/github"])
+        self.assertEqual(hrefs, ["/status/quality/github",
+                                 "/status/stress/github"])
+
+    def test_system_roster_list_is_as_long_as_the_count_says(self):
+        # what makes the disclosure worth anything is that it accounts for the
+        # whole number: two checks sharing one host node (ADR-0015 allows it for
+        # disjoint owned subtrees) are two entries, because a list deduplicated
+        # into one would leave "used by 2 checks" unsubstantiated all over again
+        self._login()
+        body = self._system_body((self._a_check("/host/one", "http"),
+                                  self._a_check("/host/one", "http"),
+                                  self._a_check("/host/two", "http")))
+
+        summary, paths, _ = self._roster_disclosure(body, "http")
+
+        self.assertEqual(summary, "used by 3 checks")
+        self.assertEqual(paths, ["/host/one", "/host/one", "/host/two"])
+
+    def test_the_roster_keeps_a_types_metadata_beside_its_name(self):
+        # The disclosure is the one thing on this page that makes a row grow,
+        # and `align-middle` — right for every other table here — then centered
+        # Module, Version and From against the *path list*: measured in
+        # Chromium at nine open paths, the version sat 102px below the type
+        # name it answers for, beside nothing.  The roster alone is top-aligned.
+        # Asserted on the roster's own table so a sweep that re-centers the
+        # page cannot take this one with it.
+        self._login()
+        body = self._system_body((self._a_check("/host/one", "http"),))
+        roster = body[body.index("<h3 class=\"h6 text-muted text-uppercase\">"
+                                 "Check types</h3>"):]
+        table = roster[roster.index("<table"):roster.index(">", roster.index(
+            "<table"))]
+        self.assertIn("align-top", table)
+        self.assertNotIn("align-middle", table)
+
+    def _an_installed_type(self, module_file):
+        from little_sister.checks.base import TypeOrigin
+        return TypeOrigin(type_name="github", module="little_sister_github.github",
+                          package="little_sister_github",
+                          distribution="little-sister-github", version="0.1.0",
+                          path=module_file)
+
+    def test_system_draws_a_loaded_path_against_the_environment(self):
+        # the row's diagnostic is *which root* the module came from, not the
+        # absolute string — nine tenths of which is the same prefix on every row,
+        # starting with somebody's home directory
+        import sysconfig
+        purelib = sysconfig.get_paths()["purelib"]
+        absolute = str(Path(purelib) / "little_sister_github" / "github.py")
+        self._login()
+
+        with mock.patch.object(app_module, "registered_types",
+                               lambda: [self._an_installed_type(absolute)]):
+            body = self._system_body((self._a_check("/quality/github", "github"),))
+
+        shown = f"{Path(purelib).name}/little_sister_github/github.py"
+        self.assertIn(f">{shown}</small>", body)
+        self.assertNotIn(f">{absolute}</small>", body)
+        # …and the whole string is still one hover away for the reader who wants it
+        self.assertIn(f'title="{absolute}"', body)
+
+    def test_system_draws_a_checkout_against_the_project(self):
+        # the case the path exists for: a source copy earlier on sys.path shadows
+        # an installed distribution of the same name, and the version beside it is
+        # then answering for code that is not running. Still legible as such.
+        absolute = str(Path.cwd() / "little_sister_stress" / "checks.py")
+        self._login()
+
+        with mock.patch.object(app_module, "registered_types",
+                               lambda: [self._an_installed_type(absolute)]):
+            body = self._system_body((self._a_check("/quality/github", "github"),))
+
+        self.assertIn(">./little_sister_stress/checks.py</small>", body)
+        self.assertNotIn(f">{absolute}</small>", body)
+
+    def test_system_roster_unused_type_offers_no_list(self):
+        # a type used zero times keeps no list — there is nothing to open, and the
+        # fold it sits under already says so
+        self._login()
+        body = self._system_body((self._a_check("/svc/a", "http"),))
+
+        summary, paths, _ = self._roster_disclosure(body, "ssh-script")
+
+        self.assertIsNone(summary)
+        self.assertEqual(paths, [])
 
     def test_system_roster_is_unfolded_when_nothing_is_in_use(self):
         # no engine: nothing is known to be unused, and this is the moment the
@@ -1179,10 +1437,14 @@ class WebTests(TestCase):
 
         in_use, folded = app_module._type_roster(info)
 
-        self.assertEqual([(o.type_name, n) for o, n in in_use], [("http", 2)])
-        self.assertNotIn("http", [o.type_name for o, _ in folded])
-        self.assertIn("ssh-script", [o.type_name for o, _ in folded])
-        self.assertEqual({n for _, n in folded}, {0})
+        self.assertEqual([(r.origin.type_name, r.count) for r in in_use],
+                         [("http", 2)])
+        # the row carries the paths, in the engine's order — the same order the
+        # check table above it prints — which is what lets the count be opened
+        self.assertEqual([r.paths for r in in_use], [("/svc/a", "/svc/b")])
+        self.assertNotIn("http", [r.origin.type_name for r in folded])
+        self.assertIn("ssh-script", [r.origin.type_name for r in folded])
+        self.assertEqual({r.paths for r in folded}, {()})
         # nothing to split against — everything folds, and the template unfolds it
         self.assertEqual(app_module._type_roster(None)[0], [])
 
@@ -3393,6 +3655,29 @@ class SystemPackagesTests(TestCase):
             "/static/css/overview.css").get_data(as_text=True)
         self.assertIn(".ls-system__register { white-space: nowrap; }", css)
 
+    def test_a_package_path_is_drawn_against_a_root_too(self):
+        # one rule in two places: this card and the check-type roster print the
+        # same kind of path, so the shortening is a filter both use rather than a
+        # fix in one template
+        import sysconfig
+        purelib = sysconfig.get_paths()["purelib"]
+        absolute = str(Path(purelib) / "little_sister_jira" / "__init__.py")
+        row = app_module.PackageRow(
+            origin=origins.PackageOrigin(package="little_sister_jira",
+                                         distribution="little-sister-jira",
+                                         version="0.1.0", path=absolute),
+            registers=("config/jira",))
+        self._login()
+
+        with mock.patch.object(app_module, "_registering_packages",
+                               lambda: [row]):
+            body = self._system()
+
+        self.assertIn(f">{Path(purelib).name}/little_sister_jira/__init__.py"
+                      "</small>", body)
+        self.assertNotIn(f">{absolute}</small>", body)
+        self.assertIn(f'title="{absolute}"', body)
+
     def test_the_library_is_not_one_of_the_packages(self):
         # the built-in check types would otherwise put little_sister in the table;
         # the page header already carries its version
@@ -3460,3 +3745,249 @@ class SystemPackagesTests(TestCase):
 
         self.assertEqual((origin.distribution, origin.version, origin.path),
                          ("", "", ""))
+
+
+class NodeCopyPageTests(TestCase):
+    """The hand-off on a leaf's detail page: the same two buttons `/copy` has,
+    aimed at one node."""
+
+    def setUp(self):
+        self.tree = StatusTree()
+        self._original = app_module.status_tree
+        app_module.status_tree = self.tree
+        self.client = app_module.app.test_client()
+        self.client.post("/login",
+                         data={"username": "pan", "password": "12345678"})
+
+    def tearDown(self):
+        app_module.status_tree = self._original
+
+    def _leaf(self, path="/svc/api"):
+        self.tree.set_check_mount(path)
+        self.tree.upsert(path, StatusCode.ERROR,
+                         "connection refused to **api**",
+                         frequency_seconds=900,
+                         config="- **token:** env://API_TOKEN")
+
+    def test_the_leaf_page_offers_both_formats(self):
+        self._leaf()
+        body = self.client.get("/status/svc/api").get_data(as_text=True)
+        self.assertIn("Copy Markdown", body)
+        self.assertIn("Copy Rich HTML", body)
+        self.assertIn('id="ls-copy-source"', body)   # the manual-copy fallback
+        self.assertIn('id="ls-copy-html"', body)     # the text/html member
+        self.assertIn("js/copy.js", body)
+
+    def test_the_source_carries_this_node_not_the_tree(self):
+        self._leaf()
+        self.tree.upsert("/other/thing", StatusCode.ERROR, "not my incident")
+
+        body = self.client.get("/status/svc/api").get_data(as_text=True)
+
+        self.assertIn("## api ⛔", body)
+        self.assertIn("**Path:** /svc/api", body)
+        self.assertIn("**Checked every:** 15m", body)
+        self.assertIn("env://API_TOKEN", body)
+        self.assertNotIn("not my incident", body)
+
+    def test_a_container_gets_no_buttons(self):
+        # A container's page is a dashboard *of its children*; the hand-off for a
+        # subtree is `/copy`, and a second one here would mean two documents
+        # answering the same question differently.
+        self._leaf("/svc/api")
+        body = self.client.get("/status/svc").get_data(as_text=True)
+        self.assertNotIn("Copy Markdown", body)
+        self.assertNotIn("Copy Rich HTML", body)
+        self.assertNotIn("js/copy.js", body)
+
+    def test_the_two_members_are_one_document(self):
+        # The `text/html` member is rendered *from* the Markdown, never beside it,
+        # so the two clipboard formats cannot drift (the `/copy` rule, one node
+        # down). The payload is JSON-encoded, so its `<` are escaped there.
+        self._leaf()
+        body = self.client.get("/status/svc/api").get_data(as_text=True)
+        payload = re.search(
+            r'<script type="application/json" id="ls-copy-html">(.*?)</script>',
+            body, re.S)
+        assert payload is not None
+        document = json.loads(payload.group(1))
+        self.assertIn("<h2>api ⛔</h2>", document)
+        self.assertIn("<strong>api</strong>", document)   # the reason's Markdown
+        self.assertNotIn("<script", payload.group(1))
+
+    def test_the_payload_cannot_break_out_of_html_or_json(self):
+        self.tree.upsert("/svc/api", StatusCode.ERROR,
+                         "</textarea></script><script>BAD</script>")
+
+        body = self.client.get("/status/svc/api").get_data(as_text=True)
+
+        self.assertNotIn("<script>BAD</script>", body)
+        self.assertNotIn("</textarea></script>", body)
+
+
+class CopyRouteTests(TestCase):
+    """One route, three documents (ADR-0036 decision 12's addressing): the tree,
+    one node, one reason line."""
+
+    def setUp(self):
+        self.tree = StatusTree()
+        self._original = app_module.status_tree
+        app_module.status_tree = self.tree
+        self.client = app_module.app.test_client()
+        self.client.post("/login",
+                         data={"username": "pan", "password": "12345678"})
+
+    def tearDown(self):
+        app_module.status_tree = self._original
+
+    def _reviews(self):
+        self.tree.upsert("/ci/reviews", StatusCode.ERROR, [
+            Entry("pr-412", "acme/api-pr-412 review overdue"),
+            Entry("pr-77", "acme/web-pr-77 review overdue"),
+        ], members=True, config="- **token:** env://GITHUB_TOKEN")
+
+    def _body(self, url):
+        return self.client.get(url).get_data(as_text=True)
+
+    def test_the_tree_document_is_still_at_copy(self):
+        self._reviews()
+        body = self._body("/copy")
+        self.assertIn("Copy status", body)
+        self.assertIn("reviews ⛔", body)
+        self.assertIn("acme/web-pr-77", body)      # every line, this is the tree
+
+    def test_a_node_document_has_a_url_of_its_own(self):
+        self._reviews()
+        body = self._body("/copy/ci/reviews")
+        self.assertIn("**Path:** /ci/reviews", body)
+        self.assertIn("acme/api-pr-412", body)
+        self.assertIn("acme/web-pr-77", body)      # the node keeps every line
+        self.assertIn("Configuration", body)
+
+    def test_a_reason_document_carries_one_line(self):
+        # The slug is a **query value**, never a path segment: a discovered entry's
+        # slug contains a `/` and a percent-encoded one does not survive PATH_INFO
+        # (ADR-0036 decision 12).
+        self._reviews()
+        body = self._body("/copy/ci/reviews?reason=pr-412")
+        self.assertIn("**Path:** /ci/reviews", body)
+        self.assertIn("acme/api-pr-412", body)
+        self.assertNotIn("acme/web-pr-77", body)
+        self.assertNotIn("Configuration", body)    # a node fact, not a finding's
+        self.assertNotIn("GITHUB_TOKEN", body)
+
+    def test_a_slug_with_a_slash_in_it_survives_the_round_trip(self):
+        # Both spellings, because the two ends disagree and both are correct: a
+        # slash is legal in a query string, so the chip's `url_for` emits it raw,
+        # while a hand-written or copied URL may well carry it encoded.
+        self.tree.upsert("/ci/reviews", StatusCode.ERROR,
+                         {"acme/api-pr-412": "review overdue"}, members=True)
+        for url in ("/copy/ci/reviews?reason=acme%2Fapi-pr-412",
+                    "/copy/ci/reviews?reason=acme/api-pr-412"):
+            with self.subTest(url=url):
+                self.assertIn("review overdue", self._body(url))
+
+    def test_the_chip_emits_a_url_this_route_answers(self):
+        # The end-to-end claim, rather than two halves that each look right: take
+        # the href the page actually rendered and ask for it.
+        self.tree.upsert("/ci/reviews", StatusCode.ERROR,
+                         {"acme/api-pr-412": "review overdue"}, members=True)
+        chip = re.search(r'<a class="reason-action" href="([^"]+)"',
+                         self._body("/status/ci/reviews"))
+        assert chip is not None
+        response = self.client.get(chip.group(1))
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("review overdue", response.get_data(as_text=True))
+
+    def test_a_line_this_run_does_not_report_is_not_invented(self):
+        # Suspended, not deleted (ADR-0036 decision 6) — but there is no document
+        # to make of a line that is not there, and the pin's stored text would be
+        # a finding the check is no longer making.
+        self._reviews()
+        response = self.client.get("/copy/ci/reviews?reason=pr-999")
+        body = response.get_data(as_text=True)
+        self.assertEqual(response.status_code, 404)
+        self.assertIn("no longer reported", body)
+        self.assertNotIn("acme/api-pr-412", body)
+
+    def test_an_unmounted_path_is_a_404_with_a_page(self):
+        response = self.client.get("/copy/nowhere/at/all")
+        self.assertEqual(response.status_code, 404)
+        self.assertIn("No such node", response.get_data(as_text=True))
+
+    def test_every_document_is_auth_gated(self):
+        self._reviews()
+        anonymous = app_module.app.test_client()
+        for url in ("/copy", "/copy/ci/reviews", "/copy/ci/reviews?reason=pr-412"):
+            with self.subTest(url=url):
+                response = anonymous.get(url)
+                self.assertEqual(response.status_code, 302)
+                self.assertIn("/login", response.headers["Location"])
+
+
+class CopyChipTests(TestCase):
+    """The built-in copy chip in the `reason.actions` rail."""
+
+    def setUp(self):
+        self.tree = StatusTree()
+        self._original = app_module.status_tree
+        app_module.status_tree = self.tree
+        self.client = app_module.app.test_client()
+        self.client.post("/login",
+                         data={"username": "pan", "password": "12345678"})
+
+    def tearDown(self):
+        app_module.status_tree = self._original
+
+    def _body(self, url):
+        return self.client.get(url).get_data(as_text=True)
+
+    def test_the_chip_links_each_member_line_to_its_own_document(self):
+        self.tree.upsert("/ci/reviews", StatusCode.ERROR,
+                         {"pr-412": "review overdue", "pr-77": "review overdue"},
+                         members=True)
+        for url in ("/status/ci/reviews", "/status"):
+            with self.subTest(surface=url):
+                body = self._body(url)
+                self.assertIn("/copy/ci/reviews?reason=pr-412", body)
+                self.assertIn("/copy/ci/reviews?reason=pr-77", body)
+
+    def test_prose_gets_no_chip(self):
+        # Where reasons are prose there is one thing to hand over and it is the
+        # node (ADR-0036): a per-line copy would offer half of one condition.
+        self.tree.upsert("/svc/api", StatusCode.ERROR,
+                         ["check error: boom", "Traceback..."])
+        body = self._body("/status/svc/api")
+        self.assertIn("check error: boom", body)
+        self.assertNotIn("/copy/svc/api?reason=", body)
+
+    def test_the_chip_addresses_a_slug_and_never_a_position(self):
+        # ADR-0036 decision 3: an index moves when an entry is inserted above it.
+        # Insert one and the chip must still point at the same finding.
+        self.tree.upsert("/ci/reviews", StatusCode.ERROR,
+                         {"pr-412": "review overdue"}, members=True)
+        first = self._body("/status/ci/reviews")
+        self.assertIn("/copy/ci/reviews?reason=pr-412", first)
+
+        self.tree.upsert("/ci/reviews", StatusCode.ERROR,
+                         {"pr-1": "newer, listed first",
+                          "pr-412": "review overdue"}, members=True)
+        second = self._body("/status/ci/reviews")
+
+        self.assertIn("/copy/ci/reviews?reason=pr-412", second)
+        self.assertIn("/copy/ci/reviews?reason=pr-1", second)
+
+    def test_a_line_with_no_slug_of_its_own_gets_no_chip(self):
+        # Belt and braces on the provider's own guard: a chip whose URL could not
+        # name a line would be a link to the wrong document, so it declines.
+        self.tree.upsert("/ci/reviews", StatusCode.ERROR,
+                         {"pr-412": "review overdue"}, members=True)
+        node = self.tree.snapshot("/ci/reviews")
+        assert node is not None
+        blank = replace(node.reasons[0], slug="")
+
+        self.assertIsNone(copy_context(node=node, reason=blank.text, line=blank,
+                                       index=0, surface="grid"))
+        self.assertIsNone(copy_context(node=replace(node, path=""),
+                                       reason=blank.text, line=node.reasons[0],
+                                       index=0, surface="grid"))

@@ -551,3 +551,83 @@ class ContextContractTests(TestCase):
                 slots.forget_fillers()
                 seen = self._seen("node.actions", url)
                 self.assertEqual({handed["surface"] for handed in seen}, {surface})
+
+
+class ContextGrowthTests(TestCase):
+    """A slot's context grows, and a provider written before it grew keeps working.
+
+    `reason.actions` gained `line` when a control needed a slug rather than a text.
+    On a **published** seam that must not cost a deployment its chips on an upgrade
+    of ours, so a provider is handed exactly what it asks for.
+    """
+
+    def setUp(self):
+        app_module.app.config["TESTING"] = True
+        self.tree = StatusTree()
+        app_module.status_tree = self.tree
+        self.client = app_module.app.test_client()
+        self.client.post("/login",
+                         data={"username": "pan", "password": "12345678"})
+
+    def _render(self, provider):
+        slots.register("reason.actions", DEMO, TEMPLATE, provider)
+        self.tree.upsert("/db/main", StatusCode.ERROR, "connection refused")
+        return self.client.get("/status").get_data(as_text=True)
+
+    def test_a_provider_that_predates_the_new_name_still_renders(self):
+        # `action` spells out (node, reason, index, surface) — the signature every
+        # filler written before `line` existed has. It must neither raise nor lose
+        # its chip.
+        with self.assertNoLogs("little_sister", level="ERROR"):
+            body = self._render(action)
+
+        self.assertIn('data-demo-action="first-filler"', body)
+
+    def test_a_provider_that_asks_for_everything_gets_the_new_name(self):
+        seen: list = []
+        self._render(recorder(seen))
+
+        self.assertTrue(seen)
+        for handed in seen:
+            self.assertIn("line", handed)
+            self.assertEqual(getattr(handed["line"], "text", None),
+                             "connection refused")
+
+    def test_a_provider_may_ask_for_only_what_it_uses(self):
+        seen: list = []
+
+        def narrow(*, line: object) -> dict[str, object]:
+            seen.append(line)
+            return {"label": "narrow", "url": "https://tracker.example.org/new",
+                    "summary": "narrow"}
+
+        with self.assertNoLogs("little_sister", level="ERROR"):
+            body = self._render(narrow)
+
+        self.assertIn('data-demo-action="first-filler"', body)
+        self.assertEqual([getattr(one, "slug", "") for one in seen],
+                         [self.tree.snapshot("/db/main").reasons[0].slug])
+
+    def test_a_callable_with_no_readable_signature_still_gets_everything(self):
+        # A provider need not be a plain function — a `functools.partial` over a
+        # builtin, a C callable, an object with `__call__`. Where the signature
+        # cannot be read there is nothing to filter by, and the honest fallback is
+        # the whole context: the filler either copes or is contained like any other.
+        class Callable:
+            def __init__(self) -> None:
+                self.seen: dict = {}
+
+            def __call__(self, **context: object):
+                self.seen = dict(context)
+                return {"label": "opaque",
+                        "url": "https://tracker.example.org/new",
+                        "summary": "opaque"}
+
+        provider = Callable()
+        provider.__signature__ = property()   # unreadable by `inspect.signature`
+
+        with self.assertNoLogs("little_sister", level="ERROR"):
+            self._render(provider)
+
+        self.assertEqual(sorted(provider.seen),
+                         sorted(slots.SLOTS["reason.actions"].context))

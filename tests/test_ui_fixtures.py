@@ -7,6 +7,9 @@ screenshot. A few invariants keep each fixture meaningful.
 """
 from __future__ import annotations
 
+import json
+import re
+from html import unescape
 from unittest import TestCase
 
 from tests.render_ui_fixtures import render_copy_page, render_page
@@ -106,7 +109,7 @@ class FixtureRenderTests(TestCase):
         html = render_copy_page()
         self.assertIn("Copy status", html)
         self.assertIn("Copy Markdown", html)
-        self.assertIn("Copy rich text", html)
+        self.assertIn("Copy Rich HTML", html)
         self.assertIn("actions", html)
         self.assertNotIn("host01 ✅", html)  # calm leaves are pruned
 
@@ -141,6 +144,99 @@ class WallFixtureTests(TestCase):
         self.assertIn("stale", html)
         self.assertIn("maintenance", html)
         self.assertIn("undefined", html)                    # the idle node
+
+    def test_two_large_roots_keeps_both_high_count_subtrees(self):
+        html = self._render("two_large_roots")
+        self.assertIn(">quality</a>", html)
+        self.assertIn(">stress</a>", html)
+        self.assertIn("pull-requests", html)
+        self.assertIn("dependency-alerts", html)
+        self.assertIn("production", html)
+        self.assertIn("staging", html)
+        self.assertNotIn("leaf-chip", html)
+
+    @staticmethod
+    def _layout(html: str) \
+            -> tuple[list[int], list[list[int]], list[list[object]]]:
+        """The stable weights, useful steps and compact plan breakpoints."""
+        weights = [int(value) for value in re.findall(
+            r'data-layout-weight="(\d+)"', html)]
+        steps = [
+            [int(span) for span in value.split(",")]
+            for value in re.findall(r'data-layout-steps="([\d,]+)"', html)
+        ]
+        match = re.search(r"data-layout-breakpoints='([^']+)'", html)
+        assert match is not None, "the grid carries no plan breakpoints"
+        return weights, steps, json.loads(unescape(match.group(1)))
+
+    @staticmethod
+    def _plan_at(breakpoints: list[list[object]],
+                 width_tenths: int) -> list[int]:
+        """The plan the client selects at a grid width in tenths of a pixel.
+
+        Bands publish in the model's unit; the client scales its fractional
+        measurement by ten rather than rounding a threshold.
+        """
+        plan: list[int] | None = None
+        for threshold, _tracks, candidate in breakpoints:
+            if int(threshold) > width_tenths:
+                break
+            assert isinstance(candidate, list)
+            plan = [int(span) for span in candidate]
+        assert plan is not None
+        return plan
+
+    def test_two_large_roots_get_the_calibrated_four_track_plan(self):
+        weights, steps, breakpoints = self._layout(
+            self._render("two_large_roots"))
+        self.assertEqual(weights, [30, 66])
+        # 13680 tenths is exactly four minimum-width tracks — the case.
+        self.assertEqual(self._plan_at(breakpoints, 13680), [1, 3])
+        self.assertTrue(all(profile[0] == 1 for profile in steps))
+        self.assertTrue(all(2 not in profile for profile in steps))
+
+    def test_two_equal_roots_get_the_split_the_width_actually_pays_for(self):
+        weights, steps, breakpoints = self._layout(
+            self._render("two_equal_large_roots"))
+        self.assertEqual(len(weights), 2)
+        self.assertEqual(weights[0], weights[1])
+        # At exactly four 330px tracks a two-track card is ~10px too narrow
+        # for two nested columns, so the diagnostic minimum-width steps skip
+        # span two and the plan spends both spares on one root.  A real
+        # 1635px four-track grid resolves ~396px tracks, where span two does
+        # fit — so there the same topology splits 2 + 2, the arrangement the
+        # minimum-priced model refused (it painted a 1949px tower instead).
+        self.assertTrue(all(2 not in profile for profile in steps))
+        self.assertEqual(self._plan_at(breakpoints, 13680), [3, 1])
+        self.assertEqual(self._plan_at(breakpoints, 16350), [2, 2])
+
+    def test_configured_reason_budget_changes_stable_height_not_live_text(self):
+        normal = self._layout(self._render("two_equal_large_roots"))
+        tall = self._layout(
+            self._render("two_equal_large_roots_reason_cap_30"))
+        self.assertTrue(all(high > low
+                            for low, high in zip(normal[0], tall[0], strict=True)))
+        self.assertIn("--reason-lines: 30",
+                      self._render("two_equal_large_roots_reason_cap_30"))
+
+    def test_eighty_roots_ship_one_breakpoint(self):
+        weights, steps, breakpoints = self._layout(
+            self._render("roots_80_mixed"))
+        self.assertEqual(len(weights), 80)
+        self.assertTrue(all(profile == [1] for profile in steps))
+        self.assertEqual(len(breakpoints), 1)
+        # One all-ones band riding auto-fill, from the narrowest grid up.
+        self.assertEqual(breakpoints[0][:2], [1, 0])
+
+    def test_chip_run_no_longer_disables_a_mixed_nested_grid(self):
+        html = self._render("mixed_chip_branches")
+        self.assertIn('class="leaf-chip-run"', html)
+        self.assertGreaterEqual(html.count('class="status-node '), 3)
+        self.assertRegex(
+            html,
+            r'<span class="leaf-chip-run">'
+            r'(?:<a class="leaf-chip[^>]*>.*?</a>){2}</span>',
+        )
 
     def test_security_findings_flood_collapses_to_a_chip(self):
         # Layout (ADR-0024): the OK "informational" leaf that floods 150 findings is a

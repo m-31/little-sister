@@ -26,8 +26,12 @@
     <div class="ls-band__row">
         <h1 class="ls-band__title">
             {% include '_breadcrumb.html' %}
-            {%- if node and node.title %}
-            <span class="node-title node-title--header">{{ node.title | markdown_inline }}</span>
+            {#- The title is dropped where it only repeats the last crumb beside
+                it (`titles.py`) — the band would otherwise read
+                "… / critical  Critical". -#}
+            {%- set shown = (node | node_title) if node else '' %}
+            {%- if shown %}
+            <span class="node-title node-title--header">{{ shown | markdown_inline }}</span>
             {%- endif %}
         </h1>
         {%- if band_stamp or band_filters %}

@@ -74,8 +74,16 @@ type: http
 path: /website                # absolute node path (ADR-0016)
 url: https://example.com
 expected_status: 200      # int or list, e.g. [200, 204]
+follow_redirects: true    # default; set false to read a 3xx as the answer
 frequency: 5m
 ```
+
+`follow_redirects` decides what a `3xx` means, and the two readings differ on the same
+URL. Followed (the default, and what this check has always done) the status is whatever
+answers at the end of the chain — so a moved site keeps reporting OK, and so does a
+login wall answering `200`. Reported, the `3xx` **is** the reading: list the redirect
+codes you accept in `expected_status`, and a new one turns the check. It must be a real
+boolean; `"false"` in quotes is refused at load rather than read as true.
 
 ## `file`
 Heartbeat: OK while a file keeps being updated; stale otherwise.

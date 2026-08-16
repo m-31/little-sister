@@ -9,6 +9,14 @@
   [ADR-0022](0022-generated-release-branch.md) (the tag a git dependency resolves)
 - **Register:** [`../decisions.md`](../decisions.md)
 
+> **Update (2026-08-10):** the window this decision was taken inside is closed. All
+> four names are held by a real release — `little-sister` 0.3.11 and the three plugins
+> at 0.1.0 — so where the Context and the Consequences say the names are *free* or
+> *unclaimed on the index*, read "they were, and each was claimed by its own first
+> upload". The convention itself is unchanged and is what made the move cost nothing:
+> the git era used the names the published era now uses, so no consumer renamed
+> anything.
+
 ## Context
 
 The first plugin repositories are consumed as **git dependencies** — a

@@ -14,6 +14,35 @@
   than a rule we remember)
 - **Register:** [`../decisions.md`](../decisions.md)
 
+> **Update (2026-08-10):** the surface promises **names**, and this note adds what it
+> does *not* promise, because the difference drew blood. The **common config fields
+> every check shares grow** — `order` joined them in
+> [ADR-0055](0055-sibling-order.md) — and each one becomes a keyword argument
+> `Check.from_config` passes to the constructor. A check type that spells those
+> keywords out instead of taking `**kwargs` therefore stops binding the day a field
+> is added, although every promised *name* still imports. **So the obligation on a
+> check type is: accept `**kwargs` and hand them to `super().__init__()`.** Adding a
+> common field stays a compatible change under this record's add-is-compatible rule,
+> and a constructor that refuses one is now reported as a `CheckError` naming the
+> file, the type and the keyword, instead of a bare `TypeError` from inside the
+> loader. The epoch (`API_VERSION`) does not move: nothing was removed or renamed.
+
+> **Update (2026-08-16):** decision 4's guard stands; what it guards had a **level of
+> its own** to choose, and the choice was wrong. The default was `DEBUG` — which
+> collects no record little-sister writes, because nothing in it logs below `INFO`,
+> and every record written by everything it is installed beside. That is also what the
+> `httpx` and `markdown_it` caps beside it are: dependencies noticed one at a time,
+> each after somebody read a log. A deployment carrying an AWS check type made the
+> shape plain by being two thirds SDK request detail. **So the default is now `INFO`,
+> and `LOG_LEVEL` names it** — inside the guard, like the level it replaces, so a
+> stray variable in a deployment's environment cannot overrule the level that
+> deployment chose in code. An unrecognized name falls back to `INFO` and says so in
+> the log it just opened, because a typo in an environment is not a reason to refuse
+> to log. Nothing about the promise moves: logging is still a behavior rather than a
+> name, `little_sister.logger` is still not importable by a plugin, and a chatty
+> dependency is still quieted by capping **its own** logger — which adds no handler
+> to root, and so leaves this default running rather than replacing it.
+
 ## Context
 
 `architecture.md` §11 has always promised the *registry*: a deployment adds its own

@@ -328,6 +328,74 @@ class EngineTests(TestCase):
         self.assertEqual(disk.about, "Declared in nodes.yaml.")   # yaml wins
         self.assertEqual(disk.title, "Disk")                      # yaml left it empty
 
+    def test_child_order_ranks_the_subnodes_a_branch_check_emits(self):
+        # ADR-0055's motivating case, end to end through the engine.
+        tree = StatusTree()
+        bands = ("critical", "high", "informational", "low", "medium")
+        result = CheckResult(StatusCode.OK, children=tuple(
+            CheckResult(StatusCode.OK, name=band,
+                        order=1 if band == "informational" else 0)
+            for band in bands))
+        Engine([_FakeCheck(path="/wiz", result=result)], tree).run_once()
+        snap = tree.snapshot("/wiz")
+        assert snap is not None
+        self.assertEqual([child.name for child in snap.children],
+                         ["critical", "high", "low", "medium", "informational"])
+
+    def test_root_result_order_is_honoured_unlike_the_root_labels(self):
+        # Deliberately unlike about/title (ADR-0025): a rank is not identity, and
+        # the root has no inline `order:` source the way it has for its labels, so
+        # ignoring it here would leave a leaf check unable to rank its own node.
+        tree = StatusTree()
+        Engine([_FakeCheck(path="/svc/b",
+                           result=CheckResult(StatusCode.OK, order=-1)),
+                _FakeCheck(path="/svc/a", result=CheckResult(StatusCode.OK))],
+               tree).run_once()
+        snap = tree.snapshot("/svc")
+        assert snap is not None
+        self.assertEqual([child.name for child in snap.children], ["b", "a"])
+
+    def test_a_root_rank_reaches_past_nodes_another_check_owns(self):
+        # The accepted consequence of reading `order` on the root (ADR-0055): ranks
+        # compare across the whole sibling set, so one check's rank moves its card
+        # relative to cards that belong to other checks. Named here so a change in
+        # this behaviour is a decision rather than a surprise.
+        tree = StatusTree()
+        Engine([_FakeCheck(path="/wall/zzz-plugin",
+                           result=CheckResult(StatusCode.OK, order=-1)),
+                _FakeCheck(path="/wall/aaa", result=CheckResult(StatusCode.OK)),
+                _FakeCheck(path="/wall/bbb", result=CheckResult(StatusCode.OK))],
+               tree).run_once()
+        self.assertEqual([c.name for c in tree.snapshot("/wall").children],
+                         ["zzz-plugin", "aaa", "bbb"])
+
+    def test_a_deployment_answers_a_root_rank_from_its_own_config(self):
+        # …and the answer is the ordinary one: state the order yourself. The seed
+        # runs at startup, so it is already in place when the first tick lands.
+        tree = StatusTree()
+        for path, rank in (("/wall/zzz-plugin", 0), ("/wall/aaa", 0),
+                           ("/wall/bbb", 0)):
+            tree.set_order(path, rank)
+        Engine([_FakeCheck(path="/wall/zzz-plugin",
+                           result=CheckResult(StatusCode.OK, order=-1)),
+                _FakeCheck(path="/wall/aaa", result=CheckResult(StatusCode.OK)),
+                _FakeCheck(path="/wall/bbb", result=CheckResult(StatusCode.OK))],
+               tree).run_once()
+        self.assertEqual([c.name for c in tree.snapshot("/wall").children],
+                         ["aaa", "bbb", "zzz-plugin"])
+
+    def test_a_result_order_of_zero_leaves_nodes_yaml_free_to_speak(self):
+        # `0` is what declaring nothing means, so it must not count as the check
+        # having spoken — otherwise every unranked node would shut out nodes.yaml.
+        tree = StatusTree()
+        tree.set_order("/host/disk", 2)
+        result = CheckResult(StatusCode.OK, children=(
+            CheckResult(StatusCode.OK, name="disk", order=0),
+            CheckResult(StatusCode.OK, name="memory", order=7),))
+        Engine([_FakeCheck(path="/host", result=result)], tree).run_once()
+        self.assertEqual(tree.snapshot("/host/disk").order, 2)     # yaml wins
+        self.assertEqual(tree.snapshot("/host/memory").order, 7)   # check fills
+
     def test_elapsed_none_before_first_run(self):
         engine = Engine([_FakeCheck(path="/a")], StatusTree())
         self.assertIsNone(engine.info().checks[0].elapsed_seconds)

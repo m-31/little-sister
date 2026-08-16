@@ -1,4 +1,9 @@
-"""SSH transport: a connection value object that runs commands and scripts.
+"""The SSH connection: a value object that runs commands and scripts over ``ssh``.
+
+Named for what it holds rather than for the layer it sits in. It was ``transport.py``
+until ADR-0058 gave that word to :mod:`little_sister.transport`, the vocabulary a
+check uses to bound and classify a request — two modules called `transport`, meaning
+different things, is how divergence starts.
 
 :class:`SshConnection` carries one host's connection parameters and is the single
 place they become an ``ssh`` argv (``BatchMode`` forced — non-interactive,

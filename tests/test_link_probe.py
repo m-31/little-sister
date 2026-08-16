@@ -1,13 +1,19 @@
 """Reachability probing for the links page (ADR-0030 §9-10).
 
-No test here touches the network: every case patches ``_request``, which is the
-one place a socket is opened. A suite that reached the internet would be slow,
-flaky and different on a laptop with a proxy — and the classification these tests
-are about happens entirely on this side of the wire.
+No test here touches the network: every case patches ``_request``, which is the one
+place this module reaches a socket (through :func:`little_sister.fetch.fetch`, which
+has its own suite). A suite that reached the internet would be slow, flaky and
+different on a laptop with a proxy — and the classification these tests are about
+happens entirely on this side of the wire.
+
+``_request`` returns **any** status and raises only when the request never got one,
+which is `fetch`'s contract: a `404` is an answer, and the stand-ins below say so by
+returning it rather than by raising.
 """
 
 import http.client
 import socket
+import ssl
 import threading
 import urllib.error
 from datetime import datetime, timedelta
@@ -17,6 +23,7 @@ from unittest import TestCase, mock
 from little_sister import link_probe
 from little_sister.icons import Icon, IconFile
 from little_sister.links import Group, Link, LinksConfig, ProbeSettings
+from little_sister.transport import Fault, RemoteError
 
 
 def config_with(*links_, **probe):
@@ -46,8 +53,14 @@ def answering(*statuses):
     return request
 
 
-def http_error(code):
-    return urllib.error.HTTPError("https://x.example.org/", code, "no", None, None)
+def transport_failure(reason):
+    """What `fetch` raises when the request never reached a status, carrying the
+    original exception as ``__cause__`` — which is the channel `_transport_verdict`
+    reads to word the failure in the page's vocabulary rather than urllib's."""
+    error = RemoteError("request failed for HEAD https://x.example.org/",
+                        fault=Fault.TRANSIENT)
+    error.__cause__ = reason
+    return error
 
 
 class TargetTests(TestCase):
@@ -144,41 +157,43 @@ class VerdictTests(TestCase):
     def test_a_redirect_is_reported_rather_than_followed(self):
         # 301 and 302 are in the default alive list, which they could never reach if
         # urllib quietly followed them to whatever answers at the end.
-        verdict = self.probe(answering(http_error(301)))
+        verdict = self.probe(answering(301))
         self.assertIs(verdict.alive, True)
         self.assertEqual(verdict.detail, "HTTP 301")
 
     def test_gone_is_dead(self):
         for code in (404, 410):
-            verdict = self.probe(answering(http_error(code)))
+            verdict = self.probe(answering(code))
             self.assertIs(verdict.alive, False)
             self.assertEqual(verdict.detail, f"HTTP {code}")
 
     def test_anything_else_is_no_answer_rather_than_a_death(self):
-        verdict = self.probe(answering(http_error(500)))
+        verdict = self.probe(answering(500))
         self.assertIsNone(verdict.alive)
         self.assertEqual(verdict.detail, "HTTP 500")
 
     def test_head_falls_back_to_get(self):
         # A 405 is a server's opinion about methods, not about existence.
-        request = answering(http_error(405), 200)
+        request = answering(405, 200)
         verdict = self.probe(request)
         self.assertIs(verdict.alive, True)
         self.assertEqual([method for _, method in request.calls], ["HEAD", "GET"])
 
     def test_a_server_that_does_not_implement_head_is_asked_again_too(self):
-        request = answering(http_error(501), 200)
+        request = answering(501, 200)
         self.assertIs(self.probe(request).alive, True)
         self.assertEqual([method for _, method in request.calls], ["HEAD", "GET"])
 
     def test_a_name_that_does_not_resolve_is_dead(self):
-        error = urllib.error.URLError(socket.gaierror("nodename nor servname"))
+        error = transport_failure(
+            urllib.error.URLError(socket.gaierror("nodename nor servname")))
         verdict = self.probe(answering(error))
         self.assertIs(verdict.alive, False)
         self.assertEqual(verdict.detail, "host not found")
 
     def test_a_refused_port_is_dead(self):
-        error = urllib.error.URLError(ConnectionRefusedError())
+        error = transport_failure(
+            urllib.error.URLError(ConnectionRefusedError()))
         verdict = self.probe(answering(error))
         self.assertIs(verdict.alive, False)
         self.assertEqual(verdict.detail, "connection refused")
@@ -186,19 +201,32 @@ class VerdictTests(TestCase):
     def test_a_timeout_is_no_answer_rather_than_a_death(self):
         # An internal host behind a slow VPN answers eventually; calling that dead
         # is how a page starts crying wolf.
-        error = urllib.error.URLError(TimeoutError())
+        error = transport_failure(urllib.error.URLError(TimeoutError()))
         verdict = self.probe(answering(error))
         self.assertIsNone(verdict.alive)
         self.assertEqual(verdict.detail, "no answer in time")
 
+    def test_a_tls_failure_says_so_and_is_not_a_death(self):
+        """The second branch nothing exercised (roadmap item 6). A bad certificate or a
+        protocol mismatch is emphatically **not** a retired host — the port answered and
+        the server is there — so it reads as unknown with a detail an operator can act
+        on, rather than as gone. It is also the one verdict here that names a fix.
+        """
+        error = transport_failure(
+            urllib.error.URLError(ssl.SSLError("CERTIFICATE_VERIFY_FAILED")))
+        verdict = self.probe(answering(error))
+        self.assertIsNone(verdict.alive)
+        self.assertEqual(verdict.detail, "TLS handshake failed")
+
     def test_the_transport_exception_never_reaches_the_page(self):
-        error = urllib.error.URLError(OSError("proxy /etc/ssl/certs said no"))
+        error = transport_failure(
+            urllib.error.URLError(OSError("proxy /etc/ssl/certs said no")))
         self.assertEqual(self.probe(answering(error)).detail, "no answer")
 
     def test_a_failed_answer_is_what_the_page_draws(self):
         self.assertFalse(self.probe(answering(200)).failed)
-        self.assertTrue(self.probe(answering(http_error(404))).failed)
-        self.assertTrue(self.probe(answering(http_error(500))).failed)
+        self.assertTrue(self.probe(answering(404)).failed)
+        self.assertTrue(self.probe(answering(500)).failed)
 
 
 class PassTests(TestCase):
@@ -438,7 +466,7 @@ class PageViewTests(TestCase):
     def test_a_dead_entry_carries_its_verdict(self):
         config = config_with(Link(title="A", url="https://a.example.org/",
                                   check=True), links=True)
-        view = self.view(config, answering(http_error(404)))
+        view = self.view(config, answering(404))
         verdict = view.verdicts["https://a.example.org/"]
         self.assertIs(verdict.alive, False)
         self.assertTrue(verdict.failed)
@@ -451,7 +479,7 @@ class PageViewTests(TestCase):
             groups=(Group(title="T", links=(
                 Link(title="A", url="https://a.example.org/", icon="far"),
                 Link(title="B", url="https://b.example.org/", icon="far"))),))
-        view = self.view(config, answering(http_error(404)))
+        view = self.view(config, answering(404))
         self.assertEqual([failure.name for failure in view.icon_failures], ["far"])
         self.assertEqual(view.icon_failures[0].verdict.detail, "HTTP 404")
 
@@ -483,8 +511,42 @@ class PageViewTests(TestCase):
         self.assertFalse(link_probe.page_view(config).running)
 
 
+class RequestPolicyTests(TestCase):
+    """What `_request` asks `fetch` for. Three of these are decisions rather than
+    defaults, and the page's whole reading of a `301` rests on the first."""
+
+    def _asked(self):
+        with mock.patch.object(link_probe, "fetch",
+                               return_value=mock.Mock(status=200)) as called:
+            self.assertEqual(
+                link_probe._request("https://x.example.org/", "HEAD"), 200)
+        return called.call_args
+
+    def test_a_redirect_is_reported_rather_than_followed(self):
+        # `301` and `302` are in the default `alive:` list, which they could never
+        # reach if urllib quietly followed them to whatever answers at the end.
+        self.assertFalse(self._asked().kwargs["follow_redirects"])
+
+    def test_the_agent_says_which_subsystem_is_knocking(self):
+        agent = self._asked().kwargs["headers"]["User-Agent"]
+        self.assertTrue(agent.startswith("little-sister/"))
+        self.assertIn("link probe", agent)
+
+    def test_no_body_is_read(self):
+        self.assertFalse(self._asked().kwargs["read_body"])
+
+    def test_the_request_carries_the_probe_timeout(self):
+        self.assertEqual(self._asked().kwargs["timeout"],
+                         link_probe.REQUEST_TIMEOUT)
+
+
 class MalformedAnswerTests(TestCase):
-    """A server that answers garbage costs its own verdict, not the pass."""
+    """A server that answers garbage costs its own verdict, not the pass.
+
+    The *conversion* — that `BadStatusLine` and friends become a `RemoteError` at all
+    — is `fetch`'s job and is tested there. What is tested here is the half this
+    module owns: such a failure is **no answer**, never a death, and it is contained.
+    """
 
     def probe(self, error):
         def request(url, method):
@@ -492,32 +554,37 @@ class MalformedAnswerTests(TestCase):
         with mock.patch.object(link_probe, "_request", request):
             return link_probe._probe("https://x.example.org/", frozenset({200}))
 
-    def test_an_http_exception_does_not_escape(self):
+    def test_a_garbage_answer_is_no_answer_rather_than_a_death(self):
         # `BadStatusLine` and `InvalidURL` are neither `OSError` nor `ValueError`,
         # and urllib re-raises them unwrapped out of `getresponse()`. One target
         # like that used to take down the whole sweep — and because a target with
         # no answer reads as "never asked", every later open started another one.
-        for error in (http.client.BadStatusLine("this is not http"),
-                      http.client.InvalidURL("nonnumeric port"),
-                      http.client.HTTPException("something else")):
-            with self.subTest(error=type(error).__name__):
-                verdict = self.probe(error)
+        for reason in (http.client.BadStatusLine("this is not http"),
+                       http.client.InvalidURL("nonnumeric port"),
+                       http.client.HTTPException("something else")):
+            with self.subTest(error=type(reason).__name__):
+                verdict = self.probe(transport_failure(reason))
                 self.assertIsNone(verdict.alive)      # no idea, not "gone"
                 self.assertEqual(verdict.detail, "no answer")
 
-    def test_one_bad_target_leaves_the_others_answered(self):
-        answers = {"https://good.example.org/": 200}
+    @staticmethod
+    def _two_targets():
+        return config_with(Link(title="Good", url="https://good.example.org/",
+                                check=True),
+                           Link(title="Bad", url="https://bad.example.org/",
+                                check=True),
+                           links=True)
 
+    def test_a_garbage_target_still_gets_a_verdict_so_it_is_not_re_probed(self):
+        """The production path, and the reason the old bug was expensive: a target
+        with **no** verdict reads as "never asked", so every later open started
+        another doomed pass."""
         def request(url, method):
-            if url in answers:
-                return answers[url]
-            raise http.client.BadStatusLine("garbage")
+            if url == "https://good.example.org/":
+                return 200
+            raise transport_failure(http.client.BadStatusLine("garbage"))
 
-        config = config_with(Link(title="Good", url="https://good.example.org/",
-                                  check=True),
-                             Link(title="Bad", url="https://bad.example.org/",
-                                  check=True),
-                             links=True)
+        config = self._two_targets()
         with mock.patch.object(link_probe, "_request", request):
             link_probe.start_pass(config).wait(5)
         view = link_probe.page_view(config)
@@ -526,6 +593,22 @@ class MalformedAnswerTests(TestCase):
         self.assertIsNone(view.verdicts["https://bad.example.org/"].alive)
         # and with every target answered, the next open is not due again
         self.assertIsNone(link_probe.refresh_if_due(config))
+
+    def test_an_unexpected_exception_costs_only_its_own_target(self):
+        """The backstop under the one above. `_probe` catches what a request is
+        expected to fail with; anything else is a bug, and one target's bug must not
+        cost the other fifty-nine their answers."""
+        def request(url, method):
+            if url == "https://good.example.org/":
+                return 200
+            raise RuntimeError("a bug, not a failed request")
+
+        config = self._two_targets()
+        with mock.patch.object(link_probe, "_request", request):
+            link_probe.start_pass(config).wait(5)
+        view = link_probe.page_view(config)
+        self.assertIs(view.verdicts["https://good.example.org/"].alive, True)
+        self.assertNotIn("https://bad.example.org/", view.verdicts)
 
 
 class IntervalTests(TestCase):

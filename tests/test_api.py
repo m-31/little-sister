@@ -66,6 +66,32 @@ class JsonApiTests(TestCase):
         self.assertEqual(node["about"], "the **billing** db")
         self.assertEqual(node["title"], "prod")
 
+    def test_the_envelope_still_carries_a_title_the_web_declines_to_draw(self):
+        # A title that only repeats the name is suppressed on every *surface*
+        # (`titles.py`) and on none of the contract: dropping a field is a change
+        # to ADR-0008, and a client rendering its own chips is entitled to its own
+        # decision about the word.
+        self.tree.upsert("/github/severity/critical", StatusCode.OK)
+        self.tree.set_title("/github/severity/critical", "Critical")
+        node = self.client.get("/status/github/severity/critical",
+                               headers=JSON).get_json()["status"]
+        self.assertEqual(node["title"], "Critical")
+
+    def test_a_declared_rank_moves_children_but_ships_no_field(self):
+        # The envelope reads the same snapshot, so a ranked node's `children` order
+        # moves here too — accepted (ADR-0055): order is not part of the contract.
+        # The rank *field* is not emitted yet; it rides the client contract round
+        # with `reported_code`, `report` and the run facts, in one schema_version
+        # decision, rather than arriving piecemeal.
+        for band in ("critical", "high", "informational", "low", "medium"):
+            self.tree.upsert(f"/wiz/{band}", StatusCode.OK,
+                             order=1 if band == "informational" else 0)
+        node = self.client.get("/status/wiz", headers=JSON).get_json()["status"]
+        self.assertEqual([child["name"] for child in node["children"]],
+                         ["critical", "high", "low", "medium", "informational"])
+        self.assertNotIn("order", node)
+        self.assertNotIn("order", node["children"][0])
+
     def test_report_stays_off_the_envelope(self):
         # Web-only until the client contract round (ADR-0044, riding ADR-0008's
         # batched revision), like `reported_code` and the run facts before it: a

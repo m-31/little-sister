@@ -1,6 +1,6 @@
 [project]
 name = "little-sister"
-version = "0.3.11"
+version = "0.3.12"
 description = "Self-hosted status monitoring — checks are plain Python, from a homelab to a team"
 authors = [
     { name = "Michael Meyling" }
@@ -49,7 +49,19 @@ dev = [
     "pytest>=9.0.3",
     "pytest-cov>=7.1.0",
     "ruff>=0.16.1",
+    # ShellCheck as a wheel, so the shell half of the gate runs through `uv run`
+    # like the rest and needs nothing installed on the machine.
+    "shellcheck-py>=0.11.0.1",
     "types-PyYAML",
+]
+# The browser boundary checks (tests/test_dashboard_browser.py, ADR-0056) hold
+# the layout model against real paint. Deliberately *not* in `dev`: the
+# everyday gate must not grow a browser download, and the tests skip cleanly
+# without one. Install and run them explicitly — see docs/testing-the-gui.md:
+#     uv sync --group browser && uv run playwright install chromium
+#     uv run pytest tests/test_dashboard_browser.py
+browser = [
+    "playwright>=1.49",
 ]
 
 [tool.ruff]
@@ -59,9 +71,18 @@ dev = [
 target-version = "py311"
 
 [tool.ruff.lint]
-# Beyond ruff's default (E, F): import sorting (I), pyupgrade (UP — the 3.14
-# idioms), bugbear (B), comprehensions (C4) and Ruff's own rules (RUF). The
-# ambiguous-unicode rules are off: the UI uses typographic "—" and "…" on purpose.
+# ruff-selection:begin
+# One selection for the whole family, so every project lints identically and a
+# fix argued in one of them is a fix in all of them. Beyond ruff's default (E, F):
+# import sorting (I), pyupgrade (UP), bugbear (B), comprehensions (C4) and Ruff's
+# own rules (RUF). Selecting explicitly also pins the gate against ruff's own
+# defaults shifting between releases.
+#
+# The ambiguous-unicode rules are off, and stay off. This family's user-facing
+# text — reasons, subnode titles, chip labels — uses typographic "—", "…", "×" and
+# "·" on purpose, and a rule that flags them would be answered with a `noqa` on
+# every line that has an opinion about punctuation.
+# ruff-selection:end
 select = ["E", "F", "W", "I", "UP", "B", "C4", "RUF"]
 ignore = ["RUF001", "RUF002", "RUF003"]
 

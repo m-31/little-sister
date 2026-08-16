@@ -31,6 +31,8 @@ DEFAULT_MAINTENANCE_CAP = 5
 DEFAULT_RETRY_ATTEMPTS = 2
 DEFAULT_CARD_STATUS_LINE = "beside"
 CARD_STATUS_LINES = ("beside", "below")
+DEFAULT_DASHBOARD_COLUMNS = "flow"
+DASHBOARD_COLUMNS = ("flow", "plain")
 SETTINGS_ASPECT = "settings"
 # An explicit single-file override, read at import so a wrapper can set it before
 # importing the app. Empty (the normal case) means "use the aspect and its layering".
@@ -89,6 +91,14 @@ class Config:
     # uniform grid that spends vertical space for it. Display only, a sibling
     # of reason_cap's budget family; a per-viewer override is a later step.
     card_status_line: str = DEFAULT_CARD_STATUS_LINE
+    # How dashboard cards spend a wide grid's columns (ADR-0056): ``flow``
+    # (the default) lets a large root take useful spare tracks from the
+    # stable width-priced plan; ``plain`` skips the plan entirely, so every
+    # card keeps one ordinary auto-fill track — the same grid a browser
+    # without JavaScript shows. One enum, display only; a per-viewer value
+    # and a possible ``packed`` mode are later steps of the same control,
+    # never a second switch.
+    dashboard_columns: str = DEFAULT_DASHBOARD_COLUMNS
 
     @property
     def tzinfo(self) -> ZoneInfo:
@@ -160,6 +170,18 @@ def _valid_card_status_line(value: object) -> str:
                        value, "/".join(CARD_STATUS_LINES),
                        DEFAULT_CARD_STATUS_LINE)
         return DEFAULT_CARD_STATUS_LINE
+    return choice
+
+
+def _valid_dashboard_columns(value: object) -> str:
+    """Coerce the dashboard column mode to a known value; anything else falls
+    back to the flowing default with a warning naming the choices."""
+    choice = str(value).strip().lower()
+    if choice not in DASHBOARD_COLUMNS:
+        logger.warning("config: dashboard_columns %r is not one of %s; using %r",
+                       value, "/".join(DASHBOARD_COLUMNS),
+                       DEFAULT_DASHBOARD_COLUMNS)
+        return DEFAULT_DASHBOARD_COLUMNS
     return choice
 
 
@@ -248,17 +270,20 @@ def load_config(path: str | Path | None = None, *,
         stacktrace=values.flag(data, "stacktrace", default=True),
         card_status_line=_valid_card_status_line(
             data.get("card_status_line", DEFAULT_CARD_STATUS_LINE)),
+        dashboard_columns=_valid_dashboard_columns(
+            data.get("dashboard_columns", DEFAULT_DASHBOARD_COLUMNS)),
     )
     if sources:
         logger.info(
             "config: loaded %s — timezone=%s, time_format=%r, reason_cap=%d, "
             "branch_cap=%d, maintenance_cap=%d, maintenance_default_expiry=%s, "
-            "retry_interval=%s, retry_attempts=%d, card_status_line=%s",
+            "retry_interval=%s, retry_attempts=%d, card_status_line=%s, "
+            "dashboard_columns=%s",
             ", ".join(str(source.resolve()) for source in sources),
             cfg.timezone, cfg.time_format, cfg.reason_cap, cfg.branch_cap,
             cfg.maintenance_cap, cfg.maintenance_default_expiry,
             cfg.retry_interval or "off", cfg.retry_attempts,
-            cfg.card_status_line)
+            cfg.card_status_line, cfg.dashboard_columns)
     return cfg
 
 

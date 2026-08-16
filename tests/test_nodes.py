@@ -6,7 +6,7 @@ from unittest import TestCase
 
 from little_sister.checks.http import HttpCheck
 from little_sister.checks.ssh.host_metrics import DEFAULT_THRESHOLDS, HostMetricsCheck
-from little_sister.errors import ConfigError
+from little_sister.errors import CheckError, ConfigError
 from little_sister.nodes import (
     NodeMeta,
     load_nodes,
@@ -38,6 +38,41 @@ class LoadNodesTests(TestCase):
             (Path(directory) / "nodes.yaml").write_text("/nexus: {title: Nexus NAS}\n")
             self.assertEqual(load_nodes(Path(directory)),
                              {"/nexus": NodeMeta(title="Nexus NAS")})
+
+    def test_order_is_read_and_a_stated_zero_survives(self):
+        # `order: 0` is the deployment overruling a rank the check declared
+        # (ADR-0055), so it must reach the tree — an absent key must not.
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / "nodes.yaml").write_text(
+                "/wiz/critical: {order: -2}\n"
+                "/wiz/informational: {order: 0}\n"
+                "/wiz/low: {about: nothing urgent}\n")
+            meta = load_nodes(Path(directory))
+            self.assertEqual(meta["/wiz/critical"].order, -2)
+            self.assertEqual(meta["/wiz/informational"].order, 0)
+            self.assertIsNone(meta["/wiz/low"].order)
+
+    def test_order_only_entry_is_kept(self):
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / "nodes.yaml").write_text("/nexus: {order: 3}\n")
+            self.assertEqual(load_nodes(Path(directory)),
+                             {"/nexus": NodeMeta(order=3)})
+
+    def test_a_non_numeric_order_is_refused(self):
+        # Silently ignoring it would leave the row in an order nobody chose.
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / "nodes.yaml").write_text("/nexus: {order: soon}\n")
+            with self.assertRaises(CheckError) as caught:
+                load_nodes(Path(directory))
+            self.assertIn("order", str(caught.exception))
+            self.assertIn("whole number", str(caught.exception))
+
+    def test_a_later_root_may_state_order_zero_over_a_ranked_base(self):
+        with tempfile.TemporaryDirectory() as d1, tempfile.TemporaryDirectory() as d2:
+            (Path(d1) / "nodes.yaml").write_text("/a: {about: base, order: 4}\n")
+            (Path(d2) / "nodes.yaml").write_text("/a: {order: 0}\n")
+            meta = load_nodes(f"{d1}{os.pathsep}{d2}")
+            self.assertEqual(meta["/a"], NodeMeta(about="base", order=0))
 
     def test_unions_across_roots(self):
         with tempfile.TemporaryDirectory() as d1, tempfile.TemporaryDirectory() as d2:
@@ -78,6 +113,30 @@ class ResolveMetadataTests(TestCase):
         # title from nodes.yaml; about falls back to the inline value (per field)
         self.assertEqual(meta["/web"],
                          NodeMeta(about="inline about", title="declared title"))
+
+    def test_an_inline_order_is_read_and_nodes_yaml_still_wins(self):
+        # `order` sits beside the `title:`/`about:` a deployment writes for the same
+        # node, with the same per-field precedence (ADR-0055). Before this it was
+        # loaded and silently dropped.
+        check = self._http(path="/web", title="inline title", order=2)
+        self.assertEqual(resolve_metadata([check], {}),
+                         {"/web": NodeMeta(title="inline title", order=2)})
+        meta = resolve_metadata([check], {"/web": NodeMeta(order=7)})
+        self.assertEqual(meta["/web"], NodeMeta(title="inline title", order=7))
+
+    def test_an_inline_order_of_zero_is_a_declaration_not_silence(self):
+        check = self._http(path="/web", order=0)
+        self.assertEqual(resolve_metadata([check], {})["/web"].order, 0)
+
+    def test_a_check_with_only_an_order_still_reaches_the_map(self):
+        # The map used to be keyed on "has a label"; an order-only check would have
+        # fallen out of it entirely.
+        check = self._http(path="/web", order=-1)
+        self.assertEqual(resolve_metadata([check], {}), {"/web": NodeMeta(order=-1)})
+
+    def test_no_order_anywhere_stays_unstated(self):
+        check = self._http(path="/web", title="inline title")
+        self.assertIsNone(resolve_metadata([check], {})["/web"].order)
 
     def test_inline_used_when_no_declaration(self):
         check = self._http(path="/web", title="inline title")

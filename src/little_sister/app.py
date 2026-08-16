@@ -2,7 +2,6 @@ import atexit
 import json
 import os
 import re
-from collections import Counter
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from functools import partial
@@ -29,7 +28,7 @@ from markupsafe import Markup
 from little_sister import __version__, csp, link_probe, slots, watch_lines
 from little_sister.actions import register_builtin_fillers
 from little_sister.api import authenticate, parse_api_tokens, problem, status_envelope
-from little_sister.checks import CheckError, parse_duration
+from little_sister.checks import CheckError, parse_duration, plain
 from little_sister.checks.base import TypeOrigin, registered_types
 from little_sister.config import config
 from little_sister.config_dir import (
@@ -39,7 +38,14 @@ from little_sister.config_dir import (
     fatal,
     registered_aspects,
 )
-from little_sister.copy_status import format_copy_markdown
+from little_sister.copy_action import register_copy_filler
+from little_sister.copy_status import (
+    TimeStyle,
+    format_copy_markdown,
+    format_node_markdown,
+    format_reason_markdown,
+)
+from little_sister.dashboard_layout import dashboard_layout
 from little_sister.engine import Engine, EngineInfo, create_engine
 from little_sister.errors import ConfigError
 from little_sister.icons import known_names, read_icon
@@ -48,9 +54,12 @@ from little_sister.logger import logger
 from little_sister.maintenance import MaintenanceEntry, MaintenanceStore
 from little_sister.nodes import load_nodes, resolve_metadata, run_consistency_pass
 from little_sister.origins import PackageOrigin, package_origin
+from little_sister.paths import shown_path
 from little_sister.render import render_markdown, render_markdown_inline
 from little_sister.secrets import SecretError, resolve_setting
+from little_sister.spans import coarse_span, format_duration, format_span
 from little_sister.status import HEARTBEAT_PATH, StatusCode
+from little_sister.titles import Labelled, label_parts, shown_title
 from little_sister.tree import StatusSnapshot, status_tree
 from little_sister.users import load_users, read_avatar
 
@@ -78,6 +87,9 @@ _load_dotenv()
 
 app = Flask(import_name=__name__)
 app.jinja_env.undefined = StrictUndefined
+# The template supplies the current filtered snapshot and render depth; this
+# helper turns only that stable topology into the card weights and span plans.
+app.jinja_env.globals["dashboard_layout"] = dashboard_layout
 # Template slots (ADR-0034): a dependent package's own templates, reachable only as
 # `ext/<package>/<name>` and only behind our own loader — so a registration adds a
 # place's contents and can never replace one of our templates. Flask always installs
@@ -182,6 +194,12 @@ def _inject_presentation() -> dict[str, object]:
         # attribute the stylesheet branches on; a per-viewer override is a
         # later step (backlog).
         "card_status_line": config.card_status_line,
+        # Deployment-wide column mode (settings.yaml `dashboard_columns`,
+        # ADR-0056): `flow` lets the status grid publish its width-priced span
+        # plan; `plain` withholds it, leaving the plain auto-fill grid — the
+        # exact page a browser without JavaScript shows. A per-viewer value
+        # and a possible `packed` mode are later steps of this same enum.
+        "dashboard_columns": config.dashboard_columns,
     }
 
 
@@ -224,6 +242,7 @@ app.jinja_env.globals["extension_assets"] = _extension_assets
 # here rather than before the app import, because it is ours: a deployment's
 # registrations have already landed by now, and both kinds share one rail.
 register_builtin_fillers()
+register_copy_filler()
 
 
 # The one inline script the documents carry: the theme bootstrap, which resolves
@@ -425,6 +444,15 @@ def _url_branch(path: str) -> str:
     return path.lstrip("/")
 
 
+@app.template_filter("loaded_from")
+def _loaded_from(path: str) -> str:
+    """A loaded-from path as `/system` draws it — against the environment or the
+    working directory, per :mod:`little_sister.paths`. Both tables that print one
+    call this; the origin objects keep the absolute string, and so does the
+    `title` the templates hang it in."""
+    return shown_path(path)
+
+
 @app.template_filter("markdown")
 def _markdown(text: object) -> Markup:
     """Render a Markdown block to safe HTML (ADR-0018)."""
@@ -435,6 +463,16 @@ def _markdown(text: object) -> Markup:
 def _markdown_inline(text: object) -> Markup:
     """Render Markdown inline (one line, no `<p>`) to safe HTML (ADR-0018)."""
     return render_markdown_inline(str(text) if text else "")
+
+
+@app.template_filter("node_title")
+def _node_title(node: Labelled) -> str:
+    """The node's title, or `""` where it only repeats its name (`titles.py`).
+
+    Takes the whole node rather than the title alone, so a template cannot ask
+    the question with only half of it. Anything carrying a `name` and a `title`
+    answers — a `StatusSnapshot`, a maintenance pin."""
+    return shown_title(node.name, node.title)
 
 
 @app.template_filter("breadcrumbs")
@@ -507,30 +545,26 @@ def _status_alert(code: StatusCode) -> str:
 
 @app.template_filter("duration")
 def _duration(seconds: int | None) -> str:
-    """Humanise a number of seconds, e.g. 900 -> '15m'."""
-    if not seconds:
-        return "—"
-    if seconds % 86400 == 0:
-        return f"{seconds // 86400}d"
-    if seconds % 3600 == 0:
-        return f"{seconds // 3600}h"
-    if seconds % 60 == 0:
-        return f"{seconds // 60}m"
-    return f"{seconds}s"
+    """A **configured** interval in the units the config wrote it in — 900 is
+    `15m` — as :func:`little_sister.spans.format_duration` writes it.
+
+    A name for the template, not a second implementation; the same relationship
+    `elapsed` has to `format_span`. The copy document states a check's frequency
+    too, and two implementations of *how this project writes an interval* is
+    precisely the drift `spans.py` exists to prevent."""
+    return format_duration(seconds)
 
 
 @app.template_filter("elapsed")
 def _elapsed(seconds: float | None) -> str:
-    """Humanise a check runtime: milliseconds under a second (``412 ms``), one
-    decimal under ten seconds (``3.1 s``), whole seconds beyond (``43 s``);
-    ``—`` when no run has finished yet."""
-    if seconds is None:
-        return "—"
-    if seconds < 1.0:
-        return f"{seconds * 1000:.0f} ms"
-    if seconds < 10.0:
-        return f"{seconds:.1f} s"
-    return f"{seconds:.0f} s"
+    """A measured span — a check runtime, a countdown, an uptime — as
+    :func:`little_sister.spans.format_span` writes it: ``412 ms``, ``3.1 s``,
+    ``43 s``, ``1m 55s``, ``2h 7m``, ``1d 3h``; ``—`` before the first run.
+
+    The filter is a name for the template, not a second implementation: the
+    rendering itself is on the public API surface so a check type writing a
+    duration into a reason line matches the page it renders onto."""
+    return format_span(seconds)
 
 
 def _format_local(moment: datetime, fmt: str | None = None) -> str:
@@ -541,10 +575,22 @@ def _format_local(moment: datetime, fmt: str | None = None) -> str:
     The one place display timestamps are formatted, so the dashboard's poll
     stamp (served in the ``X-Rendered-At`` response header) matches every
     server-rendered time (ADR-0006) rather than the browser's locale.
+
+    A **copied** document is the one thing formatted elsewhere, by
+    :class:`~little_sister.copy_status.TimeStyle` (:func:`_copy_style` builds it
+    from this same configuration). Not a second implementation of this one: it
+    answers a different question, because it is read where the configured zone is
+    not the reader's, so it names the offset this deliberately does not.
     """
     if moment.tzinfo is None:
         moment = moment.astimezone()
     return moment.astimezone(config.tzinfo).strftime(fmt or config.time_format)
+
+
+def _copy_style() -> TimeStyle:
+    """The clock a copy document is written with: this deployment's zone and
+    format, resolved once per document so one hand-off cannot straddle a reload."""
+    return TimeStyle(config.tzinfo, config.time_format)
 
 
 @app.template_filter("localtime")
@@ -586,8 +632,18 @@ def _node_meta_map(node: StatusSnapshot | None) -> dict[str, dict[str, str]]:
     while stack:
         current = stack.pop()
         meta: dict[str, str] = {}
-        if current.title:
-            meta["title"] = str(render_markdown_inline(current.title))
+        # A title that only repeats the name is dropped here as on the chip that
+        # opens the card (`titles.py`) — otherwise hovering `critical` pops a card
+        # whose entire content is the word *Critical*. A node left with no metadata
+        # at all falls out of the map, and gets no hover card, which is right.
+        # And a title with no word in it is drawn **with** its name rather than
+        # instead of it (ADR-0061): this card has no name of its own, so a band
+        # titled 🔴 would head a card with a bare circle. `plain` because a name is
+        # structural data and this string is about to be rendered as Markdown.
+        name, title = label_parts(current.name, current.title)
+        if title:
+            label = f"{plain(name)} {title}" if name else title
+            meta["title"] = str(render_markdown_inline(label))
         if current.about:
             meta["about"] = str(render_markdown(current.about))
         if meta:
@@ -610,9 +666,13 @@ class _MaintenancePin:
     appears as text** — ADR-0036 makes it opaque — so it travels only as the deep
     link's ``?reason=`` value.
 
-    ``order`` places a node's pins: its own first (``-1``), then its entries in the
+    ``slot`` places a node's pins: its own first (``-1``), then its entries in the
     **check's** order, which is information (severity, API order) that sorting by an
-    opaque slug would scramble. ``total`` is how many reasons the node had when this
+    opaque slug would scramble. It is a position *within one node*, and so is not
+    the node's ``order`` — the sibling rank of ADR-0055, which this object does not
+    carry although it is otherwise :class:`~little_sister.titles.Labelled`.
+
+    ``total`` is how many reasons the node had when this
     was read, carried so the popover can say *3 of 20* without a second walk, and
     ``expires_at`` so it can pick the soonest of several without re-parsing a
     humanized string.
@@ -629,13 +689,26 @@ class _MaintenancePin:
     remaining: str
     slug: str = ""
     line: str = ""
-    order: int = -1
+    #: Where this pin sits **among the pins of its own node** — the index of the
+    #: reason line it covers, and ``-1`` for the node's own pin so that one sorts
+    #: first. Deliberately *not* called `order`: since ADR-0055 that word means a
+    #: node's declared rank among its **siblings**, and this object is `Labelled`,
+    #: so the two would sit one attribute apart with different meanings.
+    slot: int = -1
     total: int = 0
     expires_at: str = ""
     set_by: str = ""
     set_at: str = ""
     created_by: str = ""
     created_at: str = ""
+
+    @property
+    def name(self) -> str:
+        """The pinned node's own name — the last segment of its path. The table
+        prints the whole path, whose tail *is* the name, so a title repeating it
+        duplicates on this page exactly as it does on a chip; this is what lets
+        the `node_title` filter ask the question here too (`titles.py`)."""
+        return self.path.rsplit("/", 1)[-1]
 
     @property
     def edited(self) -> bool:
@@ -687,7 +760,7 @@ def _humanize_remaining(seconds: float) -> str:
     total = int(seconds)
     if total <= 0:
         return "expired"
-    return _coarse_span(total)
+    return coarse_span(total)
 
 
 #: The name, for the one filter that has to find it inside a sentence. The
@@ -733,29 +806,12 @@ def _since(value: datetime | None) -> str:
     elapsed = int((datetime.now() - value).total_seconds())
     if elapsed < 60:
         return f"at {_format_local(value, '%H:%M')}"
-    return f"> {_coarse_span(elapsed)} ago"
-
-
-def _coarse_span(total: int) -> str:
-    """A span of seconds as its largest one or two units: ``2d 3h`` / ``5h`` /
-    ``12m`` / ``< 1m``. Shared by the two readings of a span — how long is left,
-    and how long ago it was — so they can never drift apart."""
-    if total >= 86400:
-        days, rest = divmod(total, 86400)
-        hours = rest // 3600
-        return f"{days}d {hours}h" if hours else f"{days}d"
-    if total >= 3600:
-        hours, rest = divmod(total, 3600)
-        minutes = rest // 60
-        return f"{hours}h {minutes}m" if minutes else f"{hours}h"
-    if total >= 60:
-        return f"{total // 60}m"
-    return "< 1m"
+    return f"> {coarse_span(elapsed)} ago"
 
 
 def _pin_view(node: StatusSnapshot, entry: MaintenanceEntry, now: datetime, *,
-              slug: str = "", line: str = "", order: int = -1) -> _MaintenancePin:
-    """One stored pin as an index row. ``slug`` / ``line`` / ``order`` are set for an
+              slug: str = "", line: str = "", slot: int = -1) -> _MaintenancePin:
+    """One stored pin as an index row. ``slug`` / ``line`` / ``slot`` are set for an
     **entry** pin and left at their defaults for a node's own."""
     try:
         remaining = (datetime.fromisoformat(entry.expires_at) - now).total_seconds()
@@ -763,7 +819,7 @@ def _pin_view(node: StatusSnapshot, entry: MaintenanceEntry, now: datetime, *,
         remaining = 0.0
     return _MaintenancePin(
         path=node.path, title=node.title, note=entry.reason,
-        remaining=_humanize_remaining(remaining), slug=slug, line=line, order=order,
+        remaining=_humanize_remaining(remaining), slug=slug, line=line, slot=slot,
         total=len(node.reasons), expires_at=entry.expires_at,
         set_by=entry.set_by, set_at=entry.set_at,
         created_by=entry.created_by, created_at=entry.created_at)
@@ -823,12 +879,12 @@ def _maintenance_view(
         if entry is not None:
             node_pins.append(_pin_view(current, entry, now))
         here = False
-        for order, reason_line in enumerate(current.reasons):
+        for slot, reason_line in enumerate(current.reasons):
             if reason_line.maintenance is not None:
                 here = True
                 entry_pins.append(_pin_view(
                     current, reason_line.maintenance, now, slug=reason_line.slug,
-                    line=reason_line.text, order=order))
+                    line=reason_line.text, slot=slot))
         if below and entry is None:
             ancestors.add(current.path)
         return below or entry is not None or here
@@ -836,7 +892,7 @@ def _maintenance_view(
     if node is not None:
         walk(node)
     node_pins.sort(key=lambda pin: pin.path)
-    entry_pins.sort(key=lambda pin: (pin.path, pin.order))
+    entry_pins.sort(key=lambda pin: (pin.path, pin.slot))
     return node_pins, entry_pins, ancestors
 
 
@@ -844,7 +900,7 @@ def _maintenance_pins(node_pins: list[_MaintenancePin],
                       entry_pins: list[_MaintenancePin]) -> list[_MaintenancePin]:
     """Every pin in one list for ``/maintenance``: by path, a node's own pin first,
     then its entries in the check's order."""
-    return sorted(node_pins + entry_pins, key=lambda pin: (pin.path, pin.order))
+    return sorted(node_pins + entry_pins, key=lambda pin: (pin.path, pin.slot))
 
 
 def _maintenance_rows(node_pins: list[_MaintenancePin],
@@ -1021,6 +1077,11 @@ def _seed_node_metadata(engine: Engine) -> None:
     for path, meta in metadata.items():
         status_tree.set_about(path, meta.about)
         status_tree.set_title(path, meta.title)
+        # Only where the entry states one: seeding `None` as `0` would make every
+        # nodes.yaml entry an ordering declaration and shut out the check's rank
+        # on any node that merely has an `about` (ADR-0055).
+        if meta.order is not None:
+            status_tree.set_order(path, meta.order)
     run_consistency_pass(engine.checks, metadata)
 
 
@@ -1134,11 +1195,10 @@ def status(branch: str = "") -> ResponseReturnValue:
     node = status_tree.snapshot(branch)
     # A leaf node (a check) gets its own detail page.
     if branch and node is not None and not node.children:
-        periods = status_tree.history(branch)
         # The current period's start — or None when this node has no transition of its
         # own to bound one, in which case the page reports the single observation
         # instead of a from/until of one instant (ADR-0027).
-        since = periods[-1].since if periods else None
+        since = _since_of(branch)
         # `?reason=<slug>` names one line of this node — the addressing shape
         # ADR-0036 decision 12 settled on, never a path segment. The maintenance
         # index links here with it, because on a node with 150 findings "the right
@@ -1152,13 +1212,21 @@ def status(branch: str = "") -> ResponseReturnValue:
             status_tree.entry_maintenance(branch, focus)
             if focus and all(line.slug != focus for line in node.reasons)
             else None)
+        # The hand-off, from the **same** snapshot the page renders: one node
+        # cannot be described two ways in one response, and the rich HTML comes
+        # from the canonical Markdown rather than beside it, so the two clipboard
+        # members cannot drift (the `/copy` rule, one node down).
+        copy_markdown = format_node_markdown(node, _copy_style(), since)
+        copy_rich = render_markdown(copy_markdown)
         return render_template('check.html', username=session['username'],
                                firstname=session['firstname'], node=node,
                                branch=branch, since=since, focus=focus,
                                focus_orphan=focus_orphan,
                                is_admin=session.get('admin', False),
                                maintenance_default=config.maintenance_default_expiry,
-                               maintenance_timezone=config.timezone)
+                               maintenance_timezone=config.timezone,
+                               copy_markdown=copy_markdown,
+                               copy_html_text=str(copy_rich))
     # A branch page renders the same node-facts block as the leaf page (ADR-0044
     # decision 8), so it needs the same `since`: the start of the node's current
     # **own**-status period, from its own transition log — a container has one of
@@ -1638,11 +1706,30 @@ def events() -> ResponseReturnValue:
                            firstname=session['firstname'], events=recent)
 
 
+@dataclass(frozen=True)
+class TypeRow:
+    """One check type on ``/system``'s roster, with the checks that name it.
+
+    ``paths`` is the node path of every check configured with this type, in the
+    engine's own order — so it reads down the page in the same order as the check
+    table above it — and one entry per *check*, not per node: two checks may sit on
+    one host node (ADR-0015 allows it for disjoint owned subtrees), and a list that
+    deduplicated them would stop matching the count it is there to substantiate.
+    """
+    origin: TypeOrigin
+    paths: tuple[str, ...]
+
+    @property
+    def count(self) -> int:
+        """How many checks name this type — the number the row leads with."""
+        return len(self.paths)
+
+
 def _type_roster(
         info: EngineInfo | None,
-) -> tuple[list[tuple[TypeOrigin, int]], list[tuple[TypeOrigin, int]]]:
+) -> tuple[list[TypeRow], list[TypeRow]]:
     """The registered check types, split into the ones this configuration uses and
-    the ones it merely could — each paired with how many checks use it (0 in the
+    the ones it merely could — each carrying the checks that use it (none in the
     second list, which is what the split means).
 
     Two questions land on this roster and only one of them is urgent. *Which code
@@ -1652,23 +1739,33 @@ def _type_roster(
     behind a disclosure. So the used types come first, carrying their count, and
     the rest fold away — a card that was mostly rows nobody had asked about.
 
+    The row carries the **paths** rather than the count it is shown as, because a
+    count is the one thing on this page that cannot be checked from this page. Two
+    of what? — and the configuration naming a type in two different check files,
+    each rendering in a different branch of the tree, is the ordinary case, not a
+    defect. Everything else on `/system` names its subjects; this row now can too,
+    and the paths were in hand all along (`info.checks`). Node paths, not check
+    names, because the path is what the reader can go and look at.
+
     Folded rather than dropped, because the roster is also the only place a freshly
     installed plugin can be seen to have registered *before* any check uses it —
     the same silent failure the extensions card exists to catch. Dropping the
     unused ones would make "installed, registered, waiting" indistinguishable from
-    "the entry point never fired".
+    "the entry point never fired". An unused type keeps no list, which is only the
+    empty tuple saying what the fold below the table already says.
 
     With no engine — or an engine with no checks — nothing is known to be in use,
     so the first list is empty and the caller renders the second one flat. That is
     not a fallback so much as the case that most wants the roster: a start refused
     for an unknown `type:` leaves exactly this page with no engine behind it.
     """
-    counts: Counter[str] = (Counter(check.type_name for check in info.checks)
-                            if info is not None else Counter())
-    in_use = [(origin, counts[origin.type_name]) for origin in registered_types()
-              if counts[origin.type_name]]
-    folded = [(origin, 0) for origin in registered_types()
-              if not counts[origin.type_name]]
+    used: dict[str, list[str]] = {}
+    for check in (info.checks if info is not None else ()):
+        used.setdefault(check.type_name, []).append(check.path)
+    in_use = [TypeRow(origin, tuple(used[origin.type_name]))
+              for origin in registered_types() if origin.type_name in used]
+    folded = [TypeRow(origin, ()) for origin in registered_types()
+              if origin.type_name not in used]
     return in_use, folded
 
 
@@ -1774,18 +1871,74 @@ def system() -> ResponseReturnValue:
 
 
 @app.route('/copy')
-def copy() -> ResponseReturnValue:
+@app.route('/copy/<path:branch>')
+def copy(branch: str = "") -> ResponseReturnValue:
+    """A hand-off as a **page of its own** — the tree, one node, or one reason.
+
+    One route and three documents, addressed exactly as ADR-0036 decision 12
+    settled it for maintenance: the node is a **path**, the entry is a **query
+    value** (`?reason=<slug>`), never a path segment — a discovered entry's slug
+    contains a `/`, and a percent-encoded one does not survive `PATH_INFO`.
+
+    Why a page rather than a button that copies in place. The per-line control
+    lives in the `reason.actions` slot, whose fillers are links; a page keeps it
+    one, works with JavaScript off, and — the part that decides it — keeps the
+    documents *out of the pages*. The detail page lists every reason uncapped and
+    the grid's rail rides the ~10s poll, so a document embedded per line would be
+    paid for on every render of the crowded node this feature exists for. Here
+    each one is fetched exactly when somebody asks for it.
+
+    The leaf detail page keeps its own inline buttons: that document is one an
+    operator standing on the page wants without a navigation, and it is already
+    rendered from the snapshot behind that page.
+    """
     if 'username' not in session:
         return redirect('/login')
+    style = _copy_style()
     # One immutable read for both representations: the rich HTML is rendered from
     # the canonical Markdown below, so a check update can never put two different
     # incidents on the same page (ADR-0002).
-    markdown = format_copy_markdown(status_tree.snapshot(""))
+    node = status_tree.snapshot(branch) if branch else None
+    if branch and node is None:
+        return render_template('text.html', username=session['username'],
+                               firstname=session['firstname'],
+                               copy_markdown="", copy_html=Markup(""),
+                               copy_html_text="", copy_preview=True,
+                               copy_subject=branch, copy_missing=True), 404
+    if node is not None:
+        slug = request.args.get('reason', '')
+        line = next((r for r in node.reasons if r.slug == slug), None) if slug else None
+        if slug and line is None:
+            # A slug this run does not report: **suspended, not deleted**
+            # (ADR-0036 decision 6). There is no document to make of a line that
+            # is not there, and inventing one from the pin's text would hand over
+            # a finding the check is no longer making.
+            return render_template('text.html', username=session['username'],
+                                   firstname=session['firstname'],
+                                   copy_markdown="", copy_html=Markup(""),
+                                   copy_html_text="", copy_preview=True,
+                                   copy_subject=node.path,
+                                   copy_missing_reason=True), 404
+        markdown = (format_reason_markdown(node, line, style) if line is not None
+                    else format_node_markdown(node, style, _since_of(branch)))
+        subject = node.path
+    else:
+        markdown = format_copy_markdown(status_tree.snapshot(""), style)
+        subject = ""
     rich = render_markdown(markdown) if markdown else Markup("")
     return render_template(
         'text.html', username=session['username'],
         firstname=session['firstname'], copy_markdown=markdown,
-        copy_html=rich, copy_html_text=str(rich))
+        copy_html=rich, copy_html_text=str(rich), copy_preview=True,
+        copy_subject=subject)
+
+
+def _since_of(branch: str) -> str | None:
+    """The start of a node's current own-status period, or ``None`` where it has
+    no transition of its own to bound one (ADR-0027) — what the detail page
+    computes for the same document, in one place so the two cannot differ."""
+    periods = status_tree.history(branch)
+    return periods[-1].since if periods else None
 
 
 @app.route('/links')

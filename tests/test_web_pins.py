@@ -822,14 +822,14 @@ class EntryPinIndexTests(TestCase):
         self.assertIn("ada is on it", page)
 
     def test_the_view_types_still_order_a_nodes_pins_by_hand(self):
-        # the unit-level half kept: `order` is what puts a node's own pin ahead of
+        # the unit-level half kept: `slot` is what puts a node's own pin ahead of
         # its entries, and it is easier to state here than to arrange in a tree.
         node_pin = _MaintenancePin(path="/site/wiz", title="", note="whole box",
                                    remaining="3d", total=2,
                                    expires_at="2026-08-05T00:00:00")
         entry_pin = _MaintenancePin(path="/site/wiz", title="", note="ada is on it",
                                     remaining="2d", slug="acme/pr-412",
-                                    line="waiting on review", order=0, total=2,
+                                    line="waiting on review", slot=0, total=2,
                                     expires_at="2026-08-04T00:00:00")
         rows = _maintenance_rows([node_pin], [entry_pin])
         self.assertEqual((len(rows), rows[0].pinned, rows[0].quiet), (1, True, 1))

@@ -46,6 +46,7 @@ import re
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from importlib import resources
+from inspect import Parameter, signature
 
 from flask import render_template
 from jinja2 import BaseLoader, Environment, PackageLoader, TemplateNotFound
@@ -110,10 +111,22 @@ class Slot:
 #: Both are offered on **every** node regardless, because placement policy stays
 #: with the filler: a provider returning ``None`` is how an extension declines a
 #: node, a surface or a reason it has no action for.
+#:
+#: ``reason.actions`` hands over the line **twice**, and the pair is not
+#: redundant: ``reason`` is its text, which is what a ticket's summary is made of
+#: and what every filler written before this used; ``line`` is the whole
+#: :class:`~little_sister.tree.ReasonLine` — its ``slug``, its own ``code``, its
+#: ``running`` flag and whatever is pinned on it. Recovering that from ``index``
+#: was possible and is exactly the mistake
+#: [ADR-0036](../docs/adr/0036-addressable-reasons.md) decision 3 rejected by name:
+#: an index moves when an entry is inserted above it, and a surface that ever
+#: renders a filtered subset of reasons would silently point an action at a
+#: different finding. A slug does not move, so the object carrying it is what the
+#: slot promises.
 SLOTS: Mapping[str, Slot] = {
     "reason.actions": Slot(
         name="reason.actions",
-        context=("node", "reason", "index", "surface"),
+        context=("node", "reason", "line", "index", "surface"),
         where="beside one rendered reason line — every reason of every node, on "
               "the dashboard grid and on the leaf detail page",
     ),
@@ -414,12 +427,42 @@ class ExtensionLoader(BaseLoader):
                       for filler in fillers_)
 
 
+def _accepted(provider: ContextProvider,
+              context: Mapping[str, object]) -> dict[str, object]:
+    """The part of ``context`` this provider is willing to receive.
+
+    **A slot's context grows.** ``reason.actions`` gained ``line`` the day a
+    control needed a line's slug rather than its text, and it will grow again;
+    every provider that spelled its keywords out would break on each addition,
+    with a logged failure and a silently missing chip — on a *published* seam,
+    that is a deployment losing its buttons on an upgrade of ours. So a provider
+    is handed exactly what it asks for: everything, if it declares ``**kwargs``,
+    and otherwise the named parameters it has.
+
+    This is the check-authoring surface's rule
+    ([ADR-0049](../docs/adr/0049-the-check-authoring-surface.md), amended) reached
+    by the other route. A check type must take ``**kwargs`` because the loader
+    cannot know what a constructor wants; here the caller *can* look, so the
+    burden is ours rather than the extension author's. A provider that wants the
+    new value adds it and gets it; one written two releases ago keeps working
+    untouched, which is the whole promise of a seam somebody else's code depends
+    on.
+    """
+    try:
+        parameters = signature(provider).parameters
+    except (TypeError, ValueError):        # a callable with no readable signature
+        return dict(context)
+    if any(p.kind is Parameter.VAR_KEYWORD for p in parameters.values()):
+        return dict(context)
+    return {name: value for name, value in context.items() if name in parameters}
+
+
 def _render_one(filler: Filler, context: Mapping[str, object]) -> str:
     """One filler's HTML, or ``""`` when it declines or breaks."""
     values = dict(context)
     if filler.context is not None:
         try:
-            extra = filler.context(**context)
+            extra = filler.context(**_accepted(filler.context, context))
         except Exception:
             logger.exception(
                 "slots: the context provider of %s for %r failed — that filler "

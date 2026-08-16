@@ -15,7 +15,8 @@ from __future__ import annotations
 
 import importlib
 import logging
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from pathlib import Path
 
 import pytest
 
@@ -45,6 +46,46 @@ def application_logging() -> Iterator[_Recorder]:
     try:
         yield recorder
     finally:
+        root.handlers = saved_handlers
+        root.setLevel(saved_level)
+
+
+@pytest.fixture
+def log_file(tmp_path: Path) -> Path:
+    """Where the default's file handler writes during these tests — anywhere but the
+    working tree's own `var/little-sister.log`, which a suite has no business
+    appending to."""
+    return tmp_path / "little-sister.log"
+
+
+@pytest.fixture
+def as_the_default(
+        log_file: Path,
+        monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[[], None]]:
+    """Import the module the way `./start.sh` does — with root unconfigured, so the
+    default is what runs and `LOG_LEVEL` is consulted.
+
+    Emptying root is what the returned callable is *for*: pytest's own capture
+    handler joins root once the **test body** starts, so a fixture that cleared the
+    handlers during setup would hand the module a configured root and watch it
+    correctly skip its default — a test that then proves the opposite of what it
+    reads like. `LOG_LEVEL` is cleared here so a developer who exports one for an
+    afternoon does not turn these tests red.
+    """
+    monkeypatch.setenv("LOG_FILE", str(log_file))
+    monkeypatch.delenv("LOG_LEVEL", raising=False)
+    root = logging.getLogger()
+    saved_handlers, saved_level = root.handlers[:], root.level
+
+    def reload_with_root_unconfigured() -> None:
+        root.handlers = []
+        importlib.reload(little_sister.logger)
+
+    try:
+        yield reload_with_root_unconfigured
+    finally:
+        for handler in root.handlers:
+            handler.close()
         root.handlers = saved_handlers
         root.setLevel(saved_level)
 
@@ -92,19 +133,56 @@ def test_a_plugins_own_logger_lands_there_too(
         "little_sister_example.checks.example"]
 
 
-def test_with_no_application_setup_the_library_configures_the_default() -> None:
-    """The ordinary `./start.sh` case still gets stdout plus the log file — the
-    default is only skipped when somebody else got there first."""
+def test_with_no_application_setup_the_library_configures_the_default(
+        as_the_default: Callable[[], None]) -> None:
+    """The ordinary `./start.sh` case still gets stderr plus the log file — the
+    default is only skipped when somebody else got there first — and its level is
+    **INFO**: nothing in the library logs below it, so a DEBUG root would collect
+    no line of ours and every line of every dependency's."""
+    as_the_default()
+
     root = logging.getLogger()
-    saved_handlers, saved_level = root.handlers[:], root.level
-    root.handlers = []
-    try:
-        importlib.reload(little_sister.logger)
-        kinds = {type(handler) for handler in root.handlers}
-        assert logging.FileHandler in kinds
-        assert root.level == logging.DEBUG
-    finally:
-        for handler in root.handlers:
-            handler.close()
-        root.handlers = saved_handlers
-        root.setLevel(saved_level)
+    kinds = {type(handler) for handler in root.handlers}
+    assert logging.FileHandler in kinds
+    assert root.level == logging.INFO
+
+
+def test_log_level_names_the_level_of_that_default(
+        as_the_default: Callable[[], None],
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """The knob the INFO default needs: a deployment debugging a dependency asks
+    for the old behavior by name, without owning root logging to get it. Spelled
+    in lower case here because an environment variable typed by hand is."""
+    monkeypatch.setenv("LOG_LEVEL", "debug")
+
+    as_the_default()
+
+    assert logging.getLogger().level == logging.DEBUG
+
+
+def test_log_level_does_not_reach_an_application_that_configured_logging(
+        application_logging: _Recorder, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The variable is part of the *default*, so it stops where the default does.
+    A `setLevel` outside the guard would let a stray `LOG_LEVEL` in a deployment's
+    environment silently overrule the level that deployment chose in code — which
+    is the same defect as the old unconditional `setLevel`, wearing a knob."""
+    monkeypatch.setenv("LOG_LEVEL", "DEBUG")
+
+    importlib.reload(little_sister.logger)
+
+    assert logging.getLogger().level == logging.WARNING
+
+
+def test_an_unknown_log_level_falls_back_to_info_and_says_so(
+        as_the_default: Callable[[], None], log_file: Path,
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """A typo in an environment is not a reason to refuse to log. It is a reason to
+    say which value was not understood, in the log the default just opened — read
+    back from the file, because a warning nobody receives is the failure here."""
+    monkeypatch.setenv("LOG_LEVEL", "chatty")
+
+    as_the_default()
+
+    assert logging.getLogger().level == logging.INFO
+    assert ("logger: LOG_LEVEL 'chatty' is not a level name; using INFO\n"
+            in log_file.read_text())

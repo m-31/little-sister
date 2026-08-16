@@ -36,7 +36,7 @@
             <tbody>
                 {% for pin in pins %}
                     <tr class="row-maintenance">
-                        <td><a href="{{ url_for('status', branch=pin.path | url_branch, reason=pin.slug) ~ '#pinned-reason' if pin.slug else url_for('status', branch=pin.path | url_branch) }}">{{ pin.path }}</a>{% if pin.title %} <span class="node-title">{{ pin.title | markdown_inline }}</span>{% endif %}</td>
+                        <td><a href="{{ url_for('status', branch=pin.path | url_branch, reason=pin.slug) ~ '#pinned-reason' if pin.slug else url_for('status', branch=pin.path | url_branch) }}">{{ pin.path }}</a>{% set shown = pin | node_title %}{% if shown %} <span class="node-title">{{ shown | markdown_inline }}</span>{% endif %}</td>
                         {#- The reason line an entry pin covers. Rendered as Markdown
                             and clamped by **CSS**, not by `shorten`: a member's text is
                             often a link, and cutting the string mid-link leaves the raw

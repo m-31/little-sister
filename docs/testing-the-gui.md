@@ -47,6 +47,8 @@ closed editors. A second,
 **realistic-wall** tier embeds the extremes in a
 populated overview (all content synthetic): an 80-root mixed wall (root scale), a
 multi-front incident wall (eruption + trace + stale/idle/maintenance at once), an
+overview with two tall roots, dozens of descendants, chips off and spare grid columns
+(subtree balance), an
 **OK** severity leaf flooding 150 long audit findings (the real-deployment case
 that once made a skyscraper column — since the ADR-0024 chips it collapses to one
 quiet pill, the flood living on its leaf page), and single-token reasons — a
@@ -91,11 +93,25 @@ time:
   fresh. (This is how a live check demonstrates staleness — the tree never prunes
   an omitted child, it lets it age.)
 - **children** — disk / memory / load in a shifting mix, so the card's roll-up
-  moves.
+  moves. Its three also carry a **declared rank** (below), which is why they read in
+  that order rather than with `load` filed in the middle.
 - **audit** — a wiz-style findings leaf that stays **OK** while its reason list
   swells to ~150 long lines, then clears: a skyscraper card growing and
   collapsing under the poll without ever changing color. Its findings are
   **members** (see below).
+- **severity** — a cloud-posture scanner reporting into **severity bands**, five
+  children each declaring its `order` ([ADR-0055](adr/0055-sibling-order.md)) — so
+  the row reads *critical high medium low informational* rather than the
+  alphabetical *critical high informational low medium* that files **nothing to do**
+  third and puts **low** before **medium**. The counts climb over five phases and
+  clear, so the colors travel along a row that **never re-sorts**: that is the
+  property a declared rank has and a sort by live grade would not. It is also where
+  the title rule is visible, because every band's title is only its own name
+  capitalized — the chips must read `critical`, never `critical Critical`, while the
+  root's *Cloud posture* survives because it says something the name does not. Drop
+  the `order=` arguments in `tests/demo_check.py` and the row falls back to
+  alphabetical, which is the demonstration *and* the proof that a check declaring
+  nothing is unaffected.
 - **reviews** — a small queue of pull requests waiting for a reviewer, whose reasons
   are a keyed **mapping**. Never empty, never more than six lines, and re-worded on
   every run.
@@ -176,7 +192,16 @@ that make the features above visible:
 - **`nodes.yaml`** labels the container nodes (`/ci`, `/security`, …), which the tree
   creates from the check paths and no check owns. Without it the dashboard is a wall
   of bare path segments. It also names the engine's heartbeat, which feeds the status
-  strip's hover card.
+  strip's hover card. And it carries the **deployment** half of
+  [ADR-0055](adr/0055-sibling-order.md): an `order:` on each top-level container, so
+  the wall reads outside-in (`services`, `ci`, `security`, `hosts`, `storage`,
+  `network`) rather than alphabetically. The bands under `/security/wiz` are ranked by
+  their *check*; these are ranked by the person reading the wall. Delete **every**
+  `order:` key and it goes back to alphabetical on the next restart — deleting one is
+  not the same thing, because a node left at the default rank sorts ahead of its
+  positively-ranked siblings rather than at its alphabetical place. The **third**
+  source is in `checks/security_wiz.yaml`: an inline `order: -1` beside that check's
+  own `title:`, which is what puts the posture card ahead of `audit`.
 - **`actions.yaml`** puts a deployment's own links on the pages — see below.
 - **`csp.yaml`** adds one source to the assembled Content-Security-Policy, so the
   `/system` readout has a line whose contributor is *this deployment* rather than the
@@ -273,10 +298,38 @@ leaves and their ancestor chains, so a healthy scenario disappears and a recover
 one leaves no empty heading behind. The review queue proves authored links survive;
 the maintenance recipe below proves both a whole-node pin and an individually pinned
 reason are named and attributed. **Copy Markdown** should put the visible source on
-the clipboard as plain text; **Copy rich text** should paste as a nested list in a
+the clipboard as plain text; **Copy Rich HTML** should paste as a nested list in a
 rich editor and still carry the Markdown as its plain-text fallback. Deny clipboard
 permission once: the source opens, selects itself, and the message must say that
 manual copying is required rather than claiming success.
+
+The **same two buttons** sit on a leaf's detail page — `/status/services/api`, or
+any `/ci/reviews` line — under the status card, handing over that one node instead
+of the tree. Four things to check there, because they are what the tree document
+cannot say. The pasted document names the node's path and states the frequency the
+way the page does (`15m`, not `15m 0s`). Every instant carries an offset: compare
+one against the page directly above it, which shows the same moment without one.
+Pin the node from the card below and copy again — the document must still report
+what the check **measured** and say a pin is in force, never present `maintenance`
+as the reading. And a **container** page (`/status/ci`) must offer no buttons at
+all; its hand-off is `/copy`.
+
+`/ci/actions` is the one to copy for coded lines: each line that declared a code
+carries its own cue, the uncoded advisory beside them carries none, and a running
+line says `(running)` in the text rather than leaning on the italic the page uses.
+The same lines, cues and all, must appear on `/copy`.
+
+Then the **Copy chip** on a single line. Hover a reason on `/ci/reviews` — on the
+card *and* on the detail page — and the chip appears in the same rail a
+deployment's own chips use; it leads to that line's own page, which carries the
+line and the node's identity and nothing else. Three things to confirm there,
+because each is a rule rather than a detail. `/ci/nightly` during its eruption —
+twelve linked failures as **prose** — offers no chip on any of them, which is the
+members/prose split doing its job on two nodes that look alike. Editing the URL's
+`reason=` to a slug the check
+is not reporting answers `404` saying the line is no longer reported, rather than
+rebuilding it from the pin. And the URL itself is the hand-off's other half: paste
+it into the ticket beside the document.
 
 ### Maintenance
 
@@ -419,8 +472,37 @@ and again on the member leaf page.
 
 ---
 
+## Mode 5 — the browser boundary checks (layout, against paint)
+
+The other four modes are for *looking*; the layout model
+([ADR-0056](adr/0056-stable-useful-dashboard-flow.md)) needs one thing looking
+cannot give: proof that the widths it publishes are the widths Chromium acts on.
+`tests/test_dashboard_browser.py` renders two fixture pages through the real
+templates and drives headless Chromium across a boundary one pixel at a time —
+the outer-track snap must paint flat, and the model's nested column flip must
+land within a pixel of the painted one. Both claims have been wrong before, and
+neither is visible in a screenshot.
+
+This is the one harness the ordinary gate does **not** run: it needs a browser
+download, and it skips cleanly without one, so `pytest` stays a fast, offline
+gate. Run it explicitly when the layout model, `dashboard-layout.js`, the card
+templates or the grid's stylesheet rules change:
+
+```
+uv sync --group browser
+uv run playwright install chromium
+uv run pytest tests/test_dashboard_browser.py
+```
+
+It takes a minute or two — most of it is Chromium re-laying out the page at each
+probe width. Each run renders into its own temporary directory, so concurrent
+runs cannot delete each other's artifacts.
+
+---
+
 ## Not part of a deployment
 
-All four harnesses are **dev-only**: they live under `tests/`, carry no real
+All five harnesses are **dev-only**: they live under `tests/`, carry no real
 checks, and start no engine except when you run the demo wrapper. Keep them green
-with the rest of the gate — `ruff` + `mypy` + `pytest`.
+with the rest of the gate — `ruff` + `mypy` + `pytest` — and run Mode 5 by hand
+when the dashboard layout changes.

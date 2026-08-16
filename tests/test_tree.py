@@ -1,6 +1,7 @@
 import threading
 import unittest
 from datetime import datetime, timedelta
+from typing import ClassVar
 from unittest import TestCase
 
 from little_sister.maintenance import MaintenanceEntry
@@ -846,6 +847,152 @@ class SiblingOrderingTests(TestCase):
         self.assertEqual(self._names(snap), ["a", "b"])           # top level
         branch = next(c for c in snap.children if c.name == "b")
         self.assertEqual([c.name for c in branch.children], ["x", "y"])  # nested
+
+
+class DeclaredRankTests(TestCase):
+    """A check (or a deployment) may rank its own siblings — ADR-0055."""
+
+    @staticmethod
+    def _names(snap):
+        return [child.name for child in snap.children]
+
+    def _bands(self, tree, path="/wiz"):
+        snap = tree.snapshot(path)
+        assert snap is not None
+        return self._names(snap)
+
+    def test_saying_nothing_is_exactly_todays_order(self):
+        # The whole safety of the mechanism: an undeclared rank reads 0, so a set
+        # of siblings nobody ranked interleaves by name as it always did.
+        tree = StatusTree()
+        for name in ("critical", "high", "informational", "low", "medium"):
+            tree.upsert(f"/wiz/{name}", StatusCode.OK)
+        self.assertEqual(
+            self._bands(tree),
+            ["critical", "high", "informational", "low", "medium"])
+
+    def test_a_declared_rank_moves_the_node(self):
+        # The motivating case: `informational` means *nothing to do* and the name
+        # sort puts it third, between `high` and `low`.
+        tree = StatusTree()
+        for name in ("critical", "high", "informational", "low", "medium"):
+            tree.upsert(f"/wiz/{name}", StatusCode.OK)
+        tree.set_order("/wiz/critical", -2)
+        tree.set_order("/wiz/high", -1)
+        tree.set_order("/wiz/informational", 1)
+        self.assertEqual(
+            self._bands(tree),
+            ["critical", "high", "low", "medium", "informational"])
+
+    def test_ties_still_break_by_name(self):
+        tree = StatusTree()
+        for name in ("delta", "alpha", "charlie", "bravo"):
+            tree.upsert(f"/wiz/{name}", StatusCode.OK)
+        tree.set_order("/wiz/delta", 1)
+        tree.set_order("/wiz/charlie", 1)
+        self.assertEqual(self._bands(tree),
+                         ["alpha", "bravo", "charlie", "delta"])
+
+    def test_an_unranked_sibling_keeps_the_zero_baseline(self):
+        # One ranked node moves relative to the others; the rest do not reshuffle.
+        tree = StatusTree()
+        for name in ("b", "c", "d"):
+            tree.upsert(f"/wiz/{name}", StatusCode.OK)
+        tree.set_order("/wiz/d", -1)
+        self.assertEqual(self._bands(tree), ["d", "b", "c"])
+
+    def test_the_rank_is_the_check_s_until_a_deployment_says_otherwise(self):
+        # upsert fills an *unset* field only, so a startup seed always wins — and
+        # a later tick never rewrites what it filled.
+        tree = StatusTree()
+        tree.set_order("/wiz/critical", 5)
+        tree.upsert("/wiz/critical", StatusCode.OK, order=-1)
+        tree.upsert("/wiz/high", StatusCode.OK, order=-1)
+        tree.upsert("/wiz/high", StatusCode.OK, order=9)   # a later tick
+        self.assertEqual(tree.snapshot("/wiz/critical").order, 5)
+        self.assertEqual(tree.snapshot("/wiz/high").order, -1)
+
+    #: The `wiz` bands as the check ranks them — severity order, 1..5. Nothing here
+    #: is 0, which is what makes it the right model for the escape hatch below: a
+    #: set where every sibling carries a positive rank is exactly where "put this
+    #: one back" is tempting to write and easy to get wrong.
+    _WIZ_RANKS: ClassVar[dict[str, int]] = {
+        "critical": 1, "high": 2, "medium": 3, "low": 4, "informational": 5}
+
+    def _wiz_ranked_by_the_check(self, tree):
+        """The `wiz` bands with the check's own severity ranking on every one."""
+        for name, rank in self._WIZ_RANKS.items():
+            tree.upsert(f"/wiz/{name}", StatusCode.OK, order=rank)
+        return tree
+
+    def test_a_zeroed_node_sits_between_the_negative_and_the_positive(self):
+        tree = StatusTree()
+        tree.set_order("/wiz/zeta", 0)
+        tree.upsert("/wiz/zeta", StatusCode.OK)
+        tree.upsert("/wiz/above", StatusCode.OK, order=-1)
+        tree.upsert("/wiz/below", StatusCode.OK, order=1)
+        tree.upsert("/wiz/aaa", StatusCode.OK)          # unranked, so also 0
+        self.assertEqual(self._bands(tree),
+                         ["above", "aaa", "zeta", "below"])
+
+    def test_a_configured_zero_overrules_the_check_by_naming_the_default(self):
+        # `0` from the configuration is a real declaration, not silence — which is
+        # why the node's field is nullable. Without it a deployment could push a
+        # node around but never lower it back to the baseline.
+        ranked = self._wiz_ranked_by_the_check(StatusTree())
+        self.assertEqual(
+            self._bands(ranked),
+            ["critical", "high", "medium", "low", "informational"])
+
+        overruled = StatusTree()
+        overruled.set_order("/wiz/informational", 0)      # the configured half
+        self._wiz_ranked_by_the_check(overruled)
+        self.assertEqual(overruled.snapshot("/wiz/informational").order, 0)
+
+    def test_a_zeroed_node_sorts_with_the_unranked_not_at_its_alphabetical_place(self):
+        """The escape hatch is per node, not per set — and the difference is exactly
+        what the prose used to get wrong, so it is pinned rather than described.
+
+        `0` is the rank the *unranked* carry, so zeroing one child of a ranked set
+        moves it to the **front** of that set. Only zeroing every sibling restores
+        plain alphabetical order.
+        """
+        one = StatusTree()
+        one.set_order("/wiz/informational", 0)
+        self._wiz_ranked_by_the_check(one)
+        self.assertEqual(
+            self._bands(one),
+            ["informational", "critical", "high", "medium", "low"])
+        self.assertNotEqual(self._bands(one), sorted(self._bands(one)))
+
+        every = StatusTree()
+        for band in self._WIZ_RANKS:
+            every.set_order(f"/wiz/{band}", 0)
+        self._wiz_ranked_by_the_check(every)
+        self.assertEqual(self._bands(every), sorted(self._bands(every)))
+        self.assertEqual(
+            self._bands(every),
+            ["critical", "high", "informational", "low", "medium"])
+
+    def test_a_rank_is_never_a_status_event(self):
+        tree = StatusTree()
+        tree.upsert("/wiz/critical", StatusCode.OK)
+        before = len(tree.recent_events())
+        tree.set_order("/wiz/critical", 3)
+        self.assertEqual(len(tree.recent_events()), before)
+
+    def test_ranks_apply_at_every_level(self):
+        tree = StatusTree()
+        tree.upsert("/p/a/y", StatusCode.OK)
+        tree.upsert("/p/a/x", StatusCode.OK)
+        tree.upsert("/p/b", StatusCode.OK)
+        tree.set_order("/p/b", -1)
+        tree.set_order("/p/a/y", -1)
+        snap = tree.snapshot("/p")
+        assert snap is not None
+        self.assertEqual(self._names(snap), ["b", "a"])
+        branch = next(c for c in snap.children if c.name == "a")
+        self.assertEqual([c.name for c in branch.children], ["y", "x"])
 
 
 class MaintenancePersistenceTests(TestCase):

@@ -1,0 +1,140 @@
+"""How a span of time is written — `little_sister.spans`.
+
+The tests are written from the module's claims, not from its branches: each one
+names a sentence the docstrings make and uses the values that sentence is about.
+"""
+import unittest
+
+from little_sister.spans import coarse_span, format_duration, format_span
+
+
+class FormatSpanTests(unittest.TestCase):
+    """`format_span` — a measured span, ~3 significant figures at every scale."""
+
+    def test_the_reported_defect_no_longer_reproduces(self):
+        """The two readings from the system page that started this: a run of
+        115 seconds and a wait of 812. Neither may render as bare seconds."""
+        self.assertEqual(format_span(115), "1m 55s")
+        self.assertEqual(format_span(812), "13m 32s")
+
+    def test_the_ladder_changes_units_so_the_number_stays_small(self):
+        for seconds, expected in ((0.412, "412 ms"),
+                                  (3.14159, "3.1 s"),
+                                  (42.7, "43 s"),
+                                  (115, "1m 55s"),
+                                  (7620, "2h 7m"),
+                                  (97200, "1d 3h")):
+            with self.subTest(seconds=seconds):
+                self.assertEqual(format_span(seconds), expected)
+
+    def test_no_rendering_is_wider_than_a_column(self):
+        """The claim the ladder is *for*: a millisecond run and a two-day run
+        occupy about the same width, so a table column does not jump."""
+        for seconds in (0.412, 3.14159, 42.7, 115, 7620, 97200, 8 * 86400):
+            with self.subTest(seconds=seconds):
+                self.assertLessEqual(len(format_span(seconds)), 7)
+
+    def test_a_zero_lower_unit_is_dropped(self):
+        """`2m 0s` says nothing the `2m` does not."""
+        self.assertEqual(format_span(120), "2m")
+        self.assertEqual(format_span(7200), "2h")
+        self.assertEqual(format_span(172800), "2d")
+        # …and it appears again as soon as it carries information
+        self.assertEqual(format_span(121), "2m 1s")
+        self.assertEqual(format_span(7260), "2h 1m")
+        self.assertEqual(format_span(176400), "2d 1h")
+
+    def test_the_boundaries_belong_to_the_larger_unit(self):
+        self.assertEqual(format_span(59.4), "59 s")
+        self.assertEqual(format_span(60), "1m")
+        self.assertEqual(format_span(3599), "59m 59s")
+        self.assertEqual(format_span(3600), "1h")
+        self.assertEqual(format_span(86399), "23h 59m")
+        self.assertEqual(format_span(86400), "1d")
+
+    def test_rounding_never_shows_a_value_the_rung_below_denied(self):
+        """119.6 s renders `2m`, not `1m 59s`: every rung above the minute
+        already displays whole seconds, so the seconds are rounded first."""
+        self.assertEqual(format_span(119.6), "2m")
+        self.assertEqual(format_span(59.6), "60 s")
+
+    def test_nothing_below_the_second_survives_past_a_minute(self):
+        self.assertEqual(format_span(115.37), "1m 55s")
+
+    def test_an_absent_measurement_is_not_a_zero(self):
+        """Before the first run there is no number, and `0 s` would be a claim."""
+        self.assertEqual(format_span(None), "—")
+        self.assertEqual(format_span(None, none="never run"), "never run")
+
+    def test_a_negative_span_reads_as_a_moment_not_as_a_bug(self):
+        """A countdown read just past its deadline, or a clock that stepped
+        back. `-3 s` on a dashboard reads as a broken page."""
+        self.assertEqual(format_span(-3), "0 s")
+        self.assertEqual(format_span(0), "0 s")
+
+    def test_a_fast_check_is_milliseconds_rather_than_no_time_at_all(self):
+        self.assertEqual(format_span(0.0004), "0 ms")
+        self.assertEqual(format_span(0.9996), "1000 ms")
+
+
+class CoarseSpanTests(unittest.TestCase):
+    """`coarse_span` — a bound, deliberately lossy, for a page that is not
+    re-rendered while somebody reads it."""
+
+    def test_it_states_the_largest_one_or_two_units(self):
+        for seconds, expected in ((2 * 86400 + 3 * 3600, "2d 3h"),
+                                  (5 * 3600, "5h"),
+                                  (12 * 60, "12m"),
+                                  (30, "< 1m")):
+            with self.subTest(seconds=seconds):
+                self.assertEqual(coarse_span(seconds), expected)
+
+    def test_it_never_names_a_second(self):
+        """A bound that names seconds is out of date before the sentence ends,
+        which is the whole reason this is not `format_span`."""
+        for seconds in (61, 3661, 90061, 59):
+            with self.subTest(seconds=seconds):
+                self.assertNotIn("s", coarse_span(seconds).replace("< 1m", ""))
+
+    def test_it_rounds_down_so_the_bound_stays_true(self):
+        """`> 2m ago` must not become a lie by rounding up to 3m."""
+        self.assertEqual(coarse_span(179), "2m")
+        self.assertEqual(coarse_span(7199), "1h 59m")
+
+
+if __name__ == "__main__":   # pragma: no cover
+    unittest.main()
+
+
+class FormatDurationTests(unittest.TestCase):
+    """`format_duration` — a *configured* interval, in the units it was written in."""
+
+    def test_it_writes_back_what_somebody_typed(self):
+        for seconds, expected in ((900, "15m"), (3600, "1h"), (86400, "1d"),
+                                  (90, "90s"), (300, "5m"), (172800, "2d")):
+            with self.subTest(seconds=seconds):
+                self.assertEqual(format_duration(seconds), expected)
+
+    def test_it_is_the_other_reading_of_the_same_number(self):
+        """The distinction the module exists to keep: 90 seconds is how a config
+        says `90s` and how a *measurement* says `1m 30s`. Picking the wrong one is
+        how a page claims a check runs every `1m 30s`."""
+        self.assertEqual(format_duration(90), "90s")
+        self.assertEqual(format_span(90), "1m 30s")
+        self.assertEqual(format_duration(3660), "61m")
+        self.assertEqual(format_span(3660), "1h 1m")
+
+    def test_the_largest_exact_unit_wins_and_there_is_never_a_second_one(self):
+        """`2h 1m` is not what anybody typed. An interval no larger unit divides
+        exactly stays whole in the largest one that does — 7260 seconds is `121m`,
+        never `2h 1m` and never `7260s` — and seconds are the floor, not the
+        fallback for anything awkward."""
+        self.assertEqual(format_duration(7200), "2h")
+        self.assertEqual(format_duration(7260), "121m")
+        self.assertEqual(format_duration(3660), "61m")
+        self.assertEqual(format_duration(91), "91s")
+
+    def test_a_frequency_of_zero_is_not_an_interval(self):
+        self.assertEqual(format_duration(0), "—")
+        self.assertEqual(format_duration(None), "—")
+        self.assertEqual(format_duration(None, none="never"), "never")

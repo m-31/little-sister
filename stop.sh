@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 #
-# Stop the running little-sister (the gunicorn that start.sh launched).
+# Stop this instance (the gunicorn that start.sh launched). `instance.sh` beside
+# this file says which instance that is; the lines below print its name.
 #
 #   * Our gunicorn on the port -> stop it gracefully (TERM, then KILL).
 #   * Nothing on the port      -> nothing to do (exit 0); clears a stale pidfile.
@@ -14,7 +15,7 @@ require lsof
 
 existing="$(listeners)"
 if [ -z "$existing" ]; then
-  echo "little-sister is not running on :${PORT}."
+  echo "${NAME} is not running on :${PORT}."
   rm -f "$PID_FILE"
   exit 0
 fi
@@ -38,4 +39,4 @@ if [ -n "$(listeners)" ]; then
   exit 1
 fi
 rm -f "$PID_FILE"
-echo "little-sister stopped."
+echo "${NAME} stopped."

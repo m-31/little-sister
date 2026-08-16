@@ -9,6 +9,7 @@ optional failure retry — ``retry_interval`` / ``retry_attempts`` (ADR-0033).
 from __future__ import annotations
 
 import abc
+import inspect
 import re
 import sys
 from collections.abc import Callable, Mapping
@@ -27,6 +28,7 @@ from little_sister.reasons import (
     normalize,
 )
 from little_sister.status import StatusCode, join_path, leaf_name, split_path
+from little_sister.values import number
 
 DEFAULT_FREQUENCY_SECONDS = 900   # 15 minutes — most checks run infrequently
 DEFAULT_TIMEOUT_SECONDS = 30.0
@@ -92,6 +94,31 @@ class CheckResult:
     ``nodes.yaml`` declaration seeded at startup always wins, and the label
     freezes at its first fill (stable identity, not live status — text that
     changes with the observation belongs in ``reason``).
+
+    ``order`` is a **declared rank** among a node's siblings (ADR-0055). Siblings
+    render alphabetically, which destroys the one order a severity band set has:
+    `wiz` puts ``informational`` between ``high`` and ``low``, and `github` puts
+    ``low`` before ``medium``, which is a wrong statement about severity. A check
+    that knows better says so — ``order=1`` pushes a child down, a negative value
+    pulls one up — and the snapshot sorts by ``(order, name)``. **The default `0`
+    is exactly today's behaviour**, so a check that never thought about order
+    cannot accidentally publish its loop: the rank is declared, never incidental.
+
+    Unlike ``name`` / ``about`` / ``title`` it is read on the **root as well as on
+    children**, because a rank is not identity: ignoring it on the root would leave
+    a check unable to rank the node it owns from its own code, which is half the
+    point. It fills an unset field only, so both configured sources — a
+    ``nodes.yaml`` ``order:`` and an inline ``order:`` on the check — still win.
+
+    Where a check and a configuration file differ is what ``0`` means. A **check**
+    writing ``0`` is saying nothing, because ``0`` is what saying nothing looks
+    like; a configuration file naming ``order: 0`` has stated a rank, which is the
+    only way a deployment can overrule what a check declared by naming the default
+    value. **That is not the same as asking for alphabetical.** ``0`` is the rank
+    the unranked carry, so a node at ``0`` sorts with them — after every negative
+    rank, before every positive one. Zeroing one child of a set the check ranked
+    ``1..5`` moves it to the **front**; handing that whole set back to the alphabet
+    means stating ``order: 0`` on every sibling.
     """
     code: StatusCode | None = None
     reason: ReasonInput = field(default_factory=list)
@@ -102,6 +129,7 @@ class CheckResult:
     report: str = ""
     about: str = ""
     title: str = ""
+    order: int = 0
     entries: bool = False
     #: Derived in :meth:`__post_init__` — the one internal form (ADR-0036).
     reason_entries: tuple[ReasonEntry, ...] = field(
@@ -316,7 +344,7 @@ class Check(abc.ABC):
     type_name: ClassVar[str] = ""
 
     def __init__(self, *, path: str, description: str = "",
-                 about: str = "", title: str = "",
+                 about: str = "", title: str = "", order: int | None = None,
                  frequency_seconds: int = DEFAULT_FREQUENCY_SECONDS,
                  timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
                  retry_interval_seconds: int | None = None,
@@ -325,9 +353,13 @@ class Check(abc.ABC):
         self.path = join_path(path)
         self.description = description
         # Inline node metadata (nodes.yaml overrides each): `about` is subject
-        # metadata (ADR-0012), `title` a short display label (ADR-0017).
+        # metadata (ADR-0012), `title` a short display label (ADR-0017), `order`
+        # the node's rank among its siblings (ADR-0055). `order` is the one that
+        # is `None` rather than empty when unstated, because `0` is a rank an
+        # author may mean; the other two have no such value.
         self.about = about
         self.title = title
+        self.order = order
         self.frequency_seconds = frequency_seconds
         self.timeout_seconds = timeout_seconds
         # The budgeted failure retry (ADR-0033): while the last result is not
@@ -376,15 +408,20 @@ class Check(abc.ABC):
     def resolve_secret(self, reference: str) -> str:
         """Resolve a secret reference **at construction time** (ADR-0023).
 
-        A bare name reads that environment variable (``.env``, ADR-0003); a
-        ``scheme://address`` reference goes through the resolver the
-        application registered (``little_sister.secrets``). Call this from
+        Every reference is ``scheme://address``: ``env://NAME`` reads that
+        environment variable (``.env``, ADR-0003), and any other scheme goes
+        through the resolver the application registered
+        (``little_sister.secrets``). There is deliberately **no bare-name form** —
+        a credential pasted where its reference belongs must fail the grammar
+        rather than be looked up and echoed. Call this from
         ``__init__`` / ``_extra_from_config`` and keep the value — never
         resolve during :meth:`run` (cloud stores bill per read; rotation is a
         restart).
 
-        A **malformed** reference (unknown scheme) raises :class:`CheckError`,
-        so the load fails loudly like any config typo. A well-formed reference
+        A **malformed** reference raises :class:`CheckError`, so the load fails
+        loudly like any config typo — an empty value, no ``scheme://`` at all, a
+        scheme with no address, or a scheme no resolver is registered for. A
+        well-formed reference
         that **fails to resolve** (store unreachable, secret absent) is
         recorded in ``secret_errors`` and returns ``""`` — the engine then pins
         this check to a visible ERROR without ever calling :meth:`run`.
@@ -405,15 +442,71 @@ class Check(abc.ABC):
 
     @classmethod
     def from_config(cls, config: dict[str, Any], base_dir: Path) -> Check:
+        """Build the check this config describes.
+
+        The construction is guarded because the **common fields grow**. A check
+        type written outside this repository is promised a list of *names*
+        (ADR-0049), not a frozen constructor signature, so a type that spells the
+        common keywords out instead of taking ``**kwargs`` stops binding the day
+        one is added — which is what happened when ``order`` arrived (ADR-0055).
+        Unguarded that surfaces as a bare ``TypeError`` from deep inside the
+        loader, naming neither the file nor the type; a `CheckError` naming both
+        is the difference between a five-minute fix and an afternoon.
+        """
         common = _parse_common(config)
         extra = cls._extra_from_config(config, base_dir)
-        return cls(**common, **extra)
+        try:
+            return cls(**common, **extra)
+        except TypeError as error:
+            raise _construction_refused(cls, {**common, **extra}, error) from error
 
     @classmethod
     def _extra_from_config(cls, config: dict[str, Any],
                            base_dir: Path) -> dict[str, Any]:
         """Subclass hook: parse type-specific config into constructor kwargs."""
         return {}
+
+
+def _construction_refused(cls: type[Check], kwargs: dict[str, Any],
+                          error: TypeError) -> BaseException:
+    """Turn a constructor that would not bind into a :class:`CheckError` naming
+    the type and the keywords it refused — or hand the original error back
+    untouched when it came from *inside* the constructor.
+
+    That second case is the whole reason this is a function rather than three
+    lines. A ``TypeError`` raised by the check's own body (``int(None)`` in an
+    ``__init__``, say) is a real defect in that check, and relabelling it *"your
+    constructor refuses a keyword"* would send its author looking in exactly the
+    wrong place. The two are told apart by the traceback: a binding failure is
+    raised by the call itself, so its traceback stops at this frame, while
+    anything raised inside the callee has a frame below it.
+    """
+    if error.__traceback__ is not None and error.__traceback__.tb_next is not None:
+        return error
+    refused = _keywords_refused_by(cls, kwargs)
+    if not refused:
+        return error
+    names = ", ".join(repr(key) for key in refused)
+    return CheckError(
+        f"check type {cls.type_name!r} ({cls.__module__}.{cls.__qualname__}) "
+        f"does not accept {names}. The fields every check shares grow over time, "
+        f"so a check type must take **kwargs and hand them to super().__init__() "
+        f"rather than spelling them out — see the check-authoring surface "
+        f"(ADR-0049)")
+
+
+def _keywords_refused_by(cls: type[Check], kwargs: dict[str, Any]) -> list[str]:
+    """Which of ``kwargs`` this constructor has no parameter for. Empty when it
+    takes ``**kwargs`` (it refuses nothing) or when the signature cannot be read,
+    in which case the caller keeps the original error rather than guessing."""
+    try:
+        parameters = inspect.signature(cls).parameters
+    except (TypeError, ValueError):     # pragma: no cover - exotic callables only
+        return []
+    if any(parameter.kind is inspect.Parameter.VAR_KEYWORD
+           for parameter in parameters.values()):
+        return []
+    return sorted(key for key in kwargs if key not in parameters)
 
 
 def _parse_common(config: dict[str, Any]) -> dict[str, Any]:
@@ -434,6 +527,13 @@ def _parse_common(config: dict[str, Any]) -> dict[str, Any]:
         "description": str(config.get("description", "")),
         "about": str(config.get("about", "")),
         "title": str(config.get("title", "")),
+        # A rank beside the labels it sits with (ADR-0055). Read only when the key
+        # is *present*, so an absent one stays "nobody said" while a stated `0`
+        # reaches the tree; a non-numeric one fails the load rather than being
+        # dropped, because a silently ignored rank would leave the row in an order
+        # nobody chose.
+        "order": (number(config, "order", where="check config")
+                  if config.get("order") is not None else None),
         "frequency_seconds": parse_duration(
             config.get("frequency"), DEFAULT_FREQUENCY_SECONDS),
         "timeout_seconds": float(parse_duration(

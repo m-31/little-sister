@@ -9,6 +9,17 @@
   Markdown-rendering item renders `title` too.
 - **Register:** [`../decisions.md`](../decisions.md)
 
+> **Update (2026-08-10):** decision §3 grows one case — **a title that only repeats
+> the node's name is not drawn at all**. Where a check has nothing better to say it
+> hands the name back with a capital letter, and a row of severity bands then reads
+> `critical Critical`, `medium Medium`. One predicate (`titles.py`) answers for every
+> surface; it folds case, `_` / `-` / a space and runs of whitespace, and nothing
+> else. This is display only and changes neither of the two things this record fixes
+> underneath it: the tree still stores the title, and the JSON envelope — added since,
+> per §4 — still emits it. Registered in
+> [`../decisions.md`](../decisions.md) (*A title that only repeats the name is not
+> drawn*).
+
 ## Context
 A node is identified by its `name` — the last segment of its absolute path
 ([ADR-0016](0016-node-addressing.md)) — which is often terse on purpose: `disk`,

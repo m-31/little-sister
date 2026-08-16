@@ -9,12 +9,22 @@
 # Precedence is per field: nodes.yaml > the check's inline value > empty. Declaring a
 # path no check covers is a startup warning, so the entries below all sit on a real
 # branch of the demo tree.
+#
+# The `order:` keys are the **deployment** half of ADR-0055, the other half of what
+# `/security/wiz` shows: those bands are ranked by the *check*, and the top-level
+# cards here are ranked by the person who reads the wall — outside-in, rather than
+# the alphabetical `ci hosts network security services storage`. A rank is static, so
+# ADR-0024's positional stability holds: a card moves when somebody edits this file
+# and never because a status changed. Delete every `order:` below and the wall goes
+# back to alphabetical on the next restart.
 
 /services:
+  order: 1
   title: Public services
   about: Everything a visitor from outside touches.
 
 /ci:
+  order: 2
   title: Delivery
   about: |
     The build and review pipeline. Carries the demo's two **members** neighbors —
@@ -22,22 +32,28 @@
     lists that look alike and behave differently.
 
 /network:
+  order: 6
   title: Network
   about: Links between sites, and the tunnels over them.
 
 /storage:
+  order: 5
   title: Storage
   about: Where the bytes live, and whether they were copied anywhere else.
 
 /hosts:
+  order: 4
   title: Hosts
   about: Machines, and the aspects a host check reports beneath each one.
 
 /security:
+  order: 3
   title: Security
   about: |
-    Posture findings. The audit leaf below stays **OK** while its list swells —
-    severity is the leaf's own business, and a long list is not by itself an alarm.
+    Posture findings, two ways. The **audit** leaf stays **OK** while its list
+    swells — severity is the leaf's own business, and a long list is not by itself
+    an alarm. **Cloud posture** splits the same job across severity *bands*, each a
+    node of its own that says where it sorts.
 
 # The engine's heartbeat (ADR-0005). It owns no check, yet it is a fair metadata
 # target and never an orphan: what lands here feeds the status strip and its hover

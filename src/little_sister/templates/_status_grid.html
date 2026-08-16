@@ -56,7 +56,7 @@
 <div class="status-node viewed-head s-{{ node.own_code | status_slug }}">
     <div class="status-node__self" data-path="{{ node.path }}">
         {{ status_cue(node.own_code) }}<span class="status-node__name">{{ node.name }}</span>
-        {%- if node.stale %} <span class="status-stale">stale{% if not node.children %} · {{ node.age_seconds | round | int | duration }} ago{% endif %}</span>{% endif %}
+        {%- if node.stale %} <span class="status-stale">stale{% if not node.children %} · {{ node.age_seconds | elapsed }} ago{% endif %}</span>{% endif %}
         {#- The head is the topmost visible node of this view, so the observation
             time shows here and the cards below suppress an identical one
             (ADR-0044): seven aspect cards repeating one check's run time invite a
@@ -81,7 +81,7 @@
 <div class="reason-block" style="--reason-lines: {{ cap }}"
      data-reason-node="{{ node.path }}" data-reason-total="{{ total }}">
 {%- for line in node.reasons %}
-    <div class="status-node__reason md-body{% if line.code %} is-coded s-{{ line.code | status_slug }}{% endif %}{% if line.running %} is-running{% endif %}{% if line.quiet %} is-quiet{% endif %}"><span class="reason-actions">{{ slot('reason.actions', node=node, reason=line.text, index=loop.index0, surface='grid') }}</span>{% if line.code %}{{ status_cue(line.code, labeled=true) }}{% endif %}{{ line.text | shorten(400) | markdown }}</div>
+    <div class="status-node__reason md-body{% if line.code %} is-coded s-{{ line.code | status_slug }}{% endif %}{% if line.running %} is-running{% endif %}{% if line.quiet %} is-quiet{% endif %}"><span class="reason-actions">{{ slot('reason.actions', node=node, reason=line.text, line=line, index=loop.index0, surface='grid') }}</span>{% if line.code %}{{ status_cue(line.code, labeled=true) }}{% endif %}{{ line.text | shorten(400) | markdown }}</div>
 {%- endfor %}
 </div>
 {#- Under a **node** pin everything here is silenced already, so this count is not
@@ -175,13 +175,20 @@
 {%- set ns = namespace(quiet_boxes=0) -%}
 {%- for child in children -%}
 {%- if dense and not child.children and child.code.name not in ('WARN', 'ERROR') -%}
-    {#- A quiet leaf collapses to a compact name+color chip; it flows inline, so a run
-        of quiet siblings packs into a wrapping row while a problem leaf or a branch
-        stays a full-width box that breaks the line — alphabetical order survives the
-        mix. Any reason lives on the leaf's own page. -#}
+    {#- Consecutive chips share a full-row wrapper. At a mixed level that wrapper
+        becomes one grid item while two or more full boxes can still form columns;
+        inside it the chips retain their compact wrapping flow and source order. -#}
+    {%- if loop.first or loop.previtem.children
+          or loop.previtem.code.name in ('WARN', 'ERROR') -%}
+    <span class="leaf-chip-run">
+    {%- endif -%}
     <a class="leaf-chip s-{{ child.code | status_slug }}"
        href="{{ url_for('status', branch=child.path | url_branch) }}"
-       data-path="{{ child.path }}"><span class="leaf-chip__name">{{ child.name }}</span>{% if child.title %}<span class="node-title">{{ child.title | markdown_inline }}</span>{% endif %}</a>
+       data-path="{{ child.path }}"><span class="leaf-chip__name">{{ child.name }}</span>{% set shown = child | node_title %}{% if shown %}<span class="node-title">{{ shown | markdown_inline }}</span>{% endif %}</a>
+    {%- if loop.last or loop.nextitem.children
+          or loop.nextitem.code.name in ('WARN', 'ERROR') -%}
+    </span>
+    {%- endif -%}
 {%- else -%}
     {%- set has_kids = child.children and depth0 < max_depth - 2 -%}
     {%- set node_dim = child.code.name == 'OK' or (child.own_code != child.code and has_kids) -%}
@@ -197,7 +204,7 @@
                 title** when the two would collide, because a chip is something to
                 click and a title is a nicety. Chips therefore cost the head line
                 no width at all: name and state alone decide whether a row fits. -#}
-            <span class="status-head__middle">{% if child.title %}<span class="node-title">{{ child.title | markdown_inline }}</span>{% endif %}
+            <span class="status-head__middle">{% set shown = child | node_title %}{% if shown %}<span class="node-title">{{ shown | markdown_inline }}</span>{% endif %}
             {#- The `node.actions` slot, on a nested box as on a card head. A failing
                 **leaf** almost always sits here rather than on a card — a card is the
                 top of a subtree and usually a container with no reading of its own —
@@ -217,7 +224,7 @@
                 one leading cue is decorative and a second cue in here would only
                 duplicate the shape. -#}
             {%- set box_time = child.timestamp | localtime("%H:%M") if child.timestamp else "" -%}
-            <span class="status-node__state">{% if child.stale %}<span class="status-stale">stale{% if not child.children %} · {{ child.age_seconds | round | int | duration }} ago{% endif %}</span> {% endif %}{{ card_time(child, shown_time) }}{{ child.code.name.lower() }}{{ reported_suffix(child) }}<button type="button" class="reason-chevron" tabindex="-1" aria-hidden="true"></button></span>
+            <span class="status-node__state">{% if child.stale %}<span class="status-stale">stale{% if not child.children %} · {{ child.age_seconds | elapsed }} ago{% endif %}</span> {% endif %}{{ card_time(child, shown_time) }}{{ child.code.name.lower() }}{{ reported_suffix(child) }}<button type="button" class="reason-chevron" tabindex="-1" aria-hidden="true"></button></span>
             {{ pin_banner(child) }}{{ reason_block(child, reason_cap) }}
         </div>
         {%- if has_kids -%}
@@ -275,7 +282,7 @@
     </svg>
     <a class="ls-strip__name"
        href="{{ url_for('status', branch=heartbeat.path | url_branch) }}">{{ heartbeat.name }}</a>
-    {% if heartbeat.title %}<span class="node-title">{{ heartbeat.title | markdown_inline }}</span>{% endif %}
+    {% set shown = heartbeat | node_title %}{% if shown %}<span class="node-title">{{ shown | markdown_inline }}</span>{% endif %}
     <span class="ls-strip__state">
         {% if heartbeat.stale %}<span class="status-stale">stale</span>{% endif %}
         {{ status_cue(heartbeat.code) }}{{ heartbeat.code.name.lower() }}
@@ -302,13 +309,26 @@
         if (branch and max_depth >= 1 and node.timestamp
             and (node.maintenance_entry or node.reason or node.stale
                  or node.own_code.name != 'UNDEFINED')) else "" -%}
-    <div class="status-grid">
+    {#- Stable flow spans (ADR-0056): the server derives useful width steps
+        from rendered topology, depth and the configured reason-line budget — never
+        current status or reason content — and prices each span at the width it
+        actually has, publishing `(tenths, tracks, plan)` breakpoints — the grid
+        width in tenths of a pixel, the model's own unit, against which
+        dashboard-layout.js compares its measurement scaled by ten. That script
+        measures only the grid's resolved width, sets the band's named track count
+        and selects the latest applicable band;
+        without that script, and under `dashboard_columns: plain`, this remains the
+        ordinary auto-fill grid. Each card carries its one-track stable height and
+        minimum-width useful steps for readable harness diagnostics. -#}
+    {%- set grid_layout = dashboard_layout(node.children, max_depth, reason_cap)
+        if max_depth >= 1 and dashboard_columns == 'flow' else none -%}
+    <div class="status-grid"{% if grid_layout %} data-layout-breakpoints='{{ grid_layout.breakpoints | tojson }}'{% endif %}>
         {% if max_depth < 1 %}
             {# depth 0 — a single card for the viewed node: its rolled-up "overall" light #}
             <div class="status-card s-{{ node.code | status_slug }}{% if node.code.name == 'OK' %} dim{% endif %}">
                 <div class="status-card__head" data-path="{{ node.path }}">
                     <span class="status-card__name">{{ node.name }}</span>
-                    <span class="status-head__middle">{% if node.title %}<span class="node-title">{{ node.title | markdown_inline }}</span>{% endif %}
+                    <span class="status-head__middle">{% set shown = node | node_title %}{% if shown %}<span class="node-title">{{ shown | markdown_inline }}</span>{% endif %}
                     {#- The same `node.actions` slot the depth-1 cards carry. At
                         depth 0 this card *is* the viewed node, so an action whose
                         subject is the node belongs here more plainly than
@@ -333,11 +353,15 @@
             {# a card's children render only from depth 2 on (depth 1 is cards only) #}
             {% set card_has_kids = system.children and max_depth > 1 %}
             {% set card_dim = system.code.name == 'OK' or (system.own_code != system.code and card_has_kids) %}
-            <div class="status-card s-{{ system.code | status_slug }}{% if card_dim %} dim{% endif %}">
+            <div class="status-card s-{{ system.code | status_slug }}{% if card_dim %} dim{% endif %}"
+                 {%- if grid_layout %}
+                 data-layout-weight="{{ grid_layout.weights[loop.index0] }}"
+                 data-layout-steps="{{ grid_layout.profiles[loop.index0] | map(attribute='span') | join(',') }}"
+                 {%- endif %}>
                 <div class="status-card__head" data-path="{{ system.path }}">
                     <a class="status-card__name"
                        href="{{ url_for('status', branch=system.path | url_branch) }}">{{ system.name }}</a>
-                    <span class="status-head__middle">{% if system.title %}<span class="node-title">{{ system.title | markdown_inline }}</span>{% endif %}
+                    <span class="status-head__middle">{% set shown = system | node_title %}{% if shown %}<span class="node-title">{{ shown | markdown_inline }}</span>{% endif %}
                     {#- The `node.actions` slot (ADR-0034, second slot): an action
                         whose subject is the **whole node**, not one of its reason
                         lines — which is where it belongs when a node's reasons are

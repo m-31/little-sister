@@ -26,10 +26,12 @@ from little_sister.reasons import DERIVED_PREFIX
 from little_sister.status import (
     HEARTBEAT_PATH,
     StatusCode,
+    effective_code,
     join_path,
     on_same_line,
     split_path,
 )
+from little_sister.titles import shown_title
 from little_sister.tree import StatusTree
 from tests.demo_check import SCENARIOS, DemoCheck
 from tests.demo_extension import REASON_BUDGET, review_action
@@ -93,6 +95,44 @@ class DemoScenarioTests(TestCase):
         self.assertEqual(cleared.code, StatusCode.OK)
         self.assertFalse(cleared.reason)             # findings list is gone
 
+    def test_severity_bands_declare_a_rank_and_no_band_repeats_its_name(self):
+        # The demo's ADR-0055 card, and the guard that keeps it demonstrating what
+        # its YAML claims: rank order (not alphabetical), and a title on every band
+        # that the surfaces are supposed to swallow.
+        result = SCENARIOS["severity"](0.0, 100)
+        by_rank = sorted(result.children, key=lambda c: (c.order, c.name))
+        self.assertEqual([c.name for c in by_rank],
+                         ["critical", "high", "medium", "low", "informational"])
+        # Alphabetical is genuinely different, or the fixture proves nothing.
+        self.assertNotEqual([c.name for c in by_rank],
+                            sorted(c.name for c in result.children))
+        for child in result.children:
+            with self.subTest(band=child.name):
+                self.assertEqual(shown_title(child.name, child.title), "")
+
+    def test_severity_climbs_and_clears_without_reordering(self):
+        # The root declares OK and the bands carry the news, so read the children:
+        # what the card shows is the tree's roll-up of these.
+        worst = [effective_code(StatusCode.OK,
+                                [c.code for c in
+                                 SCENARIOS["severity"]((i / 20) * 100, 100).children])
+                 for i in range(20)]
+        self.assertIn(StatusCode.OK, worst)
+        self.assertIn(StatusCode.WARN, worst)
+        self.assertIn(StatusCode.ERROR, worst)
+        # …and the ranks are a property of the band, never of what it reports now,
+        # so the row the colors travel along never re-sorts.
+        ranks = {tuple((c.name, c.order) for c in
+                       SCENARIOS["severity"]((i / 20) * 100, 100).children)
+                 for i in range(20)}
+        self.assertEqual(len(ranks), 1)
+
+    def test_informational_never_alarms_however_many_lines_it_carries(self):
+        for moment in (0.0, 40.0, 99.0):
+            with self.subTest(moment=moment):
+                bands = {c.name: c for c in SCENARIOS["severity"](moment, 100).children}
+                self.assertTrue(bands["informational"].reason)
+                self.assertEqual(bands["informational"].code, StatusCode.OK)
 
 class ReviewsScenarioTests(TestCase):
     """The demo's **declared-slug** member producer (ADR-0036 decision 4)."""
@@ -354,12 +394,12 @@ class DemoCheckTests(TestCase):
         # the WSGI wrapper registers `demo` before this runs; importing DemoCheck
         # above did the same. Every config in the demo dir must load cleanly.
         checks = load_checks(_DEMO_CONFIG_DIR)
-        self.assertEqual(len(checks), 8)
+        self.assertEqual(len(checks), 9)
         self.assertTrue(all(isinstance(c, DemoCheck) for c in checks))
         self.assertEqual({c.path for c in checks},
                          {"/services/api", "/ci/nightly", "/ci/pipelines",
                           "/ci/reviews", "/network/vpn", "/storage/backup",
-                          "/hosts/nas", "/security/audit"})
+                          "/hosts/nas", "/security/audit", "/security/wiz"})
 
     def test_dropped_child_ages_to_stale(self):
         # the mechanism the `silent` scenario relies on: a child omitted from a

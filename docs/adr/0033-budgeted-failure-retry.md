@@ -11,6 +11,16 @@
   [ADR-0031](0031-deployment-config-directory.md) (where the settings live).
 - **Register:** [`../decisions.md`](../decisions.md)
 
+> **Update (2026-08-15):** decision 2 is amended in two places by
+> [ADR-0060](0060-a-line-makes-no-claim.md), each from a fact not available here.
+> The budget now re-arms on **any change** of the stored code and not only on an
+> `OK` — because ADR-0042 made a chronically non-`OK` node ordinary, and such a check
+> spent its retries once and never got them back, invisibly. And a completed run
+> reporting `UNDEFINED` does **not** arm the retry, a withheld claim being nothing to
+> confirm. The trigger set is otherwise unchanged, so this record's reason for
+> including `WARN` — that the escalation counter must not disagree about what a
+> failure is — still holds; that counter should skip a chosen `UNDEFINED` too.
+
 ## Context
 
 A single failed check is not proof, but confirmation used to cost a full

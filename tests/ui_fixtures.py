@@ -52,6 +52,9 @@ class Fixture:
     ``status.html`` for that node with that breadcrumb. ``detail`` selects the
     member-leaf ``check.html`` surface instead. ``engine_error`` renders the page
     as if the engine had failed to start with that reason (the header banner).
+    ``dense`` mirrors the viewer's chips switch so a fixture can exercise either
+    tree shape. ``reason_cap`` overrides the harness configuration when a layout
+    case specifically exercises a deployment with a taller stable line budget.
     """
 
     name: str
@@ -60,6 +63,8 @@ class Fixture:
     branch: str = ""
     engine_error: str | None = None
     detail: bool = False
+    dense: bool = True
+    reason_cap: int | None = None
 
 
 # The sheet is a static artifact, so the *observation* times the cards now carry
@@ -505,6 +510,171 @@ def _wall_incident() -> StatusSnapshot:
     return _snapshot(tree, now=built + timedelta(minutes=20))
 
 
+def _two_large_roots() -> StatusSnapshot:
+    """Two tall top-level branches with differently shaped descendants.
+
+    This is the sparse-root / high-count-subtree case: a wide viewport has room for
+    several ordinary cards, but only two roots exist, so the current grid leaves
+    the remaining tracks empty while both cards grow downward.  The fixture keeps
+    the content synthetic while matching that geometry closely enough to judge
+    whether spare width should stay outside the roots or be spent inside them.
+    """
+    tree = StatusTree()
+
+    tree.upsert("/quality/github/actions", StatusCode.ERROR,
+                ["quality-kit (main) / lint failed (#1297)"])
+    for band in ("critical", "error", "high", "low", "medium", "note", "warning"):
+        tree.upsert(f"/quality/github/code-scanning/{band}", StatusCode.OK)
+    tree.upsert("/quality/github/issues", StatusCode.OK, "6 open issues")
+    tree.upsert(
+        "/quality/github/pull-requests",
+        StatusCode.WARN,
+        [f"dependency update {index:02d} is waiting for review"
+         for index in range(1, 13)],
+    )
+    tree.upsert("/quality/github/releases", StatusCode.WARN,
+                "two release branches have not been tagged")
+
+    for index in range(1, 8):
+        status = StatusCode.WARN if index in (2, 6) else StatusCode.OK
+        reason = (f"dependency advisory {index:02d} needs review"
+                  if status is StatusCode.WARN else None)
+        tree.upsert(f"/quality/github/dependency-alerts/advisory-{index:02d}",
+                    status, reason)
+    for platform in ("linux-311", "linux-314", "macos-arm", "macos-intel",
+                     "windows-311", "windows-314", "docs"):
+        status = StatusCode.ERROR if platform == "windows-314" else StatusCode.OK
+        reason = "the compatibility job failed" if status is StatusCode.ERROR else None
+        tree.upsert(f"/quality/github/test-matrix/{platform}", status, reason)
+
+    for environment in ("develop", "infrastructure", "production", "staging"):
+        tree.upsert(
+            f"/stress/aws/{environment}/cloudwatch/txt-resolve-errors",
+            StatusCode.WARN,
+            "alarm is active — reports errors in resolve lambda function",
+        )
+        tree.upsert(
+            f"/stress/aws/{environment}/cloudwatch/error-logs-high",
+            StatusCode.WARN,
+            "reports error-level message count above the expected baseline",
+        )
+        tree.upsert(
+            f"/stress/aws/{environment}/cloudwatch/latency-high",
+            StatusCode.WARN,
+            "p95 latency is above the synthetic service objective",
+        )
+        for instance in ("api", "batch", "gateway", "worker"):
+            tree.upsert(f"/stress/aws/{environment}/ec2/{instance}", StatusCode.OK)
+        tree.upsert(
+            f"/stress/aws/{environment}/lambda/read-functions",
+            StatusCode.WARN,
+            "function inventory cannot be read in this synthetic account",
+        )
+        tree.upsert(
+            f"/stress/aws/{environment}/lambda/process-events",
+            StatusCode.WARN,
+            "event processor reports a growing retry queue",
+        )
+        tree.upsert(f"/stress/aws/{environment}/databases/primary", StatusCode.OK)
+        tree.upsert(
+            f"/stress/aws/{environment}/databases/replica",
+            StatusCode.WARN,
+            "replication delay exceeds the expected window",
+        )
+
+    return _snapshot(tree)
+
+
+def _two_equal_large_roots() -> StatusSnapshot:
+    """Two top-level branches of the *same* size — the live overview's shape.
+
+    ``two_large_roots`` is deliberately lopsided (30 against 66), which is the one
+    arrangement where a per-card ``weight / budget`` ceiling still produced a
+    proportional split.  A real deployment's roots are often near-equal instead:
+    two teams watching the same GitHub aspects, one of them also on WIZ, the other
+    on an AWS account set that is currently refusing every AssumeRole and so has
+    no aspect children at all.  Both roots then weigh about thirty, both hit the
+    ceiling at two tracks, and every further column stays empty however wide the
+    viewport is — which is what this fixture holds still.
+
+    The height here comes largely from *reason* lines rather than nodes, which is
+    the second half of the same story: a wider card cannot split a node box away
+    from its own reasons.
+    """
+    tree = StatusTree()
+
+    denied = (
+        "role cannot be assumed: An error occurred (AccessDenied) when calling "
+        "the AssumeRole operation: User: arn:aws:iam::000000000000:user/monitor "
+        "is not authorized to perform: sts:AssumeRole on resource: "
+        "arn:aws:iam::100000000004:role/application/alarm-monitoring-role"
+    )
+
+    for team in ("quality", "stress"):
+        tree.upsert(f"/{team}/github/actions", StatusCode.ERROR,
+                    [f"{team}_kit (main) / CodeQL: failed (#1297)"])
+        for band in ("critical", "error", "high", "low", "medium", "none",
+                     "note", "warning"):
+            tree.upsert(f"/{team}/github/code_scanning_alerts/{band}",
+                        StatusCode.OK)
+            tree.upsert(f"/{team}/github/security_advisories/{band}",
+                        StatusCode.OK)
+        tree.upsert(f"/{team}/github/issues", StatusCode.OK)
+        tree.upsert(
+            f"/{team}/github/pull_requests", StatusCode.WARN,
+            [f"{team}_loadtest-board: Bump the actions group with {index} "
+             f"updates [dependabot[bot]]" for index in range(1, 6)],
+        )
+        tree.upsert(f"/{team}/github/sbom_check", StatusCode.OK)
+        tree.upsert(f"/{team}/github/secret_scanning_alerts", StatusCode.OK)
+
+    for band in ("critical", "high", "low", "medium"):
+        tree.upsert(f"/quality/wiz/{band}", StatusCode.OK)
+    tree.upsert(
+        "/quality/wiz/informational", StatusCode.OK,
+        [f"{_finding(index)}" for index in range(1, 13)],
+    )
+
+    for account in ("backup", "develop", "infrastructure", "live", "staging"):
+        tree.upsert(f"/stress/aws/{account}", StatusCode.ERROR, denied)
+
+    return _snapshot(tree)
+
+
+def _mixed_chip_branches() -> StatusSnapshot:
+    """One dense card with chip runs and several boxes at the same level.
+
+    Before chip runs became full-row grid items, the direct chips disabled the
+    entire nested grid and the three branch boxes stayed stacked however wide
+    the card grew.
+    """
+    tree = StatusTree()
+    for branch in ("alpha", "beta", "gamma"):
+        for leaf in ("one", "two", "three", "four"):
+            tree.upsert(f"/mixed/{branch}/{leaf}", StatusCode.OK)
+    tree.upsert("/mixed/summary", StatusCode.OK)
+    tree.upsert("/mixed/uptime", StatusCode.OK)
+    return _snapshot(tree)
+
+
+def _mixed_nested_flip() -> StatusSnapshot:
+    """Fifteen leaf roots plus one root with chains of heights (3,3,3,7,5).
+
+    The shape that ended the universal "wider never gets taller" claim: at the
+    width where the mixed card's nested auto-fit flips three columns to four,
+    the 7-chain re-chunks beside the 5-chain instead of above it and the card
+    genuinely grows — no outer track count can prevent it (all cost more).
+    """
+    tree = StatusTree()
+    for index in range(15):
+        tree.upsert(f"/leaf{index:02d}", StatusCode.OK)
+    for index, height in enumerate((3, 3, 3, 7, 5)):
+        chain = "/".join(f"d{level}" for level in range(height - 1))
+        tree.upsert(f"/zmix/c{index}/{chain}" if chain else f"/zmix/c{index}",
+                    StatusCode.OK)
+    return _snapshot(tree)
+
+
 def _finding(index: int) -> str:
     """One synthetic security-audit finding line (wiz-shaped, invented data):
     long prose, long unbroken resource identifiers, occasionally a link."""
@@ -547,12 +717,20 @@ def _security_findings() -> StatusSnapshot:
     tree.upsert("/github/pull_requests", StatusCode.OK, "6 open")
     tree.upsert("/github/security_advisories", StatusCode.OK)
     tree.upsert("/little-sister", StatusCode.OK, frequency_seconds=3600)
-    tree.upsert("/wiz/critical", StatusCode.OK)
+    # The severity bands carry a declared rank (ADR-0055): the name sort files
+    # `informational` — the band that means *nothing to do* — third, between `high`
+    # and `low`. Their titles are deliberately the names again, which is the other
+    # half of the same screenshot: no chip should read the word twice.
+    tree.upsert("/wiz/critical", StatusCode.OK, order=1)
     tree.set_title("/wiz/critical", "Critical")
-    tree.upsert("/wiz/high", StatusCode.OK)
+    tree.upsert("/wiz/high", StatusCode.OK, order=2)
     tree.set_title("/wiz/high", "High")
+    tree.upsert("/wiz/medium", StatusCode.OK, order=3)
+    tree.set_title("/wiz/medium", "Medium")
+    tree.upsert("/wiz/low", StatusCode.OK, order=4)
+    tree.set_title("/wiz/low", "Low")
     tree.upsert("/wiz/informational", StatusCode.OK,
-                [_finding(i) for i in range(1, 151)])
+                [_finding(i) for i in range(1, 151)], order=5)
     tree.set_title("/wiz/informational", "Informational")
     tree.set_about("/wiz", "Wiz security issues")
     return _snapshot(tree)
@@ -639,6 +817,24 @@ FIXTURES: tuple[Fixture, ...] = (
     Fixture("wall_incident",
             "16 calm hosts + eruption + 200-line trace + stale/idle/"
             "maintenance + deep branch, all at once", _wall_incident),
+    Fixture("two_large_roots",
+            "2 tall roots with dozens of differently shaped descendants, "
+            "chips off (spare columns)",
+            _two_large_roots, dense=False),
+    Fixture("two_equal_large_roots",
+            "2 tall roots of the *same* weight, chips off — the live overview "
+            "shape used to waste width on span steps that opened no columns",
+            _two_equal_large_roots, dense=False),
+    Fixture("two_equal_large_roots_reason_cap_30",
+            "the same 2-root topology with a 30-line reason budget, chips off",
+            _two_equal_large_roots, dense=False, reason_cap=30),
+    Fixture("mixed_chip_branches",
+            "a dense card with a chip run beside 3 branch boxes",
+            _mixed_chip_branches),
+    Fixture("mixed_nested_flip",
+            "15 leaf roots + one card of (3,3,3,7,5) chains, chips off — the "
+            "nested column flip no outer track choice can dodge",
+            _mixed_nested_flip, dense=False),
     Fixture("security_findings_150",
             "an OK severity leaf flooding 150 long findings beside near-empty "
             "tiles (the wiz screenshot case)", _security_findings),

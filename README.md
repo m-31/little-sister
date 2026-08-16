@@ -43,7 +43,6 @@ in a package of its own and register itself at startup.
 See `docs/` for the full picture — `project.md` (what it is), `architecture.md`
 (how the code is built), `use-cases.md` (the vision, in concrete scenes),
 `implementing-checks.md` (how to build a check type of your own),
-`plugin-repository.md` (how to give one a repository of its own), and
 `testing-the-gui.md` (previewing the web UI under extreme layouts and live
 scenarios).
 Design rationale is in `decisions.md` + `adr/`. The JSON API contract is
@@ -174,9 +173,7 @@ private deployment (real per-host checks, users and secrets) lives in its **own
 repository** that consumes little-sister as a library. Writing your **own check
 type** — a new `type:` backed by a Python class, registered through the public
 `CHECK_TYPES` seam — is covered in
-[`docs/implementing-checks.md`](docs/implementing-checks.md); giving a type its own
-installable repository, once it would have a second user, is
-[`docs/plugin-repository.md`](docs/plugin-repository.md).
+[`docs/implementing-checks.md`](docs/implementing-checks.md).
 
 #### General options (`config/settings.yaml`)
 
@@ -197,8 +194,9 @@ maintenance_default_expiry: 7d       # maintenance window when none is given
 The shipped file documents the rest inline — the dashboard caps (`reason_cap`,
 `branch_cap`, `maintenance_cap`), whether a failing check keeps its `stacktrace`,
 the card-head placement (`card_status_line`: compact `beside` by default, or the
-standing second line `below`), and the failure-retry budget (`retry_interval`,
-`retry_attempts`).
+standing second line `below`), how cards spend a wide grid's columns
+(`dashboard_columns`: `flow` by default, or `plain` for the fixed one-track
+grid), and the failure-retry budget (`retry_interval`, `retry_attempts`).
 
 #### Curated links (`config/links.yaml`)
 

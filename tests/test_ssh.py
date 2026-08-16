@@ -11,7 +11,7 @@ from little_sister.checks.ssh.script import ScriptCheck
 from little_sister.status import StatusCode
 
 HERE = Path(".")
-RUN = "little_sister.checks.ssh.transport.subprocess.run"
+RUN = "little_sister.checks.ssh.connection.subprocess.run"
 
 # An ssh advisory banner (decorated with ``**``) — what the transport turns into a
 # WARN-worthy notice and every SSH check surfaces.

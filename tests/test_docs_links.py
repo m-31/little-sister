@@ -3,7 +3,9 @@
 Each ``](target)`` link in the repo's tracked Markdown must point to a real file
 (and, when it carries a ``#fragment``, a real heading anchor). External URLs are
 out of scope; fenced and inline code is ignored so example link-syntax isn't
-flagged. Backstops the "verify cross-references" rule in AGENTS.md.
+flagged. Backstops the family's rule that a cross-reference is verified when the
+document carrying it is touched — a rule that lives in the agent rulebook, which is
+one of the documents this repository does not ship.
 """
 from __future__ import annotations
 

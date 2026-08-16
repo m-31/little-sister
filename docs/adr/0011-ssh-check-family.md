@@ -6,6 +6,14 @@
   branches), [ADR-0009](0009-per-profile-metrics-scripts.md) (per-profile scripts).
 - **Register:** [`../decisions.md`](../decisions.md)
 
+> **Update (2026-08-15):** the module named below as `transport.py` is now
+> **`connection.py`**. The word `transport` went to `little_sister.transport`, the
+> policy vocabulary every check uses to bound and classify a request
+> ([ADR-0058](0058-transport-policy-vocabulary.md)); `connection.py` is the better
+> name for what this one holds — a value object carrying one host's parameters. Nothing
+> about the decision below changes: one connection, `BatchMode` forced, facts and not
+> verdicts.
+
 ## Context
 Everything SSH lives in `checks/ssh.py` — 521 lines, ~2× the next module. One file
 holds the SSH transport, the host-metrics check, output parsing, threshold

@@ -20,7 +20,9 @@ info:
     Each node carries its rolled-up status plus metadata the client renders as
     Markdown — `about` (what it is), `title`, a leaf `description` (what its check
     does), and the check's `config` — together with maintenance details when pinned.
-    Children are returned in natural, case-insensitive name order.
+    Children are returned in a deterministic order: a declared rank first, then
+    natural, case-insensitive name order. Most trees declare no rank and are
+    therefore plain name order.
 
     The same resources back the HTML dashboard; the representation is chosen by
     `Accept` (content negotiation). `Accept: application/json` returns the JSON
@@ -38,10 +40,14 @@ info:
     (`schema_version` unchanged). v1.2 made `timestamp` nullable — strictly an
     incompatible change; `schema_version` stays **1** and the formal bump is
     consolidated into a later, client-facing enrichment of this contract (ADR-0027).
+    v1.3 replaced the flat promise of name order on `children` with `(rank, name)`
+    (ADR-0055): a client that renders in received order may see a ranked node's
+    children move. The rank itself is **not** a field here; it joins the same
+    consolidated revision. `schema_version` stays **1** for the same reason as v1.2.
 
     See `docs/api/README.md` (linked below) for auth, `curl` examples and how tokens
     are provisioned.
-  version: 1.2.0
+  version: 1.3.0
   contact:
     name: little-sister
     url: https://github.com/m-31/little-sister
@@ -263,8 +269,10 @@ components:
         children:
           type: array
           description: >-
-            Child nodes, ordered by name — natural and case-insensitive, so `node2`
-            precedes `node10`.
+            Child nodes, ordered by declared rank first and then by name — natural
+            and case-insensitive, so `node2` precedes `node10`. A node whose check
+            or deployment declares no rank shares the default, so an undeclared set
+            is plain name order. The rank is not exposed as a field.
           items:
             $ref: "#/components/schemas/Status"
       required:
