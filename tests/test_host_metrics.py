@@ -7,7 +7,9 @@ from unittest import TestCase, mock
 from little_sister.checks import CheckError
 from little_sister.checks.ssh import HostMetricsCheck, _parse_disk_path
 from little_sister.checks.ssh.metrics import volume_name
+from little_sister.engine import Engine
 from little_sister.status import StatusCode
+from little_sister.tree import StatusTree
 
 SSH_SAMPLE = """\
 os=Linux
@@ -87,18 +89,56 @@ class HostMetricsCheckTests(TestCase):
         # the shared host container itself stays bare
         self.assertEqual(result.config, "")
 
-    def test_metric_children_carry_about(self):
-        # Each aspect leaf ships the type-inherent `about` (ADR-0025); the copy
-        # lives in the ABOUT map, so every deployment's hover cards explain these
-        # leaves out of the box. A deployment's nodes.yaml still overrides per field.
+    # --- the labels (ADR-0025) ---
+    #
+    # They are read off the **tree**, not off the result, because since ADR-0025's
+    # 2026-08-19 update this check declares them and the library resolves them:
+    # the child `CheckResult` carries nothing for a name the type knows, and a
+    # test asserting on the result would now be testing the wrong layer — and
+    # would have gone on passing, vacuously, when the labels stopped arriving.
+    # What a deployment sees is the node, so that is what these pin.
+
+    def _nodes(self, directory, stdout, **extra):
+        """Every node this check writes, by path, after one engine tick."""
+        check = self._check(directory, **extra)
+        completed = subprocess.CompletedProcess([], 0, stdout, "")
+        tree = StatusTree()
+        with mock.patch("little_sister.checks.ssh.connection.subprocess.run",
+                        return_value=completed):
+            Engine([check], tree).run_once()
+        nodes = {}
+
+        def walk(node, path):
+            nodes[path] = node
+            for child in node.children:
+                walk(child, f"{path}/{child.name}")
+
+        walk(tree.snapshot("/ssh"), "/ssh")
+        return nodes
+
+    def test_metric_nodes_carry_the_declared_about(self):
+        # Each aspect leaf gets the type-inherent `about` this check declares
+        # (ADR-0025); the copy lives in the ABOUT map, so every deployment's hover
+        # cards explain these leaves out of the box. A deployment's nodes.yaml
+        # still overrides per field.
         from little_sister.checks.ssh.host_metrics import ABOUT
         with tempfile.TemporaryDirectory() as directory:
-            result, _ = self._run(directory, SSH_SAMPLE)
-        kids = self._kids(result)
+            nodes = self._nodes(directory, SSH_SAMPLE)
         for aspect in ("ssh", "disk", "memory", "cpu", "load"):
-            self.assertEqual(kids[aspect].about, ABOUT[aspect])
+            self.assertEqual(nodes[f"/ssh/{aspect}"].about, ABOUT[aspect])
         # the shared host container carries none — its labels stay nodes.yaml's
-        self.assertEqual(result.about, "")
+        self.assertEqual(nodes["/ssh"].about, "")
+
+    def test_the_declaration_is_all_this_check_does_with_a_label(self):
+        # The migration's claim, stated where it can fail: the aspect children
+        # hand over no label at all any more — the map on the check is what the
+        # engine writes. (The per-volume children below are the one exception,
+        # and they are dynamic.)
+        with tempfile.TemporaryDirectory() as directory:
+            result, _ = self._run(directory, SSH_SAMPLE)
+        for child in result.children:
+            with self.subTest(aspect=child.name):
+                self.assertEqual((child.about, child.title), ("", ""))
 
     def test_unavailable_aspect_still_carries_about(self):
         # a missing aspect is a WARN "unavailable" leaf, but its hover still
@@ -106,14 +146,16 @@ class HostMetricsCheckTests(TestCase):
         from little_sister.checks.ssh.host_metrics import ABOUT
         stdout = "disk_pct=10\ncpu_pct=5\nload1=0.1\nncpu=2\n"   # memory absent
         with tempfile.TemporaryDirectory() as directory:
-            result, _ = self._run(directory, stdout)
-        memory = self._kids(result)["memory"]
-        self.assertEqual(memory.reason, ["unavailable"])
+            nodes = self._nodes(directory, stdout)
+        memory = nodes["/ssh/memory"]
+        self.assertEqual(list(memory.reason), ["unavailable"])
         self.assertEqual(memory.about, ABOUT["memory"])
 
     def test_disk_volumes_carry_the_disk_about(self):
         # the `disk_path: all` branch and each per-filesystem volume carry the
-        # disk about, so every volume hover explains itself too.
+        # disk about, so every volume hover explains itself too. The branch is
+        # named `disk` and is labelled by the library; a volume is named by the
+        # host, so its label rides its result — the dynamic-child channel.
         from little_sister.checks.ssh.host_metrics import ABOUT
         stdout = (
             "disk_count=2\n"
@@ -123,53 +165,61 @@ class HostMetricsCheckTests(TestCase):
             "disk2_avail_kb=3972\ndisk2_pct=99\n"
             "mem_pct=30\ncpu_pct=5\nload1=0.5\nncpu=2\n")
         with tempfile.TemporaryDirectory() as directory:
-            result, _ = self._run(directory, stdout)
-        disk = self._kids(result)["disk"]
-        self.assertEqual(disk.about, ABOUT["disk"])          # the branch container
-        vols = {c.name: c for c in disk.children}
-        self.assertEqual(vols["root"].about, ABOUT["disk"])  # and each volume
-        self.assertEqual(vols["ext"].about, ABOUT["disk"])
+            nodes = self._nodes(directory, stdout)
+        self.assertEqual(nodes["/ssh/disk"].about, ABOUT["disk"])
+        self.assertEqual(nodes["/ssh/disk/root"].about, ABOUT["disk"])
+        self.assertEqual(nodes["/ssh/disk/ext"].about, ABOUT["disk"])
 
-    def test_subnodes_config_overrides_the_built_in_about(self):
-        # a deployment overrides a built-in aspect about (and sets a title) in the
+    def test_subnodes_config_overrides_the_declared_about(self):
+        # a deployment overrides a declared aspect about (and sets a title) in the
         # check's own config — per aspect, per field (ADR-0025).
         from little_sister.checks.ssh.host_metrics import ABOUT
         with tempfile.TemporaryDirectory() as directory:
-            result, _ = self._run(
+            nodes = self._nodes(
                 directory, SSH_SAMPLE,
                 subnodes={"disk": {"about": "Root volume on the NVMe.",
                                    "title": "Disk (NVMe)"}})
-        kids = self._kids(result)
-        self.assertEqual(kids["disk"].about, "Root volume on the NVMe.")  # override
-        self.assertEqual(kids["disk"].title, "Disk (NVMe)")
-        self.assertEqual(kids["memory"].about, ABOUT["memory"])   # default kept
-        self.assertEqual(kids["memory"].title, "")                # no title default
+        self.assertEqual(nodes["/ssh/disk"].about, "Root volume on the NVMe.")
+        self.assertEqual(nodes["/ssh/disk"].title, "Disk (NVMe)")
+        self.assertEqual(nodes["/ssh/memory"].about, ABOUT["memory"])  # default
+        self.assertEqual(nodes["/ssh/memory"].title, "")   # no title declared
 
     def test_subnodes_title_only_keeps_default_about(self):
-        # a config entry that sets only a title leaves the built-in about in place
+        # a config entry that sets only a title leaves the declared about in place
         # (an empty field falls back to the default, per field).
         from little_sister.checks.ssh.host_metrics import ABOUT
         with tempfile.TemporaryDirectory() as directory:
-            result, _ = self._run(
+            nodes = self._nodes(
                 directory, SSH_SAMPLE, subnodes={"cpu": {"title": "Processor"}})
-        cpu = self._kids(result)["cpu"]
-        self.assertEqual(cpu.title, "Processor")
-        self.assertEqual(cpu.about, ABOUT["cpu"])
+        self.assertEqual(nodes["/ssh/cpu"].title, "Processor")
+        self.assertEqual(nodes["/ssh/cpu"].about, ABOUT["cpu"])
+
+    def test_subnodes_config_may_extend_the_declared_about(self):
+        # `{default}` is the extension form, and it works for an installed type
+        # from the deployment's file alone (ADR-0025's 2026-08-19 update).
+        from little_sister.checks.ssh.host_metrics import ABOUT
+        with tempfile.TemporaryDirectory() as directory:
+            nodes = self._nodes(
+                directory, SSH_SAMPLE,
+                subnodes={"memory": {"about": "{default}\n\nAlso ping #oncall."}})
+        self.assertEqual(nodes["/ssh/memory"].about,
+                         ABOUT["memory"] + "\n\nAlso ping #oncall.")
 
     def test_subnodes_override_reaches_disk_branch_and_volumes(self):
         # the disk override applies to the `disk_path: all` branch and each volume
-        # (they share the disk aspect's label).
+        # (they share the disk aspect's label — the volumes because this check
+        # hands them the *resolved* text, the override included).
         stdout = (
             "disk_count=1\n"
             "disk1_path=/\ndisk1_total_kb=1000000\ndisk1_used_kb=520000\n"
             "disk1_avail_kb=480000\ndisk1_pct=52\n"
             "mem_pct=30\ncpu_pct=5\nload1=0.5\nncpu=2\n")
         with tempfile.TemporaryDirectory() as directory:
-            result, _ = self._run(
-                directory, stdout, subnodes={"disk": {"about": "Volumes on this NAS."}})
-        disk = self._kids(result)["disk"]
-        self.assertEqual(disk.about, "Volumes on this NAS.")               # the branch
-        self.assertEqual(disk.children[0].about, "Volumes on this NAS.")   # each volume
+            nodes = self._nodes(
+                directory, stdout,
+                subnodes={"disk": {"about": "Volumes on this NAS."}})
+        self.assertEqual(nodes["/ssh/disk"].about, "Volumes on this NAS.")
+        self.assertEqual(nodes["/ssh/disk/root"].about, "Volumes on this NAS.")
 
     def test_descriptions_override_leaf_descriptions(self):
         with tempfile.TemporaryDirectory() as directory:

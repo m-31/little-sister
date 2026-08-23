@@ -67,6 +67,57 @@ class LoadNodesTests(TestCase):
             self.assertIn("order", str(caught.exception))
             self.assertIn("whole number", str(caught.exception))
 
+    def test_show_when_quiet_is_read_and_a_stated_false_survives(self):
+        # The tri-state (ADR-0063): a stated `false` is a deployment declining a
+        # claim a check type ships, so it has to occupy the field; an absent key
+        # must stay unstated, or every entry becomes a declaration.
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / "nodes.yaml").write_text(
+                "/aws/ec2: {show_when_quiet: true}\n"
+                "/aws/cloudwatch: {show_when_quiet: false}\n"
+                "/aws/batch: {about: nothing special}\n")
+            meta = load_nodes(Path(directory))
+            self.assertIs(meta["/aws/ec2"].show_when_quiet, True)
+            self.assertIs(meta["/aws/cloudwatch"].show_when_quiet, False)
+            self.assertIsNone(meta["/aws/batch"].show_when_quiet)
+
+    def test_a_show_when_quiet_only_entry_is_kept(self):
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / "nodes.yaml").write_text(
+                "/nexus: {show_when_quiet: false}\n")
+            self.assertEqual(load_nodes(Path(directory)),
+                             {"/nexus": NodeMeta(show_when_quiet=False)})
+
+    def test_a_non_boolean_show_when_quiet_is_refused(self):
+        # `bool("false")` is True, so coercing a quoted YAML boolean would switch
+        # the node **on** while the file says off, and nothing could notice.
+        for stated in ('"false"', "yes please", "1"):
+            with self.subTest(stated=stated):
+                with tempfile.TemporaryDirectory() as directory:
+                    (Path(directory) / "nodes.yaml").write_text(
+                        f"/nexus: {{show_when_quiet: {stated}}}\n")
+                    with self.assertRaises(CheckError) as caught:
+                        load_nodes(Path(directory))
+                    self.assertIn("show_when_quiet", str(caught.exception))
+                    self.assertIn("true or false", str(caught.exception))
+
+    def test_a_later_root_may_state_show_when_quiet_false_over_a_declared_base(self):
+        with tempfile.TemporaryDirectory() as d1, tempfile.TemporaryDirectory() as d2:
+            (Path(d1) / "nodes.yaml").write_text(
+                "/a: {about: base, show_when_quiet: true}\n")
+            (Path(d2) / "nodes.yaml").write_text("/a: {show_when_quiet: false}\n")
+            meta = load_nodes(f"{d1}{os.pathsep}{d2}")
+            self.assertEqual(meta["/a"],
+                             NodeMeta(about="base", show_when_quiet=False))
+
+    def test_a_later_root_silent_on_show_when_quiet_keeps_the_base(self):
+        with tempfile.TemporaryDirectory() as d1, tempfile.TemporaryDirectory() as d2:
+            (Path(d1) / "nodes.yaml").write_text("/a: {show_when_quiet: true}\n")
+            (Path(d2) / "nodes.yaml").write_text("/a: {title: site title}\n")
+            meta = load_nodes(f"{d1}{os.pathsep}{d2}")
+            self.assertEqual(meta["/a"],
+                             NodeMeta(title="site title", show_when_quiet=True))
+
     def test_a_later_root_may_state_order_zero_over_a_ranked_base(self):
         with tempfile.TemporaryDirectory() as d1, tempfile.TemporaryDirectory() as d2:
             (Path(d1) / "nodes.yaml").write_text("/a: {about: base, order: 4}\n")
@@ -138,6 +189,32 @@ class ResolveMetadataTests(TestCase):
         check = self._http(path="/web", title="inline title")
         self.assertIsNone(resolve_metadata([check], {})["/web"].order)
 
+    def test_an_inline_show_when_quiet_is_read_and_nodes_yaml_still_wins(self):
+        check = self._http(path="/aws/ec2", title="EC2", show_when_quiet=True)
+        self.assertEqual(resolve_metadata([check], {}),
+                         {"/aws/ec2": NodeMeta(title="EC2", show_when_quiet=True)})
+        meta = resolve_metadata([check],
+                                {"/aws/ec2": NodeMeta(show_when_quiet=False)})
+        self.assertEqual(meta["/aws/ec2"],
+                         NodeMeta(title="EC2", show_when_quiet=False))
+
+    def test_a_declared_false_beats_an_inline_true(self):
+        # The sentence the tri-state exists for: `false` is not "unstated", so a
+        # deployment can take back what the check declared (ADR-0063).
+        check = self._http(path="/aws/ec2", show_when_quiet=True)
+        meta = resolve_metadata([check],
+                                {"/aws/ec2": NodeMeta(show_when_quiet=False)})
+        self.assertIs(meta["/aws/ec2"].show_when_quiet, False)
+
+    def test_a_check_with_only_show_when_quiet_still_reaches_the_map(self):
+        check = self._http(path="/aws/ec2", show_when_quiet=False)
+        self.assertEqual(resolve_metadata([check], {}),
+                         {"/aws/ec2": NodeMeta(show_when_quiet=False)})
+
+    def test_no_show_when_quiet_anywhere_stays_unstated(self):
+        check = self._http(path="/web", title="inline title")
+        self.assertIsNone(resolve_metadata([check], {})["/web"].show_when_quiet)
+
     def test_inline_used_when_no_declaration(self):
         check = self._http(path="/web", title="inline title")
         self.assertEqual(resolve_metadata([check], {}),
@@ -157,6 +234,14 @@ class ConsistencyPassTests(TestCase):
         joined = "\n".join(logs.output)
         self.assertIn("ghost", joined)
         self.assertNotIn("'/web'", joined)         # web is covered
+
+    def test_a_show_when_quiet_only_orphan_still_warns(self):
+        # An entry stating only this field is a declaration like any other, so the
+        # startup pass must still say when no check covers its path (ADR-0063).
+        with self.assertLogs(level="WARNING") as logs:
+            run_consistency_pass([self._http(path="/web")],
+                                 {"/ghost": NodeMeta(show_when_quiet=True)})
+        self.assertIn("ghost", "\n".join(logs.output))
 
     def test_info_logs_container_without_about(self):
         with self.assertLogs(level="INFO") as logs:

@@ -1,10 +1,11 @@
 """Node metadata: the ``nodes`` aspect's declarations + the startup consistency pass.
 
 A node's display metadata — ``about`` (subject metadata, what it *is*; ADR-0012),
-``title`` (a short display label; ADR-0017) and ``order`` (its declared rank among
-its siblings; ADR-0055) — is fed by precedence: a ``nodes.yaml``
+``title`` (a short display label; ADR-0017), ``order`` (its declared rank among
+its siblings; ADR-0055) and ``show_when_quiet`` (this node's quiet lines are still
+information; ADR-0063) — is fed by precedence: a ``nodes.yaml``
 declaration keyed by path **>** the inline value on the owning check **>** unstated.
-All three are seeded onto the tree here, at startup, before the first tick — which
+All four are seeded onto the tree here, at startup, before the first tick — which
 is what puts them ahead of the fourth source ``order`` and the labels also have: the
 values a running ``CheckResult`` carries, which fill an unset field and no more.
 The file is optional and is the ``nodes`` aspect of the configuration directory —
@@ -29,12 +30,13 @@ from little_sister.status import (
     on_same_line,
     split_path,
 )
-from little_sister.values import number
+from little_sister.values import number, strict_flag
 
 
 @dataclass(frozen=True)
 class NodeMeta:
-    """Per-node display metadata seeded at startup: ``about``, ``title``, ``order``.
+    """Per-node display metadata seeded at startup: ``about``, ``title``, ``order``
+    and ``show_when_quiet``.
 
     ``order`` is the declared sibling rank (ADR-0055) and is ``None`` when neither
     source mentions it — **not** ``0``, which is a rank an author may state on
@@ -42,25 +44,34 @@ class NodeMeta:
     the default value. It is not a request for alphabetical: ``0`` is the rank the
     unranked carry, so it sorts a node *with* them, ahead of every positive rank,
     rather than back at its alphabetical place — putting a whole ranked set back to
-    the alphabet takes an ``order: 0`` per sibling. Every other field uses the empty
-    string for the same "nobody said", which works there because no author ever
-    means an empty label.
+    the alphabet takes an ``order: 0`` per sibling.
+
+    ``show_when_quiet`` (ADR-0063) is ``None`` for the same reason and the same way:
+    ``false`` is a value an author may state on purpose — it is how a deployment
+    takes back a declaration a check made — so it has to occupy the field where a
+    check's ``true`` cannot fill over it. The two labels use the empty string for
+    "nobody said", which works there because no author ever means an empty label.
     """
     about: str = ""
     title: str = ""
     order: int | None = None
+    show_when_quiet: bool | None = None
 
     @property
     def declares(self) -> bool:
         """Whether this entry says anything at all. An entry that does not is
         dropped at parse time, so a stray key cannot become a node declaration."""
-        return bool(self.about) or bool(self.title) or self.order is not None
+        return (bool(self.about) or bool(self.title) or self.order is not None
+                or self.show_when_quiet is not None)
 
     def merged_over(self, base: NodeMeta) -> NodeMeta:
         """This entry's fields, each falling back to ``base`` where unstated."""
         return NodeMeta(about=self.about or base.about,
                         title=self.title or base.title,
-                        order=base.order if self.order is None else self.order)
+                        order=base.order if self.order is None else self.order,
+                        show_when_quiet=(
+                            base.show_when_quiet if self.show_when_quiet is None
+                            else self.show_when_quiet))
 
 
 NODES_ASPECT = "nodes"
@@ -110,9 +121,11 @@ def resolve_metadata(checks: list[Check],
     """
     meta: dict[str, NodeMeta] = {
         check.path: NodeMeta(about=check.about, title=check.title,
-                             order=check.order)
+                             order=check.order,
+                             show_when_quiet=check.show_when_quiet)
         for check in checks
-        if check.about or check.title or check.order is not None}
+        if (check.about or check.title or check.order is not None
+            or check.show_when_quiet is not None)}
     for path, entry in nodes.items():
         meta[path] = entry.merged_over(meta.get(path, NodeMeta()))
     return meta
@@ -153,8 +166,8 @@ def _containers(checks: list[Check]) -> set[str]:
 
 def _read_nodes_file(node_file: Path) -> dict[str, NodeMeta]:
     """Parse one ``nodes.yaml`` into ``path -> NodeMeta``. Each value is a mapping
-    (``{about: …, title: …, order: …}``) or a bare-string shorthand for ``about``
-    alone; an entry stating none of the three is dropped."""
+    (``{about: …, title: …, order: …, show_when_quiet: …}``) or a bare-string
+    shorthand for ``about`` alone; an entry stating none of the four is dropped."""
     try:
         with open(node_file, encoding="utf-8") as handle:
             data = yaml.safe_load(handle) or {}
@@ -178,7 +191,14 @@ def _meta_of(value: Any, where: str) -> NodeMeta:
         # a silently ignored one would leave the row in an order nobody chose.
         order = (number(value, "order", where=where)
                  if value.get("order") is not None else None)
+        # `show_when_quiet` is read the same way and for the same reason: an
+        # absent key is "nobody said", while a stated `false` is a deployment
+        # taking back what a check declared (ADR-0063). A non-boolean raises —
+        # `bool("false")` is True, so a quoted YAML boolean would switch the node
+        # *on* while the file says off, and nothing downstream could notice.
+        quiet = (strict_flag(value, "show_when_quiet", where=where)
+                 if value.get("show_when_quiet") is not None else None)
         return NodeMeta(about=str(value.get("about", "")),
                         title=str(value.get("title", "")),
-                        order=order)
+                        order=order, show_when_quiet=quiet)
     return NodeMeta(about=str(value) if value else "")

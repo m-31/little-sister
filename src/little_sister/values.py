@@ -42,7 +42,7 @@ from little_sister.errors import CheckError
 
 #: The check-authoring surface of this module (architecture.md §11, ADR-0049) —
 #: everything public here is promised, so the two cannot drift apart.
-__all__ = ["flag", "number", "real", "rows", "text"]
+__all__ = ["flag", "number", "real", "rows", "strict_flag", "text"]
 
 #: Sentinel for "not in the bag at all" — distinct from a present ``None``, which is
 #: treated the same way but must not be confused with a legitimate falsy value.
@@ -132,6 +132,33 @@ def flag(bag: object, *path: str, default: bool = False) -> bool:
     """
     value = _read(bag, path, where="", required=False)
     return default if value is _MISSING else bool(value)
+
+
+def strict_flag(bag: object, *path: str, default: bool = False,
+                where: str = "") -> bool:
+    """A boolean that must actually **be** one — a *switch* in a configuration
+    file, as against :func:`flag`'s truthiness read of a payload.
+
+    The two differ on purpose, and the difference is the whole reason this exists.
+    ``bool("false")`` is ``True``, so a quoted YAML boolean — ``enabled: "false"``,
+    ``show_when_quiet: "no"`` — read through :func:`flag` switches the thing
+    **on** while its config says off, and nothing downstream can notice: the
+    feature simply happens. A switch is worth less than nothing if it can silently
+    mean its opposite, so anything that is not a real ``bool`` raises
+    :class:`CheckError` here, like a non-numeric :func:`number`.
+
+    Absence still yields ``default``. A caller that must tell an **absent** key
+    from a stated ``false`` — a tri-state, the shape ``order`` already has — guards
+    the call with ``if bag.get(key) is not None``, because no boolean return can
+    carry that distinction.
+    """
+    value = _read(bag, path, where, required=False)
+    if value is _MISSING:
+        return default
+    if not isinstance(value, bool):
+        raise CheckError(f"{_label(path, where)}: expected true or false, got "
+                         f"{value!r}")
+    return value
 
 
 def rows(bag: object, *path: str, where: str = "") -> list[Any]:

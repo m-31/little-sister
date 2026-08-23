@@ -18,6 +18,11 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 from little_sister import secrets
+from little_sister.checks.metadata import (
+    parse_show_when_quiet,
+    parse_subnodes,
+    resolve_text,
+)
 from little_sister.errors import CheckError as CheckError
 from little_sister.origins import release_of
 from little_sister.reasons import (
@@ -28,7 +33,7 @@ from little_sister.reasons import (
     normalize,
 )
 from little_sister.status import StatusCode, join_path, leaf_name, split_path
-from little_sister.values import number
+from little_sister.values import number, strict_flag
 
 DEFAULT_FREQUENCY_SECONDS = 900   # 15 minutes — most checks run infrequently
 DEFAULT_TIMEOUT_SECONDS = 30.0
@@ -86,14 +91,23 @@ class CheckResult:
     engine upserts — declared or derived.
 
     ``about`` (subject metadata — what the node *is*) and ``title`` (a short
-    display label) are the **type-inherent** labels a branch check gives the
-    subnodes it emits (ADR-0025) — e.g. a metrics check captioning its ``disk`` /
-    ``memory`` aspects. Like ``name`` they are **ignored on the root** (whose
-    labels keep their ``nodes.yaml`` / inline-check sources), and unlike
-    ``description`` / ``config`` they **fill an empty node field only**: a
-    ``nodes.yaml`` declaration seeded at startup always wins, and the label
-    freezes at its first fill (stable identity, not live status — text that
-    changes with the observation belongs in ``reason``).
+    display label) are labels for the subnodes a branch check emits (ADR-0025) —
+    e.g. a metrics check captioning its ``disk`` / ``memory`` aspects. Like
+    ``name`` they are **ignored on the root** (whose labels keep their
+    ``nodes.yaml`` / inline-check sources), and unlike ``description`` /
+    ``config`` they **fill an empty node field only**: a ``nodes.yaml``
+    declaration seeded at startup always wins, and the label freezes at its
+    first fill (stable identity, not live status — text that changes with the
+    observation belongs in ``reason``).
+
+    They are the **fallback** channel, not the first one (ADR-0025 update
+    2026-08-19). A label a type ships for a subnode it always emits is
+    **declared**, not stamped — ``subnode_defaults`` on the constructor — and the
+    library resolves it against the deployment's ``subnodes:`` block and stores it
+    per child *name*. What is left for these two fields is the child whose name
+    nothing could have declared: the **dynamic** one, a volume or a repository the
+    run discovered. A stamped label is read per field, and only where the resolved
+    map says nothing for that name.
 
     ``order`` is a **declared rank** among a node's siblings (ADR-0055). Siblings
     render alphabetically, which destroys the one order a severity band set has:
@@ -119,6 +133,29 @@ class CheckResult:
     rank, before every positive one. Zeroing one child of a set the check ranked
     ``1..5`` moves it to the **front**; handing that whole set back to the alphabet
     means stating ``order: 0`` on every sibling.
+
+    ``show_when_quiet`` says **this node's quiet lines are still information**
+    (ADR-0063), and a surface's density mechanisms must not hide them for being
+    quiet. It is for the *inventory*-shaped aspect — one line per instance, per
+    volume, per account — whose reading is the list itself and is therefore read
+    precisely while everything is fine; the opposite claim, that a node's quiet
+    lines are noise, a check already makes by not emitting them. Like ``about`` /
+    ``title`` it is **ignored on the root**, whose declaration is the
+    ``show_when_quiet:`` key in the check's own YAML, and read on **children** —
+    where, exactly like them, it is the **dynamic-child channel**: the aspect a
+    type always emits declares the flag in its ``subnode_defaults`` entry beside
+    its label, and what is left for this field is the child only the run can name.
+    The two declarations above it — the deployment's ``subnodes:`` block first,
+    the type's map beneath — are merged in ``Check.__init__`` and applied by the
+    engine per child name, so a type never reads the config key and a deployment
+    never needs a type release to state it.
+
+    It is a **tri-state**, unlike every other flag a result carries: ``None`` is
+    "this check said nothing", and ``False`` is a check saying the node's quiet
+    lines are ordinary. Both leave today's painting, so the distinction never
+    shows here — it matters one layer down, where a stated ``false`` — the
+    deployment's ``subnodes:`` or a ``nodes.yaml`` entry — must be able to
+    overrule a shipped ``true``.
     """
     code: StatusCode | None = None
     reason: ReasonInput = field(default_factory=list)
@@ -130,6 +167,7 @@ class CheckResult:
     about: str = ""
     title: str = ""
     order: int = 0
+    show_when_quiet: bool | None = None
     entries: bool = False
     #: Derived in :meth:`__post_init__` — the one internal form (ADR-0036).
     reason_entries: tuple[ReasonEntry, ...] = field(
@@ -196,7 +234,12 @@ CHECK_TYPES: dict[str, type[Check]] = {}
 #: removed or renamed, a documented behavior changed. Adding a name does not bump
 #: it, and neither does anything else in a release: a plugin should not have to
 #: follow the library's version, only the part of it that is its own contract.
-API_VERSION = 1
+#:
+#: **v2** opened when the subnode-metadata helpers left the surface — the library
+#: reads the whole ``subnodes:`` block now and a type only declares (ADR-0025's
+#: 2026-08-19 update), so ``parse_subnodes`` / ``resolve_text`` / ``expand_tokens``
+#: have no external caller left. Every plugin says ``require_api(2)``.
+API_VERSION = 2
 
 
 def require_api(version: int, *, by: str = "") -> None:
@@ -345,6 +388,11 @@ class Check(abc.ABC):
 
     def __init__(self, *, path: str, description: str = "",
                  about: str = "", title: str = "", order: int | None = None,
+                 show_when_quiet: bool | None = None,
+                 subnode_show_when_quiet: Mapping[str, bool] | None = None,
+                 subnode_labels: Mapping[str, Mapping[str, str]] | None = None,
+                 subnode_defaults: Mapping[str, Mapping[str, object]] | None = None,
+                 label_tokens: Mapping[str, str] | None = None,
                  frequency_seconds: int = DEFAULT_FREQUENCY_SECONDS,
                  timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
                  retry_interval_seconds: int | None = None,
@@ -356,10 +404,44 @@ class Check(abc.ABC):
         # metadata (ADR-0012), `title` a short display label (ADR-0017), `order`
         # the node's rank among its siblings (ADR-0055). `order` is the one that
         # is `None` rather than empty when unstated, because `0` is a rank an
-        # author may mean; the other two have no such value.
+        # author may mean; the two labels have no such value. `show_when_quiet`
+        # (ADR-0063) is nullable for the same reason `order` is: a stated `false`
+        # is a declaration, not a silence.
         self.about = about
         self.title = title
         self.order = order
+        self.show_when_quiet = show_when_quiet
+        # The per-subnode `show_when_quiet` map the engine applies by child
+        # *name*, at any depth (ADR-0063 §2-§3), merged here from the two
+        # declarations that can carry it: what this **type** declared, in the
+        # same `subnode_defaults` entries that declare its labels, and what the
+        # **deployment** stated in the `subnodes:` block of the check's YAML,
+        # which `_parse_common` parsed for every type. The deployment's value
+        # wins per name, because a file somebody edits beats a map somebody
+        # released; both beat the value a child result stamps, and `nodes.yaml`
+        # beats all three by being seeded before the first tick.
+        #
+        # One merge, no layering: unlike a label there is nothing to extend, so
+        # a stated value replaces a declared one outright.
+        self.subnode_show_when_quiet: dict[str, bool] = {
+            **_declared_show_when_quiet(subnode_defaults),
+            **(subnode_show_when_quiet or {})}
+        # The same block's **labels**, resolved here and once (ADR-0025, update
+        # 2026-08-19). Three inputs meet: `subnode_labels` is the deployment's
+        # `subnodes:` block as `_parse_common` read it, `subnode_defaults` is
+        # what this *type* declares it ships for the subnodes it always emits,
+        # and `label_tokens` are the values its own text may reuse. The library
+        # resolves them per field — configured text over declared default, with
+        # `{default}` and `{token}` — and the engine writes the result per child
+        # *name*, at any depth, so a type never reads the block and a deployment
+        # never needs a type release to retune a label.
+        #
+        # Resolving in the constructor is what **pins the tokens to construction
+        # time**: a label freezes at the node's first fill (ADR-0025 decision 3),
+        # so a token whose value could change between runs was never legal in one.
+        # A structure that resolves once cannot express the illegal thing.
+        self.subnode_labels: dict[str, dict[str, str]] = _resolve_subnode_labels(
+            subnode_labels, subnode_defaults, label_tokens)
         self.frequency_seconds = frequency_seconds
         self.timeout_seconds = timeout_seconds
         # The budgeted failure retry (ADR-0033): while the last result is not
@@ -509,6 +591,77 @@ def _keywords_refused_by(cls: type[Check], kwargs: dict[str, Any]) -> list[str]:
     return sorted(key for key in kwargs if key not in parameters)
 
 
+_LABEL_FIELDS = ("title", "about")
+
+
+def _resolve_subnode_labels(
+        configured: Mapping[str, Mapping[str, str]] | None,
+        declared: Mapping[str, Mapping[str, object]] | None,
+        tokens: Mapping[str, str] | None) -> dict[str, dict[str, str]]:
+    """One subnode label map: the text each named subnode's ``title`` / ``about``
+    finally reads (ADR-0025, update 2026-08-19).
+
+    ``configured`` is the deployment's ``subnodes:`` block, ``declared`` what the
+    check type ships for the subnodes it always emits, ``tokens`` the values its
+    text may reuse. A ``declared`` entry may also carry ``show_when_quiet``, which
+    is not a label and is not read here — the two halves of one entry are resolved
+    by the reader each belongs to (:func:`_declared_show_when_quiet` for the flag),
+    which is what lets the type's map be shaped like the block itself.
+    Resolution is **per field**, by :func:`resolve_text`: the
+    configured text when it says something, the declared default otherwise, with
+    ``{default}`` substituted (so a deployment can extend rather than replace) and
+    ``{token}`` expanded by a plain replace that leaves Markdown intact.
+
+    A field that resolves to **nothing is left out** rather than stored empty, and
+    the two are different things one layer up: the engine reads a child result's
+    own label only where this map is silent for that name, which is what keeps a
+    dynamically named child — a volume, a repository the run discovered — labelled
+    by the check that discovered it.
+    """
+    configured = configured or {}
+    declared = declared or {}
+    tokens = dict(tokens or {})
+    resolved: dict[str, dict[str, str]] = {}
+    for name in sorted({*configured, *declared}):
+        stated = configured.get(name) or {}
+        default = declared.get(name) or {}
+        labels = {field_name: text
+                  for field_name in _LABEL_FIELDS
+                  if (text := resolve_text(str(stated.get(field_name, "")),
+                                           str(default.get(field_name, "")),
+                                           tokens))}
+        if labels:
+            resolved[name] = labels
+    return resolved
+
+
+def _declared_show_when_quiet(
+        declared: Mapping[str, Mapping[str, object]] | None) -> dict[str, bool]:
+    """The ``show_when_quiet`` a check **type** declares per subnode, read out of
+    the same ``subnode_defaults`` entries that declare its labels (ADR-0063 §2).
+
+    The type's half of the block is therefore one map shaped like the block
+    itself — ``name -> {title, about, show_when_quiet}`` — and an aspect that is a
+    roster *by construction* is declared once in the package instead of once per
+    account per installation in somebody's ``nodes.yaml``.
+
+    **Only for the names that state it**, like the configuration reader beside it:
+    absence is the tri-state's third value and has to stay absent, or a type
+    declaring a label would be declaring `false` for the flag by accident and
+    would shut out the value a run stamps. A non-boolean raises
+    :class:`CheckError` naming the subnode — the same refusal the config key gets,
+    for the same reason (``bool("false")`` is ``True``), and a declaration is
+    read at load like any other config error even though it comes from code.
+    """
+    flags: dict[str, bool] = {}
+    for name, entry in (declared or {}).items():
+        if not isinstance(entry, Mapping) or entry.get("show_when_quiet") is None:
+            continue
+        flags[str(name)] = strict_flag(
+            entry, "show_when_quiet", where=f"subnode_defaults.{name}")
+    return flags
+
+
 def _parse_common(config: dict[str, Any]) -> dict[str, Any]:
     """Parse the fields every check shares.
 
@@ -534,6 +687,27 @@ def _parse_common(config: dict[str, Any]) -> dict[str, Any]:
         # nobody chose.
         "order": (number(config, "order", where="check config")
                   if config.get("order") is not None else None),
+        # The root's own `show_when_quiet:` (ADR-0063) — this node's quiet lines
+        # are still information. Read only when present, like the rank beside it,
+        # because a stated `false` is what a deployment writes to take back a
+        # declaration; a non-boolean fails the load rather than being coerced,
+        # since `bool("false")` would switch the node on while the file says off.
+        "show_when_quiet": (
+            strict_flag(config, "show_when_quiet", where="check config")
+            if config.get("show_when_quiet") is not None else None),
+        # The same field per subnode, from the `subnodes:` block (ADR-0063).
+        # Parsed here — by the library, for every type — so a deployment can
+        # state it for any installed branch check without the type knowing the
+        # key; the engine applies it per child, over the result's shipped
+        # default.
+        "subnode_show_when_quiet": parse_show_when_quiet(config),
+        # The **labels** out of that same block, read by the same library for
+        # the same reason (ADR-0025, update 2026-08-19). They were the type's to
+        # read while its defaults lived as code it applied; once a type declares
+        # them (`subnode_defaults`) there is nothing left for it to mediate, and
+        # a `subnodes:` label written against a type that never read the block
+        # stops being a silent no-op.
+        "subnode_labels": parse_subnodes(config),
         "frequency_seconds": parse_duration(
             config.get("frequency"), DEFAULT_FREQUENCY_SECONDS),
         "timeout_seconds": float(parse_duration(

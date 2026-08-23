@@ -244,6 +244,17 @@ class StylesheetTests(TestCase):
             with self.subTest(rule=rule):
                 self.assertIn("color: var(--ls-ink)", rules[rule])
 
+    def test_every_theme_paints_opaque_navigation_chrome(self):
+        # Sticky chrome now crosses the page as it scrolls. A translucent nav
+        # token would composite against each card it passes and make every
+        # contrast measurement above a moving target, so the surface itself is
+        # part of the contract now. Keep it an explicit opaque colour in every
+        # effective theme palette.
+        for theme, selector, _ in THEMES:
+            with self.subTest(theme=theme):
+                nav = _tokens(self.blocks, selector)["--ls-nav"]
+                self.assertRegex(nav, r"^#[0-9a-fA-F]{6}$")
+
     def test_no_rule_dims_an_ink_it_also_sets(self):
         """The patch for the hole the silenced-reason line went through.
 

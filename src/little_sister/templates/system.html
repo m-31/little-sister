@@ -176,13 +176,18 @@
         </div>
         {% endif %}
 
-        {# The extension seams (ADR-0034 / ADR-0035), outside #system-info because
-           they are decided at import time and never move while the process runs —
-           re-fetching them on the ~10s poll would say nothing new. Shown only when
-           something registered, so a deployment with no extensions has no section
-           rather than an empty one. Registration is import-order sensitive and each
-           of its failures is a log warning, so the running instance has to be able
-           to answer "did my extension take?" without anyone opening a log file. #}
+        {# The extension seams (ADR-0034 / ADR-0035 / ADR-0064), outside #system-info
+           because they are decided at import time and never move while the process
+           runs — re-fetching them on the ~10s poll would say nothing new.
+           Registration is import-order sensitive and each of its failures is a log
+           warning, so the running instance has to be able to answer "did my
+           extension take?" without anyone opening a log file.
+
+           `slot_fillers` is `all_fillers()` and the library registers its own two
+           unconditionally, so in practice this card is always drawn and the guard is
+           what makes that a *fact about the fillers* rather than an assumption here.
+           The resolver list below is deliberately not part of it: it would make the
+           guard unreachable, and an unreachable condition is one no test can hold. #}
         {% if slot_fillers or extra_aspects %}
         <div class="card mb-3">
             <div class="card-body">
@@ -211,11 +216,46 @@
                     </tbody>
                 </table>
                 {% endif %}
+                {% if resolvers %}
+                {#- Every claimed secret scheme with the package that answers for it
+                    (ADR-0064), drawn as the slot table above is and not as a prose
+                    line: a deployment with a few named identities has seven or more
+                    of these, and a comma list of `scheme (package)` pairs wrapped
+                    into a paragraph where the eye has to re-find the boundary on
+                    every item. Two seams, one shape — the columns even mean the same
+                    things, `From` telling the library's own claim from a package's
+                    exactly as it does for a filler.
+
+                    The built-in `env` is listed too, unlike the aspects line below:
+                    the schemes are additive and a reference names exactly one, so
+                    this table is what a config field may say — and leaving the
+                    library's own claim out would make an *override* of it look like
+                    an ordinary registration. `Replaces` is empty in every ordinary
+                    deployment and stays a column anyway, because a replacement is
+                    the one fact on this seam that the outcome cannot show. #}
+                <table class="table table-sm align-middle mb-0 mt-3">
+                    <thead>
+                        <tr><th>Scheme</th><th>Package</th><th>Replaces</th><th>From</th></tr>
+                    </thead>
+                    <tbody>
+                        {% for row in resolvers %}
+                        <tr>
+                            <td><code>{{ row.scheme }}://</code></td>
+                            <td>{{ row.owner }}</td>
+                            <td class="text-muted">{% if row.replaced %}{{ row.replaced }}{% else %}—{% endif %}</td>
+                            <td class="text-muted">{% if row.builtin %}built-in{% else %}extension{% endif %}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                {% endif %}
                 {% if extra_aspects %}
                 {#- Each name with the package that registered it: the name alone
                     says the file is *declared*, which is not the question when the
                     file is misbehaving. An owner is absent only where the caller
-                    could not be inferred, and then nothing is claimed. #}
+                    could not be inferred, and then nothing is claimed. Still a line
+                    rather than a table: an aspect has one fact beyond its owner and
+                    a deployment has one or two of them, which is a sentence. #}
                 <p class="text-muted small mb-0 mt-2">
                     Registered configuration aspects:
                     {% for name, owner in extra_aspects %}<code>config/{{ name }}</code>{% if owner %} ({{ owner }}){% endif %}{% if not loop.last %}, {% endif %}{% endfor %}

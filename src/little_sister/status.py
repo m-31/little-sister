@@ -152,6 +152,13 @@ class Status:
         # silence — a deployment overruling a rank the check declared has to be able
         # to name the default value like any other.
         self.order: int | None = None
+        # "This node's quiet lines are still information" (ADR-0063) — display
+        # metadata like the three above, seeded from the same sources, and never
+        # status: it says a density mechanism must not trade the node's reason
+        # lines away for being quiet. `None` means **nobody said**, which is what
+        # keeps a `nodes.yaml` `show_when_quiet: false` — a deployment taking back
+        # what a check declared — distinguishable from silence.
+        self.show_when_quiet: bool | None = None
         # The marker that an admin pin is on this node (ADR-0032 rule 4, ADR-0041).
         # It is *not* sticky and holds no value: the check keeps writing underneath
         # it and the snapshot derives MAINTENANCE from it, so the node never forgets

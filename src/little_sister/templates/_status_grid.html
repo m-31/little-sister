@@ -171,30 +171,48 @@
     ``branch_cap`` does nothing and every node renders as a box. ``depth0`` carries the
     render-depth ceiling (``max_depth``) down the recursion. The render constants are
     passed explicitly so the macro never depends on call-site context. -#}
+{#- A node that **declined the density trade** (ADR-0063, ``show_when_quiet``) is
+    exempt from both compactions exactly the way a warn/error node is: never a chip,
+    and never counted a surplus quiet box. Both, or the field lies — kept out of the
+    chip and then folded, it would show *less* than the chip did. It is a claim about
+    the node's lines (an inventory is read *because* everything is fine), so it reads
+    the node, never the viewer: density off and *hide idle* are untouched, and the
+    stable flow profile never saw chip-versus-box in the first place, so no card
+    moves. The condition appears three times below because the chip-run wrapper has
+    to agree with it about the neighbours, or a declared node between two chips would
+    leave the run's ``<span>`` open. -#}
 {% macro render_nodes(children, depth0, parent_path, dense, max_depth, branch_cap, reason_cap, shown_time="") -%}
 {%- set ns = namespace(quiet_boxes=0) -%}
 {%- for child in children -%}
-{%- if dense and not child.children and child.code.name not in ('WARN', 'ERROR') -%}
+{%- if dense and not child.children and child.code.name not in ('WARN', 'ERROR')
+      and not child.show_when_quiet -%}
     {#- Consecutive chips share a full-row wrapper. At a mixed level that wrapper
         becomes one grid item while two or more full boxes can still form columns;
         inside it the chips retain their compact wrapping flow and source order. -#}
     {%- if loop.first or loop.previtem.children
-          or loop.previtem.code.name in ('WARN', 'ERROR') -%}
+          or loop.previtem.code.name in ('WARN', 'ERROR')
+          or loop.previtem.show_when_quiet -%}
     <span class="leaf-chip-run">
     {%- endif -%}
     <a class="leaf-chip s-{{ child.code | status_slug }}"
        href="{{ url_for('status', branch=child.path | url_branch) }}"
        data-path="{{ child.path }}"><span class="leaf-chip__name">{{ child.name }}</span>{% set shown = child | node_title %}{% if shown %}<span class="node-title">{{ shown | markdown_inline }}</span>{% endif %}</a>
     {%- if loop.last or loop.nextitem.children
-          or loop.nextitem.code.name in ('WARN', 'ERROR') -%}
+          or loop.nextitem.code.name in ('WARN', 'ERROR')
+          or loop.nextitem.show_when_quiet -%}
     </span>
     {%- endif -%}
 {%- else -%}
     {%- set has_kids = child.children and depth0 < max_depth - 2 -%}
     {%- set node_dim = child.code.name == 'OK' or (child.own_code != child.code and has_kids) -%}
-    {%- set is_quiet = child.code.name not in ('WARN', 'ERROR') -%}
-    {%- if dense and is_quiet %}{% set ns.quiet_boxes = ns.quiet_boxes + 1 %}{% endif -%}
-    <div class="status-node s-{{ child.code | status_slug }}{% if node_dim %} dim{% endif %}{% if dense and is_quiet and ns.quiet_boxes > branch_cap %} is-extra{% endif %}">
+    {#- Foldable = quiet **and** not declared. A declared node is not merely never
+        marked ``is-extra``; it is not counted at all, which is the same exemption a
+        warn/error box already has — counting it would spend a quiet sibling's place
+        in the cap on a box that was never going to fold. -#}
+    {%- set foldable = child.code.name not in ('WARN', 'ERROR')
+        and not child.show_when_quiet -%}
+    {%- if dense and foldable %}{% set ns.quiet_boxes = ns.quiet_boxes + 1 %}{% endif -%}
+    <div class="status-node s-{{ child.code | status_slug }}{% if node_dim %} dim{% endif %}{% if dense and foldable and ns.quiet_boxes > branch_cap %} is-extra{% endif %}">
         <div class="status-node__self" data-path="{{ child.path }}">
             {{ status_cue(child.code) }}<a class="status-node__name"
                href="{{ url_for('status', branch=child.path | url_branch) }}">{{ child.name }}</a>

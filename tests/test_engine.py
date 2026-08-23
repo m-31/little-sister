@@ -396,6 +396,255 @@ class EngineTests(TestCase):
         self.assertEqual(tree.snapshot("/host/disk").order, 2)     # yaml wins
         self.assertEqual(tree.snapshot("/host/memory").order, 7)   # check fills
 
+    def test_child_show_when_quiet_lands_on_child_nodes(self):
+        # A branch check declares it per aspect (ADR-0063) — the inventory-shaped
+        # one says so, its siblings say nothing.
+        tree = StatusTree()
+        result = CheckResult(StatusCode.OK, children=(
+            CheckResult(StatusCode.OK, name="ec2", show_when_quiet=True),
+            CheckResult(StatusCode.OK, name="batch"),))
+        Engine([_FakeCheck(path="/aws", result=result)], tree).run_once()
+        self.assertIs(tree.snapshot("/aws/ec2").show_when_quiet, True)
+        self.assertIsNone(tree.snapshot("/aws/batch").show_when_quiet)
+
+    def test_a_child_may_state_false_and_it_reaches_the_node(self):
+        # Unlike `order`'s zero, a check's `False` is a statement rather than a
+        # silence — nothing coerces it away on the trip through the engine.
+        tree = StatusTree()
+        result = CheckResult(StatusCode.OK, children=(
+            CheckResult(StatusCode.OK, name="ec2", show_when_quiet=False),))
+        Engine([_FakeCheck(path="/aws", result=result)], tree).run_once()
+        self.assertIs(tree.snapshot("/aws/ec2").show_when_quiet, False)
+
+    def test_root_result_show_when_quiet_is_ignored_like_the_root_labels(self):
+        # It rides with about/title, not with order: the root *does* have an inline
+        # source of its own — the check's `show_when_quiet:` key — so a result
+        # overruling it would put the check's code ahead of the deployment's file.
+        tree = StatusTree()
+        result = CheckResult(StatusCode.OK, show_when_quiet=True)
+        Engine([_FakeCheck(path="/aws", result=result)], tree).run_once()
+        self.assertIsNone(tree.snapshot("/aws").show_when_quiet)
+
+    def test_nodes_yaml_show_when_quiet_beats_a_check_provided_child(self):
+        # …and beats the deployment's `subnodes:` declaration too — the seed is
+        # in place before the first tick, and the engine's write fills empty only.
+        tree = StatusTree()
+        tree.set_show_when_quiet("/aws/ec2", False)
+        result = CheckResult(StatusCode.OK, children=(
+            CheckResult(StatusCode.OK, name="ec2", show_when_quiet=True),
+            CheckResult(StatusCode.OK, name="batch", show_when_quiet=True),))
+        Engine([_FakeCheck(path="/aws", result=result,
+                           subnode_show_when_quiet={"ec2": True})],
+               tree).run_once()
+        self.assertIs(tree.snapshot("/aws/ec2").show_when_quiet, False)  # yaml wins
+        self.assertIs(tree.snapshot("/aws/batch").show_when_quiet, True)  # check fills
+
+    def test_a_deployments_subnodes_block_needs_nothing_from_the_type(self):
+        # The point of the library reading the block (ADR-0063): the check type
+        # here stamps nothing and has never heard of the key — the map arrives
+        # through the common-field kwargs every type already forwards — and the
+        # deployment's declaration still lands on the child node.
+        tree = StatusTree()
+        result = CheckResult(StatusCode.OK, children=(
+            CheckResult(StatusCode.OK, name="ec2"),
+            CheckResult(StatusCode.OK, name="batch"),))
+        Engine([_FakeCheck(path="/aws", result=result,
+                           subnode_show_when_quiet={"ec2": True})],
+               tree).run_once()
+        self.assertIs(tree.snapshot("/aws/ec2").show_when_quiet, True)
+        self.assertIsNone(tree.snapshot("/aws/batch").show_when_quiet)
+
+    def test_the_deployments_block_beats_the_types_shipped_default(self):
+        # Deployment file over check code — the same rule that root-ignores the
+        # result: a shipped `True` yields to a configured `False`, and a name
+        # the block does not mention keeps the shipped default.
+        tree = StatusTree()
+        result = CheckResult(StatusCode.OK, children=(
+            CheckResult(StatusCode.OK, name="ec2", show_when_quiet=True),
+            CheckResult(StatusCode.OK, name="lambda", show_when_quiet=True),))
+        Engine([_FakeCheck(path="/aws", result=result,
+                           subnode_show_when_quiet={"ec2": False})],
+               tree).run_once()
+        self.assertIs(tree.snapshot("/aws/ec2").show_when_quiet, False)
+        self.assertIs(tree.snapshot("/aws/lambda").show_when_quiet, True)
+
+    def test_the_block_reaches_a_grandchild_by_its_name(self):
+        # Keyed by subnode *name*, at any depth — one `disk:` covers every
+        # host's `disk` leaf, which is the per-account copy-paste this closes.
+        tree = StatusTree()
+        result = CheckResult(StatusCode.OK, children=(
+            CheckResult(StatusCode.OK, name="host-a", children=(
+                CheckResult(StatusCode.OK, name="disk"),)),
+            CheckResult(StatusCode.OK, name="host-b", children=(
+                CheckResult(StatusCode.OK, name="disk"),)),))
+        Engine([_FakeCheck(path="/fleet", result=result,
+                           subnode_show_when_quiet={"disk": True})],
+               tree).run_once()
+        self.assertIs(tree.snapshot("/fleet/host-a/disk").show_when_quiet, True)
+        self.assertIs(tree.snapshot("/fleet/host-b/disk").show_when_quiet, True)
+
+    def test_a_resolved_label_lands_on_the_child_node(self):
+        # The labels ride the flag's mechanism since ADR-0025's 2026-08-19
+        # update: keyed by subnode name, applied by the engine, stamped by
+        # nobody. The check here hands over no label at all.
+        tree = StatusTree()
+        result = CheckResult(StatusCode.OK, children=(
+            CheckResult(StatusCode.OK, name="disk"),
+            CheckResult(StatusCode.OK, name="memory"),))
+        Engine([_FakeCheck(path="/host", result=result,
+                           subnode_labels={"disk": {"title": "Disk",
+                                                    "about": "The volumes."}})],
+               tree).run_once()
+        self.assertEqual(tree.snapshot("/host/disk").title, "Disk")
+        self.assertEqual(tree.snapshot("/host/disk").about, "The volumes.")
+        self.assertEqual(tree.snapshot("/host/memory").about, "")
+
+    def test_the_resolved_label_beats_the_one_the_result_carries(self):
+        # Deployment file and type declaration have both already been folded into
+        # the map; what is left on the result is the older channel, so the map wins.
+        tree = StatusTree()
+        result = CheckResult(StatusCode.OK, children=(
+            CheckResult(StatusCode.OK, name="disk", about="stamped"),))
+        Engine([_FakeCheck(path="/host", result=result,
+                           subnode_labels={"disk": {"about": "resolved"}})],
+               tree).run_once()
+        self.assertEqual(tree.snapshot("/host/disk").about, "resolved")
+
+    def test_a_stamped_label_survives_where_the_map_is_silent(self):
+        # Per field, and per name. A child nothing declared or configured — the
+        # dynamically named one, a volume this run discovered — keeps the label
+        # its check gave it, which is the whole reason the field still exists.
+        tree = StatusTree()
+        result = CheckResult(StatusCode.OK, children=(
+            CheckResult(StatusCode.OK, name="disk", about="stamped about",
+                        title="stamped title"),
+            CheckResult(StatusCode.OK, name="sda1", about="a volume"),))
+        Engine([_FakeCheck(path="/host", result=result,
+                           subnode_labels={"disk": {"title": "Disk"}})],
+               tree).run_once()
+        disk = tree.snapshot("/host/disk")
+        self.assertEqual(disk.title, "Disk")             # resolved
+        self.assertEqual(disk.about, "stamped about")    # the field it left alone
+        self.assertEqual(tree.snapshot("/host/sda1").about, "a volume")
+
+    def test_a_resolved_label_reaches_a_grandchild_by_its_name(self):
+        # Keyed by subnode *name*, at any depth — one `disk:` entry labels every
+        # host's disk leaf, which is the per-node copy-paste ADR-0025 closes.
+        tree = StatusTree()
+        result = CheckResult(StatusCode.OK, children=(
+            CheckResult(StatusCode.OK, name="host-a", children=(
+                CheckResult(StatusCode.OK, name="disk"),)),
+            CheckResult(StatusCode.OK, name="host-b", children=(
+                CheckResult(StatusCode.OK, name="disk"),)),))
+        Engine([_FakeCheck(path="/fleet", result=result,
+                           subnode_labels={"disk": {"about": "Volumes."}})],
+               tree).run_once()
+        self.assertEqual(tree.snapshot("/fleet/host-a/disk").about, "Volumes.")
+        self.assertEqual(tree.snapshot("/fleet/host-b/disk").about, "Volumes.")
+
+    def test_nodes_yaml_beats_a_resolved_label(self):
+        # Seeded before the first tick, and the engine's write fills empty only —
+        # so the declaration in the deployment's *node* file still has the last
+        # word, per field.
+        tree = StatusTree()
+        tree.set_about("/host/disk", "declared in nodes.yaml")
+        result = CheckResult(StatusCode.OK, children=(
+            CheckResult(StatusCode.OK, name="disk"),))
+        Engine([_FakeCheck(path="/host", result=result,
+                           subnode_labels={"disk": {"title": "Disk",
+                                                    "about": "resolved"}})],
+               tree).run_once()
+        self.assertEqual(tree.snapshot("/host/disk").about,
+                         "declared in nodes.yaml")
+        self.assertEqual(tree.snapshot("/host/disk").title, "Disk")   # still fills
+
+    def test_a_resolved_label_does_not_reach_the_root(self):
+        # The root's labels keep their startup sources (nodes.yaml / the inline
+        # check), so an entry carrying the root's name is a claim about a
+        # *subnode* of that name and leaves the root alone.
+        tree = StatusTree()
+        Engine([_FakeCheck(path="/host", result=CheckResult(StatusCode.OK),
+                           subnode_labels={"host": {"about": "not mine"}})],
+               tree).run_once()
+        self.assertEqual(tree.snapshot("/host").about, "")
+
+    def test_a_declared_flag_lands_on_the_child(self):
+        # The type's half of the block (ADR-0063 §2): a roster aspect declares the
+        # flag beside its label and every installation inherits it, with no
+        # `nodes.yaml` entry and no configuration anywhere. The engine is unchanged
+        # — `subnode_show_when_quiet` is the merged map, and it already read that.
+        tree = StatusTree()
+        result = CheckResult(StatusCode.OK, children=(
+            CheckResult(StatusCode.OK, name="ec2"),
+            CheckResult(StatusCode.OK, name="batch"),))
+        Engine([_FakeCheck(path="/aws", result=result,
+                           subnode_defaults={"ec2": {"show_when_quiet": True}})],
+               tree).run_once()
+        self.assertIs(tree.snapshot("/aws/ec2").show_when_quiet, True)
+        self.assertIsNone(tree.snapshot("/aws/batch").show_when_quiet)
+
+    def test_a_declared_flag_reaches_a_grandchild_by_its_name(self):
+        # Declared once in the package, applied at any depth — which is the whole
+        # of what it replaces: one entry per aspect per account in a nodes.yaml.
+        tree = StatusTree()
+        result = CheckResult(StatusCode.OK, children=(
+            CheckResult(StatusCode.OK, name="live", children=(
+                CheckResult(StatusCode.OK, name="ec2"),)),
+            CheckResult(StatusCode.OK, name="backup", children=(
+                CheckResult(StatusCode.OK, name="ec2"),)),))
+        Engine([_FakeCheck(path="/aws", result=result,
+                           subnode_defaults={"ec2": {"show_when_quiet": True}})],
+               tree).run_once()
+        self.assertIs(tree.snapshot("/aws/live/ec2").show_when_quiet, True)
+        self.assertIs(tree.snapshot("/aws/backup/ec2").show_when_quiet, True)
+
+    def test_a_declaration_beats_a_stamped_value(self):
+        # A declaration — the deployment's file first, the type's map beneath — is
+        # what a name *is*; a stamped value is what one run said about a child it
+        # had just discovered. For a declared name the declaration answers.
+        tree = StatusTree()
+        result = CheckResult(StatusCode.OK, children=(
+            CheckResult(StatusCode.OK, name="ec2", show_when_quiet=True),))
+        Engine([_FakeCheck(path="/aws", result=result,
+                           subnode_defaults={"ec2": {"show_when_quiet": False}})],
+               tree).run_once()
+        self.assertIs(tree.snapshot("/aws/ec2").show_when_quiet, False)
+
+    def test_a_stamped_flag_survives_for_a_name_nothing_declared(self):
+        # The dynamic-child channel, kept: a run that names its own child is the
+        # one case no declaration could have anticipated.
+        tree = StatusTree()
+        result = CheckResult(StatusCode.OK, children=(
+            CheckResult(StatusCode.OK, name="ec2"),
+            CheckResult(StatusCode.OK, name="i-042", show_when_quiet=True),))
+        Engine([_FakeCheck(path="/aws", result=result,
+                           subnode_defaults={"ec2": {"about": "The instances."}})],
+               tree).run_once()
+        self.assertIs(tree.snapshot("/aws/i-042").show_when_quiet, True)
+        self.assertIsNone(tree.snapshot("/aws/ec2").show_when_quiet)
+
+    def test_nodes_yaml_beats_a_declared_flag_too(self):
+        # The top of the lattice does not move: seeded before the first tick, and
+        # the engine's write fills an empty field only.
+        tree = StatusTree()
+        tree.set_show_when_quiet("/aws/ec2", False)
+        result = CheckResult(StatusCode.OK, children=(
+            CheckResult(StatusCode.OK, name="ec2"),))
+        Engine([_FakeCheck(path="/aws", result=result,
+                           subnode_defaults={"ec2": {"show_when_quiet": True}})],
+               tree).run_once()
+        self.assertIs(tree.snapshot("/aws/ec2").show_when_quiet, False)
+
+    def test_the_blocks_root_named_entry_does_not_reach_the_root(self):
+        # The root's own source is the inline `show_when_quiet:` key; a
+        # `subnodes:` entry that happens to carry the root's name is a claim
+        # about a *subnode* of that name, so the root stays untouched.
+        tree = StatusTree()
+        Engine([_FakeCheck(path="/aws", result=CheckResult(StatusCode.OK),
+                           subnode_show_when_quiet={"aws": True})],
+               tree).run_once()
+        self.assertIsNone(tree.snapshot("/aws").show_when_quiet)
+
     def test_elapsed_none_before_first_run(self):
         engine = Engine([_FakeCheck(path="/a")], StatusTree())
         self.assertIsNone(engine.info().checks[0].elapsed_seconds)
@@ -633,6 +882,82 @@ class EmptyConfigurationTests(TestCase):
         assert snap is not None
         self.assertEqual(snap.code, StatusCode.OK)
         self.assertEqual(snap.reason, ())
+
+
+#: A real refusal, kept whole because its length is the point: the old log line
+#: cut at 120 characters, which lands inside "…AssumeRole operation:" — before
+#: the half naming who was refused and for what.
+ASSUME_ROLE_REFUSAL = (
+    "role cannot be assumed: An error occurred (AccessDenied) when calling the "
+    "AssumeRole operation: User: arn:aws:sts::000000000000:assumed-role/"
+    "ExampleSSO_admin-access_0123456789abcdef/someone@example.org is not "
+    "authorized to perform: sts:AssumeRole on resource: "
+    "arn:aws:iam::000000000001:role/example-service-role")
+
+
+class RunDetailTests(TestCase):
+    """What one run's log line carries after the code and the elapsed time.
+
+    A check that could not measure at all says so in **two** reasons on purpose —
+    what went wrong, then what to do about it. The line used to keep the first
+    and cut it at 120 characters, so the actionable half never appeared anywhere
+    and the first ended mid-sentence.
+    """
+
+    def _detail(self, *reasons: str) -> str:
+        return engine_module._detail(CheckResult(StatusCode.ERROR, list(reasons)))
+
+    def test_no_reasons_says_nothing(self):
+        self.assertEqual(self._detail(), "")
+
+    def test_a_refusal_arrives_whole(self):
+        detail = self._detail(ASSUME_ROLE_REFUSAL)
+        self.assertIn("is not authorized to perform: sts:AssumeRole", detail)
+        self.assertTrue(detail.endswith("example-service-role"), detail)
+
+    def test_the_old_cut_would_have_lost_the_principal(self):
+        """The regression this exists for, stated as the fact it turns on: the
+        message is long enough that 120 characters end before it says anything
+        about *who* was refused."""
+        self.assertNotIn("is not authorized", ASSUME_ROLE_REFUSAL[:120])
+
+    def test_the_actionable_second_reason_is_there_too(self):
+        detail = self._detail("AWS credentials have expired: ExpiredToken",
+                              "renew it with `aws sso login --profile live`")
+        self.assertIn("expired", detail)
+        self.assertIn("aws sso login --profile live", detail)
+
+    def test_reasons_are_separated_so_two_do_not_read_as_one(self):
+        self.assertIn(engine_module.DETAIL_SEPARATOR, self._detail("first", "second"))
+
+    def test_newlines_are_flattened_into_the_one_record(self):
+        detail = self._detail("first line\nsecond line")
+        self.assertNotIn("\n", detail)
+        self.assertIn("first line second line", detail)
+
+    def test_a_roster_is_capped_and_says_that_it_was(self):
+        """Still a cap: a check with a hundred coded lines must not put all of
+        them on one line. What it truncates is a roster, and it says so rather
+        than stopping where a reader would take the end for the message's own."""
+        detail = self._detail(*[f"line {number}" for number in range(400)])
+        self.assertLessEqual(len(detail), engine_module.DETAIL_LIMIT + 8)
+        self.assertTrue(detail.endswith(" …"), detail[-40:])
+
+    def test_an_empty_reason_is_not_a_separator_with_nothing_round_it(self):
+        self.assertEqual(self._detail("", "only this"), " — only this")
+
+
+class RunLogLineTests(TestCase):
+    """The line itself, through a real run."""
+
+    def test_the_line_carries_the_whole_refusal(self):
+        check = _FakeCheck(path="/svc", result=CheckResult(
+            StatusCode.ERROR, [ASSUME_ROLE_REFUSAL]))
+        with self.assertLogs("little_sister.logger", level="INFO") as caught:
+            Engine([check], StatusTree()).run_once()
+        lines = [line for line in caught.output if "check /svc" in line]
+        self.assertEqual(len(lines), 1, caught.output)
+        self.assertIn("is not authorized to perform: sts:AssumeRole", lines[0])
 
 
 if __name__ == '__main__':

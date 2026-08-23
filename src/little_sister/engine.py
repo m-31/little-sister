@@ -13,7 +13,7 @@ import threading
 import time
 import traceback
 import zlib
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -30,13 +30,35 @@ from little_sister.checks import (
 )
 from little_sister.config import config
 from little_sister.logger import logger
-from little_sister.status import HEARTBEAT_PATH, StatusCode, join_path
+from little_sister.status import HEARTBEAT_PATH, StatusCode, join_path, leaf_name
 from little_sister.tree import StatusTree, status_tree
 
 # Innermost frames kept when a failing check's trace goes onto its node
 # (`stacktrace` in config/settings.yaml). The cause is almost always in the last
 # few, and a node reason is not a log file — the whole trace stays in the log.
 TRACEBACK_FRAMES = 5
+
+#: How much of a run's reasons the per-run log line carries.
+#:
+#: It used to be the **first reason, cut at 120 characters**, and both halves of
+#: that were wrong at the one moment the line is read. A check that could not
+#: measure at all words its refusal in two reasons on purpose — what went wrong,
+#: then what to do about it — because the second half is the actionable one and a
+#: cloud provider's error is long enough to push it off the edge of a card. The
+#: log kept the first and dropped the second, then cut the first mid-sentence: a
+#: real `AssumeRole` refusal ended at "…when calling the AssumeRole operation:",
+#: exactly before the part naming who was refused and for what.
+#:
+#: So: every reason, and a cap generous enough that a provider's message arrives
+#: whole. It is still a cap — a check with a hundred coded lines must not put all
+#: of them on one line — and what it truncates now is a *roster*, where the first
+#: entries are representative, rather than a single sentence's tail.
+DETAIL_LIMIT = 1200
+
+#: What joins the reasons of one run into that line. Not a newline: one run is
+#: one record, and a log a reader greps by check path must not have its answer
+#: split across lines that no longer carry it.
+DETAIL_SEPARATOR = " | "
 
 DEFAULT_MAX_WORKERS = 8
 DEFAULT_POLL_INTERVAL = 1.0
@@ -91,6 +113,25 @@ def _retry_settings(check: Check) -> tuple[int, int]:
     attempts = (check.retry_attempts if check.retry_attempts is not None
                 else config.retry_attempts)
     return max(0, interval), max(0, attempts)
+
+
+def _detail(result: CheckResult) -> str:
+    """What one run's log line says after the code and the elapsed time.
+
+    Every reason, joined, bounded by :data:`DETAIL_LIMIT` — see that constant for
+    why it is no longer the first reason cut at 120. Newlines are flattened
+    because this is one log record, and truncation says so with an ellipsis
+    rather than stopping silently: a line that ends mid-word looks exactly like a
+    message that ended there, which is how a refusal was read as truncated by AWS
+    rather than by us.
+    """
+    texts = [text.replace("\n", " ") for text in result.reason_texts if text]
+    if not texts:
+        return ""
+    joined = DETAIL_SEPARATOR.join(texts)
+    if len(joined) > DETAIL_LIMIT:
+        joined = joined[:DETAIL_LIMIT] + " …"
+    return " — " + joined
 
 
 @dataclass
@@ -387,12 +428,8 @@ class Engine:
                 item.run_started_at = None
                 item.run_started_mono = None
         elapsed_ms = elapsed * 1000
-        detail = ""
-        texts = result.reason_texts
-        if texts:
-            detail = " — " + texts[0].replace("\n", " ")[:120]
         logger.info("check %s: %s (%.0f ms)%s", check.path,
-                    result.stored_code.name, elapsed_ms, detail)
+                    result.stored_code.name, elapsed_ms, _detail(result))
         # A faster second look on failure (ADR-0033): a non-OK completion pulls
         # the armed slot earlier — never later — to the retry interval, at most
         # `retry_attempts` times per episode. A secret-pinned check (`ran` False)
@@ -472,7 +509,14 @@ class Engine:
         but only on **children** (ADR-0025): the root's labels keep their startup
         sources (``nodes.yaml`` / the inline check), so its result labels are
         ignored like its ``name``; each child's fill an empty node field only, so a
-        ``nodes.yaml`` override still wins.
+        ``nodes.yaml`` override still wins. Their **first** source is not the
+        result at all but ``check.subnode_labels`` — the deployment's ``subnodes:``
+        block resolved over what the type declared, keyed by subnode *name* at any
+        depth, exactly like the flag below (ADR-0025's 2026-08-19 update). Per
+        field: a resolved ``title`` and a stamped ``about`` coexist on one node,
+        because that is how every other precedence in this pair works. The result's
+        label is read where that map is silent for the name — the dynamically named
+        child, which no declaration could have anticipated.
 
         ``order`` (ADR-0055) fills an unset field the same way but is read on the
         **root too**, deliberately unlike the labels: a rank is not identity, and
@@ -480,12 +524,35 @@ class Engine:
         in the check's YAML — does not hold for a rank, which has none. Zero is
         passed as ``None`` because ``0`` *is* what a check declaring nothing means,
         so it must not count as a declaration and shut out ``nodes.yaml``.
+
+        ``show_when_quiet`` (ADR-0063) rides with the **labels**, not with the
+        rank: it is root-ignored, because unlike ``order`` it *does* have an
+        inline source of its own in the check's YAML — the root's declaration is
+        that key, and a result overruling it would put a check's code ahead of the
+        file the deployment edits. On a child, **two sources meet here**, and the
+        same rule decides: the deployment's ``subnodes:`` declaration
+        (``check.subnode_show_when_quiet``, parsed by the library so no type has
+        to relay it, keyed by subnode *name* at any depth) beats the value the
+        child result carries — the type's shipped default — because the
+        deployment's file beats the check's code. What survives fills an unset
+        field only, so a ``nodes.yaml`` entry, seeded before the first tick,
+        still beats both. Nothing is coerced on the way: a stated ``False``
+        travels as ``False``, because here it is a statement and not the "said
+        nothing" that ``order``'s zero is.
         """
         description = (check.description or None) if is_root else result.description
         config = (check.config_summary() or None) if is_root else result.config
-        about = None if is_root else (result.about or None)
-        title = None if is_root else (result.title or None)
+        # One guard per field, below: this lookup is harmless on a root (whose
+        # name is a node path's last segment like any other) and the root's
+        # exemption is stated where it is applied, once per label.
+        labels: Mapping[str, str] = check.subnode_labels.get(leaf_name(path), {})
+        about = None if is_root else (labels.get("about") or result.about or None)
+        title = None if is_root else (labels.get("title") or result.title or None)
         order = result.order or None
+        declared = None if is_root else check.subnode_show_when_quiet.get(
+            leaf_name(path))
+        show_when_quiet = None if is_root else (
+            declared if declared is not None else result.show_when_quiet)
         # The pre-normalized entries travel, not the raw input: the check has
         # already been through the one normalization (ADR-0036), and re-deriving
         # slugs here would be the same work done twice. `stored_code` is the
@@ -495,7 +562,8 @@ class Engine:
                           description=description,
                           frequency_seconds=check.frequency_seconds,
                           config=config, report=result.report,
-                          about=about, title=title, order=order)
+                          about=about, title=title, order=order,
+                          show_when_quiet=show_when_quiet)
         for child in result.children:
             self._store(join_path(path, child.name), child, check)
 

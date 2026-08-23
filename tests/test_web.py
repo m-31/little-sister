@@ -738,6 +738,147 @@ class WebTests(TestCase):
         self.assertIn('class="branch-more"', frag)
         self.assertIn("+2 more", frag)
 
+    # --- a node that declines the density trade (ADR-0063) ---
+
+    _INVENTORY = "12 instances, oldest 41 days"
+
+    @staticmethod
+    def _box_classes(body, path):
+        """The classes on the rendered box whose head is ``path`` — so a fold
+        assertion names the node it is about rather than counting substrings."""
+        match = re.search(
+            r'<div class="(status-node[^"]*)">\s*'
+            r'<div class="status-node__self" data-path="' + re.escape(path) + '"',
+            body)
+        assert match is not None, f"no box rendered for {path}"
+        return match.group(1)
+
+    def _declared_inventory(self):
+        """A card ('aws') whose quiet `ec2` leaf declares that its lines are still
+        information, beside quiet siblings that do not."""
+        self.tree.upsert("/aws/ec2", StatusCode.OK, [self._INVENTORY],
+                         show_when_quiet=True)
+        for aspect in ("batch", "cloudwatch", "iam"):
+            self.tree.upsert(f"/aws/{aspect}", StatusCode.OK)
+
+    def test_a_declared_quiet_leaf_keeps_its_box_while_its_siblings_chip(self):
+        # The claim itself: an inventory's lines are read *because* everything is
+        # fine, so a density mechanism must not trade them away for being quiet.
+        self._login()
+        self._declared_inventory()
+        body = self.client.get("/status").get_data(as_text=True)
+        self.assertIn(self._INVENTORY, body)                    # its lines show
+        self.assertIn("status-node s-ok", self._box_classes(body, "/aws/ec2"))
+        self.assertEqual(body.count('class="leaf-chip s-ok"'), 3)   # the siblings
+
+    def test_saying_nothing_paints_exactly_as_before(self):
+        # The safety of the mechanism: an undeclared quiet leaf still chips, and
+        # its reason is a click away as it always was.
+        self._login()
+        self.tree.upsert("/aws/ec2", StatusCode.OK, [self._INVENTORY])
+        body = self.client.get("/status").get_data(as_text=True)
+        self.assertIn('class="leaf-chip s-ok"', body)
+        self.assertNotIn(self._INVENTORY, body)
+
+    def test_a_declared_false_paints_exactly_as_before(self):
+        # The deployment's way of declining a claim the check type ships: `false`
+        # is a statement in the tree and today's painting on the screen.
+        self._login()
+        self.tree.upsert("/aws/ec2", StatusCode.OK, [self._INVENTORY],
+                         show_when_quiet=False)
+        body = self.client.get("/status").get_data(as_text=True)
+        self.assertIn('class="leaf-chip s-ok"', body)
+        self.assertNotIn(self._INVENTORY, body)
+
+    def test_the_declaration_closes_the_chip_run_around_itself(self):
+        # The chip-run wrapper has to agree with the chip condition about the
+        # neighbours, or a declared node between two chips leaves the run's <span>
+        # open and every chip after it lands inside the wrong wrapper.
+        self._login()
+        self.tree.upsert("/aws/alpha", StatusCode.OK)
+        self.tree.upsert("/aws/mid", StatusCode.OK, show_when_quiet=True)
+        self.tree.upsert("/aws/zulu", StatusCode.OK)
+        body = self.client.get("/status").get_data(as_text=True)
+        self.assertEqual(body.count('<span class="leaf-chip-run">'), 2)
+        self.assertEqual(body.count("</span>\n    \n"), 0)   # no stray open run
+        squashed = re.sub(r"\s+", "", body)
+        # run(alpha) closes, the declared box follows, then run(zulu) opens
+        self.assertRegex(
+            squashed,
+            r'<spanclass="leaf-chip-run"><aclass="leaf-chip[^>]*?'
+            r'data-path="/aws/alpha".*?</a></span><divclass="status-node')
+        self.assertRegex(
+            squashed,
+            r'</div></div><spanclass="leaf-chip-run"><aclass="leaf-chip[^>]*?'
+            r'data-path="/aws/zulu"')
+
+    def test_a_declared_box_is_never_folded_behind_more(self):
+        # Exemption from one compaction and not the other would hide *more* than
+        # the chip did, so a declared node is not counted a surplus quiet box.
+        self._login()
+        self._branchy_card()                       # five quiet, one erupting
+        self.tree.upsert("/nas/inventory/probe", StatusCode.OK)
+        self.tree.set_show_when_quiet("/nas/inventory", True)
+        with mock.patch.object(app_module, "config",
+                               replace(app_module.config, branch_cap=3)):
+            body = self.client.get("/status").get_data(as_text=True)
+        self.assertNotIn("is-extra", self._box_classes(body, "/nas/inventory"))
+        # …and it does not spend a quiet sibling's place in the cap either: still
+        # five foldable boxes against cap 3, exactly as without it
+        self.assertEqual(body.count("is-extra"), 2)
+        self.assertIn("+2 more", body)
+
+    def test_a_declared_box_survives_a_cap_of_zero(self):
+        # The same exemption a warn/error box has: at cap 0 every foldable box
+        # folds and the declared one still does not.
+        self._login()
+        self._branchy_card()
+        self.tree.upsert("/nas/inventory/probe", StatusCode.OK)
+        self.tree.set_show_when_quiet("/nas/inventory", True)
+        with mock.patch.object(app_module, "config",
+                               replace(app_module.config, branch_cap=0)):
+            body = self.client.get("/status").get_data(as_text=True)
+        self.assertNotIn("is-extra", self._box_classes(body, "/nas/inventory"))
+        self.assertEqual(body.count("is-extra"), 5)
+        self.assertIn("+5 more", body)
+
+    def test_density_off_is_untouched_by_the_declaration(self):
+        # With density off every node is a full box already, so the field does
+        # nothing — and nothing about the wall changes for declaring one.
+        self._login()
+        self._declared_inventory()
+        body = self.client.get("/status?view=1").get_data(as_text=True)
+        self.assertNotIn("leaf-chip", body)
+        self.assertIn(self._INVENTORY, body)
+
+    def test_a_declared_node_is_still_hidden_when_the_viewer_hides_ok(self):
+        # Not an exemption from the viewer's filters (ADR-0063): a declared node
+        # is still OK, and "problems only" is the person at the screen speaking.
+        self._login()
+        self._declared_inventory()
+        self.tree.upsert("/aws/batch", StatusCode.ERROR, "queue stuck")
+        body = self.client.get("/status?hide_ok=1").get_data(as_text=True)
+        self.assertIn("queue stuck", body)
+        self.assertNotIn(self._INVENTORY, body)
+
+    def test_a_declared_node_that_never_reported_is_still_idle(self):
+        # The same rule from the other side: declaring it does not make a node
+        # that has never reported anything worth showing under *hide idle*.
+        self._login()
+        self.tree.upsert("/aws/batch", StatusCode.OK)
+        self.tree.set_show_when_quiet("/aws/ec2", True)   # auto-created, unwritten
+        plain = self.client.get("/status").get_data(as_text=True)
+        self.assertIn('data-path="/aws/ec2"', plain)
+        hidden = self.client.get("/status?hide_idle=1").get_data(as_text=True)
+        self.assertNotIn('data-path="/aws/ec2"', hidden)
+
+    def test_the_declaration_reaches_the_fragment(self):
+        # It has to survive the ~10s poll swap, like the cap and the density flag.
+        self._login()
+        self._declared_inventory()
+        frag = self.client.get("/status?fragment=1").get_data(as_text=True)
+        self.assertIn(self._INVENTORY, frag)
+
     def test_branches_script_ships_with_page_not_fragment(self):
         # like reasons.js / the popover assets: the behavior loads once with the page,
         # not on every ~10s poll fragment
@@ -3596,9 +3737,11 @@ class ContentSecurityPolicyTests(TestCase):
 class SystemPackagesTests(TestCase):
     """`/system`'s package inventory — what is installed beside the library.
 
-    A package reaches an instance through four seams, and only the check-type
+    A package reaches an instance through five seams, and only the check-type
     roster ever carried an origin. An extension that registers no type — the Jira
     chip is exactly that shape — therefore had its *version* nowhere on the page.
+    The secret resolvers joined them last (ADR-0064), and are also the one seam
+    whose whole list is printed, built-in included.
     """
 
     def setUp(self):
@@ -3607,6 +3750,9 @@ class SystemPackagesTests(TestCase):
         self.client = app_module.app.test_client()
         self.addCleanup(slots.forget_fillers)
         self.addCleanup(forget_aspects)
+        resolvers = mock.patch.dict(secrets._resolvers)
+        resolvers.start()
+        self.addCleanup(resolvers.stop)
 
     def _login(self):
         self.client.post("/login",
@@ -3698,6 +3844,83 @@ class SystemPackagesTests(TestCase):
              mock.patch.object(app_module.slots, "assets", lambda: ()), \
              mock.patch.object(app_module, "registered_aspects", lambda: ()):
             self.assertNotIn("Packages", self._system())
+
+    def test_a_resolver_puts_its_package_in_the_inventory(self):
+        # the fifth seam (ADR-0064): a scheme is where a credential is read from,
+        # so which installation answers for it belongs beside the other four
+        self._login()
+        secrets.register_resolver("aws-sm-live", lambda address: "v")
+        body = self._system()
+        self.assertIn("<code>tests</code>", body)
+        self.assertIn("secret aws-sm-live://", body)
+
+    def test_the_library_s_own_scheme_adds_no_package_row(self):
+        # `env` is the library's, and the page header already carries its version
+        self._login()
+        body = self._system()
+        self.assertNotIn("<code>little_sister</code>", body)
+
+    def _resolver_row(self, body: str, scheme: str, package: str,
+                      replaces: str, origin: str) -> None:
+        """Assert the whole four-cell row for `scheme`, in order.
+
+        Whole row, not `assertIn` on a cell: the columns are what the table
+        *means* — who answers, whom that displaced, and whether it is ours — and a
+        per-cell assertion passes just as well when a value lands one column over.
+        Whitespace is collapsed so the check does not pin the template's
+        indentation, and the row is anchored at both ends by its own tags.
+        """
+        flat = re.sub(r"\s+", " ", body)
+        self.assertIn(
+            f"<td><code>{scheme}://</code></td> <td>{package}</td> "
+            f'<td class="text-muted">{replaces}</td> '
+            f'<td class="text-muted">{origin}</td>', flat)
+
+    def test_a_scheme_claimed_by_nobody_joins_no_package_row(self):
+        # a resolver registered from `__main__` names no installation, so there is
+        # no row it could honestly join — the scheme table below still shows it
+        self._login()
+        secrets._resolvers["odd"] = secrets.Registration(
+            scheme="odd", resolver=lambda address: "v", package="")
+        body = self._system()
+        self.assertNotIn("secret odd://", body)
+        self._resolver_row(body, "odd", secrets.UNIDENTIFIED, "—", "extension")
+
+    def test_the_scheme_table_names_who_answers_for_each_one(self):
+        # "which schemes may I write here" and "whose code reads this credential"
+        # are the two questions, and the second is why the owner is a column
+        self._login()
+        secrets.register_resolver("aws-sm-live", lambda address: "v")
+        body = self._system()
+        self.assertIn("<th>Scheme</th>", body)
+        self._resolver_row(body, "aws-sm-live", "tests", "—", "extension")
+
+    def test_the_scheme_table_is_shaped_like_the_slot_table(self):
+        # one card, two seams, one shape — and `From` means the same thing in both,
+        # so a reader learns the columns once
+        self._login()
+        body = self._system()
+        self.assertIn("<tr><th>Slot</th><th>Package</th><th>Template</th>"
+                      "<th>Context</th><th>From</th></tr>", body)
+        self.assertIn("<tr><th>Scheme</th><th>Package</th><th>Replaces</th>"
+                      "<th>From</th></tr>", body)
+
+    def test_the_built_in_env_scheme_is_listed_too(self):
+        # unlike the aspects line below: the schemes are additive and a reference
+        # names exactly one, so the whole table is the answer — and leaving the
+        # library's own claim out would make an override of it look ordinary
+        self._login()
+        self._resolver_row(self._system(), "env", "little_sister", "—",
+                           "built-in")
+
+    def test_a_replacement_says_whom_it_displaced(self):
+        # the one fact the outcome cannot show: the page would otherwise say the
+        # scheme is owned by whoever owns it, with nothing to say somebody else did
+        self._login()
+        secrets.register_resolver("env", lambda name: "from-the-store",
+                                  replace=True)
+        self._resolver_row(self._system(), "env", "tests", "little_sister",
+                           "extension")
 
     def test_the_aspects_line_names_who_registered_each_one(self):
         # "is this file declared" is not the question when config/jira misbehaves

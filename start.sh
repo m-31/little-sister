@@ -40,6 +40,15 @@ fi
 
 START_TIMEOUT="${START_TIMEOUT:-50}"   # wait for "up", in 0.2s steps (~10s)
 
+# How long gunicorn lets a worker go without a heartbeat before it kills and
+# restarts it -- which covers the worker's **import**, not only its requests.
+# The default is gunicorn's own, so this changes nothing by itself; an instance
+# whose import can legitimately take longer raises it in `instance.sh`, together
+# with START_TIMEOUT above. Both matter for the same reason and neither alone is
+# enough: this one decides whether the worker survives, that one decides whether
+# this script waits long enough to see it.
+WORKER_TIMEOUT="${WORKER_TIMEOUT:-30}"
+
 # --- Pre-flight: decide what to do about anything already on the port --------
 # Done first (before the slow `uv sync`) so an occupied port fails fast, and so
 # a failing sync never takes down an already-running instance.
@@ -79,7 +88,12 @@ fi
 # --- Launch (the nohup part) -------------------------------------------------
 echo "Starting ${NAME} on ${HOST}:${PORT}..."
 mkdir -p var          # runtime artifacts (gunicorn log + pidfile) live under var/
-nohup gunicorn --workers 1 --threads 8 --bind "${HOST}:${PORT}" \
+# `--workers 1` is load-bearing and not a default worth tuning: every worker is a
+# separate interpreter with its own status tree and its own engine (little-sister
+# ADR-0001), and process-wide state -- an `aws sso login` in flight, for one --
+# would be held once per worker. Threads are how this serves more than one reader.
+nohup gunicorn --workers 1 --threads 8 --timeout "${WORKER_TIMEOUT}" \
+      --bind "${HOST}:${PORT}" \
       --pid "$PID_FILE" "$APP" > "$LOG" 2>&1 &
 app_pid=$!
 

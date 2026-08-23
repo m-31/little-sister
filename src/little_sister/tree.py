@@ -151,6 +151,12 @@ class StatusSnapshot:
     #: rather than infer it; the JSON envelope does not emit it yet — that field
     #: rides the client contract round with the others held back for it.
     order: int = 0
+    #: "This node's quiet lines are still information" (ADR-0063). ``None`` where
+    #: nobody said, and a stated ``False`` is a declaration rather than a silence —
+    #: the tri-state the seed and the fill both turn on. The web reads it; the JSON
+    #: envelope does not carry it, and a client drawing its own chips is entitled to
+    #: its own decision until the field joins the contract deliberately.
+    show_when_quiet: bool | None = None
     maintenance: bool = False
     maintenance_entry: MaintenanceEntry | None = None
     stale: bool = False
@@ -264,7 +270,8 @@ class StatusTree:
                report: str | None = None,
                about: str | None = None,
                title: str | None = None,
-               order: int | None = None) -> bool:
+               order: int | None = None,
+               show_when_quiet: bool | None = None) -> bool:
         """Create-or-update the node at ``path`` and record a transition event if
         its own code changed. ``description`` / ``frequency_seconds`` / ``config``
         / ``report`` (inherited from the check) are stored when given — ``config``
@@ -300,6 +307,14 @@ class StatusTree:
         and a deployment overruling what a check declared must be able to name the
         default value like any other.
 
+        ``show_when_quiet`` (ADR-0063) fills the same way and reads "unset" the
+        same way: ``None`` is nobody-said, and a ``False`` already on the node is a
+        **statement** that a check's ``True`` must not fill over. That is the whole
+        reason the field is nullable rather than a plain ``bool`` defaulting to
+        false — the deployment's way of declining a declaration the check type
+        ships is to write ``show_when_quiet: false`` in ``nodes.yaml``, and a
+        falsy-means-empty fill would let the next tick overwrite it.
+
         A node under **maintenance** is written like any other: the pin is a
         contribution rule evaluated in the snapshot (ADR-0032 rule 3), not a value
         stamped into the tree, so the check keeps reporting and the tree keeps
@@ -321,6 +336,8 @@ class StatusTree:
                 node.title = title
             if order is not None and node.order is None:
                 node.order = order
+            if show_when_quiet is not None and node.show_when_quiet is None:
+                node.show_when_quiet = show_when_quiet
             old = node.code
             node.update(code, reason, members)
             if node.code == old:
@@ -359,6 +376,18 @@ class StatusTree:
         sibling. Thread-safe."""
         with self._lock:
             self._ensure_node(path).order = order
+
+    def set_show_when_quiet(self, path: str, show_when_quiet: bool) -> None:
+        """Seed a node's ``show_when_quiet`` (ADR-0063) — like :meth:`set_about`,
+        metadata only, no event.
+
+        The **configured** half (``nodes.yaml``, or an inline ``show_when_quiet:``
+        on the check), run at startup before the first tick, so it beats whatever
+        the check's result declares. ``False`` is a **real** declaration here and
+        not a no-op: it is the only way a deployment can decline a claim a check
+        type ships for every one of its installations. Thread-safe."""
+        with self._lock:
+            self._ensure_node(path).show_when_quiet = show_when_quiet
 
     def set_check_mount(self, path: str) -> None:
         """Register ``path`` as a **check mount** — the node a check writes its
@@ -880,6 +909,11 @@ class StatusTree:
             config="" if shared else node.config,
             report="" if shared else node.report,
             about=node.about, title=node.title, order=node.order or 0,
+            # Carried as the tri-state it is: `order` collapses to 0 because the
+            # sort needs a number, while nothing downstream needs a boolean here —
+            # and flattening `None` to `False` would throw away the one difference
+            # the fill rule turns on (ADR-0063).
+            show_when_quiet=node.show_when_quiet,
             maintenance=node.maintenance,
             maintenance_entry=self._maintenance.get(node.path), stale=stale,
             age_seconds=age, children=children,

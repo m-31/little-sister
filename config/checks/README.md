@@ -40,6 +40,8 @@ the Python class behind `type:` — is
 | `description` | human-readable description of what the check *does* (Markdown) | `""` |
 | `about` | subject metadata — what the node *is* (location, kind, context); Markdown. `nodes.yaml` overrides it | `""` |
 | `title` | a **short** display label for the node (briefer than `about`); Markdown. `nodes.yaml` overrides it | `""` |
+| `order` | this node's **declared rank among its siblings**: the row sorts by `(order, name)`, so a negative number pulls a node ahead of its unranked siblings and a positive one pushes it after them. A whole number, negative allowed; `nodes.yaml` overrides it, and both beat a rank the check's own result declares | unstated (sorts as `0`) |
+| `show_when_quiet` | `true` when this node's **quiet lines are still information** — an inventory whose list is read *because* everything is fine. The dense dashboard then keeps its full box and never folds it behind *+N more*. `nodes.yaml` overrides it; must be a real boolean (`"false"` in quotes fails the load rather than reading as *on*) | unstated |
 | `frequency` | how often to run — `30s`, `15m`, `2h`, `1d`, or a number of seconds | `15m` |
 | `timeout` | per-run timeout (same duration format) | `30s` |
 
@@ -49,22 +51,47 @@ A non-`OK` result always carries a reason. A failed or timed-out run becomes
 ## Node metadata — `config/nodes.yaml`
 
 An **optional** `nodes.yaml` **beside** this directory — one per configuration root,
-not inside `checks/` — declares each node's `about` and `title` keyed by its absolute
+not inside `checks/` — declares each node's `about`, `title`, `order` and
+`show_when_quiet` keyed by its absolute
 path, so it can reach **container / host** nodes that no single check owns. It is
 layered across the roots and seeded at startup: a later root wins **per field** over
 an earlier one (the override is logged, naming both files), and a `nodes.yaml` value
 wins over the inline value on a check, also per field. A bare string is shorthand for
 `about`. A declared path that no check covers is warned about at startup
-([ADR-0012](../../docs/adr/0012-node-metadata.md) / [ADR-0017](../../docs/adr/0017-node-title.md)).
+([ADR-0012](../../docs/adr/0012-node-metadata.md) /
+[ADR-0017](../../docs/adr/0017-node-title.md) /
+[ADR-0055](../../docs/adr/0055-sibling-order.md)).
 
 ```yaml
 /system/alpha:
   title: Living-room NUC
   about: Intel NUC in the hallway cupboard; Debian 12.
+  order: 1                       # ranked, so it sorts *after* every unranked sibling
 /nexus:
   title: Nexus NAS
   about: QNAP TS-453D NAS, 4× 8 TB in RAID-5.
+  order: 2                       # …so rank the whole set, or use negatives to lead
+/aws/prod/ec2:
+  show_when_quiet: true          # its instance list is the reading
+/aws/prod/cloudwatch:
+  show_when_quiet: false         # …and this one declines what its check declared
 ```
+
+**A stated value is not an absent one**, and for both of the fields above that is
+the whole point of writing them here.
+
+Writing `show_when_quiet: false` is not the same as leaving it out. An absent key is
+*nobody said*, so a check type that ships the declaration still reaches the node; a
+stated `false` occupies the field and takes that declaration back
+([ADR-0063](../../docs/adr/0063-declining-the-density-trade.md)).
+
+`order: 0` is the same move for a rank — the only way to overrule a rank a check
+declared, by naming the value an unranked node already carries. It is **not** a
+request for alphabetical order: `0` is the rank the unranked carry, so a zeroed node
+sorts *with* them — after every negative rank, before every positive one. Zeroing one
+child of a set its check ranked `1..5` therefore moves it to the **front** of that
+set; putting the whole set back in alphabetical order takes an `order: 0` on every
+sibling ([ADR-0055](../../docs/adr/0055-sibling-order.md)).
 
 ## `http`
 GET a URL; OK when the response status matches.
@@ -219,7 +246,26 @@ dashboard hover card. To retune one for your hosts, add a **`subnodes:`** block 
 leaf name (`subnodes: {disk: {about: "…", title: "…"}}`): a config entry overrides the
 built-in default per field; an omitted field keeps the default, and `nodes.yaml` still
 overrides above both, per node path
-([ADR-0025](../../docs/adr/0025-check-provided-subnode-metadata.md)).
+([ADR-0025](../../docs/adr/0025-check-provided-subnode-metadata.md)). Write
+`{default}` inside your text to **extend** the shipped note instead of replacing it —
+before it, after it or around it — and the type's own `{token}`s (a team name, a
+severity legend) expand in either.
+
+**`little-sister` itself reads this block**, for every branch check type: the type
+declares its defaults and the library resolves yours over them, so an entry here works
+whatever the type is and needs no release of it. Entries apply by subnode *name* —
+every leaf named `disk`, on every host this check reports, at any depth.
+
+The same block carries the one non-label key:
+**`show_when_quiet`** (`subnodes: {disk: {show_when_quiet: true}}`), the per-aspect
+form of the common field above — *this leaf's quiet lines are still information*, so
+the dense dashboard keeps its box and never folds it. It resolves like the labels
+beside it: what you write here beats what the check type declared for that name — a
+type declares the flag for an aspect that is a roster *by construction*, so you may
+never need to write it at all — and `nodes.yaml` still overrides both, per node path
+([ADR-0063](../../docs/adr/0063-declining-the-density-trade.md)). Writing
+`show_when_quiet: false` is how you decline a declaration a type ships; leaving the
+key out says nothing.
 
 A check that reports several nodes like this returns a small tree of results
 (`CheckResult.children`); the engine writes each as a node under the check's node

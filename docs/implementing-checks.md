@@ -355,7 +355,7 @@ that declaration is what sits between the imports:
 # little_sister_example/__init__.py
 from little_sister.checks import require_api
 
-require_api(1)                       # refuses at startup on a mismatch, naming both
+require_api(2)                       # refuses at startup on a mismatch, naming both
 
 from little_sister_example import (  # noqa: E402  registers the type
     example,
@@ -369,7 +369,7 @@ how a package pins the one it was written against ([ADR-0051](adr/0051-what-star
 A version **floor** in `pyproject.toml` cannot express this — a floor has no ceiling,
 so it cannot see a library that has moved *past* your epoch. The surface itself is
 pinned from the other side by an append-only snapshot,
-`tests/fixtures/check_api_v1.txt`: a name may join the surface within an epoch, but no
+`tests/fixtures/check_api_v2.txt`: a name may join the surface within an epoch, but no
 name leaves it without the epoch moving. The deployment still writes
 `import little_sister_example` in the same slot as any other registration; what a
 package changes is who maintains the type and on what version line, not how it
@@ -435,9 +435,11 @@ it before importing `little_sister.app`.
   `nodes.yaml` keyed by node path **>** the check **>** empty
   ([ADR-0012](adr/0012-node-metadata.md) / [ADR-0017](adr/0017-node-title.md)). For a
   check's **root** node the check source is an inline `about:` / `title:` in its YAML;
-  for the **subnodes a branch check emits** it is the child `CheckResult`'s
-  `about` / `title`, which fill an empty field only
-  ([ADR-0025](adr/0025-check-provided-subnode-metadata.md); see §3). A container node no
+  for the **subnodes a branch check emits** it is the `subnodes:` block in
+  the check's config resolved over what the type declared, and the child
+  `CheckResult`'s `about` / `title` beneath that — all of them filling an empty field
+  only ([ADR-0025](adr/0025-check-provided-subnode-metadata.md); see the two bullets
+  below and §3). A container node no
   single check owns can still be labeled via `nodes.yaml`. **`order` follows the same
   precedence** — `nodes.yaml` **>** an inline `order:` on the check **>** the
   `CheckResult`'s — with one difference: a stated `order: 0` in either file is a real
@@ -446,20 +448,61 @@ it before importing `little_sister.app`.
   order, because `0` is the rank the unranked carry, so a zeroed node sorts ahead of
   every positively-ranked sibling. Putting a whole ranked set back to the alphabet
   takes an `order: 0` on each of them ([ADR-0055](adr/0055-sibling-order.md)).
-- **Where a branch check gets its subnode labels.** The `CheckResult.about` / `title` a
-  branch check emits can be **hardcoded** (a per-aspect default in code, like
-  `host-metrics`' built-in `about`s) or read from the check's **own config** — a
-  `subnodes:` block, `name → {title, about}`, sitting beside the root's inline metadata.
-  `little_sister.checks` provides the reader: `parse_subnodes(config)` →
-  `{name: {title, about}}`, and `expand_tokens(text, {…})` to fill `{token}` placeholders
-  (a plain replace, never `str.format`, so backticks / braces in the Markdown survive).
-  `resolve_text(configured, default, tokens)` layers a check that has both: the config
-  value when present, the default otherwise, and config text containing `{default}`
-  **extends** the default rather than replacing it — before, after or around it. Ship
-  defaults in code for anything true of the check *type*: a deployment can still retune or
-  annotate one aspect without touching code or `nodes.yaml`, and a type that runs several
-  times in one deployment (one check per team) then carries its prose once instead of once
-  per config file.
+- **Subnode labels: declare, don't mediate.** The per-aspect `title` / `about` a branch
+  check ships are **declared**, in the two common constructor keywords
+  `subnode_defaults` (`name → {title, about}`) and `label_tokens` (`token → value`),
+  handed to `super().__init__()` from your own `__init__`. The library does the rest:
+  it reads the deployment's `subnodes:` block out of your config, resolves each field —
+  the configured text when present, your default otherwise, with `{default}` letting a
+  deployment **extend** rather than replace and `{token}`s expanded by a plain replace
+  (never `str.format`, so backticks and stray braces in the Markdown survive) — and the
+  engine writes the result per subnode *name*, at any depth. So **do not parse
+  `subnodes:`**, and do not layer a default yourself: the readers you would be
+  duplicating have already run, and they are no longer on this surface to call
+  ([ADR-0025](adr/0025-check-provided-subnode-metadata.md)'s 2026-08-19 update — the
+  same shape `show_when_quiet` uses, and the epoch bump that retired
+  `parse_subnodes` / `resolve_text` / `expand_tokens`). Declare anything true of the
+  check *type*: a deployment then retunes or annotates one aspect without touching code
+  or `nodes.yaml`, and a type that runs several times in one deployment (one check per
+  team) carries its prose once instead of once per config file. Tokens are resolved at
+  **construction**, so a token value must be a construction-time fact — a label freezes
+  at the node's first fill, and text that changes with an observation belongs in
+  `reason`.
+- **A label for a child only the run can name.** `CheckResult.about` / `title` stay for
+  the child whose name no declaration could have anticipated — a volume, a repository,
+  a tenant the run discovered. They are read **per field**, and only where the resolved
+  map says nothing for that name. A check that wants such a child to inherit an
+  aspect's text reads the resolved map, `self.subnode_labels[name][field]`, rather than
+  its own constant: that is what carries a deployment's override down to it
+  (`host-metrics`' per-volume leaves under `disk`).
+- **Declaring that a node's quiet lines are the reading.** Most reason text is
+  diagnostic — while the node is quiet there is nothing to read — but some checks'
+  lines are an **inventory**: one line per instance, per volume, per account, read
+  *because* everything is fine. A check whose quiet lines are noise already drops
+  them itself; the opposite claim is `show_when_quiet`
+  ([ADR-0063](adr/0063-declining-the-density-trade.md)), and the dense dashboard then
+  keeps that node's full box and never folds it away. A check type's only part in it
+  is the **declaration**, and it goes where the labels go: `show_when_quiet: True`
+  in that subnode's `subnode_defaults` entry, beside its `title` and `about`, for an
+  aspect that is an inventory *by construction*. The type's map is then shaped like
+  the deployment's block, key for key, and one line in the package replaces an entry
+  per aspect per node path in every installation's `nodes.yaml`. Declare it as a
+  real boolean: a string is refused at load, naming the subnode, because
+  `bool("false")` is `True` and a quoted one would switch a node on while the source
+  says off.
+  Say nothing at all for a node the check has no opinion about — an entry that
+  omits the key leaves the field for somebody else, while `False` is a *statement*
+  and would shut out a declaration a deployment wanted to make. The deployment's
+  half needs nothing from you either: the library reads
+  `subnodes: {name: {show_when_quiet: …}}` out of the check's config, for **every**
+  type, and merges it over your declaration per name — so do not parse the key in a
+  check, and do not layer it yourself; both readers have already run. Ship a
+  declaration only for the aspect whose *content* is a list, not for one you would
+  like to be more visible — a wall of declared nodes is a configuration smell, and
+  dense mode's benefit shrinks by exactly as much as somebody declares.
+  `CheckResult.show_when_quiet` stays for the child a run *names* — a volume, an
+  instance — which is the same dynamic-child channel the labels keep; the root's own
+  source is the `show_when_quiet:` key in its YAML, which no result may overrule.
 - **Ownership** — two checks may not own overlapping nodes; the loader rejects the
   whole load with a named conflict. A branch check that shares a container overrides
   `owned_nodes()` to own its child subtrees only (§2), so peers can coexist (ADR-0015).
@@ -484,6 +527,9 @@ environment variable overrides the file
 resolver the application registered for that scheme
 (`little_sister.secrets.register_resolver`) — registered in the same
 import-before-app slot as the check types (§4); the library ships no store client.
+A scheme is claimed **once**, and a second claim from a different package refuses at
+startup naming both, because a scheme says where a credential is read from
+([ADR-0064](adr/0064-the-resolver-is-a-registration.md)).
 
 - **Resolve at construction, never in `run()`.** Call
   `self.resolve_secret(reference)` from the constructor and keep the value — cloud

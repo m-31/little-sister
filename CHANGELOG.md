@@ -8,58 +8,154 @@ contract versions **separately** — see `docs/api/openapi.yaml` `info.version`.
 
 ## [Unreleased]
 
-## [0.3.12] - 2026-08-17
+## [0.3.13] - 2026-08-23
+
+### Removed
+
+- **Breaking — three names leave the check-authoring surface, and the check API
+  epoch is now 2.** `parse_subnodes`, `resolve_text` and `expand_tokens` are gone
+  from `little_sister.checks`. They were how a branch check read and layered its
+  own `subnodes:` block; little-sister reads that block itself now, for every check
+  type, so a type has nothing left to call them for (see *Changed*). **Every
+  check-type package must release**: change `require_api(1)` to `require_api(2)`,
+  delete the three imports and the code around them, and declare
+  `subnode_defaults` / `label_tokens` instead. There is deliberately **no
+  compatibility window** — a package built for epoch 1 refuses at startup naming
+  both numbers, which is the point of the epoch
+  ([ADR-0051](docs/adr/0051-what-startup-refuses.md)). Nothing in a *deployment's*
+  configuration changes: the `subnodes:` block is written exactly as before, and it
+  now works for check types that never read it.
+
+### Added
+
+- **A node can say that its quiet lines are still worth reading.** The dense
+  dashboard buys height by painting a quiet leaf as a chip and folding surplus quiet
+  boxes behind *+N more*, which is right for reason text that explains a problem and
+  wrong for an **inventory** — a list of instances, volumes or accounts that is read
+  precisely *because* everything is fine, and which was therefore visible only while
+  something else was broken. Such a node now declares `show_when_quiet`, and the
+  dense view keeps its full box and never folds it. Set it beside `title` and
+  `about` — in a check's YAML for its own node, in `config/nodes.yaml` for any node
+  by path, or per aspect in the check's `subnodes:` block, which **little-sister
+  reads itself, for every branch check type**: a deployment can declare it for any
+  installed check without that check changing.
+
+  **A check type declares it beside the label, in the same entry** — its
+  `subnode_defaults` map is shaped like the block a deployment writes, key for key
+  — so an aspect that is a roster *by construction* (an `ec2` inventory, one line
+  per instance) is stated once in the package and inherited by every account of
+  every installation. What a deployment writes in its own `subnodes:` block beats
+  that per name, `config/nodes.yaml` beats both per path, and a value a check
+  *stamps* on a child result is the fallback for a child only the run could have
+  named. Stating `show_when_quiet: false` — in the block or in `nodes.yaml` — is
+  how a declaration a type ships is declined; leaving the key out says nothing.
+  A value that is not a real boolean fails the load, in a declaration as in a
+  config file, naming the subnode.
+
+  Nothing changes for a node that says nothing,
+  density off is unaffected, *hide idle* and *hide ok* still answer to the viewer,
+  no card moves, and the JSON envelope is unchanged
+  ([ADR-0063](docs/adr/0063-declining-the-density-trade.md)).
+
+- **One name joins the check-authoring surface.** `values.strict_flag` is a
+  configuration boolean that must actually be one, beside `values.flag`'s truthiness
+  read of a payload: a quoted YAML boolean — `enabled: "false"` — is truthy, so the
+  lenient read switches a thing *on* while its config says off, and this one refuses
+  the value instead. No reader of the `subnodes:` block is on the surface — the
+  library runs them all for every check type, so a check calls none of them (the
+  three that used to be there are in *Removed* above). One consequence for every
+  type: a malformed `subnodes:` block now fails the load rather than sitting inert
+  in a config the type never read.
 
 ### Changed
 
-- **The default log level is now `INFO`, and `LOG_LEVEL` names it**
-  ([ADR-0049](docs/adr/0049-the-check-authoring-surface.md), amended). This reaches
-  only installations that let little-sister configure logging: an application that
-  sets up its own — before importing `little_sister.app` — keeps its level exactly as
-  it did, and `LOG_LEVEL` does not reach it.
+- **A secret resolver is now a registration like the others, and a scheme is
+  claimed once.** `secrets.register_resolver()` was the last of the five seams a
+  package reaches an instance through that recorded nothing about who registered
+  what: a second claim on a scheme silently replaced the first, where a second
+  `type:` claim refuses at startup naming both. It now records the **package** that
+  made the claim — inferred from the call site, as a configuration aspect's
+  registrant is — and a claim on a scheme **another** package holds raises
+  `SchemeConflictError` before the process starts, naming both and the scheme.
+  A scheme is where a credential is read from, so import order must not be what
+  decides it; the alternative is one package's checks authenticating against
+  another's store, which fails on a machine nobody is watching or, worse, quietly
+  succeeds.
 
-  The old default was `DEBUG`, which collects no line little-sister writes, since
-  nothing in it logs below `INFO`, and every line written by everything installed
-  beside it. One deployment's log ran two thirds AWS SDK request detail nobody had
-  asked for. `LOG_LEVEL=DEBUG` asks for the old behavior back for a debugging
-  session; an unrecognized name falls back to `INFO` and says so in the log it just
-  opened.
-  - A dependency that is chatty at `INFO` is quieted the way it always was, by
-    capping **its own** logger — `logging.getLogger("botocore").setLevel(WARNING)`,
-    beside the check-type registrations. That adds no handler to the root logger, so
-    the default setup still runs: quieting a dependency does not cost you ownership
-    of logging.
+  Registering the same scheme again **from the same package** still replaces it
+  silently — that is a reloading server re-running its own registrations.
+  Replacing *another* package's scheme is still available and now has to be said:
+  `register_resolver(scheme, resolver, replace=True)`. A deployment that
+  substitutes its own implementation of the built-in `env` resolver keeps that
+  feature and adds one keyword; what it stops doing is happening by accident. What
+  a replacement displaced is remembered and shown.
 
-- **A title with no word in it no longer stands in for a node's name**
-  ([ADR-0061](docs/adr/0061-decoration-is-not-a-label.md)). Most surfaces draw the
-  name and the title side by side; two draw the title *instead of* the name — the
-  `/copy` hand-off and the inspection popover's card — which is right while a title is
-  a word, and wrong for a glyph. A node titled `🔴` used to paste into a ticket as a
-  circle and nothing else, in the one surface with no chips and no styling to carry
-  the meaning. It now reads `critical 🔴`, name first.
-  - The test is `isalnum` per character, so it is a **Unicode** one: a Japanese,
-    Cyrillic or Greek title is a word and is unaffected; an emoji, an arrow or a
-    bullet is not. A digit counts.
-  - **Only nodes whose titles are already wordless change**, and only on those two
-    surfaces — nothing that was drawn stops being drawn. Display only, as before: the
-    tree still stores the title and the JSON envelope still emits it, so a client
-    drawing its own chips keeps its own decision about the glyph.
-- **The fast failure retry now re-arms whenever a check's reading changes**, not only
-  when it goes `OK` — and a run that reports `UNDEFINED` no longer arms it at all
-  ([ADR-0033](docs/adr/0033-budgeted-failure-retry.md), amended by
-  [ADR-0060](docs/adr/0060-a-line-makes-no-claim.md) decision 4). Only deployments
-  that set `retry_interval` are affected.
+  **`/system` prints the seam twice.** Each package's inventory row gains
+  `secret <scheme>://` beside its types, slots, assets and aspects; and the
+  extensions card gains the **whole scheme list** — scheme, package, what it
+  replaced, and whether it is the library's own — as a table shaped like the slot
+  table above it. The built-in `env` is in it, unlike the aspects line beside it,
+  because the schemes are additive and a reference names exactly one, so the full
+  list is the only answer to *what may I write in this field*; and unlike the
+  entries beside it, this one is never absent.
+  Nothing on the check-authoring surface moves and the epoch stays 2:
+  `little_sister.secrets` has never been in §11's fenced block
+  ([ADR-0064](docs/adr/0064-the-resolver-is-a-registration.md)).
 
-  The old rule assumed a non-`OK` check was a failing one. Since a node's code can be
-  derived from its lines, a check can sit at `WARN` for weeks as its *ordinary* state —
-  and it then spent `retry_attempts` in its first few cycles and had none left on the
-  day its reading actually changed, which is the one day a second look is worth
-  paying for. Nothing said so either: `/system` marks only a pulled-in slot, so a
-  spent budget looked exactly like a check that never had one.
+- **A deployment can label any installed branch check's subnodes, without that
+  check's help.** `subnodes: {disk: {title: …, about: …}}` in a check's own config
+  is read by little-sister itself now, exactly like the `show_when_quiet` beside it:
+  a check type **declares** the labels it ships (`subnode_defaults`) and any values
+  its text reuses (`label_tokens`), the library resolves each field once — the
+  configured text when present, the declared default otherwise, `{default}`
+  extending rather than replacing and `{token}`s expanded by a plain replace that
+  leaves Markdown intact — and the engine writes the result per subnode *name*, at
+  any depth. Two things change for the better: a `subnodes:` label written against a
+  type that never read the block used to do nothing at all, silently, and now
+  reaches every branch type; and text substitution is one library contract rather
+  than one per check type. Precedence is unchanged — `config/nodes.yaml` still wins
+  per field, and a label still freezes at a node's first fill — and a label a check
+  puts on a **dynamically named** child (a volume it discovered) still applies,
+  where nothing declared or configured that name
+  ([ADR-0025](docs/adr/0025-check-provided-subnode-metadata.md), 2026-08-19 update).
 
-  A burst is still bounded, because an unchanged reading is not news: a three-day
-  outage costs `retry_attempts` fast runs and then normal cadence, exactly as before.
-  What changed is that the budget comes back when the news does.
+- **The dashboard navigation stays reachable while a long tree scrolls.** The bar
+  remains at the top in both interactive layouts, and the left rail stays beneath
+  its height — from a safe scriptless default refined by measurement — and gains
+  its own scroll on a short window. An expanded narrow top bar uses its measured
+  first-row footprint to scroll the section list without clipping the separately
+  bounded settings menu, so both last choices remain reachable. The document is
+  still the scroll container; content panels
+  pass behind the chrome while viewport-positioned popovers remain above it, and
+  the kiosk remains unchanged
+  ([ADR-0062](docs/adr/0062-navigation-chrome-is-layout-behavior.md)).
+
+### Fixed
+
+- **A run's log line no longer cuts the reason that explains the run.** It carried
+  the **first** reason, truncated at 120 characters — and both halves of that were
+  wrong exactly when the line is read. A check that could not measure at all words
+  its refusal in two reasons on purpose, what went wrong and then what to do about
+  it, because the second is the actionable half and a provider's error is long
+  enough to push it off the edge of a card; the log kept the first and dropped the
+  second, then cut the first mid-sentence. A real `AssumeRole` refusal ended at
+  *"…when calling the AssumeRole operation:"* — precisely before the part naming
+  who was refused and for what, which was the whole content. Now every reason is
+  carried, joined, under a cap generous enough for a provider's message to arrive
+  whole; what the cap truncates is a *roster*, where the leading entries are
+  representative, and it says so with an ellipsis rather than stopping where a
+  reader would take the end for the message's own.
+
+- **An action chip no longer reads through to the title underneath it.** In a card
+  head the chip rail sits over the title's space on purpose — a chip is something to
+  click — but a chip is transparent, so a deployment's `+ Jira` landed in the middle
+  of a word and neither could be read. Every card and node box now declares its fill
+  as a token and the rail repaints that exact fill beneath its chips while they are
+  showing, the title fading into it; a card at rest offers nothing to click and keeps
+  its whole title
+  ([ADR-0034](docs/adr/0034-template-slots-for-dependent-packages.md)).
+
+## [0.3.12] - 2026-08-17
 
 ### Added
 
@@ -155,7 +251,89 @@ contract versions **separately** — see `docs/api/openapi.yaml` `info.version`.
   no `Retry-After` may be nothing more than crawler protection, and pressing a service
   that is already complaining about volume is how access gets withdrawn.
 
+- **A check can declare the order of its own nodes.** Siblings have always rendered
+  alphabetically, which is wrong wherever the set has an order of its own: a severity
+  band row read `critical high informational low medium`, filing *nothing to do* third,
+  and `low` before `medium` is a wrong statement about severity. `CheckResult` now
+  carries an `order: int = 0` and the tree sorts siblings by `(order, name)` — a
+  negative value pulls a node up, a positive one pushes it down, and ties still break
+  by name. A deployment can overrule any of it from its own configuration — `order:`
+  sits beside `title:` and `about:`, both inline on a check and in `nodes.yaml`
+  ([ADR-0055](docs/adr/0055-sibling-order.md)).
+
+  `0` is the rank an unranked node carries, so a node given it sorts with them — ahead
+  of every positive rank and behind every negative one. Stating `order: 0` on one child
+  of a ranked set therefore moves that child to the *front*; putting a whole set back to
+  plain alphabetical order means stating it on every sibling.
+
+  **Nothing changes for a deployment that declares no ranks.** The default `0` on every
+  node reproduces the previous alphabetical order exactly. Where a rank *is* declared,
+  a node's `children` move in the JSON envelope as well as on the dashboard. The API
+  spec had promised plain name order, so it moves to **1.3.0** and now documents
+  `(rank, name)`; `schema_version` stays `1`, as it did for the nullable `timestamp`.
+  The rank itself is not an envelope field yet — it ships with the batched
+  client-contract revision.
+
+- **`/system` now says which checks a check type is used by.** The check-type roster
+  printed *used by 2 checks* under a type name and nothing else, so the one number on
+  that page an operator might doubt was the one number the page could not
+  substantiate — *two of what?*, when a type named in two check files, rendering in two
+  different branches of the tree, is the ordinary case. The count is still what the row
+  leads with, and it now opens into the node path of every check behind it, each a link
+  to that node. A type nothing uses offers no list. Everything else on the page already
+  named its subjects; this row does too.
+
 ### Changed
+
+- **The default log level is now `INFO`, and `LOG_LEVEL` names it**
+  ([ADR-0049](docs/adr/0049-the-check-authoring-surface.md), amended). This reaches
+  only installations that let little-sister configure logging: an application that
+  sets up its own — before importing `little_sister.app` — keeps its level exactly as
+  it did, and `LOG_LEVEL` does not reach it.
+
+  The old default was `DEBUG`, which collects no line little-sister writes, since
+  nothing in it logs below `INFO`, and every line written by everything installed
+  beside it. One deployment's log ran two thirds AWS SDK request detail nobody had
+  asked for. `LOG_LEVEL=DEBUG` asks for the old behavior back for a debugging
+  session; an unrecognized name falls back to `INFO` and says so in the log it just
+  opened.
+  - A dependency that is chatty at `INFO` is quieted the way it always was, by
+    capping **its own** logger — `logging.getLogger("botocore").setLevel(WARNING)`,
+    beside the check-type registrations. That adds no handler to the root logger, so
+    the default setup still runs: quieting a dependency does not cost you ownership
+    of logging.
+
+- **A title with no word in it no longer stands in for a node's name**
+  ([ADR-0061](docs/adr/0061-decoration-is-not-a-label.md)). Most surfaces draw the
+  name and the title side by side; two draw the title *instead of* the name — the
+  `/copy` hand-off and the inspection popover's card — which is right while a title is
+  a word, and wrong for a glyph. A node titled `🔴` used to paste into a ticket as a
+  circle and nothing else, in the one surface with no chips and no styling to carry
+  the meaning. It now reads `critical 🔴`, name first.
+  - The test is `isalnum` per character, so it is a **Unicode** one: a Japanese,
+    Cyrillic or Greek title is a word and is unaffected; an emoji, an arrow or a
+    bullet is not. A digit counts.
+  - **Only nodes whose titles are already wordless change**, and only on those two
+    surfaces — nothing that was drawn stops being drawn. Display only, as before: the
+    tree still stores the title and the JSON envelope still emits it, so a client
+    drawing its own chips keeps its own decision about the glyph.
+
+- **The fast failure retry now re-arms whenever a check's reading changes**, not only
+  when it goes `OK` — and a run that reports `UNDEFINED` no longer arms it at all
+  ([ADR-0033](docs/adr/0033-budgeted-failure-retry.md), amended by
+  [ADR-0060](docs/adr/0060-a-line-makes-no-claim.md) decision 4). Only deployments
+  that set `retry_interval` are affected.
+
+  The old rule assumed a non-`OK` check was a failing one. Since a node's code can be
+  derived from its lines, a check can sit at `WARN` for weeks as its *ordinary* state —
+  and it then spent `retry_attempts` in its first few cycles and had none left on the
+  day its reading actually changed, which is the one day a second look is worth
+  paying for. Nothing said so either: `/system` marks only a pulled-in slot, so a
+  spent budget looked exactly like a check that never had one.
+
+  A burst is still bounded, because an unchanged reading is not news: a three-day
+  outage costs `retry_attempts` fast runs and then normal cadence, exactly as before.
+  What changed is that the budget comes back when the news does.
 
 - **The built-in `http` check and the links page now share one request path.** The
   `http` check keeps following redirects and keeps reporting any transport failure as
@@ -213,8 +391,6 @@ contract versions **separately** — see `docs/api/openapi.yaml` `info.version`.
   keeps the documents *out of* the pages that offer them — a node with two hundred
   findings would otherwise carry two hundred documents on every render.
 
-### Changed
-
 - **A slot's context provider now receives the names it declares.** `reason.actions`
   gained a `line` name (the whole reason entry — slug, code, `running`, any pin),
   and a provider that spelled its keyword arguments out would have broken on the
@@ -241,65 +417,6 @@ contract versions **separately** — see `docs/api/openapi.yaml` `info.version`.
   `format_duration` for a **configured** interval written back in the units
   somebody typed it in (`900` is `15m`, where a measured span would say `15m 0s`).
   `parse_duration` reads a span from a config; these write one to a screen.
-
-### Fixed
-
-- **A span no longer stays in seconds however large it grows.** The `/system`
-  page rendered a quarter-hour wait as `in 812s` beside a two-minute run reading
-  `115 s`, and a check stale for two hours read `7500s`, because each surface
-  formatted its own. They all call `format_span` now, which changes units as the
-  value grows — `412 ms`, `3.1 s`, `43 s`, `1m 55s`, `2h 7m`, `1d 3h` — so the
-  number stays about the same width whatever the span. Affects the `elapsed`
-  Jinja filter, the system page's Running / Next run / Last run cells and its
-  uptime card, and the staleness line on the dashboard and the check page. A
-  *configured* interval still renders through `duration` in the units the config
-  wrote it in (`15m`), which is a different question and a different answer.
-
-- **A check type that does not accept a new common field now fails with a message
-  that names it.** The fields every check shares grow — `order` is the newest — and
-  each becomes a keyword argument the loader passes to a check's constructor. A check
-  type written outside this repository that spells those keywords out instead of
-  taking `**kwargs` used to fail with a bare `TypeError` from inside the loader,
-  naming neither the configuration file nor the check type. It is now a `CheckError`
-  naming the file, the type and the keyword it refused, and saying what to do about
-  it. A `TypeError` raised *inside* a constructor is deliberately left alone, so a
-  real defect in a check is never relabelled as this.
-
-### Added
-
-- **A check can declare the order of its own nodes.** Siblings have always rendered
-  alphabetically, which is wrong wherever the set has an order of its own: a severity
-  band row read `critical high informational low medium`, filing *nothing to do* third,
-  and `low` before `medium` is a wrong statement about severity. `CheckResult` now
-  carries an `order: int = 0` and the tree sorts siblings by `(order, name)` — a
-  negative value pulls a node up, a positive one pushes it down, and ties still break
-  by name. A deployment can overrule any of it from its own configuration — `order:`
-  sits beside `title:` and `about:`, both inline on a check and in `nodes.yaml`
-  ([ADR-0055](docs/adr/0055-sibling-order.md)).
-
-  `0` is the rank an unranked node carries, so a node given it sorts with them — ahead
-  of every positive rank and behind every negative one. Stating `order: 0` on one child
-  of a ranked set therefore moves that child to the *front*; putting a whole set back to
-  plain alphabetical order means stating it on every sibling.
-
-  **Nothing changes for a deployment that declares no ranks.** The default `0` on every
-  node reproduces the previous alphabetical order exactly. Where a rank *is* declared,
-  a node's `children` move in the JSON envelope as well as on the dashboard. The API
-  spec had promised plain name order, so it moves to **1.3.0** and now documents
-  `(rank, name)`; `schema_version` stays `1`, as it did for the nullable `timestamp`.
-  The rank itself is not an envelope field yet — it ships with the batched
-  client-contract revision.
-
-- **`/system` now says which checks a check type is used by.** The check-type roster
-  printed *used by 2 checks* under a type name and nothing else, so the one number on
-  that page an operator might doubt was the one number the page could not
-  substantiate — *two of what?*, when a type named in two check files, rendering in two
-  different branches of the tree, is the ordinary case. The count is still what the row
-  leads with, and it now opens into the node path of every check behind it, each a link
-  to that node. A type nothing uses offers no list. Everything else on the page already
-  named its subjects; this row does too.
-
-### Changed
 
 - **`/system` no longer prints an absolute path to every loaded module.** Both tables
   that say where something was loaded from — the check-type roster and the package
@@ -403,6 +520,29 @@ contract versions **separately** — see `docs/api/openapi.yaml` `info.version`.
   This is a **display** change only. The JSON API still emits `title` exactly as before
   — a client that renders its own chips makes its own decision about the word — and a
   `nodes.yaml` title is stored as written.
+
+### Fixed
+
+- **A span no longer stays in seconds however large it grows.** The `/system`
+  page rendered a quarter-hour wait as `in 812s` beside a two-minute run reading
+  `115 s`, and a check stale for two hours read `7500s`, because each surface
+  formatted its own. They all call `format_span` now, which changes units as the
+  value grows — `412 ms`, `3.1 s`, `43 s`, `1m 55s`, `2h 7m`, `1d 3h` — so the
+  number stays about the same width whatever the span. Affects the `elapsed`
+  Jinja filter, the system page's Running / Next run / Last run cells and its
+  uptime card, and the staleness line on the dashboard and the check page. A
+  *configured* interval still renders through `duration` in the units the config
+  wrote it in (`15m`), which is a different question and a different answer.
+
+- **A check type that does not accept a new common field now fails with a message
+  that names it.** The fields every check shares grow — `order` is the newest — and
+  each becomes a keyword argument the loader passes to a check's constructor. A check
+  type written outside this repository that spells those keywords out instead of
+  taking `**kwargs` used to fail with a bare `TypeError` from inside the loader,
+  naming neither the configuration file nor the check type. It is now a `CheckError`
+  naming the file, the type and the keyword it refused, and saying what to do about
+  it. A `TypeError` raised *inside* a constructor is deliberately left alone, so a
+  real defect in a check is never relabelled as this.
 
 ## [0.3.11] - 2026-08-09
 

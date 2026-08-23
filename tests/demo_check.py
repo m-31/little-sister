@@ -293,6 +293,13 @@ def _children(t: float, period: float) -> CheckResult:
 #: capitalized name, added deliberately so this one card demonstrates both halves
 #: of its phase at once: the bands sort by rank, and none of them draws a title
 #: that only repeats the name it sits beside.
+#:
+#: The two **labels** are declared rather than stamped (ADR-0025's 2026-08-19
+#: update): `_BAND_LABELS` below goes to the library as `subnode_defaults`, which
+#: resolves it against any `subnodes:` block in `demo_config/checks/security_wiz.yaml`
+#: and lets the engine write the result per band name. Add a `subnodes:` entry
+#: there and the hover card changes with no code edit at all — that is the path
+#: Mode 2 is showing.
 _BANDS = (
     ("critical", 1, "Exploitable now, from outside. Page somebody."),
     ("high", 2, "Exploitable, or trivially chained into something that is."),
@@ -301,6 +308,24 @@ _BANDS = (
     ("informational", 5, "Nothing to do — inventory, posture notes, "
                          "an unused key that is nonetheless recorded."),
 )
+
+#: The band that **declines the density trade** (ADR-0063). `informational` is the
+#: demo's inventory-shaped node: it never alarms however many lines it carries, so
+#: under the ordinary rule its lines would show only while a *sibling* was red —
+#: visibility by accident of an error, for the one band whose lines are read
+#: because everything is fine. It says so, and keeps its box beside four siblings
+#: that still chip. Point this at `"low"` and the box moves; set it to `""` and the
+#: whole card chips again, which is the demonstration.
+_SHOW_WHEN_QUIET = "informational"
+
+#: The same bands in the shape the library takes — one entry per name, shaped like
+#: the `subnodes:` block a deployment would write: the two labels, and the flag on
+#: the one band that declines the density trade (ADR-0063 §2). One map is the
+#: type's whole half of that block.
+_BAND_LABELS: dict[str, dict[str, object]] = {
+    name: {"title": name.capitalize(), "about": about,
+           **({"show_when_quiet": True} if name == _SHOW_WHEN_QUIET else {})}
+    for name, _, about in _BANDS}
 
 #: What each band has found, per fifth of the loop. A row is one band's counts as
 #: the cycle turns, so the whole arc is legible here rather than assembled out of
@@ -375,7 +400,20 @@ def _severity(t: float, period: float) -> CheckResult:
 
     Each band also carries a `title` that is only its own name capitalized — what a
     check hands back when it has nothing better to say — so the chips must read
-    `critical`, never `critical Critical`. Both rules on one card.
+    `critical`, never `critical Critical`. Both rules on one card. That title and
+    the band's `about` are **declared** (`_BAND_LABELS` -> `subnode_defaults`) and
+    resolved by the library, so nothing here stamps a label onto a child.
+
+    It is also the demo's ADR-0063 node. `informational` declares
+    `show_when_quiet` — in `_BAND_LABELS`, beside its label, which is where a type
+    says a thing is a roster *by construction* — so in the dense view it keeps its
+    box and its four inventory lines while its quiet siblings collapse to chips:
+    the one band whose text is read *because* nothing is wrong, no longer visible
+    only when something is (`_SHOW_WHEN_QUIET`). The counts below leave it holding
+    four lines in every phase, so the box is never empty and the difference is on
+    screen the whole cycle. Nothing here stamps the flag on a result — a band this
+    check can name is declared, and the stamped channel is for a child only a run
+    could name.
 
     The counts turn over five phases (`_BAND_COUNTS`), so the roll-up climbs
     green → amber → red and clears, with the *order of the chips never moving* —
@@ -384,12 +422,12 @@ def _severity(t: float, period: float) -> CheckResult:
     phase = min(int(t / period * len(_BAND_COUNTS["critical"])),
                 len(_BAND_COUNTS["critical"]) - 1)
     children = []
-    for name, rank, about in _BANDS:
+    for name, rank, _ in _BANDS:
         count = _BAND_COUNTS[name][phase]
         children.append(CheckResult(
             _band_code(name, count),
             list(_BAND_FINDINGS[name][:count]),
-            name=name, title=name.capitalize(), about=about, order=rank,
+            name=name, order=rank,
             report=f"{count} open finding{'' if count == 1 else 's'} "
                    f"in this band."))
     return CheckResult(StatusCode.OK, children=tuple(children),
@@ -406,7 +444,11 @@ class DemoCheck(Check):
     def __init__(self, *, scenario: str = "escalate",
                  period: float = _DEFAULT_PERIOD, entries: bool = False,
                  **kwargs: Any) -> None:
-        super().__init__(**kwargs)
+        # The band labels this type ships, declared for the library to resolve
+        # (ADR-0025). Every scenario declares them, and only the `severity` one
+        # emits children by those names — a declaration for a name a run never
+        # produces is inert, which is what lets one type declare for all of them.
+        super().__init__(subnode_defaults=_BAND_LABELS, **kwargs)
         self.scenario = scenario
         # `entries: true` reads a prose scenario's reason list as **members**
         # instead (ADR-0036) — a harness knob, not a model change: it exists so one

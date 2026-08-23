@@ -995,6 +995,87 @@ class DeclaredRankTests(TestCase):
         self.assertEqual([c.name for c in branch.children], ["y", "x"])
 
 
+class ShowWhenQuietTests(TestCase):
+    """A node may decline the density trade — ADR-0063, in the tree.
+
+    Display metadata like `about` / `title` / `order`: seeded at startup from the
+    configuration, filled from a running `CheckResult` only where nothing is set,
+    and never a status event. What is its own is the **tri-state**, which every
+    test here turns on: `None` is nobody-said and `False` is a statement.
+    """
+
+    def test_unstated_is_none_not_false(self):
+        # The distinction the whole field rests on. Collapsing it to a bool would
+        # make every node a declaration of "ordinary", which nothing could fill.
+        tree = StatusTree()
+        tree.upsert("/aws/ec2", StatusCode.OK)
+        self.assertIsNone(tree.snapshot("/aws/ec2").show_when_quiet)
+
+    def test_a_check_fills_an_unset_field(self):
+        tree = StatusTree()
+        tree.upsert("/aws/ec2", StatusCode.OK, show_when_quiet=True)
+        self.assertIs(tree.snapshot("/aws/ec2").show_when_quiet, True)
+
+    def test_a_check_may_state_false_and_it_is_stored_as_a_statement(self):
+        tree = StatusTree()
+        tree.upsert("/aws/batch", StatusCode.OK, show_when_quiet=False)
+        self.assertIs(tree.snapshot("/aws/batch").show_when_quiet, False)
+
+    def test_a_seeded_false_is_not_filled_over_by_a_check_s_true(self):
+        # The sentence the tri-state exists for: a deployment writing
+        # `show_when_quiet: false` in nodes.yaml declines a claim the check type
+        # ships, and the next tick must not take it back.
+        tree = StatusTree()
+        tree.set_show_when_quiet("/aws/ec2", False)
+        tree.upsert("/aws/ec2", StatusCode.OK, show_when_quiet=True)
+        self.assertIs(tree.snapshot("/aws/ec2").show_when_quiet, False)
+
+    def test_a_seeded_true_survives_a_check_saying_nothing(self):
+        tree = StatusTree()
+        tree.set_show_when_quiet("/aws/ec2", True)
+        tree.upsert("/aws/ec2", StatusCode.OK)
+        self.assertIs(tree.snapshot("/aws/ec2").show_when_quiet, True)
+
+    def test_the_fill_freezes_at_the_first_tick(self):
+        # Seed-time, like the labels: a changed declaration is a restart.
+        tree = StatusTree()
+        tree.upsert("/aws/ec2", StatusCode.OK, show_when_quiet=True)
+        tree.upsert("/aws/ec2", StatusCode.OK, show_when_quiet=False)
+        self.assertIs(tree.snapshot("/aws/ec2").show_when_quiet, True)
+
+    def test_seeding_auto_creates_the_node(self):
+        # Like set_about: a declaration may name a container no check has built.
+        tree = StatusTree()
+        tree.set_show_when_quiet("/aws/ec2", True)
+        self.assertIs(tree.snapshot("/aws/ec2").show_when_quiet, True)
+
+    def test_declaring_it_is_never_a_status_event(self):
+        # Display metadata, not status (ADR-0013's grammar).
+        tree = StatusTree()
+        tree.upsert("/aws/ec2", StatusCode.OK)
+        before = len(tree.recent_events())
+        tree.set_show_when_quiet("/aws/ec2", True)
+        tree.upsert("/aws/ec2", StatusCode.OK, show_when_quiet=False)
+        self.assertEqual(len(tree.recent_events()), before)
+
+    def test_it_changes_no_status_anywhere(self):
+        tree = StatusTree()
+        tree.upsert("/aws/ec2", StatusCode.OK, show_when_quiet=True)
+        tree.upsert("/aws/batch", StatusCode.WARN, "queue backed up")
+        self.assertEqual(tree.snapshot("/aws").code, StatusCode.WARN)
+        self.assertEqual(tree.snapshot("/aws/ec2").code, StatusCode.OK)
+
+    def test_the_declaration_does_not_cascade_to_children(self):
+        # Per node, deliberately (ADR-0063): a declared container keeps its own
+        # box and its quiet leaves chip as usual unless declared themselves.
+        tree = StatusTree()
+        tree.upsert("/aws/ec2", StatusCode.OK, show_when_quiet=True)
+        tree.upsert("/aws/ec2/eu-west-1", StatusCode.OK)
+        child = tree.snapshot("/aws/ec2").children[0]
+        self.assertEqual(child.name, "eu-west-1")
+        self.assertIsNone(child.show_when_quiet)
+
+
 class MaintenancePersistenceTests(TestCase):
     def _entry(self, expires_at, *, reason="planned", set_by="ada"):
         now = datetime.now().isoformat()

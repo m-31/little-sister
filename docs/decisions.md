@@ -945,6 +945,15 @@ that carried no slot at all. A quiet leaf stays a chip and carries none. Nothing
 about the seam changes; this widens the roster's `where`, which is part of the
 version contract, so it is recorded rather than left to the template.
 
+*Amended 2026-08-16 — the rail veils what it overlays.* In a card head the
+`node.actions` rail is positioned **over** the title's space — a chip is something to
+click, a title is a nicety — and a chip is transparent so it reads on every status
+fill; together those drew both sets of glyphs into the same pixels. Every card and
+node box now declares its fill as **`--ls-surface`**, and the rail repaints that exact
+fill beneath its chips while they are showing, the title fading into it; a card at
+rest keeps its whole title. Presentation only — no context, filler, markup or
+placement change — and no ink meets a new background, so every measured pair holds.
+
 *Amended 2026-08-15 — `line`, and what a provider is handed.* `reason.actions`
 gains the context name **`line`**: the whole reason entry, carrying the **slug** an
 action needs to address one finding, plus its own code, its `running` flag and any
@@ -1623,6 +1632,24 @@ have given one predicate two answers for a case no shipped band is.
 
 → Full record: [`adr/0061-decoration-is-not-a-label.md`](adr/0061-decoration-is-not-a-label.md)
 
+### ADR-0062 — Navigation chrome is layout behavior, not a preference
+**Q:** Keeping navigation reachable on a long page opens two choices that CSS cannot
+make: does pinned chrome become another key in ADR-0029's presentation cookie, and
+should a short window unpin it when the navigation is taller than the viewport?
+
+**A:** **Pinning belongs to the interactive layouts and is not another preference.**
+The viewer already chooses rail or top bar; keeping that chosen arrangement reachable
+while its page scrolls is behavior of the layout, so the cookie and settings menu gain
+no switch. A short window keeps the chrome pinned and scrolls only its constrained
+child — rail, expanded section list, or settings dropdown — while the window remains
+the document scroll container and kiosk stays untouched. CSS supplies safe no-script
+geometry; `rail.js` refines both the rendered border box and the first row's viewport
+budget. Content-anchored
+reason editors slide behind the chrome; viewport-positioned maintenance and inspection
+popovers stay above it.
+
+→ Full record: [`adr/0062-navigation-chrome-is-layout-behavior.md`](adr/0062-navigation-chrome-is-layout-behavior.md)
+
 ### ADR-0060 — A line makes no claim; the node says it could not look
 **Q:** `UNDEFINED` meant *nobody has reported this node yet*, and ADR-0042 then let a
 check hand a line that same code **on purpose** — *this line makes no claim*. Two
@@ -1696,3 +1723,101 @@ place they touch.
 
 → Full record: [`adr/0058-transport-policy-vocabulary.md`](adr/0058-transport-policy-vocabulary.md)
 
+### ADR-0063 — A node may decline the density trade (`show_when_quiet`)
+**Q:** The dense view compacts every quiet node the same way — a leaf to a chip, surplus
+boxes behind *+N more* — and ADR-0056 names the cost honestly: a chip trades at-a-glance
+quiet reason text for density. For most nodes quiet text is diagnostic and the trade is
+free, but an inventory-shaped node (the `aws` check's `ec2` aspect: one line per instance
+name, a count, the oldest age) is read *because* everything is fine — in dense view its
+lines were visible only beside an error. A check can already say "my quiet lines are
+noise" (`show_healthy: false` drops them at the source); where does the opposite claim —
+*my quiet lines are the payload* — live: with the check, or with the viewer?
+
+**A:** **With the node, as display metadata — the viewer keeps the mode, the node states
+its nature, and the deployment's half is read by the library.** A new optional boolean,
+`show_when_quiet`, rides the labels' lattice exactly: `nodes.yaml` per path
+**>** the deployment's `subnodes:` block in the check's YAML **>** the type's declared
+default — `show_when_quiet` beside `title` / `about` in the same `subnode_defaults`
+entry, so a roster aspect is declared once where its label is — **>** the stamped value
+on a child `CheckResult`, the dynamic-child channel, **>** unstated (inline on the root,
+whose result copy is ignored), seed-once / fill-empty — and **tri-state**, so a stated
+`false` occupies the field where a declared or stamped `true` cannot fill over it. The
+`subnodes:` key is a **common
+field**: `_parse_common` reads it for every type and the engine applies it per subnode
+*name*, at any depth, so a deployment can declare it for **any installed branch check**
+by editing its own YAML — no plugin release, and no reader on the check-authoring
+surface, where a per-type call would have made support invisible (the first type to skip
+it leaves the key parsing cleanly and doing nothing). The labels needed their defaults
+declared as data first and follow by ADR-0025's 2026-08-19 update; the block's *shape*
+is base-validated on every type, so a malformed one fails fast. In the dense view a
+declared node is exempt the way warn/error already is: **never a chip, never a fold
+candidate** — one exemption without the other would hide more than the chip did. It is
+display metadata and nothing else: no event, no aggregation, no freshness; *hide idle*
+still hides it, because that filter is the viewer explicitly asking for problems only; no
+cookie key (ADR-0029's boundary — the cookie changes how the page looks, this changes what
+a node shows); no envelope change (ADR-0008), a client drawing its own chips being
+entitled to its own decision (ADR-0061). Position cannot move: chip-versus-box painting
+was never a flow-profile input and the model already prices every node as a full box
+(ADR-0056). Named for the claim, not the widget — `no_chip` would be one template's
+condition riding in the tree, on the wrong side of the line that rejected a `wide:` hint
+in `nodes.yaml`.
+
+→ Full record: [`adr/0063-declining-the-density-trade.md`](adr/0063-declining-the-density-trade.md)
+
+### ADR-0025 (2026-08-19 update) — The `subnodes` labels join the library-read block
+**Q:** ADR-0063 made the `subnodes:` block's flag a common field the library reads for
+every check type, and the labels stayed check-mediated on the argument that layering them
+needs the type's own default text and tokens. That argument is contingent, not principled
+— it holds only while the defaults live as *code the check applies*. Why not declare them
+as data and let the library read the whole block?
+
+**A:** **Exactly that: the library reads, a check only declares.** A type states
+`subnode_defaults` (`name → {title, about, show_when_quiet}` — the shipped per-aspect
+maps shaped like the block itself, promoted from
+convention to declaration) and `label_tokens` (`token → value`) as common constructor
+keywords beside the flag's map; the library resolves each field once — configured text
+when present, else the declared default, `{default}` substituted and `{token}`s expanded
+by the same plain replace — and the engine stores the resolved text per child name, at
+any depth. A result-carried label or flag remains only the fallback for a name nothing
+declared or configured, so a check stamping a dynamic child keeps working; `nodes.yaml`,
+seeded first, still wins per field, and labels still freeze at the first fill — which
+now pins tokens to construction-time facts structurally. `parse_subnodes`, `resolve_text` and
+`expand_tokens` lose their external callers and retire from the authoring facade — a
+**breaking** surface change taken deliberately, with every consumer family-owned and
+moving in lockstep, no compatibility window, said at the top of the release notes. Two
+holes close: a `subnodes:` label on a type that never read the block was a silent no-op
+and now reaches every branch type; and substitution becomes one library contract — plain
+`str.replace`, token values inserted as Markdown-active text with raw HTML escaped at
+render (ADR-0018), so a check exposes only values it would print as Markdown. The
+per-leaf `descriptions:` map is untouched (a different field, write-through).
+
+→ Full record: [`adr/0025-check-provided-subnode-metadata.md`](adr/0025-check-provided-subnode-metadata.md)
+
+### ADR-0064 — A secret resolver is a registration like the others
+**Q:** `secrets.register_resolver()` is one of the five seams a package reaches an
+instance through, and is held to none of their rules: it records no registering
+package, it is absent from `/system`, and a second claim on a scheme silently
+replaces the first where a second `type:` claim refuses naming both. Which of those
+is right, now that a package — not only a deployment — can claim a scheme?
+
+**A:** **All three change; the seam becomes a registration in full.** A claim
+records the package that made it, inferred from the call site as
+`register_aspect`'s is, and the resolver travels *with* its provenance in one record
+per scheme rather than beside it in a table that can disagree. A second claim from a
+**different** package **refuses at startup** naming both and the scheme — ADR-0051's
+rule for ADR-0051's reason, because a scheme says where a credential is read from
+and import order must not decide it; the same package registering again replaces
+silently, which is a reloading server re-running its own registrations. Replacing
+somebody else's scheme stays available and is **said out loud** — `replace=True` —
+which keeps ADR-0023's promise that a deployment may substitute its own `env`
+implementation while stopping it from happening by accident; a deployment is not
+structurally distinguishable from a package, so an inferred *"the deployment wins"*
+would refuse the very case it exists to allow. What was replaced is remembered and
+shown, being the one fact the outcome cannot reveal. `/system` prints the seam
+twice: `secret <scheme>://` on each package's inventory row, and the **whole** scheme
+list with its owners — built-in `env` included, unlike the aspects line — because the
+schemes are additive and the full list is the only answer to what a config field may
+say. `little_sister.secrets` is not on the check-authoring surface, so the epoch does
+not move.
+
+→ Full record: [`adr/0064-the-resolver-is-a-registration.md`](adr/0064-the-resolver-is-a-registration.md)

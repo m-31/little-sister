@@ -3,13 +3,13 @@
 The web surface has to hold its shape against **extremes**, not just the friendly
 local tree — a card drowning in a hundred linked reasons, a 200-line `code()`
 block, a tree eight levels deep, a node that falls silent — and it has to hold it
-in every theme. Four dev-only harnesses under `tests/` let you see the GUI under
+in every theme. Five dev-only harnesses under `tests/` let you see the GUI under
 synthetic scenarios **without a real deployment**: a **static fixture sheet** for
 judging layout (the fast loop), a **live demo** for the dynamics a static page
 can't show, a **render matrix** that shoots `/links` across the theme roster, and
-a **contrast sweep** that measures what the eye cannot judge. All render the
-*real* templates, so a variant that looks right here is most of the
-implementation.
+a **contrast sweep** that measures what the eye cannot judge, plus **browser
+boundary checks** for layout claims paint has to prove. All render the *real*
+templates, so a variant that looks right here is most of the implementation.
 
 ---
 
@@ -111,7 +111,12 @@ time:
   root's *Cloud posture* survives because it says something the name does not. Drop
   the `order=` arguments in `tests/demo_check.py` and the row falls back to
   alphabetical, which is the demonstration *and* the proof that a check declaring
-  nothing is unaffected.
+  nothing is unaffected. One band is not a chip at all: `informational` declares
+  `show_when_quiet` ([ADR-0063](adr/0063-declining-the-density-trade.md)), so it
+  keeps its box and its four inventory lines beside four siblings that collapse —
+  the band whose text is read *because* nothing is wrong, no longer visible only
+  when something is. Point `_SHOW_WHEN_QUIET` at another band and the box moves;
+  empty it and the whole card chips again.
 - **reviews** — a small queue of pull requests waiting for a reviewer, whose reasons
   are a keyed **mapping**. Never empty, never more than six lines, and re-worded on
   every run.
@@ -472,21 +477,50 @@ and again on the member leaf page.
 
 ---
 
-## Mode 5 — the browser boundary checks (layout, against paint)
+## Mode 5 — the browser boundary checks (layout and chrome, against paint)
 
-The other four modes are for *looking*; the layout model
+The other four modes are for *looking*; some layout claims need measurements.
+The stable-flow model
 ([ADR-0056](adr/0056-stable-useful-dashboard-flow.md)) needs one thing looking
 cannot give: proof that the widths it publishes are the widths Chromium acts on.
-`tests/test_dashboard_browser.py` renders two fixture pages through the real
+`tests/test_dashboard_browser.py` renders four fixture pages through the real
 templates and drives headless Chromium across a boundary one pixel at a time —
 the outer-track snap must paint flat, and the model's nested column flip must
-land within a pixel of the painted one. Both claims have been wrong before, and
-neither is visible in a screenshot.
+land within a pixel of the painted one. It also renders a genuinely tall wall in
+a short viewport: both interactive layouts keep their bar at the top while the
+window scrolls; the rail occupies and scrolls within the exact space below it;
+the settings menu's last layout choice remains reachable; and a border-box height
+change proves the measured rail offset follows the rendered bar rather than a
+constant. The CSS-only path proves the seeded offset plus the rail's inset still
+clears the rendered bar, then checks the control and anchor positions. A narrow case
+enlarges the first row, proves its measured viewport budget, opens the collapsed
+sections, scrolls to their last entry, then opens the settings menu and reaches its
+last layout choice. A reason editor scrolled into the bar proves content panels paint
+beneath the chrome. These claims have all been wrong before, and none is visible in
+one screenshot.
+
+The same module carries one claim that is about **paint alone**: an action chip laid
+over a node's title must not read through to it
+([ADR-0034](adr/0034-template-slots-for-dependent-packages.md)). It is measured by
+comparing the pixels inside a chip with the title in place and with it hidden — the
+same image while the chip is showing, and a *different* one on a card at rest, which
+is what keeps the first comparison from passing on a blind measurement or on a veil
+that never lifts. That page is not on the fixture sheet: the sheet registers no
+filler, so it has no chip to collide with anything, which is how the collision
+shipped. The check builds its own page through the same `render_page` pipeline, with
+the demo package filling the real slot.
 
 This is the one harness the ordinary gate does **not** run: it needs a browser
-download, and it skips cleanly without one, so `pytest` stays a fast, offline
-gate. Run it explicitly when the layout model, `dashboard-layout.js`, the card
-templates or the grid's stylesheet rules change:
+download. Without Playwright or Chromium the whole module skips. Its two stable-flow
+boundary checks abort every jsDelivr request before their first navigation, assert
+that Bootstrap CSS was among the intercepted requests, and compare a consistently
+unstyled render. Each chrome test declares whether it needs Bootstrap CSS or its
+behavior bundle; the harness probes those exact URLs in a blank page and skips only
+the affected test when that asset is directly unavailable. Fixture navigation waits
+for the DOM and the specific Bootstrap condition, not for unrelated tail scripts
+such as Floating UI. Run it explicitly when the layout model,
+`dashboard-layout.js`, `rail.js`, the shell or card templates, or the grid/chrome
+stylesheet rules change:
 
 ```
 uv sync --group browser

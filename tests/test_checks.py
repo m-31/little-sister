@@ -4,6 +4,7 @@ import time
 import unittest
 from email.message import Message
 from pathlib import Path
+from typing import ClassVar
 from unittest import TestCase, mock
 
 from little_sister.checks import (
@@ -639,6 +640,208 @@ class InlineAboutTests(TestCase):
                 {"type": "http", "path": "/web", "url": "http://x",
                  "order": "soon"}, HERE)
         self.assertIn("whole number", str(caught.exception))
+
+    def test_show_when_quiet_is_parsed_beside_the_labels(self):
+        # The check root's own declaration (ADR-0063): this node's quiet lines are
+        # still information. It sits in the file that already states its title and
+        # about, which is why the *result*'s copy is ignored on the root.
+        check = HttpCheck.from_config(
+            {"type": "http", "path": "/aws/ec2", "url": "http://x",
+             "show_when_quiet": True}, HERE)
+        self.assertIs(check.show_when_quiet, True)
+
+    def test_show_when_quiet_defaults_to_unstated_and_a_written_false_does_not(self):
+        bare = HttpCheck.from_config(
+            {"type": "http", "path": "/web", "url": "http://x"}, HERE)
+        self.assertIsNone(bare.show_when_quiet)
+        stated = HttpCheck.from_config(
+            {"type": "http", "path": "/web", "url": "http://x",
+             "show_when_quiet": False}, HERE)
+        self.assertIs(stated.show_when_quiet, False)   # a statement, not silence
+
+    def test_a_non_boolean_show_when_quiet_fails_the_load(self):
+        with self.assertRaises(CheckError) as caught:
+            HttpCheck.from_config(
+                {"type": "http", "path": "/web", "url": "http://x",
+                 "show_when_quiet": "false"}, HERE)
+        self.assertIn("true or false", str(caught.exception))
+
+    def test_the_subnodes_flag_is_parsed_into_every_type(self):
+        # The deployment's per-subnode declarations are a common field the
+        # library reads (ADR-0063): an `http` check has no children and no
+        # subnodes code of its own, and the map still lands — which is what
+        # lets a deployment state the key for any installed branch type
+        # without that type changing.
+        check = HttpCheck.from_config(
+            {"type": "http", "path": "/aws", "url": "http://x",
+             "subnodes": {"ec2": {"show_when_quiet": True},
+                          "batch": {"about": "no flag stated here"}}}, HERE)
+        self.assertEqual(check.subnode_show_when_quiet, {"ec2": True})
+
+    def test_a_malformed_subnodes_flag_fails_the_load_on_any_type(self):
+        # The block's shape is the library's to validate, so a quoted boolean
+        # fails fast even on a type that never reads `subnodes:` itself.
+        with self.assertRaises(CheckError) as caught:
+            HttpCheck.from_config(
+                {"type": "http", "path": "/aws", "url": "http://x",
+                 "subnodes": {"ec2": {"show_when_quiet": "yes"}}}, HERE)
+        self.assertIn("subnodes.ec2.show_when_quiet", str(caught.exception))
+
+
+class _DeclaringCheck(Check):
+    """A branch type that **declares** its subnode labels and one token, the way
+    ADR-0025's 2026-08-19 update says a type states them: two common constructor
+    keywords, no reading and no layering of its own."""
+
+    DEFAULTS: ClassVar[dict[str, dict[str, str]]] = {
+        "disk": {"title": "Disk", "about": "Volumes on {host}."},
+        "memory": {"about": "RAM in use."}}
+
+    def __init__(self, **kwargs: object) -> None:
+        super().__init__(subnode_defaults=self.DEFAULTS,      # type: ignore[arg-type]
+                         label_tokens={"host": "alpha"}, **kwargs)
+
+    def run(self) -> CheckResult:
+        return CheckResult(StatusCode.OK)
+
+
+def _declaring(defaults: dict, **config: object) -> Check:
+    """A check type that declares `defaults`, built from `config` like any other.
+
+    Written as a factory because what is under test is the *declaration* — a fact
+    about a type, not a value a config can set — so each case needs a type of its
+    own rather than a keyword.
+    """
+    class _Declared(Check):
+        def __init__(self, **kwargs: object) -> None:
+            super().__init__(subnode_defaults=defaults,   # type: ignore[arg-type]
+                             **kwargs)                    # type: ignore[arg-type]
+
+        def run(self) -> CheckResult:
+            return CheckResult(StatusCode.OK)
+
+    return _Declared.from_config({"type": "x", "path": "/host", **config}, HERE)
+
+
+class DeclaredShowWhenQuietTests(TestCase):
+    """A type declares the flag in the same entry that declares its labels, and
+    the deployment's `subnodes:` block is merged over it (ADR-0063 §2-§3).
+
+    The merged map is what the engine already reads, so these read it where it is
+    made — on the check. What the engine then does with it is `test_engine.py`.
+    """
+
+    ROSTER: ClassVar[dict[str, dict[str, object]]] = {
+        "ec2": {"about": "The instances.", "show_when_quiet": True},
+        "batch": {"about": "The queues."}}
+
+    def test_a_declaration_alone_reaches_the_map(self):
+        check = _declaring(self.ROSTER)
+        self.assertEqual(check.subnode_show_when_quiet, {"ec2": True})
+
+    def test_a_name_that_declares_only_labels_stays_absent(self):
+        # Absence is the tri-state's third value: a type declaring text must not
+        # be declaring `false` by accident, or it would shut out a stamped value.
+        check = _declaring(self.ROSTER)
+        self.assertNotIn("batch", check.subnode_show_when_quiet)
+        # …and the labels of both names still resolve, from the same entries.
+        self.assertEqual(check.subnode_labels["batch"]["about"], "The queues.")
+        self.assertEqual(check.subnode_labels["ec2"]["about"], "The instances.")
+
+    def test_the_blocks_false_beats_the_declared_true(self):
+        # Deployment file over package code, per name — the same direction as
+        # every other rung of this lattice.
+        check = _declaring(self.ROSTER,
+                           subnodes={"ec2": {"show_when_quiet": False}})
+        self.assertEqual(check.subnode_show_when_quiet, {"ec2": False})
+
+    def test_the_block_may_add_a_name_the_type_said_nothing_about(self):
+        check = _declaring(self.ROSTER,
+                           subnodes={"batch": {"show_when_quiet": True}})
+        self.assertEqual(check.subnode_show_when_quiet,
+                         {"ec2": True, "batch": True})
+
+    def test_a_non_boolean_declaration_refuses_the_load(self):
+        # `bool("false")` is `True`, so a quoted boolean in a *declaration* would
+        # switch a node on while the package's source says off. It is refused like
+        # the config key's, and the message names the subnode.
+        with self.assertRaises(CheckError) as caught:
+            _declaring({"ec2": {"show_when_quiet": "true"}})
+        self.assertIn("subnode_defaults.ec2.show_when_quiet",
+                      str(caught.exception))
+        self.assertIn("true or false", str(caught.exception))
+
+    def test_a_type_that_declares_no_flag_is_unchanged(self):
+        check = _declaring({"ec2": {"about": "The instances."}})
+        self.assertEqual(check.subnode_show_when_quiet, {})
+
+
+class SubnodeLabelTests(TestCase):
+    """The resolution table (ADR-0025, update 2026-08-19): what each named
+    subnode's `title` / `about` finally reads, resolved once at construction from
+    what the type declared and what the deployment's `subnodes:` block says."""
+
+    def _check(self, **config: object) -> Check:
+        return _DeclaringCheck.from_config(
+            {"type": "x", "path": "/host", **config}, HERE)
+
+    def test_a_declaration_alone_resolves(self):
+        labels = self._check().subnode_labels
+        self.assertEqual(labels["memory"], {"about": "RAM in use."})
+
+    def test_a_declared_token_expands(self):
+        # The type's own value, in its own text — the `{token}` half.
+        self.assertEqual(self._check().subnode_labels["disk"]["about"],
+                         "Volumes on alpha.")
+
+    def test_the_config_beats_the_declaration_per_field(self):
+        labels = self._check(subnodes={"disk": {"about": "The NVMe only."}}
+                             ).subnode_labels
+        self.assertEqual(labels["disk"],
+                         {"title": "Disk", "about": "The NVMe only."})
+
+    def test_the_config_may_extend_the_declaration(self):
+        # `{default}` puts the shipped text back inside the deployment's own,
+        # and the token inside *that* still expands.
+        labels = self._check(
+            subnodes={"disk": {"about": "{default} Ask #storage first."}}
+        ).subnode_labels
+        self.assertEqual(labels["disk"]["about"],
+                         "Volumes on alpha. Ask #storage first.")
+
+    def test_a_token_in_the_configured_text_expands_too(self):
+        labels = self._check(subnodes={"memory": {"title": "RAM on {host}"}}
+                             ).subnode_labels
+        self.assertEqual(labels["memory"]["title"], "RAM on alpha")
+
+    def test_a_name_the_type_never_declared_still_resolves(self):
+        # The hole this update closes: a `subnodes:` label written against a type
+        # that had no reader used to be a silent no-op.
+        labels = self._check(subnodes={"lambda": {"about": "Functions."}}
+                             ).subnode_labels
+        self.assertEqual(labels["lambda"], {"about": "Functions."})
+
+    def test_a_field_nobody_stated_is_absent_rather_than_empty(self):
+        # Absent is not the same as empty one layer up: the engine reads the
+        # child result's own label exactly where this map is silent, which is
+        # what keeps a dynamically named child labelled by its check.
+        labels = self._check().subnode_labels
+        self.assertNotIn("title", labels["memory"])
+        self.assertNotIn("lambda", labels)
+
+    def test_a_type_that_declares_nothing_has_the_blocks_labels(self):
+        # Every type gets the reader, exactly as it gets the flag's.
+        check = HttpCheck.from_config(
+            {"type": "http", "path": "/aws", "url": "http://x",
+             "subnodes": {"ec2": {"title": "EC2", "show_when_quiet": True}}}, HERE)
+        self.assertEqual(check.subnode_labels, {"ec2": {"title": "EC2"}})
+
+    def test_the_flag_stays_out_of_the_label_map(self):
+        # Two readers over one block: a boolean must not arrive among the strings.
+        check = self._check(subnodes={"disk": {"show_when_quiet": True}})
+        self.assertEqual(check.subnode_labels["disk"],
+                         {"title": "Disk", "about": "Volumes on alpha."})
+        self.assertEqual(check.subnode_show_when_quiet, {"disk": True})
 
 
 if __name__ == '__main__':

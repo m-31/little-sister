@@ -78,6 +78,27 @@
 > §11 of `architecture.md` names as part of the version contract, so it is recorded
 > here rather than left to the template.
 
+> **Update (2026-08-16):** the `node.actions` rail in a card head **veils what it
+> overlays**. It is positioned over the title's space deliberately — a chip is
+> something to click, a title is a nicety — and a chip is deliberately transparent,
+> inking in `currentColor` so it reads on every status fill. Two right decisions drew
+> both sets of glyphs into the same pixels: a deployment's `+ Jira` landed in the
+> middle of the word *analysis* and neither could be read. So every card and node box
+> now declares its fill as `--ls-surface` and paints from that token, and the rail
+> repaints that exact fill beneath its chips — the title dissolving into it across a
+> short gradient rather than being sliced mid-letter. Only while the chips are
+> showing, by the same conditions that show them: a card at rest offers nothing to
+> click and keeps every pixel of its title.
+>
+> Presentation only: no context name, no filler, no markup and no placement changes,
+> and the `reason.actions` rail — which floats beside its line and overlaps nothing —
+> is untouched. Because the fill under a chip is the fill the chip was already sitting
+> on, no ink meets a new background: every pair `test_contrast.py` measures is
+> unchanged. The claim is about paint, so it is checked in paint
+> (`tests/test_dashboard_browser.py`): the pixels inside a shown chip are the same
+> image with the title there and with it hidden, and — the counterpart that keeps the
+> first honest — a *different* image on a card at rest.
+
 ## Context
 
 little-sister is a library; the real deployment lives in a private repository that

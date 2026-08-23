@@ -2,13 +2,20 @@
 ``scheme://address``-always grammar that keeps a pasted secret out of the lookup,
 the ``secrets:`` config block, the check base's resolve-at-construction split
 (malformed = loud ``CheckError``, unresolvable = recorded), and the engine's
-pinned-ERROR path."""
+pinned-ERROR path.
+
+The registry is also a **registration seam** held to the seam rules (ADR-0064):
+a claim records the package that made it, a second claim from another package
+refuses, and replacing somebody else's scheme is said out loud.
+"""
 from __future__ import annotations
 
 import os
 import unittest
+from collections.abc import Callable
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import FunctionType
 from typing import Any
 from unittest import TestCase, mock
 
@@ -16,11 +23,44 @@ from little_sister import secrets
 from little_sister.checks import CheckError, CheckResult, load_checks
 from little_sister.checks.base import CHECK_TYPES, Check, parse_secret_refs
 from little_sister.engine import Engine
+from little_sister.secrets import register_resolver
 from little_sister.status import StatusCode
 from little_sister.tree import StatusTree
 
 TOKEN_ENV = "LS_TEST_SECRET"
 TOKEN_REF = f"env://{TOKEN_ENV}"
+
+
+def _claim(scheme: str, resolver: secrets.Resolver, **kwargs: Any) -> None:
+    """The one line an installed package's registration module runs.
+
+    Only its **globals** travel: :func:`_from_package` rebinds this body to a
+    namespace named after some other package, which is exactly what the registry
+    reads — the calling frame's ``__name__``. Faking the module rather than the
+    answer keeps the inference itself under test; a test that patched
+    ``calling_package`` would pass against a registry that never called it.
+    """
+    register_resolver(scheme, resolver, **kwargs)
+
+
+def _from_module(module: str) -> Callable[..., None]:
+    """:func:`_claim` as a module of that exact name would call it."""
+    return FunctionType(_claim.__code__,
+                        {"__name__": module,
+                         "register_resolver": register_resolver})
+
+
+def _from_package(package: str) -> Callable[..., None]:
+    """:func:`_claim` as *package*'s own registration **submodule** would call it —
+    a package registers from somewhere inside itself, and what is recorded is the
+    installation, not the file."""
+    return _from_module(f"{package}.registrations")
+
+
+#: This test module's own package, which is what the registry infers for a bare
+#: ``secrets.register_resolver(...)`` call below — the deployment-registers-its-own
+#: case, spelled the way the registry spells it.
+HERE = "tests"
 
 
 class _SecretCheck(Check):
@@ -120,10 +160,131 @@ class ResolveTests(_IsolatedCase):
         with self.assertRaises(ValueError):
             secrets.register_resolver("  ", lambda address: "v")
 
-    def test_reregistering_replaces_the_resolver(self):
+    def test_the_same_package_registering_again_replaces_the_resolver(self):
+        # Not last-wins any more (ADR-0064) — last-wins *within one package*,
+        # which is the reloading server re-running its own registrations.
         secrets.register_resolver("fake", lambda address: "first")
         secrets.register_resolver("fake", lambda address: "second")
         self.assertEqual(secrets.resolve("fake://x"), "second")
+
+
+class RegistrySeamTests(_IsolatedCase):
+    """A scheme is claimed once, by a package that is named (ADR-0064).
+
+    The claim rules are the `type:` rules (little-sister ADR-0051) for the same
+    reason: a scheme decides which store a credential is read from, so a silent
+    last-wins would let import order hand one package's checks another package's
+    secrets.
+    """
+
+    def test_a_registration_names_the_package_that_made_it(self):
+        _from_package("other_package")("fake", lambda address: "v")
+        claimed = secrets._resolvers["fake"]
+        self.assertEqual(claimed.package, "other_package")
+        self.assertEqual(claimed.owner, "other_package")
+        self.assertFalse(claimed.builtin)
+        self.assertEqual(claimed.replaced, "")
+
+    def test_a_bare_call_names_the_calling_module_s_package(self):
+        secrets.register_resolver("fake", lambda address: "v")
+        self.assertEqual(secrets._resolvers["fake"].package, HERE)
+
+    def test_the_built_in_env_scheme_is_the_library_s(self):
+        claimed = secrets._resolvers["env"]
+        self.assertEqual(claimed.package, "little_sister")
+        self.assertTrue(claimed.builtin)
+
+    def test_registered_resolvers_are_listed_by_scheme(self):
+        _from_package("other_package")("zeta", lambda address: "v")
+        secrets.register_resolver("alpha", lambda address: "v")
+        listed = secrets.registered_resolvers()
+        self.assertEqual([row.scheme for row in listed],
+                         sorted(row.scheme for row in listed))
+        self.assertEqual({row.scheme for row in listed},
+                         {"alpha", "env", "zeta"})
+
+    def test_another_package_claiming_a_scheme_refuses(self):
+        _from_package("first_package")("fake", lambda address: "first")
+        with self.assertRaises(secrets.SchemeConflictError):
+            _from_package("second_package")("fake", lambda address: "second")
+
+    def test_the_refusal_names_both_packages_and_the_scheme(self):
+        _from_package("first_package")("fake", lambda address: "first")
+        with self.assertRaises(secrets.SchemeConflictError) as caught:
+            _from_package("second_package")("fake", lambda address: "second")
+        message = str(caught.exception)
+        self.assertIn("first_package", message)
+        self.assertIn("second_package", message)
+        self.assertIn("fake://", message)
+
+    def test_a_refused_claim_leaves_the_first_resolver_answering(self):
+        _from_package("first_package")("fake", lambda address: "first")
+        with self.assertRaises(secrets.SchemeConflictError):
+            _from_package("second_package")("fake", lambda address: "second")
+        self.assertEqual(secrets.resolve("fake://x"), "first")
+        self.assertEqual(secrets._resolvers["fake"].package, "first_package")
+
+    def test_case_and_padding_do_not_dodge_the_claim(self):
+        _from_package("first_package")("fake", lambda address: "first")
+        with self.assertRaises(secrets.SchemeConflictError):
+            _from_package("second_package")("  FaKe  ", lambda address: "second")
+
+    def test_a_deliberate_replacement_wins(self):
+        _from_package("first_package")("fake", lambda address: "first")
+        _from_package("second_package")("fake", lambda address: "second",
+                                        replace=True)
+        self.assertEqual(secrets.resolve("fake://x"), "second")
+
+    def test_a_replacement_records_whom_it_displaced(self):
+        _from_package("first_package")("fake", lambda address: "first")
+        _from_package("second_package")("fake", lambda address: "second",
+                                        replace=True)
+        claimed = secrets._resolvers["fake"]
+        self.assertEqual(claimed.package, "second_package")
+        self.assertEqual(claimed.replaced, "first_package")
+
+    def test_reloading_the_replacing_package_keeps_the_replacement(self):
+        # Re-importing the module that overrode a scheme must not quietly un-say
+        # that it overrode anything — the page would then show a plain claim.
+        _from_package("first_package")("fake", lambda address: "first")
+        second = _from_package("second_package")
+        second("fake", lambda address: "second", replace=True)
+        second("fake", lambda address: "again")
+        self.assertEqual(secrets.resolve("fake://x"), "again")
+        self.assertEqual(secrets._resolvers["fake"].replaced, "first_package")
+
+    def test_a_first_claim_replaces_nobody(self):
+        _from_package("first_package")("fake", lambda address: "v",
+                                       replace=True)
+        self.assertEqual(secrets._resolvers["fake"].replaced, "")
+
+    def test_a_deployment_may_still_replace_the_built_in_env(self):
+        # ADR-0023's promise, kept — now said out loud rather than by accident.
+        secrets.register_resolver("env", lambda name: "from-the-store",
+                                  replace=True)
+        self.assertEqual(secrets.resolve(TOKEN_REF), "from-the-store")
+        claimed = secrets._resolvers["env"]
+        self.assertEqual(claimed.package, HERE)
+        self.assertEqual(claimed.replaced, "little_sister")
+        self.assertFalse(claimed.builtin)
+
+    def test_replacing_env_by_accident_no_longer_happens(self):
+        with self.assertRaises(secrets.SchemeConflictError) as caught:
+            secrets.register_resolver("env", lambda name: "oops")
+        self.assertIn("little_sister", str(caught.exception))
+        self.assertIn(HERE, str(caught.exception))
+
+    def test_an_unidentified_caller_is_named_rather_than_left_blank(self):
+        # `__main__` is what *any* script is called when it is run directly, so it
+        # identifies no installation and the registry keeps nothing (origins.py).
+        # The page and the refusal still have to call it something.
+        claim = _from_module("__main__")
+        with self.assertRaises(secrets.SchemeConflictError) as caught:
+            claim("env", lambda name: "oops")
+        self.assertIn(secrets.UNIDENTIFIED, str(caught.exception))
+        claim("fake", lambda address: "v")
+        self.assertEqual(secrets._resolvers["fake"].package, "")
+        self.assertEqual(secrets._resolvers["fake"].owner, secrets.UNIDENTIFIED)
 
 
 class MissingSchemeTests(_IsolatedCase):

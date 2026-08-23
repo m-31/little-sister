@@ -14,6 +14,14 @@
 # rank has and a sort by live grade would not: watch the colors travel along a row
 # that stays put.
 #
+# One band is not a chip at all. `informational` declares `show_when_quiet`
+# (ADR-0063) from the check's code, so it keeps its box and its four inventory lines
+# while the other four bands collapse — the band whose lines are read *because*
+# nothing is wrong, no longer visible only when something is. The declaration is a
+# fact about that node's content, so it travels with the check; a deployment that
+# disagrees writes `show_when_quiet: false` under the band's path in `nodes.yaml`
+# and takes it back.
+#
 # The `order:` below is the **third** source ADR-0055 defines, and the one that is
 # easiest to miss: a rank stated inline, beside the `title:` and `about:` this file
 # already writes for the same node. It is negative, so this card leads `/security`

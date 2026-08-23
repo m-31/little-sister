@@ -96,6 +96,37 @@ class FlagTests(TestCase):
         self.assertIs(values.flag({}, "archived", default=True), True)
 
 
+class StrictFlagTests(TestCase):
+    """A switch in a configuration file, as against `flag`'s truthiness read."""
+
+    def test_reads_bools(self):
+        self.assertIs(values.strict_flag({"enabled": True}, "enabled"), True)
+        self.assertIs(values.strict_flag({"enabled": False}, "enabled"), False)
+
+    def test_absent_yields_the_default(self):
+        self.assertIs(values.strict_flag({}, "enabled"), False)
+        self.assertIs(values.strict_flag({}, "enabled", default=True), True)
+
+    def test_a_quoted_yaml_boolean_is_refused_rather_than_inverted(self):
+        # The whole reason this exists beside `flag`: `bool("false")` is True, so
+        # the lenient read switches the thing **on** while the config says off.
+        self.assertIs(values.flag({"enabled": "false"}, "enabled"), True)
+        with self.assertRaises(CheckError) as caught:
+            values.strict_flag({"enabled": "false"}, "enabled", where="aspect")
+        self.assertIn("aspect.enabled", str(caught.exception))
+        self.assertIn("true or false", str(caught.exception))
+
+    def test_a_number_is_refused_too(self):
+        for stated in (1, 0, 1.0, [], {}):
+            with self.subTest(stated=stated), self.assertRaises(CheckError):
+                values.strict_flag({"enabled": stated}, "enabled")
+
+    def test_walks_a_path_like_its_neighbours(self):
+        bag = {"subnodes": {"ec2": {"show_when_quiet": True}}}
+        self.assertIs(
+            values.strict_flag(bag, "subnodes", "ec2", "show_when_quiet"), True)
+
+
 class RowsTests(TestCase):
     def test_reads_a_list_of_bags(self):
         labels = values.rows(_PAYLOAD, "labels")

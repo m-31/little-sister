@@ -56,7 +56,7 @@ from little_sister.nodes import load_nodes, resolve_metadata, run_consistency_pa
 from little_sister.origins import PackageOrigin, package_origin
 from little_sister.paths import shown_path
 from little_sister.render import render_markdown, render_markdown_inline
-from little_sister.secrets import SecretError, resolve_setting
+from little_sister.secrets import SecretError, registered_resolvers, resolve_setting
 from little_sister.spans import coarse_span, format_duration, format_span
 from little_sister.status import HEARTBEAT_PATH, StatusCode
 from little_sister.titles import Labelled, label_parts, shown_title
@@ -1082,6 +1082,13 @@ def _seed_node_metadata(engine: Engine) -> None:
         # on any node that merely has an `about` (ADR-0055).
         if meta.order is not None:
             status_tree.set_order(path, meta.order)
+        # Likewise, and for the sharper case: a `false` here is a deployment
+        # declining a claim a check type ships, so it has to occupy the field —
+        # while seeding `None` as `False` would make every nodes.yaml entry a
+        # declaration and shut out the check on any node that merely has an
+        # `about` (ADR-0063).
+        if meta.show_when_quiet is not None:
+            status_tree.set_show_when_quiet(path, meta.show_when_quiet)
     run_consistency_pass(engine.checks, metadata)
 
 
@@ -1780,9 +1787,10 @@ def _registering_packages() -> list[PackageRow]:
     """Every package outside the library that registered anything, with where it
     was loaded from and what it contributed.
 
-    A package reaches this instance through four seams — a check type, a slot
-    filler, an asset, a configuration aspect (ADR-0051, ADR-0034, ADR-0037,
-    ADR-0035) — and until this card only the first reported a version, because the
+    A package reaches this instance through five seams — a check type, a slot
+    filler, an asset, a configuration aspect, a secret resolver (ADR-0051,
+    ADR-0034, ADR-0037, ADR-0035, ADR-0064) — and until this card only the first
+    reported a version, because the
     check-type roster is the one that carries an origin. So an extension that
     registers **no check type** was the one thing on the page whose release could
     not be read off the running instance at all: the seam tables name a package and
@@ -1816,6 +1824,13 @@ def _registering_packages() -> list[PackageRow]:
         # here rather than guessed; the extensions card still lists the name.
         if owner := aspect_owner(aspect):
             registers.setdefault(owner, set()).add(f"config/{aspect}")
+    for registration in registered_resolvers():
+        # Same rule: a resolver registered from `__main__` names no installation,
+        # so there is no row it could honestly join. The scheme list below still
+        # shows it, where the row is the scheme rather than the package.
+        if registration.package:
+            registers.setdefault(registration.package,
+                                 set()).add(f"secret {registration.scheme}://")
     return [PackageRow(origin=package_origin(package),
                        registers=tuple(sorted(registers[package])))
             for package in sorted(registers) if package != "little_sister"]
@@ -1837,10 +1852,11 @@ def system() -> ResponseReturnValue:
     else:
         # The extension seams, outside the polled fragment because they are
         # settled at startup and never change while the process runs: which
-        # package fills which template slot (ADR-0034) and which configuration
-        # aspects a dependent package added (ADR-0035). A seam nobody can see
-        # from the running instance is indistinguishable from one that silently
-        # did not take.
+        # package fills which template slot (ADR-0034), which configuration
+        # aspects a dependent package added (ADR-0035), and which package answers
+        # for each secret scheme (ADR-0064). A seam nobody can see from the
+        # running instance is indistinguishable from one that silently did not
+        # take.
         #
         # The check-type roster is here for that reason too, and one more: a type
         # may now be registered by a separately released package (ADR-0051), so
@@ -1863,6 +1879,7 @@ def system() -> ResponseReturnValue:
                                slot_fillers=slots.all_fillers(),
                                packages=_registering_packages(),
                                extra_aspects=aspects,
+                               resolvers=registered_resolvers(),
                                csp_header=CSP_HEADER,
                                csp_directives=csp_policy.directives)
     response = make_response(body)

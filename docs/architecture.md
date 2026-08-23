@@ -679,6 +679,21 @@ resolve (store unreachable, secret absent) is recorded on the check's
 check types takes a credential; the seam serves deployment checks (and later
 satellites).
 
+Registering is a **claim**, held to the rules of the other registration seams
+([ADR-0064](adr/0064-the-resolver-is-a-registration.md)): the registry records the
+package that made it — inferred from the call site, as a configuration aspect's
+registrant is — and a second claim on one scheme from a **different** package
+**refuses at startup** naming both, for the reason a duplicate `type:` name does
+(ADR-0051): a scheme says where a credential is read from, so import order must not
+be what decides it. The same package registering again replaces silently, which is a
+reloading server re-running its own registrations; replacing *another* package's
+scheme is available to whoever means it and says so — `replace=True` — which is how
+a deployment substitutes its own `env` implementation, and what it replaced is
+remembered. `/system` shows both halves: `secret <scheme>://` on the registering
+package's inventory row, and a table of every scheme with its owner — built-in `env`
+included, because the schemes are additive and the whole list is what a config field
+may say.
+
 **Node metadata** (`nodes.py`, [ADR-0012](adr/0012-node-metadata.md) /
 [ADR-0017](adr/0017-node-title.md)): a node's `about` (subject metadata, what it *is*)
 and `title` (a short display label) are seeded onto the tree **once at startup** via
@@ -689,17 +704,29 @@ declaration keyed by path (so it reaches container / host nodes no single check 
 directory — `config/nodes.yaml` in each root of the path-list, where a later root
 wins **per field** over an earlier one and the override is logged with both files
 named ([ADR-0031](adr/0031-deployment-config-directory.md)). It carries both fields
-per path (`path: {about: …, title: …}`; a bare string is `about`). For the **subnodes a branch check emits**, a child `CheckResult` may
-carry its own `about` / `title` — a third feed the engine applies at runtime
-([ADR-0025](adr/0025-check-provided-subnode-metadata.md)), so the per-field precedence
-there is `nodes.yaml` **>** check-provided **>** empty. Unlike the write-through
+per path (`path: {about: …, title: …}`; a bare string is `about`). For the **subnodes a
+branch check emits** the lattice grows two rungs
+([ADR-0025](adr/0025-check-provided-subnode-metadata.md)): `nodes.yaml` **>** the
+deployment's `subnodes:` block in the check's own YAML — **read by the library**, like
+the `show_when_quiet` beside it — **>** what the check *type* **declared**
+(`subnode_defaults`, `name → {title, about}`) **>** the `about` / `title` on the child
+`CheckResult` **>** empty. The middle two resolve **per field** in `Check.__init__`, once:
+the configured text when it says something, the declared default otherwise, with
+`{default}` substituted so a deployment can extend rather than replace and `{token}`s
+(`label_tokens`) expanded by a plain replace that leaves Markdown intact; the engine
+then writes the resolved text per subnode *name*, at any depth, exactly as it does the
+flag. The result's own label is read only where that map is silent for the name — the
+**dynamically named** child a run discovered (`host-metrics`' per-volume leaves), which
+no declaration could have anticipated. Unlike the write-through
 `description` / `config`, these **fill an empty field only**, and because the startup
 seed runs before the engine's first tick a `nodes.yaml` label is already present and
-wins; a check-provided label then freezes at first fill (stable identity — text that
-changes each run belongs in `reason`). This carries **type-inherent** subnode identity —
-`host-metrics` ships a per-aspect `about` for `ssh` / `disk` / `memory` / `cpu` / `load`
-— so a reusable branch check explains its leaves in every deployment without per-node
-`nodes.yaml` copy-paste. A
+wins; a filled label then freezes at first fill (stable identity — text that
+changes each run belongs in `reason`), which is also what pins a `{token}` to a
+construction-time fact. This carries **type-inherent** subnode identity —
+`host-metrics` declares a per-aspect `about` for `ssh` / `disk` / `memory` / `cpu` /
+`load` — so a reusable branch check explains its leaves in every deployment without
+per-node `nodes.yaml` copy-paste, and a deployment retunes one of them, for **any**
+installed branch type, without that type carrying a line of code for it. A
 **branch** check gives each leaf its own `description` through a `descriptions:` map
 keyed by leaf name, leaving the shared container's description empty. A startup
 **consistency pass** warns for an `about` path no check covers (the ADR-0014
@@ -718,6 +745,32 @@ rank by naming the default value, so the node's field is nullable while the snap
 is a plain `int`. A zeroed node sorts **with the unranked**, ahead of every positive
 rank; that is a rank, not a request for alphabetical, and returning a whole ranked set
 to the alphabet takes an `order: 0` per sibling.
+
+And a node may carry **`show_when_quiet`** — *this node's quiet lines are still
+information* ([ADR-0063](adr/0063-declining-the-density-trade.md)) — for the
+**inventory**-shaped aspect whose list is read precisely because everything is fine,
+and which the dense view would otherwise show only while a sibling was failing. It
+rides the labels' lattice **exactly**, which is what makes the `subnodes:` block one
+story: a `nodes.yaml` `show_when_quiet:` **>** the deployment's `subnodes:` block in
+the check's own YAML — **read by the library**, not by the check: `_parse_common`
+parses it for every type, so a deployment can state it for any installed branch check
+without that check changing — **>** the type's **declared default**, `show_when_quiet`
+in the same `subnode_defaults` entry that declares that subnode's labels, so an aspect
+that is a roster by construction is declared once in a package rather than once per
+node path in every installation **>** the value on a child `CheckResult`, the
+dynamic-child channel **>** unstated. `Check.__init__` merges the two declarations
+into one per-name map — the same place and the same moment the labels resolve — and
+the engine applies that map per subnode *name*, at any depth. The
+result's copy is root-ignored like `about` / `title`, because the root's own source
+is the inline `show_when_quiet:` key in the check's YAML. It is a **tri-state** for
+the reason `order` is nullable, sharpened: a stated `false` is a deployment declining
+a claim a check type ships for every installation, so it must occupy the field where
+a check's `true` cannot fill over it, and it stays `bool | None` all the way onto the
+snapshot. A non-boolean fails the load (`values.strict_flag`, so `"false"` in quotes
+cannot read as *on*) — for the inline key and for the block alike, on every type,
+since the block's shape is the library's to validate. What it does is painting and
+nothing else — §4.4 — and it is deliberately **not** in the JSON envelope, which is
+unchanged.
 
 **A title that only repeats the name is not drawn** (`titles.py`). Where a check has
 nothing better to say it hands back the name again with a capital letter, and a row of
@@ -1108,7 +1161,20 @@ raises rather than rendering blank):
   `static/js/rail.js` is the rail's counterpart — its burger swaps the collapsed
   icon rail for icons + labels, deliberately *not* remembered: collapsed is the
   layout's default and the burger is a peek, while presentation that is remembered
-  belongs to the one cookie.
+  belongs to the one cookie. Per [ADR-0062](adr/0062-navigation-chrome-is-layout-behavior.md),
+  pinning is behavior of both interactive layouts, not another preference. The bar
+  and rail are sticky while the **window remains the scroll container**, preserving
+  the viewport coordinate system used by the inspection and maintenance popovers.
+  CSS supplies safe scriptless geometry; the script observes the rendered border box
+  and publishes both its exact height and the non-section footprint of the first row.
+  It recognizes a wrapped section list from its position below the settings row,
+  without copying Bootstrap's breakpoint into JavaScript.
+  A short rail scrolls internally. Below the top bar's collapse breakpoint, the first
+  row stays visible while an over-tall section list scrolls beneath it; the settings
+  dropdown takes the same measured budget, not the expanded bar's height.
+  Content-anchored reason editors pass
+  behind the chrome, while viewport-positioned popovers stay above it. The kiosk
+  renders neither element, so none of this behavior reaches it.
 - `_page_band.html` — one aligned band per page, replacing what used to be a title
   row, a loose `about` paragraph and a freshness caption stacked down the page:
   breadcrumb/title on the left, the updated-line and the filters on the right, the
@@ -1170,7 +1236,11 @@ raises rather than rendering blank):
   of its own. In a head row the title and the action chips share a zero-basis
   middle (`.status-head__middle`), so **name and state alone decide whether a row
   fits**: the title ellipses under pressure and the chips sit absolutely over its
-  space — a chip is something to click, a title is a nicety — while the state
+  space — a chip is something to click, a title is a nicety. The rail **repaints the
+  box's own fill** there (every card and node declares it as `--ls-surface`) for as
+  long as its chips are showing, so a chip — transparent by design, inking in
+  `currentColor` — never reads through to the title beneath it, and a card at rest,
+  offering nothing to click, keeps its whole title. The state
   cluster never breaks between its parts; a state that truly cannot fit drops as
   one clean right-aligned line. Where a card's cluster *sits* is the deployment's
   choice (`card_status_line`, §7): `beside` keeps the compact one-line head,
@@ -1254,7 +1324,15 @@ raises rather than rendering blank):
   title/about). In that same dense view a branch also **caps the quiet sub-branch
   boxes** it shows to a configurable budget (`branch_cap`), folding the surplus behind
   an in-place **"+N more"** (`static/js/branches.js` keeps the reveal open across the ~10s poll swap) so a deeply-nested card can't tower over the grid — a
-  warn/error box is never folded. Card heights are **bounded**: the reason caps from
+  warn/error box is never folded. **A node may decline both compactions**
+  ([ADR-0063](adr/0063-declining-the-density-trade.md)): one carrying
+  `show_when_quiet` is never painted as a chip and is never counted a surplus quiet
+  box, so an inventory aspect keeps its list at a glance instead of showing it only
+  while a sibling is red. Both together or the field lies — kept out of the chip and
+  then folded, it would show less than the chip did. The declaration is per node and
+  does not cascade; it is a fact about the node's content, so the viewer's own
+  controls are untouched in both directions (density off already boxes everything,
+  and *hide idle* / *hide ok* still answer to the person at the screen). Card heights are **bounded**: the reason caps from
   above, a `min-height` floor from below. When a responsive row has **spare
   ordinary-width tracks**, roots spend only widths their tree can use. The server
   builds a stable flow profile from the filtered, depth-limited topology and
@@ -1850,14 +1928,13 @@ is explicit. A tag promises to keep these stable:
       CHECK_TYPES  Check  CheckError  CheckResult  Entry  register
       API_VERSION  require_api
       code  coerce_code  config_markdown  parse_duration  parse_secret_refs  plain
-      expand_tokens  parse_subnodes  resolve_text
       CHECKS_ASPECT  checks_dirs  load_checks
   little_sister.reasons
       Entry  MAX_SLUG_LENGTH  ReasonError  derived_slug  normalize  slug
   little_sister.status
       StatusCode  join_path
   little_sister.values
-      flag  number  real  rows  text
+      flag  number  real  rows  strict_flag  text
   little_sister.spans
       coarse_span  format_duration  format_span
   little_sister.transport
@@ -1973,16 +2050,19 @@ is explicit. A tag promises to keep these stable:
   added, and is told so by a `CheckError` naming the file, the type and the keyword.
 
   **This surface is versioned as an epoch of its own** — `API_VERSION`, currently
-  **1**. It bumps when a name above is removed or renamed, or a documented behavior
+  **2**. It bumps when a name above is removed or renamed, or a documented behavior
   changes; adding a name does not bump it, and neither does anything else in a
-  release. A package declares the epoch it was built for with `require_api(1)` beside
+  release. A package declares the epoch it was built for with `require_api(2)` beside
   its registrations, and a mismatch refuses at startup naming both numbers
   ([ADR-0051](adr/0051-what-startup-refuses.md)). The install-time floor a package
   declares (`little-sister >= x`) keeps a *too old* library out; the epoch catches the
-  upgrade the floor cannot see. `tests/fixtures/check_api_v1.txt` snapshots what
-  epoch 1 promises, and the gate requires the current block to still contain all of
+  upgrade the floor cannot see. `tests/fixtures/check_api_v2.txt` snapshots what
+  epoch 2 promises, and the gate requires the current block to still contain all of
   it — so a name cannot leave without the epoch moving, which is the hole a
-  doc-and-code rename would otherwise slip through.
+  doc-and-code rename would otherwise slip through. **Epoch 2** opened by removing
+  `parse_subnodes`, `resolve_text` and `expand_tokens`: a branch check used to read and
+  layer its own `subnodes:` block, and the library reads the whole block now while a
+  type only declares (§4.5's node metadata paragraph, ADR-0025).
 
   A **type name is claimed once**, and stays bare (`type: github`): two packages
   registering one name refuse at startup naming both classes, rather than letting
@@ -2040,11 +2120,16 @@ is explicit. A tag promises to keep these stable:
     `LOG_LEVEL=DEBUG`; one that wants a *dependency* quiet caps that dependency's
     own logger by name, which adds no handler and so leaves this default intact.
 - **Secret references** — `little_sister.secrets`: `resolve(reference)` /
-  `register_resolver(scheme, resolver)` / `resolve_setting(value)` (an app setting
+  `register_resolver(scheme, resolver, *, replace=False)` / `resolve_setting(value)`
+  (an app setting
   whose value may be a reference), the reference syntax itself (`scheme://address`,
   with no bare-name form), and `Check.resolve_secret` (resolve at construction,
   pin on failure — [ADR-0023](adr/0023-secret-references.md)). A deployment registers
-  its resolvers in the same import-before-app slot as its check types.
+  its resolvers in the same import-before-app slot as its check types. A scheme is
+  claimed **once**: a second claim from a different package raises
+  `SchemeConflictError` at startup naming both, and `replace=True` is how a caller
+  that means to displace another package's scheme says so
+  ([ADR-0064](adr/0064-the-resolver-is-a-registration.md)).
 - **Environment contract** — how a deployment points the library at its own config
   in the working directory: `LITTLE_SISTER_CONFIG_DIR` (the configuration path-list —
   checks, node metadata, settings and users,

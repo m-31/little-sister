@@ -11,6 +11,41 @@
   here).
 - **Register:** [`../decisions.md`](../decisions.md)
 
+> **Update (2026-08-22):** Decision §5 — *where a check sources the labels* — is
+> re-arranged: **the library reads, a check only declares.** The non-label key that
+> later joined this block proved the shape (`show_when_quiet`, ADR-0063): parsed by
+> `Check._parse_common` for every type, applied by the engine per child name, so a
+> deployment states it for any installed branch check with no check release. The
+> labels follow, once their one genuine dependency becomes data: a type declares
+> **`subnode_defaults`** (`name -> {title, about, show_when_quiet}` — §5's shipped
+> per-aspect maps, promoted from a convention the check applies to a declaration the
+> library applies, and shaped like the `subnodes:` block itself, so the type's half
+> mirrors the deployment's key for key: ADR-0063's flag rides the same entries, a
+> roster aspect declared once beside its own label) and **`label_tokens`**
+> (`token -> value`), both ordinary common-field constructor keywords. The library
+> resolves each field once — for text, the configured value when present, else the
+> declared default, `{default}` substituted and `{token}`s expanded by the same
+> plain replace as ever; for the flag, the same merge without the layering — and the
+> engine stores the result per child name; a result-carried label or flag remains
+> only the fallback for a name nothing declared or configured, so a
+> deployment-authored check stamping a dynamic child keeps working.
+> `parse_subnodes`, `resolve_text` and `expand_tokens` thereby lose their
+> external callers and retire from the authoring facade, ADR-0049's surface gate
+> moving with them — a **breaking** change to the surface, taken deliberately while
+> every consumer is family-owned and moves in lockstep; there is deliberately no
+> compatibility window, and the release notes say it at the top. What this record
+> fixed stays fixed: per-field precedence is still `nodes.yaml` > the deployment's
+> block > the check > empty; seed-once / fill-empty is still the mechanism; labels
+> still freeze at the first fill — which now pins tokens to construction-time facts
+> structurally, where before it merely implied them. Two holes close: a `subnodes:`
+> label on a type that never read the block was a silent no-op and now reaches every
+> branch type; and substitution becomes one library contract — a plain
+> `str.replace`, token values inserted as Markdown-active text with raw HTML escaped
+> at render (ADR-0018), so a check exposes only values it would print as Markdown.
+> The per-leaf `descriptions:` map (ADR-0012) is untouched: a different field, with
+> write-through semantics. Registered in [`../decisions.md`](../decisions.md) (*The
+> `subnodes` labels join the library-read block*).
+
 ## Context
 A branch check ([ADR-0007](0007-check-result-branches.md)) emits `CheckResult.children`
 and so **knows what its subnodes are** — a metrics check owns the meaning of its

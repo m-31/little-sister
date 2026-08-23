@@ -9,6 +9,13 @@ against: ``__all__`` below is the check-authoring half of the version contract
 (architecture.md §11, ADR-0049), and the modules it re-exports from are free to
 move beneath it. The library's own built-ins import ``.base`` directly — they
 are imported *by* this module, so the facade is not available to them yet.
+
+Nothing from ``checks.metadata`` is re-exported here any more. Its three helpers
+were the reader and the layering a branch check ran over its own ``subnodes:``
+block; the library reads that block itself now and a type only **declares** its
+defaults and tokens (ADR-0025's 2026-08-19 update), so the names left the surface
+with the callers that needed them — the check API epoch moving with them
+(ADR-0051).
 """
 # Import the built-in checks for their registration side effects. The SSH family
 # (incl. qnap-metrics / macos-memory) registers via the ``ssh`` package.
@@ -29,11 +36,6 @@ from little_sister.checks.base import (
     require_api,
 )
 from little_sister.checks.loader import CHECKS_ASPECT, checks_dirs, load_checks
-from little_sister.checks.metadata import (
-    expand_tokens,
-    parse_subnodes,
-    resolve_text,
-)
 
 # The check-facing entry value object (ADR-0042), re-exported so a check type
 # imports its whole vocabulary from one place.
@@ -51,13 +53,10 @@ __all__ = [
     "code",
     "coerce_code",
     "config_markdown",
-    "expand_tokens",
     "load_checks",
     "parse_duration",
     "parse_secret_refs",
-    "parse_subnodes",
     "plain",
     "register",
     "require_api",
-    "resolve_text",
 ]

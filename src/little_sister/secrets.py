@@ -9,6 +9,13 @@ the resolver the **application registered** for that scheme: a deployment calls
 resolver's dependencies; the library ships no store client (``env`` is the one
 built-in).
 
+Registering is a **claim**, and it is held to the rules the neighboring seams are
+held to (ADR-0064): the registry records which package made it, ``/system`` prints
+it, and a second claim on one scheme from a *different* package **refuses** at
+startup naming both — because a scheme says where a credential is read from, and
+import order must not be what decides that. Replacing somebody else's scheme stays
+available to whoever means it, by saying ``replace=True`` at the call site.
+
 There is deliberately **no bare-name form** (ADR-0023's 2026-07-27 update):
 requiring the scheme is what makes a secret *value* pasted where a reference
 belongs a structural config error, caught by the grammar rather than by guessing
@@ -29,12 +36,21 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable
+from dataclasses import dataclass
+
+from little_sister.origins import calling_package
 
 # A resolver maps the address part of a ``scheme://address`` reference to the
 # secret value; it may raise anything on failure (wrapped into SecretError).
 Resolver = Callable[[str], str]
 
 _SCHEME_SEPARATOR = "://"
+
+#: What a caller that cannot be identified is called on the page and in a refusal.
+#: :func:`~little_sister.origins.calling_package` answers ``""`` for ``__main__``
+#: on purpose — it is what *any* script is called when run directly, so it names no
+#: installation — and a blank in a message naming two claimants would read as a bug.
+UNIDENTIFIED = "an unidentified caller (__main__)"
 
 
 class SecretError(Exception):
@@ -51,22 +67,110 @@ class UnknownSchemeError(Exception):
     loudly like any config typo."""
 
 
-_resolvers: dict[str, Resolver] = {}
+class SchemeConflictError(Exception):
+    """Two packages claim one scheme, and neither said it meant to replace the
+    other. Raised from :func:`register_resolver` — that is, from the application's
+    import-before-app block, so the process does not start (ADR-0064), the way a
+    second claim on a ``type:`` name does not (little-sister ADR-0051)."""
 
 
-def register_resolver(scheme: str, resolver: Resolver) -> None:
+@dataclass(frozen=True)
+class Registration:
+    """One claimed scheme: who answers for it, and whom that displaced.
+
+    The resolver travels *with* its provenance rather than beside it in a second
+    table, so there is one thing to register, one thing to look up and one thing a
+    test substitutes — a parallel dict of owners is a dict that can disagree with
+    the registry it describes.
+    """
+    scheme: str
+    resolver: Resolver
+    #: The package that registered it, inferred from the call site — ``""`` where
+    #: the caller could not be identified (see :data:`UNIDENTIFIED`).
+    package: str
+    #: The package this claim deliberately replaced, or ``""``. Kept because a
+    #: replacement is the one thing on this seam that an operator cannot deduce
+    #: from the outcome: the page would otherwise show a scheme owned by whoever
+    #: happens to own it, with nothing to say somebody else used to.
+    replaced: str = ""
+
+    @property
+    def builtin(self) -> bool:
+        """Whether the library itself claimed this scheme (``env``)."""
+        return self.package == "little_sister"
+
+    @property
+    def owner(self) -> str:
+        """The registering package as a page or a message should say it."""
+        return self.package or UNIDENTIFIED
+
+
+_resolvers: dict[str, Registration] = {}
+
+
+def register_resolver(scheme: str, resolver: Resolver, *,
+                      replace: bool = False) -> None:
     """Register ``resolver`` for ``scheme`` (e.g. ``aws-sm``).
 
-    Called by the application before ``little_sister.app`` is imported.
-    Schemes are case-insensitive; re-registering a scheme replaces the previous
-    resolver (registration modules may be imported more than once) — including
-    ``env``, which this module registers for itself at import and which a
-    deployment therefore *can* replace, deliberately, like any other.
+    Called by the application before ``little_sister.app`` is imported. Schemes
+    are case-insensitive. The registering **package** is inferred from the call
+    site — a name the caller had to repeat is a name the caller can get wrong —
+    and ``/system`` prints it, so a scheme that arrives from a separately released
+    package can be traced to the code that answers for it.
+
+    A scheme is claimed **once** (ADR-0064). Re-registering from the *same*
+    package replaces the resolver silently, because a registration module may be
+    imported more than once and refusing that would refuse a reloading server. A
+    claim on a scheme **another** package holds raises
+    :class:`SchemeConflictError` naming both, for the reason a duplicate ``type:``
+    name does (little-sister ADR-0051): a scheme is where a credential is read
+    from, so a silent last-wins would let import order decide which store a check
+    authenticates against, and the loser's checks would read somebody else's
+    secrets — or fail to, at a machine nobody is looking at.
+
+    ``replace=True`` is how that is done on purpose, and it is the only way. A
+    deployment overriding the built-in ``env`` with an implementation of its own is
+    using a feature (ADR-0023) and keeps it; what it no longer does is happen by
+    accident, and the replacement it made is recorded and shown rather than
+    silently indistinguishable from a first claim.
     """
     scheme = scheme.strip().lower()
     if not scheme:
         raise ValueError("a resolver scheme must be non-empty")
-    _resolvers[scheme] = resolver
+    package = calling_package()
+    claimed = _resolvers.get(scheme)
+    replaced = ""
+    if claimed is not None:
+        if claimed.package == package:
+            # The same package again: a reload, or a registration function a
+            # deployment called twice. Carry any earlier replacement forward —
+            # re-importing the module that overrode `env` must not quietly
+            # un-say that it overrode anything.
+            replaced = claimed.replaced
+        elif not replace:
+            raise SchemeConflictError(
+                f"two packages claim the secret scheme '{scheme}://': "
+                f"{claimed.owner} registered it and {package or UNIDENTIFIED} "
+                f"claims it too. A scheme says where a credential is read from, "
+                f"so import order must not be what decides it — rename the "
+                f"scheme in one of them, install only one of the packages, or "
+                f"pass replace=True where replacing the other is the point "
+                f"(ADR-0064).")
+        else:
+            replaced = claimed.package
+    _resolvers[scheme] = Registration(scheme=scheme, resolver=resolver,
+                                      package=package, replaced=replaced)
+
+
+def registered_resolvers() -> tuple[Registration, ...]:
+    """Every claimed scheme with the package that answers for it, by scheme.
+
+    For ``/system``, which shows this seam beside the others: a registration
+    nobody can see from the running instance is indistinguishable from one that
+    silently did not take, and — since the schemes are additive — the list is also
+    the only answer to *what may I write in this config field*.
+    """
+    return tuple(_resolvers[scheme] for scheme in sorted(_resolvers))
 
 
 def _environment(name: str) -> str:
@@ -109,14 +213,14 @@ def resolve(reference: str) -> str:
     if not address.strip():
         raise UnknownSchemeError(
             f"secret reference {reference!r} has no address after {scheme!r}://")
-    resolver = _resolvers.get(scheme.strip().lower())
-    if resolver is None:
+    registration = _resolvers.get(scheme.strip().lower())
+    if registration is None:
         known = ", ".join(sorted(_resolvers)) or "none"
         raise UnknownSchemeError(
             f"no secret resolver registered for scheme {scheme!r} "
             f"(reference {reference!r}; registered: {known})")
     try:
-        value = resolver(address)
+        value = registration.resolver(address)
     except SecretError:
         raise                      # a resolver that phrased its own failure
     except Exception as error:

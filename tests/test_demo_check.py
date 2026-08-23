@@ -106,9 +106,18 @@ class DemoScenarioTests(TestCase):
         # Alphabetical is genuinely different, or the fixture proves nothing.
         self.assertNotEqual([c.name for c in by_rank],
                             sorted(c.name for c in result.children))
+        # The titles are declared now, not stamped (ADR-0025's 2026-08-19
+        # update), so read them where they live — on the check, resolved. Reading
+        # the result's empty `title` would still pass and prove nothing.
+        check = DemoCheck.from_config(
+            {"type": "demo", "path": "/security/posture", "scenario": "severity"},
+            Path("."))
         for child in result.children:
             with self.subTest(band=child.name):
-                self.assertEqual(shown_title(child.name, child.title), "")
+                declared = check.subnode_labels[child.name]["title"]
+                self.assertEqual(declared, child.name.capitalize())
+                self.assertEqual(shown_title(child.name, declared), "")
+                self.assertTrue(check.subnode_labels[child.name]["about"])
 
     def test_severity_climbs_and_clears_without_reordering(self):
         # The root declares OK and the bands carry the news, so read the children:
@@ -133,6 +142,30 @@ class DemoScenarioTests(TestCase):
                 bands = {c.name: c for c in SCENARIOS["severity"](moment, 100).children}
                 self.assertTrue(bands["informational"].reason)
                 self.assertEqual(bands["informational"].code, StatusCode.OK)
+
+    def test_exactly_one_band_declines_the_density_trade(self):
+        # The demo's ADR-0063 node: `informational` is the band whose lines are
+        # read *because* nothing is wrong, so it keeps its box while the other
+        # four chip. The flag is **declared** beside that band's label now, so it
+        # is read off the check — a band this type can name is not a child a run
+        # discovered, and reading the result would be testing the channel this
+        # deliberately stopped using. It must carry lines in every phase, or the
+        # box is empty and there is nothing to look at; and its siblings must stay
+        # silent on the field, or the card demonstrates a wall rather than a
+        # declaration.
+        check = DemoCheck.from_config(
+            {"type": "demo", "path": "/security/wiz", "scenario": "severity"},
+            Path("."))
+        self.assertEqual(check.subnode_show_when_quiet, {"informational": True})
+        for moment in (0.0, 40.0, 99.0):
+            with self.subTest(moment=moment):
+                bands = {c.name: c
+                         for c in SCENARIOS["severity"](moment, 100).children}
+                self.assertTrue(bands["informational"].reason)
+                for band in bands.values():
+                    # nothing is stamped: every one of these names is declared
+                    self.assertIsNone(band.show_when_quiet)
+
 
 class ReviewsScenarioTests(TestCase):
     """The demo's **declared-slug** member producer (ADR-0036 decision 4)."""
