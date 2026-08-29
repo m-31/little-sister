@@ -1,7 +1,7 @@
 # ADR-0030 — Curated links come from a deployment-supplied file
 
 - **Status:** Accepted
-- **Date:** 2026-07-31
+- **Date:** 2026-08-23 (accepted 2026-07-31)
 - **Related:** [ADR-0031](0031-deployment-config-directory.md) (the `config/` directory
   and its layering, which this file is an aspect of),
   [ADR-0015](0015-check-discovery-union.md) (the path-list underneath it),
@@ -16,129 +16,6 @@
   [ADR-0029](0029-per-user-presentation-preferences.md) (`DARK_THEMES` → `bs_theme`,
   the seam the icon variants ride).
 - **Register:** [`../decisions.md`](../decisions.md)
-
-> **Update (2026-07-31):** the filter's field set — left below as *"a one-line
-> client-side match on the title"* — is now **the entry's title and its group's**.
-> Still titles, never prose. Measured on the first real page rather than reasoned
-> about: with entry titles alone, typing a category name (`loadtest`) matched
-> nothing at all, which reads as a broken page rather than as a narrow rule, and
-> typing the category is exactly what somebody who knows the toolbox does. `note:`
-> stays out, for the reason the decision gives for making entries records at all: a
-> note is prose, and a match the reader cannot see in the title it landed on is the
-> failure mode records were chosen to avoid. Tokens match with **and**, in any
-> order, so a second word narrows. Order is untouched — the filter hides, it never
-> sorts.
-
-> **Update (2026-08-01):** the search path gains a rung. **`config/links/icons/` is
-> the deployment's own pack, discovered by file name** — dropping `firewall.png` there
-> and writing `icon: firewall` is now the whole of it, with no `icons:` entry. The pair
-> convention is the built-in pack's own file names (`<name>-on-light.*` /
-> `<name>-on-dark.*`); anything else is a single file on the chip; one flat directory,
-> no recursion; a non-icon file (a README, a `.DS_Store`) passes in silence. It sits
-> **above** the packs a dependent package registers and **below** the `icons:` map,
-> which stays the way to say what a file cannot — a remote URL, or `none`. Order
-> across roots is unchanged: later root wins, per name, whole.
->
-> The reason is a real port. A deployment moving sixty links off an older tool put its
-> seven own marks into `config/links/icons/`, wrote `icon: firewall` beside the
-> entries, and was told *no icon named 'firewall'* while the file sat in the directory
-> the page was reading. Requiring a second declaration for a file already named after
-> the thing it draws is a rule with no reader — decision 3's *"a name resolves through
-> a search path"* had simply left the deployment's own directory off it. Only the
-> **directory** form has one, which is what that form is for
-> ([ADR-0031](0031-deployment-config-directory.md) §2): an `icons/` beside a flat
-> `config/links.yaml` is a directory in a configuration root, and warns as an
-> unrecognized aspect rather than being read as ours.
-
-> **Update (2026-08-02):** decision 9's timer moves off the engine's tick. **A probe
-> pass is triggered by somebody opening the page, and only when the newest answer is
-> older than `interval:`** — the key keeps its name and its `6h` default, and changes
-> meaning from *how often the timer fires* to *how stale an answer may be before an
-> open refreshes it*. The pass never blocks the response: the page renders from what is
-> already in memory, each verdict carrying its own age, and the answers one open
-> triggers appear on the next. One pass at a time, however many readers arrive together.
->
-> Two things the trigger has to survive, added after review. An `interval:` this cannot
-> read **falls back to the default** instead of raising: the loader keeps the key as raw
-> text and does not validate it, so a plausible typo like `6 hours` took the whole page
-> to a 500 with nothing warned first; a non-positive one falls back too, since it would
-> make every open due. And one target that answers **garbage** costs its own verdict and
-> not the sweep — `http.client.HTTPException` is neither an `OSError` nor a `ValueError`
-> and came back out of the probe unwrapped, so a typo'd port left every other entry
-> unanswered, which the trigger then read as "never asked" and retried on every open.
->
-> Decision 9 already named the audience — *the person who maintains the file, and that
-> person is looking at this page* — and then put the timer somewhere that runs whether
-> or not anybody is. Two things follow that were not visible when this was written.
-> **Most deployments would probe an empty set:** decision 8's structural pass already
-> rejects a local icon file that is not there and a pack member that is not there, both
-> offline and at load, so the only icon a probe can discover anything about is a
-> **remote** one — the fill this ADR ranks last and expects to be rare — while links are
-> opt-in and default off. And **the tick would have cost a seam for it**: a periodic
-> callback on a scheduler built for checks, skipped wherever the engine is disabled,
-> which is exactly where the page still works. Triggering from the page needs none of
-> that, and probes where the page is read.
->
-> The rejected shape is *every n-th open*. A count is unpredictable in both directions:
-> five reloads while somebody watches a dashboard would spend five passes, and a page
-> opened twice a day would refresh on neither. Time is the honest unit, and it is the
-> one already in the file. **Probing at startup stays rejected** for the reason under
-> Alternatives; this is that argument one step further — not at boot, not on a clock,
-> but when somebody asks.
->
-> *Never blocks* is a rule about the **open**, not about the reader. A deliberate **check
-> now** control re-probes on demand and, unlike an open, **waits for the answer** under
-> an overall deadline — the person who has just fixed a URL is the one case the time gate
-> gets wrong, and they are waiting on purpose. It shares the single pass, so a press that
-> lands mid-pass joins it; whatever has not answered by the deadline keeps its previous
-> verdict and age.
-
-> **Update (2026-08-02, later):** decisions 9–10 gain the rule that makes *one pass at a
-> time* survivable. **A pass carries a deadline of its own, and abandons what has not
-> answered when it runs out.**
->
-> The gap this closes: `REQUEST_TIMEOUT` bounds one **socket operation**, not one
-> request. A server that sends a byte every four seconds never times out, and the pass
-> waiting on it could not end — the executor was entered as a context manager, and
-> leaving one waits for every worker. Because the single pass slot was released only on
-> the way out, one such host froze reachability for the life of the process: no open and
-> no *check now* could ever start another pass. The page went on showing ages that crept
-> upward with nothing behind them.
->
-> **It cannot be cancellation.** A request already on the wire cannot be recalled, and a
-> thread blocked in `recv` cannot be interrupted. So it is **abandonment**: at the
-> deadline the pass keeps what came back, says what did not, stops waiting, and lets the
-> next pass have the slot. The three fates are exact, and the middle one is why this is
-> worth writing down. **Answered** — the verdict, at the age it arrived. **Never started**
-> (still queued, so cancelled) — nothing was asked, so nothing changes and the previous
-> verdict and age stand; overwriting it would be this module inventing a failure it never
-> observed. **Started and unfinished** — *no answer*, which is a value this ADR already
-> has (§10) and deliberately not a death: silence would leave an hours-old *alive* beside
-> an entry whose host has been swallowing requests all morning.
->
-> The deadline is **derived, not fixed**: `CONCURRENCY` probes run at once, so the honest
-> unit is rounds, and sixty entries are ten rounds where six are one. It has a floor
-> comfortably above the *check now* deadline, so "the pass carries on without me" stays
-> true rather than becoming "the pass expired before you stopped waiting".
->
-> Two passes can now be alive at once, so **one has to lose**. Each carries a generation;
-> every write, the prune of what the file no longer names, and the release of the pass
-> slot check it first. A superseded pass stops writing — two passes interleaving into one
-> store would produce a set of answers with no single age, and the freshness line on the
-> page is a single age.
->
-> What abandonment leaks is **threads and sockets a host is refusing to release**, and
-> nothing this side of the wire can make it let go. So there is a cap: past three
-> outstanding, no new pass starts. That is a real degradation, and the page **says so**
-> rather than looking like a control that does nothing — this is the one condition under
-> which the ages beside the entries stop meaning what they say.
->
-> One more thing was wrong, and it is recorded here because it made the sentence above it
-> false. Verdicts were said to be stored *as they arrive*; they were collected with
-> `Executor.map`, which yields in **submission** order. The probes did run concurrently;
-> the storing did not, so a slow first target held every later answer out of the store
-> until it finished. That is harmless while a pass always completes, and load-bearing the
-> moment one may not — "keep what came back" is the whole promise of a deadline.
 
 ## Context
 `/links` has been a placeholder since the route existed: a heading and a sentence about
@@ -216,6 +93,27 @@ three broken-image glyphs, all of them internal hosts.
    4. the link origin's `/favicon.ico`;
    5. a neutral inline SVG.
 
+   The search path has one further rung. **`config/links/icons/` is the deployment's
+   own pack, discovered by file name** — dropping `firewall.png` there and writing
+   `icon: firewall` is the whole of it, with no `icons:` entry. The pair convention is
+   the built-in pack's own file names (`<name>-on-light.*` / `<name>-on-dark.*`);
+   anything else is a single file on the chip; one flat directory, no recursion; a
+   non-icon file (a README, a `.DS_Store`) passes in silence. It sits **above** the
+   packs a dependent package registers and **below** the `icons:` map, which stays the
+   way to say what a file cannot — a remote URL, or `none`. Order across roots is
+   unchanged: later root wins, per name, whole.
+
+   The reason is a real port. A deployment moving sixty links off an older tool put its
+   seven own marks into `config/links/icons/`, wrote `icon: firewall` beside the
+   entries, and was told *no icon named 'firewall'* while the file sat in the directory
+   the page was reading. Requiring a second declaration for a file already named after
+   the thing it draws is a rule with no reader, which is why *"a name resolves through a
+   search path"* reaches the deployment's own directory too. Only the **directory** form
+   has one, which is what that form is for
+   ([ADR-0031](0031-deployment-config-directory.md) §2): an `icons/` beside a flat
+   `config/links.yaml` is a directory in a configuration root, and warns as an
+   unrecognized aspect rather than being read as ours.
+
    A packaged icon is a small SVG, and may itself be an `on_light` / `on_dark` pair —
    GitHub's mark is exactly why. An icon never renders as a browser's broken-image glyph.
 
@@ -280,10 +178,41 @@ three broken-image glyphs, all of them internal hosts.
    runs at startup: this application must come up while the network is broken.
 
 9. **Reachability is probed on a slow schedule and reported on the page — not on the
-   status tree.** The engine's tick supplies the timer; results live in memory and
-   render beside the entry that failed. The audience is the person who maintains
-   `links.yaml`, and that person is looking at this page; the reader mid-incident finds
-   out by clicking.
+   status tree.** Results live in memory and render beside the entry that failed. The
+   audience is the person who maintains `links.yaml`, and that person is looking at this
+   page; the reader mid-incident finds out by clicking.
+
+   **A probe pass is triggered by somebody opening the page, and only when the newest
+   answer is older than `interval:`** — the key keeps its `6h` default, and means *how
+   stale an answer may be before an open refreshes it*. The pass never blocks the
+   response: the page renders from what is already in memory, each verdict carrying its
+   own age, and the answers one open triggers appear on the next. One pass at a time,
+   however many readers arrive together.
+
+   Two things the trigger has to survive. An `interval:` this cannot read **falls back
+   to the default** instead of raising: the loader keeps the key as raw text and does
+   not validate it, so a plausible typo like `6 hours` took the whole page to a 500 with
+   nothing warned first; a non-positive one falls back too, since it would make every
+   open due. And one target that answers **garbage** costs its own verdict and not the
+   sweep — `http.client.HTTPException` is neither an `OSError` nor a `ValueError` and
+   came back out of the probe unwrapped, so a typo'd port left every other entry
+   unanswered, which the trigger then read as "never asked" and retried on every open.
+
+   Two things follow from that audience. **Most deployments would probe an empty set:**
+   decision 8's structural pass already rejects a local icon file that is not there and
+   a pack member that is not there, both offline and at load, so the only icon a probe
+   can discover anything about is a **remote** one — the fill this ADR ranks last and
+   expects to be rare — while links are opt-in and default off. And **the tick would
+   have cost a seam for it**: a periodic callback on a scheduler built for checks,
+   skipped wherever the engine is disabled, which is exactly where the page still works.
+   Triggering from the page needs none of that, and probes where the page is read.
+
+   *Never blocks* is a rule about the **open**, not about the reader. A deliberate
+   **check now** control re-probes on demand and, unlike an open, **waits for the
+   answer** under an overall deadline — the person who has just fixed a URL is the one
+   case the time gate gets wrong, and they are waiting on purpose. It shares the single
+   pass, so a press that lands mid-pass joins it; whatever has not answered by the
+   deadline keeps its previous verdict and age.
 
 10. **Probing is opt-in, and the defaults split by how trustworthy the answer is.**
    **Icons are probed by default** — a static asset, no auth, an unambiguous failure.
@@ -293,6 +222,52 @@ three broken-image glyphs, all of them internal hosts.
    `404` / `410` / DNS failure / connection refused count as dead; `401` and `403` are
    *alive*. `HEAD` falls back to `GET`, because a `405` is a server's opinion about
    methods, not about existence.
+
+11. **A pass carries a deadline of its own, and abandons what has not answered when it
+   runs out.** This is the rule that makes *one pass at a time* survivable.
+
+   The gap this closes: `REQUEST_TIMEOUT` bounds one **socket operation**, not one
+   request. A server that sends a byte every four seconds never times out, and the pass
+   waiting on it could not end — the executor was entered as a context manager, and
+   leaving one waits for every worker. Because the single pass slot was released only on
+   the way out, one such host froze reachability for the life of the process: no open
+   and no *check now* could ever start another pass. The page went on showing ages that
+   crept upward with nothing behind them.
+
+   **It cannot be cancellation.** A request already on the wire cannot be recalled, and
+   a thread blocked in `recv` cannot be interrupted. So it is **abandonment**: at the
+   deadline the pass keeps what came back, says what did not, stops waiting, and lets
+   the next pass have the slot. The three fates are exact, and the middle one is why
+   this is worth writing down. **Answered** — the verdict, at the age it arrived.
+   **Never started** (still queued, so cancelled) — nothing was asked, so nothing
+   changes and the previous verdict and age stand; overwriting it would be this module
+   inventing a failure it never observed. **Started and unfinished** — *no answer*,
+   which is a value this ADR already has (§10) and deliberately not a death: silence
+   would leave an hours-old *alive* beside an entry whose host has been swallowing
+   requests all morning.
+
+   The deadline is **derived, not fixed**: `CONCURRENCY` probes run at once, so the
+   honest unit is rounds, and sixty entries are ten rounds where six are one. It has a
+   floor comfortably above the *check now* deadline, so "the pass carries on without me"
+   stays true rather than becoming "the pass expired before you stopped waiting".
+
+   Two passes can be alive at once, so **one has to lose**. Each carries a generation;
+   every write, the prune of what the file no longer names, and the release of the pass
+   slot check it first. A superseded pass stops writing — two passes interleaving into
+   one store would produce a set of answers with no single age, and the freshness line
+   on the page is a single age.
+
+   What abandonment leaks is **threads and sockets a host is refusing to release**, and
+   nothing this side of the wire can make it let go. So there is a cap: past three
+   outstanding, no new pass starts. That is a real degradation, and the page **says so**
+   rather than looking like a control that does nothing — this is the one condition
+   under which the ages beside the entries stop meaning what they say.
+
+   Verdicts are stored *as they arrive*, and not in `Executor.map`'s **submission**
+   order. The probes did run concurrently; the storing did not, so a slow first target
+   held every later answer out of the store until it finished. That is harmless while a
+   pass always completes, and load-bearing the moment one may not — "keep what came
+   back" is the whole promise of a deadline.
 
 Local icon files make this aspect a **directory**, so the example below is
 `config/links/links.yaml` with its files in `config/links/icons/`. A flat
@@ -333,8 +308,16 @@ groups:
 - **The presentation stays in the library**, so the page inherits the themes, the rail,
   the kiosk layout and the band without a deployment having to know they exist. A
   free-Markdown page would have opted out of all of it.
-- Entries are **records**, so the filter box is a one-line client-side match on the
-  title rather than a search over rendered prose.
+- Entries are **records**, so the filter box is a one-line client-side match on **the
+  entry's title and its group's** rather than a search over rendered prose. Still
+  titles, never prose. Measured on the first real page rather than reasoned about: with
+  entry titles alone, typing a category name (`loadtest`) matched nothing at all, which
+  reads as a broken page rather than as a narrow rule, and typing the category is
+  exactly what somebody who knows the toolbox does. `note:` stays out, for the reason
+  the decision gives for making entries records at all: a note is prose, and a match the
+  reader cannot see in the title it landed on is the failure mode records were chosen to
+  avoid. Tokens match with **and**, in any order, so a second word narrows. Order is
+  untouched — the filter hides, it never sorts.
 - **The status strip is untouched.** `_split_heartbeat` lifts the heartbeat into the
   one-line strip only when it has no children — the guard exists precisely so the strip
   can never hide a subtree ([ADR-0024](0024-dashboard-layout.md)). The reserved
@@ -398,5 +381,11 @@ groups:
   tree — the placement would be arbitrary in every installation.
 - **Probing at startup.** Simple and needs no scheduler, but it slows boot, needs the
   network at the worst possible moment, and files its answer in a log nobody reads.
+  Triggering from the page is that argument one step further — not at boot, not on a
+  clock, but when somebody asks.
+- **Every n-th open.** A count is unpredictable in both directions: five reloads while
+  somebody watches a dashboard would spend five passes, and a page opened twice a day
+  would refresh on neither. Time is the honest unit, and it is the one already in the
+  file.
 - **Loading once at startup**, consistent with the checks. Rejected for what a restart
   costs while history is in memory.

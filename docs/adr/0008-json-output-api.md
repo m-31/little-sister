@@ -1,7 +1,7 @@
 # ADR-0008 — JSON output (backend mode): endpoint, schema & token auth
 
 - **Status:** Accepted
-- **Date:** 2026-06-25
+- **Date:** 2026-08-23 (accepted 2026-06-25)
 - **Related:** [ADR-0002](0002-rlock-snapshot-synchronization.md) (snapshots are the
   serializable copy), [ADR-0003](0003-config-and-secrets-via-env-file.md) (`.env`
   secrets/tokens), [ADR-0004](0004-status-aggregation-semantics.md) (roll-up),
@@ -77,6 +77,13 @@ readers** — a display client (wants the rolled-up code) and a federating paren
      `T`/`Z` (`…Z`), converted at serialization (Zalando #238, naming #235). Internal
      storage stays naive-local (ADR-0006); only the wire is normalized, so
      cross-machine age/staleness is well-defined.
+   - **The envelope also carries the node-metadata fields** — `about` (ADR-0012),
+     `title` (ADR-0017), `config` (ADR-0013), all **raw Markdown** (the client
+     renders, ADR-0018) — and a nullable **`maintenance_details`** object (`reason` /
+     `set_by` / `set_at` / `expires_at`, ADR-0014) beside the existing `maintenance`
+     bool. All **additive**, so `schema_version` stays **1** and the existing
+     `maintenance` bool is unchanged; the federating parent renders grafted nodes
+     (and their maintenance windows) exactly as the origin.
 
 4. **Errors are Problem JSON** — `application/problem+json` per RFC 9457 (Zalando
    #176): `type`, `title`, `status`, `detail`. `401` (missing/bad token), `404` (no
@@ -114,15 +121,6 @@ readers** — a display client (wants the rolled-up code) and a federating paren
   refuse an unknown major.
 - Read-only means a leaked token exposes status, not control — a deliberately small
   blast radius for the first cut (a new required `.env` key, fail-fast per ADR-0003).
-
-> **Update (2026-06-26):** the envelope gained the node-metadata fields —
-> `about` (ADR-0012), `title` (ADR-0017), `config` (ADR-0013), all **raw Markdown**
-> (the client renders, ADR-0018) — and a nullable **`maintenance_details`** object
-> (`reason` / `set_by` / `set_at` / `expires_at`, ADR-0014) beside the existing
-> `maintenance` bool. All **additive**, so `schema_version` stays **1** and the existing
-> `maintenance` bool is unchanged; the federating parent now renders grafted nodes (and
-> their maintenance windows) exactly as the origin. Contract + register:
-> [`api/openapi.yaml`](../api/openapi.yaml), [`../decisions.md`](../decisions.md).
 
 ## Deliberate deviations from Zalando
 - **Static bearer tokens, not OAuth2.** The guidelines assume an OAuth2 provider;

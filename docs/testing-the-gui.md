@@ -76,6 +76,9 @@ uv run gunicorn -w1 --threads 8 tests.demo_wsgi:app     # then http://localhost:
 uv run python tests/demo_wsgi.py
 ```
 
+It stays on **8000** while an instance serves on 8888, so the demo and a real instance
+can run side by side rather than fighting for one port.
+
 Log in with the committed fixture user **`pan` / `12345678`**. Use a single worker:
 the engine and the status tree live in-process.
 
@@ -217,8 +220,9 @@ that make the features above visible:
   (rendered bare), a built-in switched off with `none`, and a name nothing defines.
   It takes the **directory** form (`links/links.yaml` with `links/icons/` beside it),
   which is the shape an aspect that ships files grows into: an `icons/` directory
-  sitting next to a `config/links.yaml` is a directory in a configuration root, and
-  the loader would rightly warn that `icons` is not a known aspect.
+  sitting next to a `config/links.yaml` is a directory in a configuration root that
+  nobody has claimed, and the startup report would rightly name it as not a known
+  aspect.
 
 ### The two ways a slot gets filled
 

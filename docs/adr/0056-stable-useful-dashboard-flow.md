@@ -1,7 +1,7 @@
 # ADR-0056 — Dashboard layout follows stable, useful flow
 
 - **Status:** Accepted
-- **Date:** 2026-08-15
+- **Date:** 2026-08-23 (accepted 2026-08-15)
 - **Supersedes:** [ADR-0024](0024-dashboard-layout.md)
 - **Related:** [ADR-0005](0005-dashboard-freshness-and-self-monitoring.md)
   (the `little-sister` heartbeat),
@@ -107,10 +107,15 @@ linear chain has no wider step at all. Reason text may come and go without chang
 the profile, while changing the configured reason budget deliberately changes it.
 
 Within each consecutive source-order row every root starts at its first one-track
-step. Among next steps that fit the remaining tracks, the allocator chooses the
-greatest stable-height reduction per added track; exact ties go to the earlier root.
-A step can consume several tracks atomically. If no useful next step fits, tracks
-remain empty rather than padding a card with width its tree cannot use.
+step. The allocator's objective is min-max, not summed gain. A grid row is as tall
+as its tallest card, so among cards whose next useful step fits, the currently
+tallest one wins; equal heights fall to the better reduction per track, exact ties
+to source order. A step can consume several tracks atomically. If no useful next
+step fits, tracks remain empty rather than padding a card with width its tree cannot
+use. The summed-gain rule measurably misallocated: two equal roots on a fourteen-track
+grid went `[12, 2]`, because every one of the twelve tracks paid a row while the
+starved neighbour owned the row height throughout. Under min-max they grow
+alternately.
 
 A descendant level containing at least two direct full boxes uses responsive nested
 grid tracks. Consecutive quiet chips share a full-row `leaf-chip-run`: the chips wrap
@@ -118,115 +123,68 @@ inline inside it while full boxes at the same mixed level can still grid. A sing
 child wrapper and each node box remain intact, so a node and its reasons never split
 between columns and document order stays unchanged.
 
-The server retains the 32 plans for deterministic diagnostics but sends only
-**breakpoints** where the plan changes. `dashboard-layout.js` measures the resolved
-outer track count and selects the latest applicable breakpoint after first paint,
-resize and fragment swap. It never derives product semantics from the DOM. The
-ordinary `auto-fill` grid remains the no-JavaScript and malformed-data fallback.
+The five stylesheet constants are pinned by a structural test. The model mirrors
+`overview.css` (330 px track, 1 rem and 0.4 rem gaps, card and box insets) by hand;
+a test reads the stylesheet and compares, so moving the CSS turns a silently wrong
+layout into a red test. The per-node cost divisor written as `6` above is the
+**default reason budget** (`DEFAULT_REASON_CAP`), not a sixth constant.
 
-## Consequences
+Pricing a span at the 330 px track **minimum** misprices it: `auto-fill` distributes
+a real viewport's leftover across its tracks, so a resolved track is almost always
+wider. A two-track card at the minimum offers ~656 px against the ~666 px two nested
+columns need — ten pixels short — so a minimum-priced model called span two useless
+everywhere, although it fits at nearly every real width. Two consequences were
+measured: two equal ~30-node roots on a real four-track grid were allocated `[3, 1]`
+— a 1,137 px card beside a 1,949 px tower — where `[2, 2]` paints 1,137/1,137; and a
+root branching four wide at its second level missed a 1,763 → 918 px step because the
+fourth nested column missed the minimum by a hair.
 
-- Status and reason churn cannot move a root; topology, view controls, reason-cap
-  configuration and viewport capacity can.
-- Width is spent only in useful quanta. Some responsive rows intentionally retain
-  an empty track because the next usable nested column needs two or more.
-- A high reason budget gives a reason-capable topology more influence without the
-  unstable alternative of counting live reasons.
-- Mixed dense levels gain nested columns without turning every chip into a grid cell.
-- Poll payload is proportional to roots plus actual plan changes, rather than roots
-  multiplied by 32.
-- The `/little-sister` reservation still costs one namespace; a chip still trades
-  at-a-glance quiet reason text for density; both keep their original fallbacks.
+The server retains the 32 plans for deterministic diagnostics. Breakpoints are keyed
+in grid width, not track counts. The server prices each candidate span at the content
+width it actually has at that grid width (integer tenths, exact threshold enumeration
+— every width at which any nested column count anywhere can flip, mapped back through
+the same arithmetic the height model divides with) and publishes bands where the plan
+changes. Bands publish **tenths of a pixel**, the model's own unit, and the client
+scales its measurement by ten: publishing the ceiling in whole pixels instead left a
+band up to 0.9px late — nine times the column tolerance — and browsers report
+fractional widths, so across that gap a wall could carry a 105-row plan while a legal
+count offered 75. The column tolerance is one tenth of a pixel, and a browser test
+holds model and paint to within a pixel of each other.
 
-## Alternatives considered
+`dashboard-layout.js` measures the grid's resolved width — a viewport fact it already
+observed for the resize reflow — and selects the last applicable band; the resolved
+track count remains only as the safety clamp on a span. It never derives product
+semantics from the DOM. Grid width is not a status fact, so the stability rule is
+untouched. The ordinary `auto-fill` grid remains the no-JavaScript and malformed-data
+fallback.
 
-- **Equal-height uniform tiles** — maximal stability and balance, but wastes space
-  in the interactive overview. It remains a possible fixed-geometry kiosk design.
-- **CSS columns, masonry or dense packing** — closes holes but makes position depend
-  on live height, violating the stable-position rule.
-- **Live reason counts or browser-measured heights** — match one paint precisely and
-  make a status poll move cards. Rejected at the input boundary.
-- **Visible node count plus a 16-node entry price and maximum branch factor** —
-  deterministic but discontinuous at 16/17, blind to reason-cap configuration, and
-  unable to say which nesting widths are useful. This is the superseded ADR-0024
-  allocation.
-- **A `wide` or `weight` hint in `nodes.yaml`** — stable but couples deployment
-  metadata to presentation and ages as a check's topology changes.
-- **One grid item per chip** — opens mixed levels but destroys the compact wrapping
-  run. The full-row chip-run wrapper preserves both properties.
+The published band count is proportional to actual plan changes over width (roughly
+sixty entries, under a kilobyte, for the two-root live shape; still one band for
+eighty flat roots). A deployment that wants none of this sets `settings.yaml`
+`dashboard_columns: plain`, which withholds the plan and leaves the auto-fill grid —
+byte-for-byte the no-JavaScript page; `flow` is the default, anything else warns and
+falls back. That key is deliberately an enum, not a switch: a per-viewer value and a
+possible `packed` mode are later steps of the same control.
 
-## Update — 2026-08-12 (the plan is priced at the width the viewport resolved)
+### Explicit track counts — decided 2026-08-12
 
-Measured against real paint the same day it shipped, the decision above kept every
-stability promise and mispriced one input: it evaluated every span at the 330 px
-track **minimum**, while `auto-fill` distributes a real viewport's leftover across
-its tracks, so a resolved track is almost always wider. A two-track card at the
-minimum offers ~656 px against the ~666 px two nested columns need — ten pixels
-short — so the model called span two useless everywhere, although it fits at
-nearly every real width. Two consequences were measured: two equal ~30-node roots
-on a real four-track grid were allocated `[3, 1]` — a 1,137 px card beside a
-1,949 px tower — where `[2, 2]` paints 1,137/1,137; and a root branching four wide
-at its second level missed a 1,763 → 918 px step because the fourth nested column
-missed the minimum by a hair.
+Width pricing alone leaves one flaw standing: **at the exact width where `auto-fill`
+adds a track, every track snaps back to the 330 px minimum**, so a span-two card
+physically loses its second nested column and one more pixel of viewport paints a
+dramatically taller page. Measured on the equal-root fixture: a 1,713 px grid painted
+the 2 + 2 split at 1,137 px twice (1,582 px document); at 1,714 px the fifth track
+snapped in and the same tree painted a 2,122 px tower (2,567 px document). The
+lopsided fixture worsened the same way at 2,405 → 2,406 px. This is not an
+enumeration bug — an integer number of minimum-width outer tracks simply cannot
+express the half-and-half layout an odd count just destroyed.
 
-Three things change, none of them an input:
-
-- **Breakpoints are keyed in grid width, not track counts.** The server
-  prices each candidate span at the content width it actually has at that grid
-  width (integer tenths, exact threshold enumeration — every width at which any
-  nested column count anywhere can flip, mapped back through the same arithmetic
-  the height model divides with) and publishes bands where the
-  plan changes. `dashboard-layout.js` measures the grid's resolved width — a
-  viewport fact it already observed for the resize reflow — and selects the last
-  applicable band; the resolved track count remains only as the safety clamp on a
-  span. Grid width is not a status fact, so the stability rule is untouched.
-  Bands publish **tenths of a pixel**, the model's own unit, and the client
-  scales its measurement by ten: publishing the ceiling in whole pixels instead
-  left a band up to 0.9px late — nine times the column tolerance — and browsers
-  report fractional widths, so across that gap a wall could carry a 105-row plan
-  while a legal count offered 75.
-- **The allocator's objective is min-max, not summed gain.** A grid row is as tall
-  as its tallest card, so among cards whose next useful step fits, the currently
-  tallest one wins; equal heights fall to the better reduction per track, exact
-  ties to source order. The summed-gain rule measurably misallocated once widths
-  were priced honestly: two equal roots on a fourteen-track grid went `[12, 2]`,
-  because every one of the twelve tracks paid a row while the starved neighbour
-  owned the row height throughout. Under min-max they grow alternately.
-- **The five stylesheet constants are pinned by a structural test.** The model
-  mirrors `overview.css` (330 px track, 1 rem and 0.4 rem gaps, card and box
-  insets) by hand; a test now reads the stylesheet and compares, so moving the
-  CSS turns a silently wrong layout into a red test. The per-node cost divisor
-  written as `6` above is the **default reason budget** (`DEFAULT_REASON_CAP`),
-  not a sixth constant.
-
-The published band count is proportional to actual plan changes over width
-(roughly sixty entries, under a kilobyte, for the two-root live shape; still one
-band for eighty flat roots). A deployment that wants none of this sets
-`settings.yaml` `dashboard_columns: plain`, which withholds the plan and leaves
-the auto-fill grid — byte-for-byte the no-JavaScript page; `flow` is the default,
-anything else warns and falls back. That key is deliberately an enum, not a
-switch: a per-viewer value and a possible `packed` mode are later steps of the
-same control.
-
-## Update — 2026-08-12 (the plan carries its own track count)
-
-Live resizing found the flaw the width pricing left standing: **at the exact width
-where `auto-fill` adds a track, every track snaps back to the 330 px minimum**, so a
-span-two card physically loses its second nested column and one more pixel of
-viewport paints a dramatically taller page. Measured on the equal-root fixture: a
-1,713 px grid painted the 2 + 2 split at 1,137 px twice (1,582 px document); at
-1,714 px the fifth track snapped in and the same tree painted a 2,122 px tower
-(2,567 px document). The lopsided fixture worsened the same way at 2,405 → 2,406 px.
-This is not an enumeration bug — an integer number of minimum-width outer tracks
-simply cannot express the half-and-half layout an odd count just destroyed.
-
-The remedy is that a published band now names the **track count its plan was priced
-for**: `(tenths, tracks, plan)`. The script sets the grid to exactly that many equal
-tracks (`repeat(tracks, minmax(0, 1fr))`), so at 1,714 px the four wide tracks
-simply stay. A count of `0` means "let auto-fill decide" and is only ever sent with
-an all-ones plan, which is valid at any count — a flat eighty-root wall therefore
-still ships one band and paints byte-identically to the fallback. Three rules keep
-the choice disciplined:
+A published band therefore names the **track count its plan was priced for**:
+`(tenths, tracks, plan)`. The script sets the grid to exactly that many equal tracks
+(`repeat(tracks, minmax(0, 1fr))`), so at 1,714 px the four wide tracks simply stay.
+A count of `0` means "let auto-fill decide" and is only ever sent with an all-ones
+plan, which is valid at any count — a flat eighty-root wall therefore still ships one
+band and paints byte-identically to the fallback. Three rules keep the choice
+disciplined:
 
 - **Candidates are priced by modeled page height** — consecutive source-order rows,
   each as tall as its tallest card — with the summed card heights breaking ties
@@ -261,37 +219,23 @@ the choice disciplined:
   monotonicity test therefore evaluates the active band's fixed cost immediately
   before and at every model event, not merely at published band starts.
 
-The wider-never-worse property is a **tested invariant, not a theorem**: the
-sweep re-examines every model event and can hold or adopt any count within the
-track-width rule, so a published rise would need the incumbent and every legal
-candidate to worsen at the same width. The tests assert the property across the
-hand-built counterexample fixtures — the nine-root mid-band column flip and the
-twelve-root auto-fill re-chunk — the live fixtures, and a seeded randomized
-sweep of mixed walls, probing both sides of every event.
+`_height_pieces` used to evaluate the whole subtree at every propagated threshold —
+0.4 s at a thousand leaves, 6.7 s at ten thousand, per poll — and now merges its
+**children's pieces bottom-up**, so each node's work is local (10,000 leaves:
+~150 ms); `_flow_height` stays as the straight-line reference with a differential
+test holding the two together. And the finished layout is **memoized on the
+depth-limited tree shape** plus the reason budget — the only inputs it ever reads —
+so a poll that changed nothing but statuses costs a dictionary lookup.
 
-Two performance fixes ride along, found by the same review. `_height_pieces` used
-to evaluate the whole subtree at every propagated threshold — 0.4 s at a thousand
-leaves, 6.7 s at ten thousand, per poll — and now merges its **children's pieces
-bottom-up**, so each node's work is local (10,000 leaves: ~150 ms); `_flow_height`
-stays as the straight-line reference with a differential test holding the two
-together. And the finished layout is **memoized on the depth-limited tree shape**
-plus the reason budget — the only inputs it ever reads — so a poll that changed
-nothing but statuses costs a dictionary lookup.
+### What a wider viewport promises — decided 2026-08-12
 
-Known and deliberate: dense mode still prices every visible node as a full
-box-and-reason host, so with chips on the model overestimates heights and can
-spend width the dense paint gains little from. That is the stability trade decided
-above — chip painting must not move cards — and it is recorded rather than tuned.
-
-## Update — 2026-08-12 (the promise is narrowed to what the planner controls)
-
-A fifteen-plus-one fixture ended the universal "wider never gets taller" claim:
+A fifteen-plus-one fixture rules out a universal "wider never gets taller" claim:
 fifteen leaf roots beside one root whose children are chains of heights
-(3, 3, 3, 7, 5). Inside an unchanged three-track band, the mixed card's **nested
-auto-fit** flips three columns to four, the 7-chain re-chunks beside the 5-chain
-instead of above it, and the card genuinely grows (modeled 16 → 18 rows; painted
-~1,141 → ~1,229 px) — while every alternative track count costs 28 or more. The
-incumbent itself becomes taller and there is nothing to switch to. The rise is
+(3, 3, 3, 7, 5). Inside an unchanged three-track band, the mixed card's
+**nested auto-fit** flips three columns to four, the 7-chain re-chunks beside the
+5-chain instead of above it, and the card genuinely grows (modeled 16 → 18 rows;
+painted ~1,141 → ~1,229 px) — while every alternative track count costs 28 or more.
+The incumbent itself becomes taller and there is nothing to switch to. The rise is
 the card's own: the planner controls outer tracks and spans, and this reflow
 happens a level below both.
 
@@ -323,9 +267,37 @@ worth that cost only if per-card reflow proves to annoy in practice.
   them, so no window exists in which a superseded plan is still on screen: a
   band start *is* a model event, never a rounded-up one.
 
-Two smaller corrections from the same review: the column tolerance was a full
-pixel while calling itself sub-pixel, skewing the model's flips a visible pixel
-from Chromium's — it is one tenth now, and a browser test holds model and paint
-to within a pixel of each other; and a docstring still claimed a fixed plan's
-cost "can only fall", which the nine-root fixture had already disproven — it now
-says what the repricing is actually for.
+## Consequences
+
+- Status and reason churn cannot move a root; topology, view controls, reason-cap
+  configuration and viewport capacity can.
+- Width is spent only in useful quanta. Some responsive rows intentionally retain
+  an empty track because the next usable nested column needs two or more.
+- A high reason budget gives a reason-capable topology more influence without the
+  unstable alternative of counting live reasons.
+- Mixed dense levels gain nested columns without turning every chip into a grid cell.
+- Poll payload is proportional to roots plus actual plan changes, rather than roots
+  multiplied by 32.
+- The `/little-sister` reservation still costs one namespace; a chip still trades
+  at-a-glance quiet reason text for density; both keep their original fallbacks.
+- Known and deliberate: dense mode still prices every visible node as a full
+  box-and-reason host, so with chips on the model overestimates heights and can
+  spend width the dense paint gains little from. That is the stability trade decided
+  above — chip painting must not move cards — and it is recorded rather than tuned.
+
+## Alternatives considered
+
+- **Equal-height uniform tiles** — maximal stability and balance, but wastes space
+  in the interactive overview. It remains a possible fixed-geometry kiosk design.
+- **CSS columns, masonry or dense packing** — closes holes but makes position depend
+  on live height, violating the stable-position rule.
+- **Live reason counts or browser-measured heights** — match one paint precisely and
+  make a status poll move cards. Rejected at the input boundary.
+- **Visible node count plus a 16-node entry price and maximum branch factor** —
+  deterministic but discontinuous at 16/17, blind to reason-cap configuration, and
+  unable to say which nesting widths are useful. This is the superseded ADR-0024
+  allocation.
+- **A `wide` or `weight` hint in `nodes.yaml`** — stable but couples deployment
+  metadata to presentation and ages as a check's topology changes.
+- **One grid item per chip** — opens mixed levels but destroys the compact wrapping
+  run. The full-row chip-run wrapper preserves both properties.

@@ -1,7 +1,7 @@
 # ADR-0018 — Markdown rendering for node text
 
 - **Status:** Accepted
-- **Date:** 2026-06-26
+- **Date:** 2026-08-23 (accepted 2026-06-26)
 - **Related:** [ADR-0012](0012-node-metadata.md) (`about`), [ADR-0013](0013-check-config-on-node.md)
   (check `config`), [ADR-0017](0017-node-title.md) (`title`) — the fields rendered
   here; [ADR-0007](0007-check-result-branches.md) (`CheckResult.reason`, where the
@@ -9,27 +9,6 @@
   Markdown, unchanged). A later ADR-0019 (inspection popover) will display much of
   this rendered text.
 - **Register:** [`../decisions.md`](../decisions.md)
-
-> **Update (2026-06-26):** image rendering — initially **disabled** here as a safety
-> measure (no remote `![]()` beacons or mixed content) — has been **enabled for now**.
-> Accepted tradeoff: an operator-authored `about` / `title` / `description` may embed a
-> remote image, so the browser will fetch arbitrary image URLs (a privacy-beacon /
-> mixed-content vector). Untrusted **reason** content is unaffected — the built-in
-> capturing checks route it through `plain()` / `code()`, which escape `[` / `]` so an
-> image can't form. Re-disabling is one line in `render.py`; a `Content-Security-Policy`
-> would let images stay on with host limits. The images-off test is
-> skipped while this holds.
-
-> **Update (2026-08-03):** an admin-authored **maintenance explanation** joins the
-> rendered fields. It uses the same block/inline filters and the same trust boundary;
-> raw HTML is still escaped, and the persisted/JSON value is still raw Markdown. See
-> *Maintenance explanations* below.
-
-> **Update (2026-08-03):** fully qualified bare `http://` and `https://` URLs are
-> linkified through markdown-it-py's own link rule. The scope is deliberately narrow:
-> bare domains, email addresses, FTP and protocol-relative text remain text, while the
-> generated links pass through the existing validation and hardening. See *Bare web
-> URLs* below.
 
 ## Context
 Several node fields are **Markdown** but shown as **plain text** today: `title`
@@ -53,10 +32,15 @@ filters; render **all four fields**, and give checks helpers to keep reason cont
    already swaps in server HTML; nothing moves to the client.
 2. **markdown-it-py, safe defaults.** Raw HTML is **escaped**, and link schemes are
    validated (`javascript:` / `vbscript:` / `file:` / unsafe `data:` dropped).
-   Additionally, rendered links get **`rel="noopener noreferrer"`**, and **images were
-   disabled** (no remote `![]()` beacons or mixed content) — since **enabled**, see the
-   Update note above. One runtime dependency (plus the tiny pure-Python `mdurl`); **no
-   second sanitizer**.
+   Additionally, rendered links get **`rel="noopener noreferrer"`**, and **images are
+   enabled for now**. Accepted tradeoff: an operator-authored `about` / `title` /
+   `description` may embed a remote image, so the browser will fetch arbitrary image
+   URLs (a privacy-beacon / mixed-content vector). Untrusted **reason** content is
+   unaffected — the built-in capturing checks route it through `plain()` / `code()`,
+   which escape `[` / `]` so an image can't form. Re-disabling is one line in
+   `render.py`; a `Content-Security-Policy` would let images stay on with host limits.
+   The images-off test is skipped while this holds. One runtime dependency (plus the
+   tiny pure-Python `mdurl`); **no second sanitizer**.
 3. **Reasons render like the rest, and the check author owns their safety.** The check
    base provides helpers to assemble a reason from untrusted / log content: **`plain(text)`**
    (escape Markdown specials so it renders literally) and **`code(text)`** (fence it as a
@@ -75,6 +59,10 @@ filters; render **all four fields**, and give checks helpers to keep reason cont
 ### Maintenance explanations
 *(decided 2026-08-03; the rendered-field set grows, nothing above is withdrawn)*
 
+An admin-authored **maintenance explanation** joins the rendered fields. It uses the
+same block/inline filters and the same trust boundary; raw HTML is still escaped, and
+the persisted/JSON value is still raw Markdown.
+
 6. **The explanation is authored Markdown.** `MaintenanceEntry.reason` is rendered as
    a block on full read surfaces and inline on compact summaries, through the same
    filters and policy as the node fields. The editor always receives the untouched raw
@@ -91,6 +79,11 @@ filters; render **all four fields**, and give checks helpers to keep reason cont
 
 ### Bare web URLs
 *(decided 2026-08-03; link recognition grows, nothing above is withdrawn)*
+
+Fully qualified bare `http://` and `https://` URLs are linkified through
+markdown-it-py's own link rule. The scope is deliberately narrow: bare domains, email
+addresses, FTP and protocol-relative text remain text, while the generated links pass
+through the existing validation and hardening.
 
 9. **An explicit web scheme is enough.** Plain `http://…` and `https://…` text becomes
    a link without requiring `<…>` or `[label](…)`. It produces the same `link_open`
@@ -113,7 +106,7 @@ filters; render **all four fields**, and give checks helpers to keep reason cont
   globally; our built-ins do this, and a custom check that forgets is the author's
   responsibility (operator-controlled — ADR-0007).
 - **No CSP and no extra sanitizer this slice.** The chosen posture is the safe renderer
-  + `rel=noopener` (images were off, now on — see the Update note). A
+  + `rel=noopener` (images are on). A
   `Content-Security-Policy` stays a worthwhile separate
   hardening step (it needs the filter form's `onchange` handlers externalized /
   nonced, and the CDN allowlisted — the poll script is already an external file)

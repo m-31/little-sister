@@ -1,16 +1,9 @@
 # ADR-0003 — Configuration & secrets via a `.env` file
 
 - **Status:** Accepted
-- **Date:** 2026-06-17
+- **Date:** 2026-08-23 (accepted 2026-06-17)
 - **Related:** [ADR-0001 — In-process threaded engine](0001-in-process-threaded-engine.md)
 - **Register:** [`../decisions.md`](../decisions.md)
-
-> **Update (2026-07-18):** the closing note below has been taken up:
-> [ADR-0023](0023-secret-references.md) extends this decision's reference-by-name rule
-> into a general **secret reference** — a bare environment-variable name (this ADR's
-> behavior, still the default) or a `scheme://address` reference resolved by a
-> deployment-registered resolver (e.g. AWS Secrets Manager). The `.env` mechanics
-> here are unchanged.
 
 ## Context
 little-sister needs a Flask **`secret_key`** (today hardcoded as `"TODO"` — see
@@ -54,3 +47,9 @@ file** via the process environment:
 If the deployment grows (multiple hosts, the JSON API, satellite tokens), revisit
 with a proper secret manager. The `.env` approach is intended as the simple
 initial baseline, consistent with ADR-0001's "no extra services yet".
+
+This note has been taken up: [ADR-0023](0023-secret-references.md) extends this
+decision's reference-by-name rule into a general **secret reference** — a bare
+environment-variable name (this ADR's behavior, still the default) or a
+`scheme://address` reference resolved by a deployment-registered resolver (e.g.
+AWS Secrets Manager). The `.env` mechanics here are unchanged.

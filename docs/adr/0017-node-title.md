@@ -1,24 +1,13 @@
 # ADR-0017 — Node title: a short display label
 
 - **Status:** Accepted
-- **Date:** 2026-06-26
+- **Date:** 2026-08-23 (accepted 2026-06-26)
 - **Related:** [ADR-0012](0012-node-metadata.md) (node metadata — `about`; `title`
   shares its sources and `nodes.yaml` shape), [ADR-0016](0016-node-addressing.md)
   (`name` is the derived last path segment `title` sits beside),
   [ADR-0008](0008-json-output-api.md) (JSON envelope, unchanged here). The
   Markdown-rendering item renders `title` too.
 - **Register:** [`../decisions.md`](../decisions.md)
-
-> **Update (2026-08-10):** decision §3 grows one case — **a title that only repeats
-> the node's name is not drawn at all**. Where a check has nothing better to say it
-> hands the name back with a capital letter, and a row of severity bands then reads
-> `critical Critical`, `medium Medium`. One predicate (`titles.py`) answers for every
-> surface; it folds case, `_` / `-` / a space and runs of whitespace, and nothing
-> else. This is display only and changes neither of the two things this record fixes
-> underneath it: the tree still stores the title, and the JSON envelope — added since,
-> per §4 — still emits it. Registered in
-> [`../decisions.md`](../decisions.md) (*A title that only repeats the name is not
-> drawn*).
 
 ## Context
 A node is identified by its `name` — the last segment of its absolute path
@@ -48,6 +37,16 @@ Add an optional **`title`** — a short display label for the node.
    and in the **page header** beside the `status / …` breadcrumb — on both a branch
    view and a **leaf's** detail page. The leaf's body still shows its `name` heading
    and `description`. The name/path identity is unchanged underneath.
+
+   **A title that only repeats the node's name is not drawn at all.** Where a check
+   has nothing better to say it hands the name back with a capital letter, and a row
+   of severity bands then reads `critical Critical`, `medium Medium`. One predicate
+   (`titles.py`) answers for every surface; it folds case, `_` / `-` / a space and
+   runs of whitespace, and nothing else. This is display only and changes neither of
+   the two things this record fixes underneath it: the tree still stores the title,
+   and the JSON envelope still emits it. Registered in
+   [`../decisions.md`](../decisions.md) (*A title that only repeats the name is not
+   drawn*).
 4. **Web-only this slice.** It surfaces in the snapshot and renders in the web UI;
    it is **not** added to the JSON envelope ([ADR-0008](0008-json-output-api.md)) here
    — that is the `status_envelope` item.

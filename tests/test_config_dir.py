@@ -10,11 +10,11 @@ from unittest import TestCase
 from little_sister.config_dir import (
     ASPECTS,
     CONFIG_DIR_ENV,
+    announce_aspects,
     aspect_files,
     aspect_in,
     config_roots,
     forget_aspects,
-    forget_scanned_roots,
     register_aspect,
     registered_aspects,
     sole_aspect_file,
@@ -194,12 +194,14 @@ class AspectFormTests(TestCase):
 
 
 class CandidateTests(TestCase):
-    def test_unknown_candidate_warns(self):
+    """What the report on unclaimed configuration files says, and when (ADR-0070)."""
+
+    def test_a_stray_file_is_reported(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "brand.yaml").write_text("name: acme\n")
             with self.assertLogs(level="WARNING") as logs:
-                config_roots(str(root))
+                announce_aspects(str(root))
             self.assertTrue(any("brand.yaml" in line for line in logs.output))
 
     def test_non_candidates_pass_in_silence(self):
@@ -213,29 +215,63 @@ class CandidateTests(TestCase):
             (root / ".keep").write_text("")
             (root / "checks").mkdir()
             with self.assertNoLogs(level="WARNING"):
-                config_roots(str(root))
+                announce_aspects(str(root))
 
-    def test_warning_is_emitted_once_per_root(self):
-        # Once per root per process — the point of the cache. Its lifetime is a
-        # process, so conftest clears it per test rather than letting test order
-        # decide whether a warning appears.
+    def test_resolving_a_root_says_nothing_at_all(self):
+        # The scan does not ride the resolution any more, and this is the whole of
+        # why: the first resolution in a real process is somebody's registration
+        # reading the aspect it has just declared.
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "brand.yaml").write_text("name: acme\n")
-            with self.assertLogs(level="WARNING"):
-                config_roots(str(root))
             with self.assertNoLogs(level="WARNING"):
                 config_roots(str(root))
+                aspect_files("nodes", str(root))
 
-    def test_the_cache_can_be_cleared(self):
+    def test_an_aspect_registered_after_another_has_read_a_root_is_not_reported(self):
+        # The defect this moved for, in the shape that produced it: every registrar
+        # in this family declares its aspect and then immediately reads it, so the
+        # first one to run performed the scan and named every aspect registered after
+        # it as unknown for the life of the process. The whole sequence is inside the
+        # assertion, because the old complaint was emitted by the *read* — asserting
+        # only about the report would pass on the broken code.
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "brand.yaml").write_text("name: acme\n")
-            with self.assertLogs(level="WARNING"):
-                config_roots(str(root))
-            forget_scanned_roots()
-            with self.assertLogs(level="WARNING"):
-                config_roots(str(root))
+            (root / "jira.yaml").write_text("project_id: '1'\n")
+            (root / "identity.yaml").write_text("issuer: https://sso.example\n")
+            with self.assertNoLogs(level="WARNING"):
+                register_aspect("jira")
+                aspect_files("jira", str(root))    # the declare-then-read shape
+                register_aspect("identity")
+                aspect_files("identity", str(root))
+                announce_aspects(str(root))
+
+    def test_the_report_covers_every_root_of_the_path_list(self):
+        # Including a root something has already resolved: the report is not a
+        # once-per-root event that an earlier read can spend.
+        with tempfile.TemporaryDirectory() as d1, tempfile.TemporaryDirectory() as d2:
+            (Path(d1) / "nodes.yaml").write_text("/a: {title: base}\n")
+            (Path(d2) / "node.yaml").write_text("/b: {title: site}\n")
+            spec = f"{d1}{os.pathsep}{d2}"
+            aspect_files("nodes", spec)
+            with self.assertLogs(level="WARNING") as logs:
+                announce_aspects(spec)
+            self.assertTrue(any(str(Path(d2) / "node.yaml") in line
+                                for line in logs.output))
+
+    def test_the_message_names_who_reads_each_known_aspect(self):
+        # Most of the value of reporting late: `identiy.yaml` sits one character from
+        # an `identity` the line now attributes, so the log points at the typo rather
+        # than merely reporting that something is unclaimed.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "identiy.yaml").write_text("issuer: https://sso.example\n")
+            register_aspect("identity")
+            with self.assertLogs(level="WARNING") as logs:
+                announce_aspects(str(root))
+            line = "\n".join(logs.output)
+            self.assertIn("identity (tests)", line)
+            self.assertIn("known: actions, checks", line)   # a built-in stays bare
 
 
 class LayerTests(TestCase):
@@ -284,7 +320,7 @@ class RegisteredAspectTests(TestCase):
             (root / "jira.yaml").write_text("project_id: '1'\n")
             register_aspect("jira")
             with self.assertNoLogs(level="WARNING"):
-                config_roots(str(root))
+                announce_aspects(str(root))
 
     def test_a_registered_aspect_is_read_like_any_other(self):
         with tempfile.TemporaryDirectory() as d1, tempfile.TemporaryDirectory() as d2:

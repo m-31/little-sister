@@ -78,12 +78,11 @@ timestamps shown in it?
 **A:** In a YAML **`config.yaml`** (read once; defaults on missing keys). Options so
 far: `timezone` (default `Europe/Berlin`) and `time_format`. Timestamps are stored
 as server-local and **converted at display** to the configured zone via a
-`localtime` Jinja filter (`zoneinfo` + `tzdata`).
-
-*Amended 2026-08-08.* The same zone interprets an admin's **unzoned maintenance
-expiry**. Explicit `Z` / numeric offsets win; a DST hole or fold is refused. The
-resolved instant returns to the existing naive server-local storage convention, so
-the persistence and JSON timestamp contracts do not change.
+`localtime` Jinja filter (`zoneinfo` + `tzdata`). The same zone also **interprets**
+what an admin writes: an unzoned maintenance expiry is read in it, an explicit `Z` or
+numeric offset wins, and a DST hole or fold is refused rather than guessed. The
+resolved instant returns to the naive server-local storage convention, so the
+persistence and JSON timestamp contracts are unchanged.
 
 → Full record: [`adr/0006-config-file-and-timezones.md`](adr/0006-config-file-and-timezones.md)
 
@@ -195,78 +194,67 @@ entries no configured check **covers** (segment-wise on the same root-to-leaf li
 subsystem and unreachable-branch-leaf pins survive). A deliberate stopgap the
 persistence phase subsumes.
 
-*Amended 2026-08-02 — editing a pin, and two admins writing it.* A pinned node offered
-only *Clear*, so extending a window meant clearing and re-setting: the node alarmed in
-the gap, and a blank reason falling back to the literal `maintenance` usually threw the
-explanation away. And the write had no precondition, so two admins a minute apart
-silently lost the first one's words. Now: the set form is **reachable while pinned and
-prefilled** with the stored reason, beside *Clear* — duration deliberately **not**
-prefilled, so blank means the configured default here exactly as it does on an unpinned
-node. The entry carries **both dates** — `created_at` / `created_by` beside `set_at` /
+A pin is **editable in place**, because offering only *Clear* meant that extending a
+window was a clear and a re-set: the node alarmed in the gap, and a blank reason falling
+back to the literal `maintenance` usually threw the explanation away. The set form is
+**reachable while pinned and prefilled** with the stored reason, beside *Clear* —
+duration deliberately **not** prefilled, so blank means the configured default here
+exactly as it does on an unpinned node, while a **blank reason on an edit keeps the
+stored text**, blank meaning *"I did not touch this field"*; on a new pin the literal
+`maintenance` stays the placeholder. Reading comes first and editing is on intent: a
+pinned item shows its rendered explanation, authorship and expiry, and only an explicit
+*Edit* reveals the prefilled raw-Markdown textarea beside the blank new-window field. A
+member reason's control occupies a stable end rail and opens only on activation — hover
+never inserts a form into the pointer's path.
+
+The entry carries **both dates** — `created_at` / `created_by` beside `set_at` /
 `set_by`, which keep meaning *the last write*; absent from an older file they default to
-the set values, so it loads unchanged. The write becomes a **compare-and-set** on
-`set_at`, carried as a hidden token (empty = *"nothing is pinned"*) and **exact**, since
-one process holds one lock ([ADR-0001](adr/0001-in-process-threaded-engine.md),
+the set values, so it loads unchanged. The write is a **compare-and-set** on `set_at`,
+carried as a hidden token (empty = *"nothing is pinned"*) and **exact**, since one
+process holds one lock ([ADR-0001](adr/0001-in-process-threaded-engine.md),
 [ADR-0002](adr/0002-rlock-snapshot-synchronization.md)); on a mismatch nothing is
 written and both texts come back, the admin's own preserved, with one click to take the
-stored ones instead. `action=clear` carries the same token. An **edit emits an event** —
+stored ones instead. `action=clear` carries the same token. Without the precondition two
+admins a minute apart silently lost the first one's words. An **edit emits an event** —
 `MAINTENANCE -> MAINTENANCE` is invisible to the code test — but a no-op re-submit does
-not. Lands **before** per-entry pins ([ADR-0036](adr/0036-addressable-reasons.md)),
-because the same guard has to cover `(path, slug)` and a token designed once is a token
-not built twice.
+not.
 
-*Amended again the same day — the key widens.* A pin may name **one reason** of a node
-([ADR-0036](adr/0036-addressable-reasons.md)), so the side-table is keyed `(path, slug)`
-as well as `path` and the file holds two tables, `{"nodes": …, "entries": …}`. One
-mechanism at two depths: same entry shape, same token, same replay, reap and sweep —
-only the effect differs, since an entry pin writes nothing into the tree and is joined
-at snapshot time, which is what [ADR-0032](adr/0032-status-contribution-boundary.md)
-rule 3 asks for. The file's new shape is a **clean break** with the bare node table:
-no reader for the old one, no migration, an ignored file warned about and rewritten on
-the next save — runtime state the program owns and bounds with a finite expiry, so a
-compatibility branch in the read path forever is the worse trade. An entry pin emits
-**no event**, because it changes no stored code.
+The key is **`(path, slug)` as well as `path`**, since a pin may name one reason of a
+node ([ADR-0036](adr/0036-addressable-reasons.md)), and the file holds two tables,
+`{"nodes": …, "entries": …}`. One mechanism at two depths: same entry shape, same token,
+same replay, reap and sweep — only the effect differs, since an entry pin writes nothing
+into the tree and is joined at snapshot time, which is what
+[ADR-0032](adr/0032-status-contribution-boundary.md) rule 3 asks for. Its guarded set
+carries `(path, slug, set_at)`, so rewording or extending an entry pin never clears it
+or lets the finding alarm in the gap, and it emits **no event**, because it changes no
+stored code. That file shape is a **clean break** with the bare node table: no reader
+for the old one, no migration, an ignored file warned about and rewritten on the next
+save — runtime state the program owns and bounds with a finite expiry, so a
+compatibility branch in the read path forever is the worse trade, and a future shape
+change follows the same hard-cut rule.
 
-*Amended again 2026-08-02 (after review) — a positive, bounded window, and a blank
-field that changes nothing.* §4 promised a **finite** expiry; finite was not enough.
-A zero or negative duration parsed cleanly, landed `expires_at` in the past, and the
-next sweep dropped the entry — reason and both authorships gone within a tick, behind
-a redirect that looked like success, which is the lost-explanation failure the
-compare-and-set guard exists to prevent arriving through the other door. At the far
-end, an enormous duration overflowed the date arithmetic and `inf` overflowed the
-parser, neither of them a `CheckError`, so a typo became a 500. A window is now **at
-least one second and at most a year**, and out of range is **refused, not clamped** —
-the form returns with the admin's words and a sentence saying what was wrong, the same
-page a refused compare-and-set uses, because the situation is the same. Only the
-deployment's configured default still falls back. And a **blank reason on an edit keeps
-the stored text**: blank means *"I did not touch this field"*, so an edit that only
-moves the window keeps the explanation; on a new pin the literal `maintenance` stays
-the placeholder.
+**Finite was not enough** for §4's expiry. A zero or negative duration parsed cleanly,
+landed `expires_at` in the past, and the next sweep dropped the entry — reason and both
+authorships gone within a tick, behind a redirect that looked like success, which is the
+lost-explanation failure the compare-and-set guard exists to prevent, arriving through
+the other door. At the far end an enormous duration overflowed the date arithmetic and
+`inf` overflowed the parser, neither of them a `CheckError`, so a typo became a 500. A
+window is **at least one second and at most a year**, and out of range is **refused, not
+clamped** — the form returns with the admin's words and a sentence saying what was
+wrong, the same page a refused compare-and-set uses, because the situation is the same.
+Only the deployment's configured default still falls back.
 
-*Amended 2026-08-02 — read first, edit on intent.* The in-place edit now applies to
-an **entry pin** as well as a node pin. A pinned item shows its rendered explanation,
-authorship and expiry first; explicit *Edit* reveals the prefilled raw-Markdown
-textarea and the existing blank new-window field, while *Clear* stays separate. A
-member reason's maintenance control occupies a stable end rail and opens only on
-activation — hover never inserts a form into the pointer's path. The entry's guarded
-set carries `(path, slug, set_at)`, so rewording or extending it never clears the pin or
-lets the finding alarm in the gap. This changes no side-table field or file shape and
-needs no migration; a future shape change follows the existing hard-cut rule rather
-than adding a compatibility reader.
-
-*Amended again 2026-08-02 — name the expiry directly.* The maintenance field accepts
-unit-suffixed durations or a small calendar grammar: full ISO date/time, `MM-DD`, a
-day of month, `HH:MM`, or weekday plus time. Blank still uses the configured duration;
-digits now mean day-of-month, so seconds carry `s`. Shortcuts choose their next future
-occurrence in the configured timezone, never clamp an impossible date, refuse DST
-holes/folds, and still obey the one-second-to-365-day bound. A native click-opened help
-table beside every shared field makes the exact grammar discoverable. All forms still
-resolve to the existing `expires_at`; no persistence or JSON shape changes.
-
-*Amended again 2026-08-02 — bare weekday at noon.* A weekday without an explicit time,
-abbreviated or full and in any letter case, means its next occurrence at 12:00 in the
-configured timezone. When today has that name it always means the following week,
-independent of the current time; an explicitly supplied time may still select today.
+The field **names the expiry directly**: unit-suffixed durations, or a small calendar
+grammar — full ISO date/time, `MM-DD`, a day of month, `HH:MM`, or weekday plus time.
+Blank still uses the configured duration; digits mean day-of-month, so seconds carry
+`s`. A **bare weekday**, abbreviated or full and in any letter case, means its next
+occurrence at 12:00 in the configured timezone, and when today carries that name it
+always means the following week, independent of the current time — an explicitly
+supplied time may still select today. Shortcuts choose their next future occurrence,
+never clamp an impossible date, refuse DST holes and folds, and obey the same
+one-second-to-365-day bound. A native click-opened help table beside every shared field
+makes the exact grammar discoverable. All forms resolve to the existing `expires_at`; no
+persistence or JSON shape changes.
 
 → Full record: [`adr/0014-maintenance-persistence.md`](adr/0014-maintenance-persistence.md)
 
@@ -323,28 +311,28 @@ yet. The path/name identity (ADR-0016) is untouched.
 
 **A:** Render **server-side** via Jinja `markdown` (block) / `markdown_inline` filters,
 using **markdown-it-py** with safe defaults — raw HTML escaped, link schemes validated —
-plus `rel="noopener noreferrer"` on links (images were disabled, since **enabled** — see
-the ADR Update note). One runtime dep
+plus `rel="noopener noreferrer"` on links (images were disabled, since **enabled**).
+One runtime dep
 (+ tiny `mdurl`); no CSP or extra sanitizer this slice. `reasons` are the check author's
 responsibility (operator-controlled, ADR-0007); the check base provides **`plain()`**
 (escape Markdown) and **`code()`** (fence log output) so a check folds external bytes in
 safely, and the built-in capturing checks use them. `title`/`description` render inline;
 `about`/`reasons` as a block. The JSON envelope is unchanged (raw Markdown).
 
-*Amended 2026-08-02 — maintenance explanations.* The admin-authored
-`MaintenanceEntry.reason` joins the rendered fields: block rendering on full read
-surfaces, inline rendering plus CSS clamping in compact summaries, and the untouched
-source in every editor. Raw HTML stays escaped and unsafe schemes stay rejected. The
-literal `maintenance` sentinel is not displayed; the persisted string and
-`maintenance_details.reason` remain raw Markdown in the same storage/API shapes.
+The admin-authored `MaintenanceEntry.reason` is one of the rendered fields: block
+rendering on full read surfaces, inline rendering plus CSS clamping in compact
+summaries, and the untouched source in every editor. Raw HTML stays escaped and unsafe
+schemes stay rejected. The literal `maintenance` sentinel is not displayed; the
+persisted string and `maintenance_details.reason` remain raw Markdown in the same
+storage and API shapes.
 
-*Amended 2026-08-02 — bare web URLs.* Fully qualified bare `http://` and `https://`
-URLs render as links through markdown-it-py's linkification rule and receive the same
-scheme validation, new-tab target and `noopener noreferrer` relation as explicit
-Markdown links. Recognition is deliberately limited to those two schemes: schemaless
-domains, email addresses, FTP, protocol-relative text, code spans and `plain()`-wrapped
-captured output stay literal. The runtime dependency now uses the
-`markdown-it-py[linkify]` extra rather than an in-house URL recognizer.
+Fully qualified **bare `http://` and `https://` URLs** render as links, through
+markdown-it-py's linkification rule and with the same scheme validation, new-tab target
+and `noopener noreferrer` relation as explicit Markdown links. Recognition is
+deliberately limited to those two schemes: schemaless domains, email addresses, FTP,
+protocol-relative text, code spans and `plain()`-wrapped captured output stay literal.
+The runtime dependency takes the `markdown-it-py[linkify]` extra rather than an in-house
+URL recognizer.
 
 → Full record: [`adr/0018-markdown-rendering.md`](adr/0018-markdown-rendering.md)
 
@@ -485,16 +473,39 @@ no-JavaScript fallback.
 through a per-path `nodes.yaml` entry — so a **type-inherent** subnode identity has to
 be copy-pasted into every deployment and host. Where should those labels come from?
 
-**A:** From the **result value**: `CheckResult` gains `about` / `title`, read only on a
-**child** (ignored on the root, like `name`, which keeps its `nodes.yaml` / inline-check
-sources). Precedence per field is **`nodes.yaml` > check-provided > empty**, kept by
-**seed-once** semantics — startup seeding (`set_about` / `set_title`) overwrites, the
-engine's runtime write **fills an empty field only**; since `nodes.yaml` is seeded before
-the first tick it always wins, so neither tree nor engine needs provenance state. Labels
-**freeze at first fill** (stable identity, not live status — changing text is `reason`).
-`description` / `config` stay write-through; the JSON contract and web surface are
-unchanged. A **yaml-aware engine** and **per-field provenance on `Status`** were rejected
-as buying live label updates nothing needs.
+**A:** From the **type**, and read by the **library**: a check only declares. A type
+states `subnode_defaults` (`name → {title, about, show_when_quiet}` — the shipped
+per-aspect maps, shaped like the `subnodes:` block itself) and `label_tokens`
+(`token → value`) as common constructor keywords beside the block's flag map; the
+library resolves each field once — configured text when present, else the declared
+default, `{default}` substituted and `{token}`s expanded by the same plain replace — and
+the engine stores the resolved text per child name, at any depth. Precedence per field
+is **`nodes.yaml` > declared or check-provided > empty**, kept by **seed-once**
+semantics: startup seeding (`set_about` / `set_title`) overwrites, the engine's runtime
+write **fills an empty field only**, and since `nodes.yaml` is seeded before the first
+tick it always wins, so neither tree nor engine needs provenance state. Labels **freeze
+at first fill** (stable identity, not live status — changing text is `reason`), which
+also pins tokens to construction-time facts structurally. A label carried on a
+`CheckResult` **child** — `about` / `title`, ignored on the root like `name` — remains
+the fallback for a name nothing declared or configured, so a check stamping a
+dynamically discovered child keeps working.
+
+The block was check-mediated at first, on the argument that layering the labels needs
+the type's own default text and tokens. That argument is contingent rather than
+principled: it held only while those defaults lived as *code the check applies*.
+Declaring them as data closes two holes — a `subnodes:` label on a type that never read
+the block was a silent no-op and now reaches every branch type, and substitution becomes
+one library contract, plain `str.replace` with token values inserted as Markdown-active
+text and raw HTML escaped at render
+([ADR-0018](adr/0018-markdown-rendering.md)), so a check exposes only values it would
+print as Markdown. `parse_subnodes`, `resolve_text` and `expand_tokens` lose their
+external callers and retire from the authoring facade — a **breaking** surface change
+taken deliberately, with every consumer family-owned and moving in lockstep, no
+compatibility window, said at the top of the release notes. The per-leaf `descriptions:`
+map is untouched (a different field, write-through); `description` / `config` stay
+write-through, and the JSON contract and web surface are unchanged. A **yaml-aware
+engine** and **per-field provenance on `Status`** were rejected as buying live label
+updates nothing needs.
 
 → Full record: [`adr/0025-check-provided-subnode-metadata.md`](adr/0025-check-provided-subnode-metadata.md)
 
@@ -519,30 +530,6 @@ metadata the origin renders: **`about`**, **`title`**, **`config`** as **raw Mar
 maintenance) beside the existing **`maintenance`** bool — the bool is left **unchanged**
 (repurposing it to an object would be breaking). Contract:
 [`api/openapi.yaml`](api/openapi.yaml). Recorded here, no ADR.
-
-### ADR-0004 (2026-08-01 update) — A failing check shows its stack trace
-**Q:** When a check raises, the node shows only `check error: <message>` while the
-trace goes to the log. On a deployment whose log is awkward to reach — a container,
-someone else's cloud — that is the one piece of information the operator needs and
-cannot get from the dashboard. Should the trace go on the node?
-
-**A:** **Yes, by default.** A second reason carries the innermost 5 frames as a
-`code()` block (verbatim and inert, ADR-0018), chained causes included; `config.yaml`'s
-**`stacktrace: false`** turns it off where the dashboard has a wider audience than its
-logs. Global rather than per-check: a check that raises unexpectedly is exactly the one
-nobody thought to flag in advance, so an opt-in switch would be off when it mattered.
-Folded into `reason` rather than given its own `Status` field — `reason_cap` then clamps
-it on the dashboard, the detail page shows it in full, and the JSON envelope carries it
-with no schema change. The exception **message** is now escaped with `plain()` in the
-same pass, which it never was.
-
-Recorded as an update to [ADR-0004](adr/0004-status-aggregation-semantics.md), which
-gains *A check that fails* — stating that any exception, timeout or non-`CheckResult`
-return becomes `ERROR` (never a skipped update, never a stale OK), and why that is
-`ERROR` rather than `UNDEFINED`. `engine.py` had cited ADR-0004 for exactly this since
-it was written, with nothing in the ADR to point at.
-
-→ Full record: [`adr/0004-status-aggregation-semantics.md`](adr/0004-status-aggregation-semantics.md)
 
 ### ADR-0026 — Reading values from decoded bags (`values.py`)
 **Q:** Config blocks and API payloads decode to bags of `Any`, and `Any` is assignable
@@ -597,7 +584,7 @@ malformed reference — no scheme (a pasted secret, typically) or an unknown one
 fails loudly at load like any config error, without quoting what it rejected; a
 failed **resolution** pins the check to a visible ERROR instead of aborting the
 engine. `SECRET_KEY` and the API-token setting may themselves be references
-(`resolve_setting` — see the ADR's update note), and `SECRET_KEY` unset now means
+(`resolve_setting` — see the record), and `SECRET_KEY` unset now means
 a **random per-start key**.
 
 → Full record: [`adr/0023-secret-references.md`](adr/0023-secret-references.md)
@@ -633,17 +620,16 @@ min-rolled root look ancient) — the frequency-normalized freshness signal rema
 observation times do not aggregate. Cards show the time when present; the JSON
 `timestamp` becomes nullable with the same semantics.
 
-*Amended 2026-08-08 — the mount registry **counts checks per path**
-([ADR-0044](adr/0044-run-facts-on-the-node.md)).* An unwritten ancestor above one
-mount **shared by two checks** now inherits **no** stamp: the set collapsed the pair
-into one "sole" mount, so rule 3 attributed upward a value that flips between two
-checks' run times — rule 4's ambiguity. The shared node itself keeps its own last
-write (rule 2). A branch check's own mount needed no new stamping — it is written
-every run, as the context says; its bare look was display-only, closed by ADR-0044's
-topmost-visible rule (both records carry the correction in their update notes). The
-engine now writes the run's **facts** — wall time and armed next slot — beside each
-result, and the snapshot resolves them exactly where the count is one; nothing is
-synthesized from children.
+The mount registry **counts checks per path**
+([ADR-0044](adr/0044-run-facts-on-the-node.md)), so an unwritten ancestor above one
+mount **shared by two checks** inherits **no** stamp: a set collapsed the pair into one
+"sole" mount, and rule 3 then attributed upward a value that flips between two checks'
+run times — rule 4's ambiguity. The shared node itself keeps its own last write
+(rule 2). A branch check's own mount needs no separate stamping — it is written every
+run; its bare look was display-only, closed by ADR-0044's topmost-visible rule (both
+records carry the correction). The engine writes the run's **facts** — wall time and
+armed next slot — beside each result, and the snapshot resolves them exactly where the
+count is one; nothing is synthesized from children.
 
 → Full record: [`adr/0027-observation-timestamp-semantics.md`](adr/0027-observation-timestamp-semantics.md)
 
@@ -736,40 +722,39 @@ runbook through its own config ([ADR-0025](adr/0025-check-provided-subnode-metad
 so no structured per-node `links:` field is added — the page is general helpers, the node
 knows its own subject.
 
-**Update (2026-07-31):** the client-side filter matches **the entry's title and its
-group's** — still titles, never prose. Measured on the first real page rather than
-reasoned about: with entry titles alone, typing a category name matched nothing at all,
-which reads as a broken page rather than as a narrow rule.
+The client-side filter matches **the entry's title and its group's** — still titles,
+never prose. Measured on the first real page rather than reasoned about: with entry
+titles alone, typing a category name matched nothing at all, which reads as a broken
+page rather than as a narrow rule.
 
-**Update (2026-08-01):** the search path gains a rung — **`config/links/icons/` is the
+The search path has one more rung than the roster above: **`config/links/icons/` is the
 deployment's own pack, discovered by file name**, so a file dropped there needs no
-`icons:` entry. Above the packs a dependent package registers, below the map (which
-stays the way to name a URL or say `none`); pairs follow the built-in pack's
+`icons:` entry. It sits above the packs a dependent package registers and below the map
+(which stays the way to name a URL or say `none`); pairs follow the built-in pack's
 `<name>-on-light.*` naming.
 
-**Update (2026-08-02):** reachability is probed **when somebody opens the page**, not on
-a timer, and only when the newest answer is older than `interval:` — which keeps its name
-and its `6h` default while changing meaning from *how often a timer fires* to *how stale
-an answer may be*. The pass never blocks the render: the page shows what is in memory
-with each verdict's age, and one open's pass lands on the next. The audience was always
-the reader of this page; structural validation already covers every icon that is not
-remote, so a timer would mostly probe an empty set; and the engine's tick would have
-bought a scheduler seam that is skipped exactly where the page still works. *Every n-th
-open* was rejected against it — a count refreshes five times under a reloading reader and
-never under a twice-a-day one. *Never blocks* governs the **open**, not the reader: a
-deliberate **check now** control re-probes on demand and does wait, under a deadline,
-sharing the one pass.
+Reachability is probed **when somebody opens the page**, not on a timer, and only when
+the newest answer is older than `interval:` — which keeps its name and its `6h` default
+while meaning *how stale an answer may be* rather than *how often a timer fires*. The
+pass never blocks the render: the page shows what is in memory with each verdict's age,
+and one open's pass lands on the next. The audience was always the reader of this page;
+structural validation already covers every icon that is not remote, so a timer would
+mostly probe an empty set; and the engine's tick would have bought a scheduler seam that
+is skipped exactly where the page still works. *Every n-th open* was rejected against it
+— a count refreshes five times under a reloading reader and never under a twice-a-day
+one. *Never blocks* governs the **open**, not the reader: a deliberate **check now**
+control re-probes on demand and does wait, under a deadline, sharing the one pass.
 
-*Amended again 2026-08-02 (after review).* An `interval:` the parser cannot read, or a
-non-positive one, **falls back to the default** rather than raising — the loader keeps
+Two things a first reading of that got wrong. An `interval:` the parser cannot read, or
+a non-positive one, **falls back to the default** rather than raising — the loader keeps
 the key as raw text and validates nothing, so `6 hours` took `GET /links` to a 500. And
 a target whose server answers garbage costs its own verdict, not the pass:
-`http.client.HTTPException` is neither an `OSError` nor a `ValueError` and escaped the
-probe unwrapped, leaving every remaining target unanswered — which the trigger read as
+`http.client.HTTPException` is neither an `OSError` nor a `ValueError`, escaped the
+probe unwrapped, and left every remaining target unanswered — which the trigger read as
 "never asked" and retried on every subsequent open.
 
-*Amended once more 2026-08-02.* **A pass carries its own deadline and abandons what has
-not answered.** `REQUEST_TIMEOUT` bounds a socket *operation*, not a request, so a server
+**A pass carries its own deadline and abandons what has not answered.**
+`REQUEST_TIMEOUT` bounds a socket *operation*, not a request, so a server
 that dribbles a byte every four seconds never times out — and since the executor was
 entered as a context manager and the single pass slot released only on the way out, that
 one host froze reachability for the life of the process. It cannot be cancellation: a
@@ -803,8 +788,10 @@ links merge by title, `settings.yaml` shallow-merges per key, and `users.yaml` i
 security question wearing a convenience costume. An aspect is `config/<aspect>.yaml` when
 it is only data and `config/<aspect>/` when it also carries files beside it (checks and
 their scripts, links and their icons, a brand and its assets); **both forms present is an
-error**, and an unrecognized entry **warns and is ignored**, so an operator's stray file
-can never stop the monitor. `config.yaml` becomes **`config/settings.yaml`** and
+error**, and an unrecognized entry **warns and is ignored** — reported once at the end of
+the registration window rather than when a root is resolved
+([ADR-0070](adr/0070-the-unclaimed-file-report-runs-at-the-end-of-registration.md)) — so an
+operator's stray file can never stop the monitor. `config.yaml` becomes **`config/settings.yaml`** and
 `users.yaml` becomes **`config/users.yaml`** in the same move — a deployment reorganizes
 **once**, not once per aspect — while `LITTLE_SISTER_CONFIG` remains an explicit
 single-file override that **bypasses layering entirely** (the matching user-list
@@ -859,7 +846,7 @@ today — both fields already exist and staleness is the one transform; maintena
 ([ADR-0014](adr/0014-maintenance-persistence.md)) is the single implementation that
 breaks the rule and is what a policy decision would correct.
 
-**Update (2026-08-01):** the boundary reaches **one level below a node**. A node's
+The boundary reaches **one level below a node**. A node's
 reasons are addressable keyed entries ([ADR-0036](adr/0036-addressable-reasons.md))
 and an entry may carry its own suppression; the entries are then **virtual children**
 — each unsuppressed one contributes the node's reported status, a suppressed one
@@ -926,45 +913,38 @@ no slot, and `/system` lists what registered. First slot: `reason.actions`
 leaf page. Extension **static assets** are explicitly not in this decision; the
 JSON envelope is untouched.
 
-*Amended 2026-08-02 — the second slot.* The roster gains **`node.actions`**, context
-`(node, surface)`, in a card head and beside the status on a leaf's own page. A slot is
+`reason.actions` also hands over the context name **`line`**: the whole reason entry,
+carrying the **slug** an action needs to address one finding, plus its own code, its
+`running` flag and any pin. `reason` stays the line's text. Recovering the entry from
+`index` was possible and is what [ADR-0036](adr/0036-addressable-reasons.md) decision 3
+refuses — an index moves when an entry is inserted above it. With it comes the rule the
+roster was missing: **a provider receives the names it declares**, or all of them when
+it declares `**kwargs`, so a growing context can never cost a filler written against an
+earlier one its chip. Adding a name was always called a compatible change; that is what
+makes it one in fact.
+
+The second slot is **`node.actions`**, context `(node, surface)`, in a card head, on
+each **nested box** under a card, and beside the status on a leaf's own page. A slot is
 added when something asks for one, and [ADR-0036](adr/0036-addressable-reasons.md) did:
 its members/prose split decides where a deployment's action belongs — on a line where
 the reasons are addressable members, on the **node** where they are prose, since a
-per-line control there would offer to raise a ticket about a stack trace. Additive; the
-mechanism and `reason.actions` are unchanged, and both slots are offered on every node
-with the filler declining by returning `None`, so this adds a place and not a policy.
+per-line control there would offer to raise a ticket about a stack trace. The nested
+boxes are in the roster because the first deployment to fill the slot found the gap by
+rendering: a card is the top of a subtree and is usually a container with no reading of
+its own, so a filler that declines a node with nothing to say declines exactly the nodes
+that have card heads — while the failing **leaf**, which is what an action is nearly
+always about, sat in a box that carried no slot at all. A quiet leaf stays a chip and
+carries none. Both slots are offered on every node, with the filler declining by
+returning `None`, so the roster names places and never policy; `where` is part of the
+version contract, which is why it is recorded here rather than left to the template.
 
-*Amended 2026-08-02 — `node.actions` on every box.* The slot is offered on each
-**nested box** under a card as well as on the card head. The first deployment to
-fill it found the gap by rendering: a card is the top of a subtree and is usually
-a container with no reading of its own, so a filler that declines a node with
-nothing to say declines exactly the nodes that have card heads — while the
-failing **leaf**, which is what an action is nearly always about, sat in a box
-that carried no slot at all. A quiet leaf stays a chip and carries none. Nothing
-about the seam changes; this widens the roster's `where`, which is part of the
-version contract, so it is recorded rather than left to the template.
-
-*Amended 2026-08-16 — the rail veils what it overlays.* In a card head the
-`node.actions` rail is positioned **over** the title's space — a chip is something to
-click, a title is a nicety — and a chip is transparent so it reads on every status
-fill; together those drew both sets of glyphs into the same pixels. Every card and
-node box now declares its fill as **`--ls-surface`**, and the rail repaints that exact
-fill beneath its chips while they are showing, the title fading into it; a card at
-rest keeps its whole title. Presentation only — no context, filler, markup or
-placement change — and no ink meets a new background, so every measured pair holds.
-
-*Amended 2026-08-15 — `line`, and what a provider is handed.* `reason.actions`
-gains the context name **`line`**: the whole reason entry, carrying the **slug** an
-action needs to address one finding, plus its own code, its `running` flag and any
-pin. `reason` stays the line's text and no existing filler moves. Recovering the
-entry from `index` was possible and is what
-[ADR-0036](adr/0036-addressable-reasons.md) decision 3 refuses — an index moves when
-an entry is inserted above it. With it comes the rule the roster was missing: **a
-provider receives the names it declares**, or all of them when it declares
-`**kwargs`, so a growing context can never cost a filler written against an earlier
-one its chip. Adding a name was always called a compatible change; this is what
-makes it one in fact.
+One presentation rule belongs with them. In a card head the `node.actions` rail is
+positioned **over** the title's space — a chip is something to click, a title is a
+nicety — and a chip is transparent so that it reads on every status fill; together those
+drew both sets of glyphs into the same pixels. Every card and node box declares its fill
+as **`--ls-surface`**, and the rail repaints that exact fill beneath its chips while
+they are showing, the title fading into it; a card at rest keeps its whole title. No
+ink meets a new background, so every measured contrast pair holds.
 
 → Full record: [`adr/0034-template-slots-for-dependent-packages.md`](adr/0034-template-slots-for-dependent-packages.md)
 
@@ -975,7 +955,13 @@ operator must edit. Where do they go — and how, without the library warning
 about the file on every start?
 
 **A:** `config_dir.register_aspect(name, as_file=…, as_directory=…)`, called in
-the same import-before-app slot check types and icon packs use. The library's
+the same import-before-app slot check types and icon packs use — a rule about the
+**read**, not about the warning: `aspect_in` looks the name up in `ASPECTS`, so an
+undeclared aspect is a `KeyError` rather than a diagnosis. The warning could not have
+been the reason, because the registering call is **itself** the first resolution, which
+made the rule as first written unfollowable; the scan is silent now and the report runs
+at the end of the registration window
+([ADR-0070](adr/0070-the-unclaimed-file-report-runs-at-the-end-of-registration.md)). The library's
 `BUILTIN_ASPECTS` is the floor: a registration naming one of them is refused
 with both shapes logged. A registered aspect is then an **ordinary** aspect —
 same shape enforcement, same path-list layering (`aspect_files`), same
@@ -1018,7 +1004,7 @@ the snapshot joins them ([ADR-0032](adr/0032-status-contribution-boundary.md)
 rule 3, honoured from the start for once). **Absence suspends a pin; only expiry
 disposes of it** — a failed check replaces its whole reason map, so
 delete-on-absence would discard every pin on a bad minute. The entries are
-**virtual children** (the ADR-0032 amendment of the same date): the node's own
+**virtual children** (ADR-0032 decision 8): the node's own
 status is the worst of the unsuppressed set, `MAINTENANCE` when none is left.
 A per-entry pin takes the **cap**, not the `escapes` threshold — an entry has no
 severity of its own. Staleness still judges the raw reading, quiet entries are
@@ -1032,20 +1018,16 @@ Rejected: a node per entry (the event log alone — 200 findings is a fifth of t
 deque — plus the envelope, the density budget and a tree-level prune, all to buy a
 history we are not taking).
 
-*Amended 2026-08-02 — built.* The write's form field is **`slug`**, not `reason`: that
-name is already the pin's explanation text on the same form. The optional linkable
-`/maintenance/<path:branch>?reason=<slug>` page is not built; the leaf detail page the
-decision names as the surface carries the control. The widened key is persisted by
-[ADR-0014](adr/0014-maintenance-persistence.md)'s amendment of the same date — one
-side-table, one file, two tables in it — and that file's shape is a **clean break**,
-not a migration.
+As built, the write's form field is **`slug`**, not `reason`: that name is already the
+pin's explanation text on the same form. The widened key is persisted by
+[ADR-0014](adr/0014-maintenance-persistence.md) — one side-table, one file, two tables
+in it — and that file's shape is a **clean break**, not a migration.
 
-*Amended again 2026-08-02 — an entry pin reports where a node pin does.* The first
-pass built setting one and forgot indexing it: the maintenance index walked node pins
-only, so a silenced reason reached neither the strip pill, nor the "contains
-maintenance" pip, nor `/maintenance` — and a node whose members were **all** pinned
-read `MAINTENANCE` on the dashboard while the maintenance page denied any pin was
-there, which is exactly the un-indexed suppression
+**An entry pin reports wherever a node pin does.** Setting one without indexing it left
+the maintenance index walking node pins only, so a silenced reason reached neither the
+strip pill, nor the "contains maintenance" pip, nor `/maintenance` — and a node whose
+members were **all** pinned read `MAINTENANCE` on the dashboard while the maintenance
+page denied any pin was there, which is exactly the un-indexed suppression
 [ADR-0032](adr/0032-status-contribution-boundary.md) rule 5 forbids. The two surfaces
 answer different questions and so take different shapes: the **capped popover**
 summarizes one row per *node* with a count (*3 of 20 reasons*; *all 20 reasons* where
@@ -1054,23 +1036,26 @@ node from it, and **`/maintenance`** lists one row per *pin*, with entries in th
 check's order under their node's own pin. What names an entry in a list is its **line**
 — never the slug, which stays opaque — and the line (*Silenced*) gets a different
 column from the pin's justification (*Why*), because both are called "reason" in the
-model and are not the same kind of thing. The **query parameter of decision 12 is
-built after all**, as `/status/<branch>?reason=<slug>` rather than a second route: on
-a 150-finding node the right page is not the right line, so the index links to the
-line and the page marks it with one fixed anchor. A slug in a *fragment* was rejected
-— legal slugs contain `#` and `%`, it would need an id per line, and it can only fail
-silently; the parameter instead lets the server say the one thing nothing else could,
-that a pin whose slug the run did not report is **suspended, not deleted**. On the
-pip, only a **node** pin still takes a node out of the ancestor set: a node pin cancels
-its subtree, an entry pin cancels nothing below it.
+model and are not the same kind of thing. On the pip, only a **node** pin takes a node
+out of the ancestor set: a node pin cancels its subtree, an entry pin cancels nothing
+below it.
 
-*Amended 2026-08-08 — decision 8's premise narrows.* An entry may declare a **code
-of its own** ([ADR-0042](adr/0042-entries-carry-their-own-code.md)); "an entry has
-no severity of its own" now describes entries that declare none — the default, and
-permanently right for a severity-banded leaf. The cap-not-`escapes` *effect* for
-entry pins stands unchanged; whether a pin on a coded entry may take `escapes` moves
-to the pin-policy design pass. Decision 13's envelope sketch grows `code` and
-`running` beside `text` and `maintenance`, still whole in the client contract round.
+Decision 12's query parameter **is** built, as `/status/<branch>?reason=<slug>` rather
+than a second route or the linkable `/maintenance/<path:branch>?reason=<slug>` page the
+decision sketched: on a 150-finding node the right page is not the right line, so the
+index links to the line and the leaf detail page — the surface the decision names —
+marks it with one fixed anchor. A slug in a *fragment* was rejected: legal slugs contain
+`#` and `%`, it would need an id per line, and it can only fail silently. The parameter
+instead lets the server say the one thing nothing else could, that a pin whose slug the
+run did not report is **suspended, not deleted**.
+
+Decision 8's premise is narrower than it reads. An entry may declare a **code of its
+own** ([ADR-0042](adr/0042-entries-carry-their-own-code.md)), so "an entry has no
+severity of its own" describes entries that declare none — the default, and permanently
+right for a severity-banded leaf. The cap-not-`escapes` *effect* for entry pins stands
+unchanged; whether a pin on a coded entry may take `escapes` belongs to the pin-policy
+design pass. Decision 13's envelope carries `code` and `running` beside `text` and
+`maintenance`, still whole in the client contract round.
 
 → Full record: [`adr/0036-addressable-reasons.md`](adr/0036-addressable-reasons.md)
 
@@ -1165,7 +1150,8 @@ skipped update, never a stale `OK` left in place. "Unknown" is not available:
 that it cannot tell us. The reason is `check error: <message>`, escaped like any
 untrusted string ([ADR-0018](adr/0018-markdown-rendering.md)) because an exception
 message routinely carries external text. Unless settings say otherwise a **second
-reason** carries the innermost five frames as an inert `code()` block — on by default,
+reason** carries the innermost five frames — chained causes included — as an inert
+`code()` block, on by default,
 because a deployment whose log is awkward to reach should not have to go find the one
 thing that explains the failure, and **global rather than per-check**, because the
 check that raises unexpectedly is exactly the one nobody thought to flag. The trace is
@@ -1434,7 +1420,7 @@ sets up its own logging keeps its handlers *and its level* and gets little-siste
 records in them. Writing that down fixed a real defect: the root `setLevel(DEBUG)` ran
 outside that guard.
 
-**Update (2026-08-16):** the level *inside* the guard is now **INFO**, named by
+The level *inside* that guard is **INFO**, named by
 `LOG_LEVEL` when a deployment wants another. `DEBUG` collected no record the library
 writes — nothing in it logs below INFO — and every record its dependencies write; one
 deployment's log was two thirds AWS SDK request detail. The variable is part of the
@@ -1599,8 +1585,7 @@ jumps on every poll), so ADR-0024's positional stability holds. The envelope's
 → Full record: [`adr/0055-sibling-order.md`](adr/0055-sibling-order.md)
 
 ### ADR-0061 — Decoration cannot substitute for the thing it decorates
-**Q:** Since ADR-0017's 2026-08-10 update a title that only repeats the node's name is
-not drawn. Most surfaces draw the name and the title side by side, so that is the whole
+**Q:** ADR-0017 says a title that only repeats the node's name is not drawn. Most surfaces draw the name and the title side by side, so that is the whole
 question there — but two draw the title **instead of** the name: `/copy`, which labels
 an item with the title when there is one, and the inspection popover, whose card
 carries `title` and `about` and no name at all. Both are right while a title is a word:
@@ -1711,8 +1696,8 @@ waits on the chosen-`UNDEFINED` question. A check whose transport is a vendor SD
 replaces the *implementation* and still wears the policy; a check-type package may take
 `httpx` or `requests` where the library may not — and neither would help where it
 counts, since neither has a total-request timeout. The SSH package's `transport.py`
-becomes `connection.py` to free the name. **Amended the same day** for a service that
-answers *not now*: `RemoteError` carries an optional `retry_after`, `ask` spends it in
+becomes `connection.py` to free the name. For a service that answers *not now*,
+`RemoteError` carries an optional `retry_after`, `ask` spends it in
 place of its own backoff when the deadline affords it, and `fetch` parses the standard
 `Retry-After` header — but there is **no fourth `Fault`**, because a throttle is already
 transient and no status can identify one (both `403` and `429` are used for it, and a
@@ -1748,7 +1733,7 @@ field**: `_parse_common` reads it for every type and the engine applies it per s
 by editing its own YAML — no plugin release, and no reader on the check-authoring
 surface, where a per-type call would have made support invisible (the first type to skip
 it leaves the key parsing cleanly and doing nothing). The labels needed their defaults
-declared as data first and follow by ADR-0025's 2026-08-19 update; the block's *shape*
+declared as data first and follow by ADR-0025; the block's *shape*
 is base-validated on every type, so a malformed one fails fast. In the dense view a
 declared node is exempt the way warn/error already is: **never a chip, never a fold
 candidate** — one exemption without the other would hide more than the chip did. It is
@@ -1763,35 +1748,6 @@ condition riding in the tree, on the wrong side of the line that rejected a `wid
 in `nodes.yaml`.
 
 → Full record: [`adr/0063-declining-the-density-trade.md`](adr/0063-declining-the-density-trade.md)
-
-### ADR-0025 (2026-08-19 update) — The `subnodes` labels join the library-read block
-**Q:** ADR-0063 made the `subnodes:` block's flag a common field the library reads for
-every check type, and the labels stayed check-mediated on the argument that layering them
-needs the type's own default text and tokens. That argument is contingent, not principled
-— it holds only while the defaults live as *code the check applies*. Why not declare them
-as data and let the library read the whole block?
-
-**A:** **Exactly that: the library reads, a check only declares.** A type states
-`subnode_defaults` (`name → {title, about, show_when_quiet}` — the shipped per-aspect
-maps shaped like the block itself, promoted from
-convention to declaration) and `label_tokens` (`token → value`) as common constructor
-keywords beside the flag's map; the library resolves each field once — configured text
-when present, else the declared default, `{default}` substituted and `{token}`s expanded
-by the same plain replace — and the engine stores the resolved text per child name, at
-any depth. A result-carried label or flag remains only the fallback for a name nothing
-declared or configured, so a check stamping a dynamic child keeps working; `nodes.yaml`,
-seeded first, still wins per field, and labels still freeze at the first fill — which
-now pins tokens to construction-time facts structurally. `parse_subnodes`, `resolve_text` and
-`expand_tokens` lose their external callers and retire from the authoring facade — a
-**breaking** surface change taken deliberately, with every consumer family-owned and
-moving in lockstep, no compatibility window, said at the top of the release notes. Two
-holes close: a `subnodes:` label on a type that never read the block was a silent no-op
-and now reaches every branch type; and substitution becomes one library contract — plain
-`str.replace`, token values inserted as Markdown-active text with raw HTML escaped at
-render (ADR-0018), so a check exposes only values it would print as Markdown. The
-per-leaf `descriptions:` map is untouched (a different field, write-through).
-
-→ Full record: [`adr/0025-check-provided-subnode-metadata.md`](adr/0025-check-provided-subnode-metadata.md)
 
 ### ADR-0064 — A secret resolver is a registration like the others
 **Q:** `secrets.register_resolver()` is one of the five seams a package reaches an
@@ -1821,3 +1777,250 @@ say. `little_sister.secrets` is not on the check-authoring surface, so the epoch
 not move.
 
 → Full record: [`adr/0064-the-resolver-is-a-registration.md`](adr/0064-the-resolver-is-a-registration.md)
+
+### ADR-0065 — The connection decides what is secure
+**Q:** The session cookie carries a login and was never marked `Secure`, which was
+right while every deployment served plain HTTP on a trusted network — a `Secure`
+cookie there is set and never sent back, and the symptom is a login page that will
+not stay logged in. A deployment now terminates TLS, and the next one will sit behind
+a load balancer that opens its own TLS connection to the instance. Who decides whether
+a request is secure?
+
+**A:** **The transport, per request** — `request.is_secure`, which is
+`wsgi.url_scheme`, which gunicorn sets from the socket it is holding. It is true
+exactly when *this process* terminated a TLS connection, so one rule covers a laptop
+and a load-balanced instance without knowing which it is in, and it cannot drift from
+how the process was started because it is how the process was started. Not a
+configuration value — Flask's `SESSION_COOKIE_SECURE` is a second copy of a fact the
+process already has, and a deployment that sets it and starts without TLS locks the
+operator out of its own login page with nothing in the log reading wrong. Not the host
+name, which is `localhost` to one viewer and something else to the rest. Not a
+forwarded header, which is a claim by a peer rather than a fact, and which gunicorn
+already offers behind its own allowed-peer list for a deployment that really does have
+a terminating proxy. **All three cookies** are marked by the one rule — the session,
+the presentation preferences and the view switches — because a rule with an exception
+is one somebody has to remember, and the next cookie added should inherit a flag rather
+than an argument. A configured `True` still wins, so the transport can only ever *add*
+the flag, and there is deliberately no switch that removes it from a TLS connection.
+**No HSTS:** it is scoped to a host and ignores the port, so a header from
+`localhost:8443` would make every other service on that machine unreachable in that
+browser — a promise about a whole host name, which is a deployment's to make and not a
+library's.
+
+→ Full record: [`adr/0065-the-connection-decides-what-is-secure.md`](adr/0065-the-connection-decides-what-is-secure.md)
+
+### ADR-0066 — `/health` answers liveness, and says almost nothing
+**Q:** Nothing answers *is this process serving* in a form a machine can read — the
+readiness probe aims at `/login`, a login page standing in for a liveness statement.
+A load balancer is about to ask on a schedule, holding no credential of ours. What
+should it be told?
+
+**A:** **`200` while the process serves, whatever the engine is doing**, with the
+engine's condition reported in the **body** and never in the status code. The two
+questions come apart exactly where it matters: a check config that fails to load
+deliberately leaves the application serving behind a red banner naming the reason
+(ADR-0005), so a health check that answered "not well" there would have the balancer
+remove the one page explaining why — a legible failure turned into an unreachable one.
+The body is **two fields**: `status`, constant, the code restated for a caller that
+reads bodies; and `engine`, from the closed vocabulary `running` / `disabled` /
+`failed`. `disabled` and `failed` are both "no engine" and deliberately not one word —
+a deployment that said `LITTLE_SISTER_ENGINE=0` got what it asked for, and reporting it
+the same as a broken configuration is the confusion this application exists to remove.
+**No login gate**, because a load balancer has no session and no token — and the bound
+on an ungated route is that it says almost nothing: not the failure reason (a
+`CheckError` names config files, and the banner carries it behind the login), not the
+version (`/about` is auth-gated for exactly that reason), not the configuration. It is
+**not part of the JSON API** — no token, no envelope, not in `openapi.yaml` — because
+two contracts with different audiences should not be one merely because both return
+JSON, and it is not the system-info endpoint either. `no-store`, since a cached health
+answer is a lie with a delay on it. It also makes the set of routes that answer without
+an identity **two**, where it has always been an accident of each route checking for
+itself; that roster becomes explicit and closed when the identity seam lands.
+
+→ Full record: [`adr/0066-health-answers-liveness-and-says-almost-nothing.md`](adr/0066-health-answers-liveness-and-says-almost-nothing.md)
+
+### ADR-0067 — The run scripts can serve TLS, and never verify it
+**Q:** `start.sh`, `stop.sh` and `test_api.sh` are how somebody who receives
+little-sister runs it, and all three could only speak `http://`. How to change that had
+been open for a long time: gunicorn or a proxy, self-signed or an internal authority,
+where the pair comes from, and what a client does about trust.
+
+**A:** **`--tls` on all three scripts** — per run rather than a committed setting,
+which would make one person's choice everybody's default; `LITTLE_SISTER_TLS` beside it
+for telling `stop.sh` or `test_api.sh` about an instance something else started. All
+three take it, though for two reasons: `start.sh` and `test_api.sh` have to *speak* the
+scheme, while `stop.sh` signals a pid and its flag is vestigial. **The port moves with the
+scheme** — `TLS_PORT`, `8443`, beside `PORT` in `instance.sh` — because one number under
+two schemes is an address wearing two costumes and a bookmark reaches for the wrong one.
+**`TLS_CERT` / `TLS_KEY`, both or neither**, serve a certificate the installation
+already has; with neither set `--tls` **mints a throwaway** — P-384, 200 days, into the
+gitignored `var/tls/` under a `077` umask, **overwritten at the next start rather than
+removed at boot**, because gunicorn rebuilds its SSL context per accepted connection and
+reads both files each time. **The scripts never verify it**, and that is the decision
+rather than a shortcut: each is talking to a process on this machine that it started
+seconds ago and holds the pid of, so a certificate answers nothing that was in question,
+while verification adds a way for a healthy instance to be reported as dead — measured,
+with the same certificate trusted and untrusted. That is not an exception to
+`little_sister.fetch`'s no-switch-off rule, which is about reading somebody else's
+service. **Whether this machine trusts a supplied certificate is reported instead** —
+one question after a successful start, and only for a supplied one, since a minted
+certificate is unverifiable by construction. And `PROBE_PATH` now aims at `/health`
+(ADR-0066) rather than at a login page standing in for one. **One checkout serves one
+instance** — which the single pidfile and single log already asserted, and one-port
+lookups quietly broke: the scripts now ask whether *somebody else* holds the port they
+are about to bind of that port alone, and whether *this checkout is already serving* of
+both, so a start replaces an instance on the other scheme's port instead of running
+beside it and truncating its log, and a stop finds that instance instead of calling it
+absent and deleting its pidfile. **Ours is a gunicorn whose working directory is this
+checkout** — not the WSGI target two checkouts can share, and deliberately nothing in
+the command line, which macOS `ps` truncates and which gunicorn rewrites outright under
+`setproctitle`; nor the pidfile's contents, which these scripts delete themselves and
+which name a pid that may since have been reused. `--any-instance` is the per-run way
+past the resulting refusal, named in the refusal, and it reaches a gunicorn and nothing
+else.
+
+→ Full record: [`adr/0067-the-run-scripts-can-serve-tls.md`](adr/0067-the-run-scripts-can-serve-tls.md)
+
+### ADR-0068 — The login gate refuses by default, and every route is classified
+**Q:** *Who is this request* was `session['username']`, read in fourteen views —
+thirteen opening with the same two lines and a fourteenth with its own variation. The
+duplication is the obvious problem; the real one is that **nothing could say which
+routes answer without an identity**, the answer being whichever views happened to
+check. `/health` now answers a load balancer holding no credential on purpose, and an
+identity provider supplied from outside will be able to send an unidentified request
+anywhere — including that health check.
+
+**A:** **One `before_request` hook, refusing by default.** The polarity is the decision
+rather than the deduplication: a decorator each view opts into reads the same on the
+page and fails the other way — forget it and the route is silently open. A route added
+tomorrow is closed until its endpoint is put on a list, and that edit is where *should
+this be open?* gets asked. **Two named lists, and the second exists so nobody misreads
+the first**: `OPEN_ENDPOINTS` answer with no identity at all (the login form and its
+stylesheet, logout, `/csp-report`, `/health`, and the two redirects that land somewhere
+gated anyway), while `SELF_AUTHENTICATING_ENDPOINTS` holds `/status` alone — it
+negotiates between a session and a bearer token (ADR-0008), so a gate in front would
+redirect an API client to a login form. One list called "the ungated ones" would say
+`/status` is open, and it is not. `identity.current_user()` returns an `Identity`
+(`name`, `firstname`, `lastname`, `admin`) or `None`; `signed_in()` serves a view
+already behind the gate and answers **401 rather than redirecting**, because nobody
+there means a misclassified route, not a visitor who needs a form. `admin` is the only
+role, because two is what the routes gate. Nothing a visitor sees changes, the existing
+suite passes unchanged, and the seam this prepares has exactly one function to replace:
+`challenge()`, called from one place. `little_sister.identity` is **not** on the
+promised surface and the check API epoch does not move.
+
+→ Full record: [`adr/0068-the-login-gate-refuses-by-default.md`](adr/0068-the-login-gate-refuses-by-default.md)
+
+### ADR-0069 — Identity comes from outside, and never from a chain
+**Q:** Behind the one gate and the one `current_user()` was still
+`session['username']`, written by a form comparing a plaintext password against a
+list in `config/users/users.yaml`. That list is right for the install this project
+protects — one person, one machine, fifteen seconds, no services behind it — and it
+is not a login system for a team. Two environments in front of us answer identity in
+structurally different ways: an authorization-code redirect to Keycloak, where the
+application performs a login; and a load balancer that has already completed the
+whole exchange and injects a signed assertion into a header, where it performs none.
+And whatever answers can stop answering, at the same moment everything else is going
+wrong.
+
+**A:** **Deciding who somebody is is not this library's job.** The primitive is *who
+is this request* — `identify()` — with `challenge()` beside it and a login flow as
+four **optional** hooks, so the header-verifying case implements two methods and
+nothing else rather than being the awkward one. A deployment registers a provider in
+the same import-before-app slot it already uses, and the built-in list is a provider
+like any other — including in how it gets there: **an installation registers its own
+doors, all of them**, `local_login.use_local()` for the built-in list like anything
+else (§3). The library adds none on anybody's behalf, so
+*can anybody log into this instance* is answered by reading one file rather than by
+working out what the library would have inferred from what else was registered. That
+call is the only reader of the `users` aspect, which is what lets a deployment with a
+directory of its own carry no `users.yaml` at all.
+
+**Several ways in are allowed; an ordered list of them to try is not.** Each provider
+is a **door** with a name and a route of its own (`/login/<door>`,
+`/auth/callback/<door>`, library-owned, so no general route seam is added and a
+provider never brings a route). `sign_in()` records which door produced the session
+and `current_user()` asks *that* provider and no other — the mechanism, not a
+discouragement — so registration order can never decide who somebody is. That matters
+more here than in most applications: a name is a **stored key** that maintenance pins
+and event authorship are held against, and two directories that both know `michael`
+cannot be told apart afterwards. Nobody who solved this made order load-bearing:
+Kubernetes made it irrelevant, Grafana partitioned by credential kind, Keycloak moved
+the choice in front of the application; Django, which did make order matter,
+documents the ambiguity rather than solving it.
+
+A door name is claimed once and exactly one door is the default — a second claim on
+either **refuses at startup naming both**, as a duplicate `type:` name or secret
+scheme does (ADR-0051, ADR-0064). Where a registration is merely *missing* the
+application starts and says so instead: **a contradiction refuses, an omission
+logs** (§2). No door at all, and doors with none of them the default,
+are both a startup `WARNING` naming the line to add, on an instance that serves
+`/health` and refuses every gated page with a `401` — refusing to start would take a
+monitoring application down for a mistake it can describe, and would refuse the more
+usable of the two, since doors without a default still admit anybody who knows
+`/login/<door>`. **A default door can also stop being there and that is nobody's
+omission** — §5 closes a door whose credential did not resolve — so `challenge()` sends
+an unidentified request to `/login` where the installation asked for the chooser and any
+door is registered, decided off the registry rather than by asking `enterable()`, which
+a provider may answer by probing; without the chooser that address is the default door's
+own step and answers `404`, so `401` remains honest and its message says which of the
+two states it is in. A provider that raises is **no identity**: logged, never *let them through*, the
+opposite of the contained slot filler next door (ADR-0034), because containment is
+right for a decoration and wrong for a gate; a failing door takes down itself and no
+other. `identify()` is answered once per request. `Identity` stays four fields with no
+claims bag, and the JSON API's bearer tokens are untouched.
+
+**One door the library ships and it is not a provider's:** a **system admin**, on a
+door of its own that always renders a local form, so an operator can still get in on
+the morning the identity provider is what broke. Its password is a *registration* —
+`identity.use_system_admin(reference=…)` resolved once through ADR-0023, or the
+discouraged `password=…`, each refusing the other's shape — never generated, compared
+with `compare_digest`, and visible in use: a distinct avatar, a `WARNING` per login,
+a row on `/system`. The built-in login page links to it while it can take a password
+(§5) — which reaches the small install and, precisely, *not* the
+redirecting one that mostly needs it, where `/login` renders nothing of ours. That half
+is §1's other half: **`challenge()` and `login_page()` answer different
+questions.** The challenge stays a straight redirect, because on an SSO install it is
+*silent* and anything rendered there taxes every visit forever; `/login` may render a
+**choice** of doors instead, costing nothing on the common path and — being served by
+us — still answering when the identity provider does not. `identity.choose_at_login()`
+is the installation's line and `/login/<door>` is untouched, which is what keeps the
+page from linking back to itself; a redirecting provider adds a `login_page()`
+returning its own redirect to appear on it. A door grows an optional `label=` for that
+page to print, and an optional `enterable()` for *can this be entered right now* —
+asked once, of the door, by both the chooser and the built-in page's link. A failed resolution closes that door and the application keeps
+serving, because an unreachable parameter store must not take the dashboard down
+during the kind of event it is watching. Every door is on `/system` — name, route,
+provider, registering package, which is the default — since a way into an application
+must not be knowable only by reading the source.
+
+→ Full record: [`adr/0069-identity-comes-from-outside-and-one-account-does-not.md`](adr/0069-identity-comes-from-outside-and-one-account-does-not.md)
+
+### ADR-0070 — The report on unclaimed configuration files runs at the end of registration
+**Q:** A deployment that registers a configuration aspect of its own is told at every
+start that its own file is *not a known configuration aspect* — read correctly, working,
+and reported as ignored. ADR-0035 §5 says to register before the app is imported, so why
+does following that rule not help?
+
+**A:** Because **the registering call is itself the first resolution**, and resolving a
+root was what scanned it. Every registrar in this family declares its aspect and then
+reads it immediately — so that a broken configuration file fails at startup rather than
+at the first click — so whichever registration ran first performed the scan and every
+aspect registered after it was named unknown for the life of the process. No ordering
+fixes that, which makes the rule unfollowable rather than delicate; it is import order
+deciding an observable, which ADR-0035 §4 already refuses for aspect shapes. So **the
+scan stays and goes silent, and the complaint moves to the end of the registration
+window**: `config_dir.announce_aspects()`, called once from the app import, the same
+position and the same argument as `announce_doors()`
+([ADR-0069](adr/0069-identity-comes-from-outside-and-one-account-does-not.md)) — that
+import is the moment the set of aspects is final. It is **public**, so a tool that never
+builds an app can ask the same question; it covers **every configured root** rather than
+only the resolved ones; and, being late, the message can name the known aspects **with
+the packages that read them**, so a misspelled `identiy.yaml` points at the `identity` it
+missed. ADR-0035 §5 stands on its true reason — the read, not the warning: `aspect_in`
+looks the name up in `ASPECTS`, so an undeclared aspect is a `KeyError`. Reading the
+aspects lazily in the plugins was the obvious move and fixes nothing: it removes one
+trigger, leaves the mechanism, and trades away the startup failure the eager read exists
+for.
+
+→ Full record: [`adr/0070-the-unclaimed-file-report-runs-at-the-end-of-registration.md`](adr/0070-the-unclaimed-file-report-runs-at-the-end-of-registration.md)

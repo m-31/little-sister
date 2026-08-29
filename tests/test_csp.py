@@ -508,13 +508,18 @@ class TemplateSurfaceTests(TestCase):
                           path.read_text(encoding="utf-8"))
         self.assertEqual(carriers, ["_theme_bootstrap.html"])
 
-    def test_both_documents_include_it(self):
-        # the header for every page that has one, and the login page, which has no
-        # header and is the reason there were two copies
+    def test_every_document_without_a_header_includes_it(self):
+        # The header carries it for every page that has one. The pages that have no
+        # header are the ones somebody sees before there is a session to build one
+        # from — the login form, and the door chooser that may stand in front of it
+        # (ADR-0069 §1) — and each of those has to include the partial itself. The
+        # one hash is what makes that cheap; two hand-written copies were what made
+        # it expensive, which is the claim above.
         including = sorted(path.name for path in self.TEMPLATES.glob("*.html")
                            if "_theme_bootstrap.html" in
                            path.read_text(encoding="utf-8"))
-        self.assertEqual(including, ["_header.html", "login.html"])
+        self.assertEqual(including,
+                         ["_header.html", "choose_door.html", "login.html"])
 
 
 if __name__ == "__main__":

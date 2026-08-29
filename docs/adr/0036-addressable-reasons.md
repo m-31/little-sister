@@ -1,7 +1,7 @@
 # ADR-0036 — Addressable reasons: keyed entries, and maintenance on one of them
 
 - **Status:** Accepted
-- **Date:** 2026-08-01
+- **Date:** 2026-08-23 (accepted 2026-08-01)
 - **Related:** [ADR-0032](0032-status-contribution-boundary.md) (the contribution
   boundary, amended by this decision to reach one level below a node),
   [ADR-0004](0004-status-aggregation-semantics.md) (the roll-up these entries reuse,
@@ -16,57 +16,6 @@
   [ADR-0025](0025-check-provided-subnode-metadata.md) (the other route — real
   subnodes — and why it is not this one)
 - **Register:** [`../decisions.md`](../decisions.md)
-
-> **Update (2026-08-02):** built. Two points decision 12 left to the implementation
-> are settled here. The **form field is `slug`**, not `reason`: this form's `reason`
-> is already the pin's explanation text, and overloading it would have made the two
-> indistinguishable in one request — the *addressing* shape the decision fixes is the
-> query parameter (`?reason=<slug>`), a different namespace, and it is unaffected.
-> And the linkable `/maintenance/<path:branch>?reason=<slug>` page is **not** built:
-> decision 12 offers it as the shape *"where a linkable page is wanted"*, and the leaf
-> detail page it names as the surface is enough for the case that motivated this.
-> Where the widened side-table is persisted is [ADR-0014](0014-maintenance-persistence.md)'s
-> amendment of the same date; the file's shape is a clean break, not a migration.
-
-> **Update 2 (2026-08-02):** an entry pin now **reports** everywhere a node pin does
-> — the strip pill, the "contains maintenance" pip and `/maintenance` — which decision
-> 10 required and the first pass did not deliver. Setting one stays the leaf page's
-> job (decision 12). Three points this settles:
->
-> * The **query parameter is built after all**, on the node page rather than as a
->   second route: `/status/<branch>?reason=<slug>`. The index names a line, so its
->   link lands on that line; the page marks the one it was asked for with a single
->   fixed `pinned-reason` anchor. A slug in a *fragment* was considered and rejected —
->   a declared slug may legally contain `#` or `%`, which a fragment silently
->   mis-parses; it would need an id on all 150 lines; and it can only fail to scroll.
->   The parameter lets the server say what nothing else could: a pin whose slug the
->   current run does not report is **suspended, not deleted** (decision 6), and the
->   page now says so in words.
-> * The **slug is still never rendered as text.** It appears only as that link's
->   value. What names an entry in a list is its *line*, and the two texts get two
->   columns: *Silenced* (the line) and *Why* (the pin's own explanation). They are
->   both called "reason" in the model and are not the same kind of thing.
-> * The **capped popover summarizes per node** — one row with a count (*3 of 20
->   reasons*, or *all 20 reasons* where every member is pinned) — while `/maintenance`
->   lists one row per pin. Twenty rows from one node would otherwise evict every other
->   node from a capped list. The count is also what keeps the pip honest: without it a
->   row would read as a node pin, which it is not.
-
-> **Update 3 (2026-08-06, decided 2026-08-05):** decision 8's premise **narrows**. An
-> entry may now declare a **code of its own**
-> ([ADR-0042](0042-entries-carry-their-own-code.md)), so "an entry has no severity of
-> its own" is true only of entries that declare none — which remains the default, and
-> remains permanently right for a severity-banded leaf, whose lines are one severity
-> by construction. Decision 7's "the node's own status is the worst of what is left"
-> becomes literally true over coded entries: same derivation, same exclusions, same
-> silenced-versus-unreported tiebreak, with one stated default — an entry-bearing
-> node whose run reports **no** entries reads `OK`, because "nothing to report" is
-> not "nothing reported". Decision 8's *effect* — a per-entry pin takes the cap, not
-> the `escapes` threshold — stands unchanged for now; whether a pin on a *coded*
-> entry may take `escapes` is re-examined by the pin policy when it is designed.
-> Decisions 1, 2, 6, 9, 10 and 12 are untouched; decision 13's envelope sketch grows
-> `code` and `running` beside `text` and `maintenance`, still in the client contract
-> round and not before.
 
 ## Context
 
@@ -153,8 +102,10 @@ at.
 
 **5. The pin lives outside the check's output.** The check emits `slug -> text` and
 nothing else; the maintenance side-table's key widens from `path` to `(path, slug)`;
-the snapshot joins the two. Storing the entry *in* the reason map would destroy it on
-the check's next run, and writing it into the tree is what
+the snapshot joins the two. Where the widened side-table is persisted is
+[ADR-0014](0014-maintenance-persistence.md); the file's shape is a clean break, not a
+migration. Storing the entry *in* the reason map would destroy it on the check's next
+run, and writing it into the tree is what
 [ADR-0032](0032-status-contribution-boundary.md) rule 3 forbids. This is the first
 maintenance-shaped mechanism built rule-3-correct from the start.
 
@@ -168,7 +119,11 @@ forgotten pin from lasting forever.
 
 **7. The entries are virtual children.** Each unsuppressed entry contributes the
 node's reported status; a suppressed one contributes nothing; the node's **own**
-status is the worst of what is left. A node that reported entries and has none
+status is the worst of what is left. That holds literally over entries that declare a
+code of their own ([ADR-0042](0042-entries-carry-their-own-code.md)): same derivation,
+same exclusions, same silenced-versus-unreported tiebreak, with one stated default —
+an entry-bearing node whose run reports **no** entries reads `OK`, because "nothing to
+report" is not "nothing reported". A node that reported entries and has none
 unsuppressed left presents `MAINTENANCE`. Two nodes are outside this rule entirely: one
 that reported **no** reasons (a check with a code and nothing to say), and one whose
 reasons are **prose** (decision 2) — prose has no individually suppressible parts, and
@@ -176,13 +131,18 @@ its unit of suppression stays the node pin.
 
 This is [ADR-0004](0004-status-aggregation-semantics.md)'s roll-up applied one level
 below a node, and it is what the
-[ADR-0032](0032-status-contribution-boundary.md) amendment of the same date records:
+[ADR-0032](0032-status-contribution-boundary.md) decision 8 records:
 the contribution boundary reaches under a node, and rules 2–7 hold there unchanged.
 
-**8. A per-entry pin takes the cap, not the threshold.** When the pin policy grows an
-`escapes` setting, the threshold form (`escapes: error`) is meaningless for an entry,
-because an entry has no severity of its own — it carries the node's. The **cap** form
-does work: a capped entry contributes `WARN` where it would have contributed `ERROR`.
+**8. A per-entry pin takes the cap, not the threshold.** An entry may declare a **code
+of its own** ([ADR-0042](0042-entries-carry-their-own-code.md)), so an entry has no
+severity of its own only where it declares none — which remains the default, and
+remains permanently right for a severity-banded leaf, whose lines are one severity by
+construction. When the pin policy grows an `escapes` setting, the threshold form
+(`escapes: error`) is meaningless for such an entry, because it carries the node's. The
+**cap** form does work: a capped entry contributes `WARN` where it would have
+contributed `ERROR`. Whether a pin on a *coded* entry may take `escapes` is re-examined
+by the pin policy when it is designed.
 
 **9. Liveness is not switched off.** `_is_stale`'s exemption for a pinned node is
 **not** extended to a node whose entries are all pinned. Staleness keeps judging the
@@ -193,7 +153,15 @@ quiet findings ([ADR-0032](0032-status-contribution-boundary.md) rule 6).
 and the node states how many of its entries are quiet — a card clamps its reasons to
 `reason_cap` ([ADR-0024](0024-dashboard-layout.md)), so the pinned line may sit below
 the fold and the count is the only thing that always shows
-([ADR-0032](0032-status-contribution-boundary.md) rule 5).
+([ADR-0032](0032-status-contribution-boundary.md) rule 5). An entry pin **reports**
+everywhere a node pin does — the strip pill, the "contains maintenance" pip and
+`/maintenance`. Setting one stays the leaf page's job (decision 12).
+
+The **capped popover summarizes per node** — one row with a count (*3 of 20 reasons*,
+or *all 20 reasons* where every member is pinned) — while `/maintenance` lists one row
+per pin. Twenty rows from one node would otherwise evict every other node from a capped
+list. The count is also what keeps the pip honest: without it a row would read as a
+node pin, which it is not.
 
 **11. Events and history keep plain strings.** They carry the map's *values*. A slug
 in a historical event means nothing once the entry is gone, and per-entry events are
@@ -202,20 +170,38 @@ what would flood the log. Whether an entry's appearance is ever recorded is left
 **12. An entry is addressed in a query parameter or a form field — never in a path
 segment.** The surface is the **existing leaf detail page**, which already lists every
 reason uncapped; it grows an admin control per line, and the write posts `path` plus
-`reason`. Where a linkable page is wanted, the shape is
-`/maintenance/<path:branch>?reason=<slug>` — the node stays a path, the slug stays a
-query value. Two reasons, both hard: a percent-encoded `/` does **not** survive a path
-segment (WSGI hands over an already-decoded `PATH_INFO`, so `%2F` and a real separator
-are indistinguishable by the time routing runs, and Apache answers `404` for encoded
+**`slug`**, not `reason`: this form's `reason` is already the pin's explanation text,
+and overloading it would have made the two indistinguishable in one request — the
+*addressing* shape this decision fixes is the query parameter (`?reason=<slug>`), a
+different namespace, and it is unaffected.
+
+The **query parameter is built** on the node page rather than as a second route:
+`/status/<branch>?reason=<slug>` — the node stays a path, the slug stays a query value.
+The index names a line, so its link lands on that line; the page marks the one it was
+asked for with a single fixed `pinned-reason` anchor. A slug in a *fragment* was
+considered and rejected — a declared slug may legally contain `#` or `%`, which a
+fragment silently mis-parses; it would need an id on all 150 lines; and it can only
+fail to scroll. The parameter lets the server say what nothing else could: a pin whose
+slug the current run does not report is **suspended, not deleted** (decision 6), and
+the page says so in words.
+
+Two reasons, both hard: a percent-encoded `/` does **not** survive a path segment (WSGI
+hands over an already-decoded `PATH_INFO`, so `%2F` and a real separator are
+indistinguishable by the time routing runs, and Apache answers `404` for encoded
 slashes by default), and the natural slug for a discovered entry contains one —
 `acme/api-pr-412`. Keeping the slug out of the path also removes the ambiguity of
 `/maintenance/a/b/c`: with the parameter absent, the target is the node itself.
 
+The **slug is never rendered as text.** It appears only as that link's value. What
+names an entry in a list is its *line*, and the two texts get two columns: *Silenced*
+(the line) and *Why* (the pin's own explanation). They are both called "reason" in the
+model and are not the same kind of thing.
+
 **13. The JSON envelope grows additively.** `reason` stays an array of strings,
 unchanged for every existing client; a new `reasons` array carries an object per
-entry — `{"text": …, "maintenance": … | null}` — objects rather than positional
-pairs, per the API guidelines. It rides the one `schema_version` decision of the
-client contract round rather than arriving on its own.
+entry — `{"text": …, "code": …, "running": …, "maintenance": … | null}` — objects
+rather than positional pairs, per the API guidelines. It rides the one
+`schema_version` decision of the client contract round rather than arriving on its own.
 
 ## Consequences
 

@@ -23,7 +23,7 @@ from little_sister import secrets
 from little_sister.checks import CheckError, CheckResult, load_checks
 from little_sister.checks.base import CHECK_TYPES, Check, parse_secret_refs
 from little_sister.engine import Engine
-from little_sister.secrets import register_resolver
+from little_sister.secrets import register_resolver, same_secret
 from little_sister.status import StatusCode
 from little_sister.tree import StatusTree
 
@@ -472,6 +472,40 @@ class LoaderTests(_IsolatedCase):
         checks = self._load("type: secret-dummy\npath: /svc\n")
         self.assertEqual(len(checks), 1)
         self.assertTrue(checks[0].secret_errors)     # pinned later, not fatal
+
+
+class SameSecretTests(TestCase):
+    """Comparing a credential — and the standard library trap this wraps.
+
+    `secrets.compare_digest` takes `str` **only while both sides are ASCII** and
+    raises `TypeError` otherwise. Written the obvious way, a password check passes
+    every test anybody writes and then answers a 500 the first time somebody types
+    an umlaut into it — an anonymous visitor at the emergency door, on the morning
+    that door exists for.
+    """
+
+    def test_it_matches_and_refuses_like_an_equality(self):
+        self.assertTrue(same_secret("hunter2", "hunter2"))
+        self.assertFalse(same_secret("hunter2", "hunter3"))
+        self.assertFalse(same_secret("", "hunter2"))
+        self.assertFalse(same_secret("hunter2", ""))
+
+    def test_a_non_ascii_presented_credential_is_refused_not_raised(self):
+        # The bug: this is what a German keyboard produces at a login form.
+        self.assertFalse(same_secret("pässword", "hunter2"))
+
+    def test_a_non_ascii_stored_credential_still_compares(self):
+        # And this is a `.env` somebody hand-edited, where *every* attempt raised.
+        self.assertTrue(same_secret("gänseblümchen", "gänseblümchen"))
+        self.assertFalse(same_secret("gänseblumchen", "gänseblümchen"))
+
+    def test_the_stdlib_call_it_replaces_would_have_raised(self):
+        # Pinning the reason this function exists rather than only its behaviour: if
+        # the standard library ever stops raising here, this is the test that says
+        # the wrapper may go.
+        import secrets as stdlib
+        with self.assertRaises(TypeError):
+            stdlib.compare_digest("pässword", "pässword")
 
 
 if __name__ == "__main__":

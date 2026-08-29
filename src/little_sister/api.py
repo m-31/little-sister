@@ -6,12 +6,12 @@ HTTP responses) stays in :mod:`little_sister.app`.
 """
 from __future__ import annotations
 
-import secrets
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
 
 from little_sister.maintenance import MaintenanceEntry
+from little_sister.secrets import same_secret
 from little_sister.tree import StatusSnapshot
 
 # Major version of the JSON / federation schema (ADR-0008). Bumped only on an
@@ -130,7 +130,10 @@ def parse_api_tokens(raw: str) -> dict[str, str]:
 def authenticate(auth_header: str | None,
                  tokens: Mapping[str, str]) -> str | None:
     """Return the client name for a valid ``Authorization: Bearer`` token, else
-    ``None``. Tokens are compared in constant time (ADR-0008).
+    ``None``. Tokens are compared in constant time (ADR-0008), through
+    :func:`little_sister.secrets.same_secret` — a bearer token arrives off the wire
+    and may be any bytes at all, which the standard library's own comparison refuses
+    to be handed as text.
     """
     if not auth_header:
         return None
@@ -139,6 +142,6 @@ def authenticate(auth_header: str | None,
     if scheme.lower() != "bearer" or not presented:
         return None
     for name, token in tokens.items():
-        if secrets.compare_digest(presented, token):
+        if same_secret(presented, token):
             return name
     return None

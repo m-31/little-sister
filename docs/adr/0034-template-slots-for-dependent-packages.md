@@ -1,7 +1,7 @@
 # ADR-0034 — Template slots for dependent packages
 
 - **Status:** Accepted
-- **Date:** 2026-08-01
+- **Date:** 2026-08-23 (accepted 2026-08-01)
 - **Related:** [ADR-0001](0001-in-process-threaded-engine.md) (the import-before-app
   registration slot this reuses), [ADR-0018](0018-markdown-rendering.md) (what a
   reason is made of, and why raw HTML is escaped there),
@@ -12,92 +12,6 @@
   goes — the sibling seam taken in the same pass),
   [ADR-0008](0008-json-output-api.md) (untouched: a slot is presentation only)
 - **Register:** [`../decisions.md`](../decisions.md)
-
-> **Update (2026-08-02):** the roster grows its **second slot**, `node.actions`, with
-> context `(node, surface)` — in a card head on the dashboard grid and beside the status
-> on a leaf's own page. Additive: the mechanism, the loader, the containment and the
-> closed-roster rule are untouched, and `reason.actions` is unchanged.
->
-> The last consequence below predicted slots would accumulate and said one should be
-> added when something asks for it. Something did:
-> [ADR-0036](0036-addressable-reasons.md) split a node's reasons into **members** and
-> **prose**, and that split decides where a deployment's action belongs. On members an
-> action is about one finding and goes on the line. On prose — a failure message and its
-> stack trace are one condition in several paragraphs — there is exactly one thing to
-> act on and it is the **node**; a per-line control there would offer to raise a ticket
-> about a stack trace.
->
-> Both slots are offered on **every** node, and the filler declines what it does not
-> want by returning `None`, so this adds a *place*, not a policy. Core gains the
-> `.node-actions` rail and the `.node-action` chip, deliberately the same chip shape as
-> `.reason-action`: an action is an action, and a second visual language for one gesture
-> would be the extension seam leaking into the design.
-
-> **Update (2026-08-15):** `reason.actions` grows one context name, `line` — the
-> whole [`ReasonLine`](../architecture.md), carrying the entry's **slug**, its own
-> `code`, its `running` flag and whatever is pinned on it. Decision 7's `reason`
-> stays exactly what it was, the line's unshortened text, and every filler written
-> against it is untouched. The library's own **copy chip** is the first filler to
-> need the addition: it links one line to a document of its own
-> (`/copy/<path>?reason=<slug>`), and a URL needs the slug.
->
-> Recovering the entry from `index` was possible — the surfaces pass `loop.index0`
-> over the very list the slug lives in — and is precisely what
-> [ADR-0036](0036-addressable-reasons.md) decision 3 refuses: an index moves when an
-> entry is inserted above it, so an action built on one would silently address a
-> different finding the next time the check reports, with nothing to notice it by.
->
-> **And a rule the roster was missing, which this addition is the proof of: a
-> provider is handed exactly what it asks for.** A context that grows would
-> otherwise break every provider that spelled its keywords out — a `TypeError`,
-> a logged failure, and a deployment quietly losing its chips on an upgrade of
-> *ours*. So the renderer reads the provider's signature and passes the names it
-> declares, or everything when it declares `**kwargs`. This is
-> [ADR-0049](0049-the-check-authoring-surface.md)'s growing-fields problem reached
-> from the other side: a check type must take `**kwargs` because the loader cannot
-> see what a constructor wants, and here the caller *can* look — so the burden is
-> ours rather than the extension author's, which is the right way round for a seam
-> somebody else's code depends on. Adding a name to a slot's context stays a
-> compatible change; it is now compatible in fact and not only on paper.
-
-> **Update (2026-08-03):** `node.actions` is offered on **every box the grid draws**,
-> not only on card heads — each nested box under a card carries it too. The first
-> deployment to fill it found the gap by rendering: a card is the *top* of a subtree
-> and is usually a container with no reading of its own, so a filler that declines a
-> node with nothing to say declines exactly the nodes that have card heads, while the
-> failing **leaf** — the node an action is nearly always about — sits in a nested box
-> that carried no slot at all. The two rules were individually defensible and together
-> they put the chip nowhere the eye already was, leaving it reachable only by drilling
-> into the leaf's own page.
->
-> Nothing about the seam changes: the context is the same, the filler still declines
-> what it does not want, and the rail still collapses when nobody fills it — a
-> deployment with no extension pays one empty `<span>` per box. A **quiet leaf** is
-> drawn as a chip rather than a box and carries no slot, which is the right line:
-> nothing quiet is worth acting on. This is a widening of the roster's `where`, which
-> §11 of `architecture.md` names as part of the version contract, so it is recorded
-> here rather than left to the template.
-
-> **Update (2026-08-16):** the `node.actions` rail in a card head **veils what it
-> overlays**. It is positioned over the title's space deliberately — a chip is
-> something to click, a title is a nicety — and a chip is deliberately transparent,
-> inking in `currentColor` so it reads on every status fill. Two right decisions drew
-> both sets of glyphs into the same pixels: a deployment's `+ Jira` landed in the
-> middle of the word *analysis* and neither could be read. So every card and node box
-> now declares its fill as `--ls-surface` and paints from that token, and the rail
-> repaints that exact fill beneath its chips — the title dissolving into it across a
-> short gradient rather than being sliced mid-letter. Only while the chips are
-> showing, by the same conditions that show them: a card at rest offers nothing to
-> click and keeps every pixel of its title.
->
-> Presentation only: no context name, no filler, no markup and no placement changes,
-> and the `reason.actions` rail — which floats beside its line and overlaps nothing —
-> is untouched. Because the fill under a chip is the fill the chip was already sitting
-> on, no ink meets a new background: every pair `test_contrast.py` measures is
-> unchanged. The claim is about paint, so it is checked in paint
-> (`tests/test_dashboard_browser.py`): the pixels inside a shown chip are the same
-> image with the title there and with it hidden, and — the counterpart that keeps the
-> first honest — a *different* image on a card at rest.
 
 ## Context
 
@@ -150,6 +64,18 @@ dependent package fills a slot with **a template of its own** plus an optional
    a URL, a label — and never assembles markup, so every untrusted byte in the context
    is escaped by the same machinery that escapes it everywhere else.
 
+   **A provider is handed exactly what it asks for.** A context that grows would
+   otherwise break every provider that spelled its keywords out — a `TypeError`,
+   a logged failure, and a deployment quietly losing its chips on an upgrade of
+   *ours*. So the renderer reads the provider's signature and passes the names it
+   declares, or everything when it declares `**kwargs`. This is
+   [ADR-0049](0049-the-check-authoring-surface.md)'s growing-fields problem reached
+   from the other side: a check type must take `**kwargs` because the loader cannot
+   see what a constructor wants, and here the caller *can* look — so the burden is
+   ours rather than the extension author's, which is the right way round for a seam
+   somebody else's code depends on. Adding a name to a slot's context stays a
+   compatible change; it is compatible in fact and not only on paper.
+
 3. **A provider returning `None` means "nothing here".** That is how a filler declines
    a node, a surface or a reason it has no action for — placement *policy* belongs to
    the filler, not to the core template. The library offers `reason.actions` on every
@@ -179,6 +105,19 @@ dependent package fills a slot with **a template of its own** plus an optional
    polled dashboard, `check` on the leaf detail page). It renders in both places
    because the reason does.
 
+   The context carries one more name, `line` — the whole
+   [`ReasonLine`](../architecture.md), carrying the entry's **slug**, its own `code`,
+   its `running` flag and whatever is pinned on it. `reason` stays the line's
+   unshortened text, and every filler written against it is untouched. The library's
+   own **copy chip** is the first filler to need it: it links one line to a document
+   of its own (`/copy/<path>?reason=<slug>`), and a URL needs the slug.
+
+   Recovering the entry from `index` was possible — the surfaces pass `loop.index0`
+   over the very list the slug lives in — and is precisely what
+   [ADR-0036](0036-addressable-reasons.md) decision 3 refuses: an index moves when an
+   entry is inserted above it, so an action built on one would silently address a
+   different finding the next time the check reports, with nothing to notice it by.
+
 8. **The kiosk renders no slot.** Decided in `app.py`, not in `slots.py`: a wall display
    is read from across a room and has nobody at its keyboard — the same reason the pin
    control is hidden there — but that is a *presentation* rule, and the seam stays free
@@ -196,6 +135,56 @@ dependent package fills a slot with **a template of its own** plus an optional
     Serving an extension's own `.js` / `.css` needs a route, a cache-busting story and
     a Content-Security-Policy answer, so it is a *separate* decision — see Consequences
     for what it costs today.
+
+11. **The second slot is `node.actions`** — context `(node, surface)`, on the dashboard
+    grid and beside the status on a leaf's own page. It is offered on **every box the
+    grid draws**, not only on card heads — each nested box under a card carries it too.
+    A card is the *top* of a subtree and is usually a container with no reading of its
+    own, so a filler that declines a node with nothing to say declines exactly the
+    nodes that have card heads, while the failing **leaf** — the node an action is
+    nearly always about — sits in a nested box that carried no slot at all. The two
+    rules were individually defensible and together they put the chip nowhere the eye
+    already was, leaving it reachable only by drilling into the leaf's own page. A
+    **quiet leaf** is drawn as a chip rather than a box and carries no slot, which is
+    the right line: nothing quiet is worth acting on. A slot's `where` is part of the
+    version contract (§11 of `architecture.md`), so it is recorded here rather than
+    left to the template.
+
+    [ADR-0036](0036-addressable-reasons.md) split a node's reasons into **members**
+    and **prose**, and that split decides where a deployment's action belongs. On
+    members an action is about one finding and goes on the line. On prose — a failure
+    message and its stack trace are one condition in several paragraphs — there is
+    exactly one thing to act on and it is the **node**; a per-line control there would
+    offer to raise a ticket about a stack trace.
+
+    Both slots are offered on **every** node, and the filler declines what it does not
+    want by returning `None`, so this adds a *place*, not a policy. Additive: the
+    mechanism, the loader, the containment and the closed-roster rule are untouched,
+    and `reason.actions` is unchanged. Core gains the `.node-actions` rail and the
+    `.node-action` chip, deliberately the same chip shape as `.reason-action`: an
+    action is an action, and a second visual language for one gesture would be the
+    extension seam leaking into the design. The rail collapses when nobody fills it —
+    a deployment with no extension pays one empty `<span>` per box.
+
+    The `node.actions` rail in a card head **veils what it overlays**. It is
+    positioned over the title's space deliberately — a chip is something to click, a
+    title is a nicety — and a chip is deliberately transparent, inking in
+    `currentColor` so it reads on every status fill. Two right decisions drew both
+    sets of glyphs into the same pixels: a deployment's `+ Jira` landed in the middle
+    of the word *analysis* and neither could be read. So every card and node box
+    declares its fill as `--ls-surface` and paints from that token, and the rail
+    repaints that exact fill beneath its chips — the title dissolving into it across a
+    short gradient rather than being sliced mid-letter. Only while the chips are
+    showing, by the same conditions that show them: a card at rest offers nothing to
+    click and keeps every pixel of its title.
+
+    Presentation only: the `reason.actions` rail — which floats beside its line and
+    overlaps nothing — is untouched. Because the fill under a chip is the fill the chip
+    was already sitting on, no ink meets a new background: every pair
+    `test_contrast.py` measures is unchanged. The claim is about paint, so it is
+    checked in paint (`tests/test_dashboard_browser.py`): the pixels inside a shown
+    chip are the same image with the title there and with it hidden, and — the
+    counterpart that keeps the first honest — a *different* image on a card at rest.
 
 ## Consequences
 

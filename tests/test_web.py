@@ -18,6 +18,7 @@ from little_sister import (
     icons,
     link_probe,
     links,
+    local_login,
     origins,
     secrets,
     slots,
@@ -1536,14 +1537,14 @@ class WebTests(TestCase):
         # the case the path exists for: a source copy earlier on sys.path shadows
         # an installed distribution of the same name, and the version beside it is
         # then answering for code that is not running. Still legible as such.
-        absolute = str(Path.cwd() / "little_sister_stress" / "checks.py")
+        absolute = str(Path.cwd() / "my_deployment" / "checks.py")
         self._login()
 
         with mock.patch.object(app_module, "registered_types",
                                lambda: [self._an_installed_type(absolute)]):
             body = self._system_body((self._a_check("/quality/github", "github"),))
 
-        self.assertIn(">./little_sister_stress/checks.py</small>", body)
+        self.assertIn(">./my_deployment/checks.py</small>", body)
         self.assertNotIn(f">{absolute}</small>", body)
 
     def test_system_roster_unused_type_offers_no_list(self):
@@ -1960,7 +1961,7 @@ class WebTests(TestCase):
 
     def test_the_menu_trigger_uses_the_default_when_no_avatar_resolved(self):
         self._login()
-        with mock.patch.dict(app_module.user_avatars, {}, clear=True):
+        with mock.patch.dict(local_login.registered_avatars(), {}, clear=True):
             body = self.client.get("/status").get_data(as_text=True)
         self.assertIn('src="/static/default-avatar.svg"', body)
 
@@ -2790,7 +2791,7 @@ class UserAvatarRouteTests(TestCase):
         self.assertIn("/login", response.headers["Location"])
 
     def test_a_user_without_a_custom_avatar_gets_the_packaged_default(self):
-        with mock.patch.dict(app_module.user_avatars, {}, clear=True):
+        with mock.patch.dict(local_login.registered_avatars(), {}, clear=True):
             self._login()
             response = self.client.get("/user/avatar")
         self.assertEqual(response.status_code, 302)
@@ -2803,7 +2804,8 @@ class UserAvatarRouteTests(TestCase):
             picture.write_bytes(b"avatar-png")
             avatar = AvatarFile(path=picture, content_type="image/png",
                                 root=Path(directory))
-            with mock.patch.dict(app_module.user_avatars, {"pan": avatar}, clear=True):
+            with mock.patch.dict(local_login.registered_avatars(),
+                                 {"pan": avatar}, clear=True):
                 self._login()
                 page = self.client.get("/status").get_data(as_text=True)
                 response = self.client.get("/user/avatar")
@@ -2821,7 +2823,8 @@ class UserAvatarRouteTests(TestCase):
             picture.write_bytes(b"avatar-webp")
             avatar = AvatarFile(path=picture, content_type="image/webp",
                                 root=Path(directory))
-            with mock.patch.dict(app_module.user_avatars, {"pan": avatar}, clear=True):
+            with mock.patch.dict(local_login.registered_avatars(),
+                                 {"pan": avatar}, clear=True):
                 self._login()
                 first = self.client.get("/user/avatar")
                 again = self.client.get(
@@ -2835,7 +2838,8 @@ class UserAvatarRouteTests(TestCase):
             picture.write_bytes(b"avatar-png")
             avatar = AvatarFile(path=picture, content_type="image/png",
                                 root=Path(directory))
-            with mock.patch.dict(app_module.user_avatars, {"pan": avatar}, clear=True):
+            with mock.patch.dict(local_login.registered_avatars(),
+                                 {"pan": avatar}, clear=True):
                 self._login()
                 picture.unlink()
                 response = self.client.get("/user/avatar")
@@ -2855,7 +2859,8 @@ class UserAvatarRouteTests(TestCase):
             outside.write_bytes(b"not-an-avatar")
             avatar = AvatarFile(path=picture.resolve(), content_type="image/png",
                                 root=avatar_root.resolve())
-            with mock.patch.dict(app_module.user_avatars, {"pan": avatar}, clear=True):
+            with mock.patch.dict(local_login.registered_avatars(),
+                                 {"pan": avatar}, clear=True):
                 self._login()
                 picture.unlink()
                 picture.symlink_to(outside)

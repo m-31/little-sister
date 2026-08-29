@@ -26,8 +26,8 @@ class ShownPathTests(TestCase):
     def test_a_checkout_beside_the_config_is_named_by_the_project(self):
         # the case that matters: a source copy earlier on sys.path shadowing an
         # installed distribution of the same name — still legible as such
-        self.assertEqual(shown(f"{PROJECT}/little_sister_stress/checks.py"),
-                         "./little_sister_stress/checks.py")
+        self.assertEqual(shown(f"{PROJECT}/my_deployment/checks.py"),
+                         "./my_deployment/checks.py")
 
     def test_the_venv_inside_the_project_is_not_read_as_the_project(self):
         # both roots contain the file; the longer one is the one that says
@@ -42,7 +42,7 @@ class ShownPathTests(TestCase):
 
     def test_no_root_prints_the_home_directory_it_sits_in(self):
         for path in (f"{SITE}/little_sister_github/github.py",
-                     f"{PROJECT}/little_sister_stress/checks.py"):
+                     f"{PROJECT}/my_deployment/checks.py"):
             with self.subTest(path=path):
                 self.assertNotIn("/Users/someone", shown(path))
 

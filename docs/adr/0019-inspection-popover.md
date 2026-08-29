@@ -1,18 +1,13 @@
 # ADR-0019 — Inspection popover (hover card)
 
 - **Status:** Accepted
-- **Date:** 2026-06-26
+- **Date:** 2026-08-23 (accepted 2026-06-26)
 - **Related:** [ADR-0017](0017-node-title.md) (`title`) and [ADR-0012](0012-node-metadata.md)
   (`about`) — the fields the card shows;
   [ADR-0018](0018-markdown-rendering.md) (the card injects server-rendered Markdown);
   [ADR-0005](0005-dashboard-freshness-and-self-monitoring.md) (the ~10s grid-fragment
   poll the card must coexist with).
 - **Register:** [`../decisions.md`](../decisions.md)
-
-> **Update (2026-06-26):** the card shows **`title` + `about` only**. A leaf's
-> `description` was dropped from it — it stays on the leaf detail page — so a node gets a
-> card when it has a `title` or an `about`. The decision text below reads `title` / `about`
-> accordingly.
 
 ## Context
 On the dashboard a node surfaces its `description` + `about` only through the native

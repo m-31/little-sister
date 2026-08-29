@@ -1,21 +1,13 @@
 # ADR-0052 — Plugin names: one convention for a git dependency and a published one
 
 - **Status:** Accepted
-- **Date:** 2026-08-08 (decided while writing the extraction procedure, looking ahead
-  to publication)
+- **Date:** 2026-08-23 (accepted 2026-08-08, decided while writing the extraction
+  procedure, looking ahead to publication)
 - **Related:** [ADR-0051](0051-what-startup-refuses.md) (the type name this pins, and
   the roster that reads the mapping),
   [ADR-0049](0049-the-check-authoring-surface.md) (what a plugin depends on),
   [ADR-0022](0022-generated-release-branch.md) (the tag a git dependency resolves)
 - **Register:** [`../decisions.md`](../decisions.md)
-
-> **Update (2026-08-10):** the window this decision was taken inside is closed. All
-> four names are held by a real release — `little-sister` 0.3.11 and the three plugins
-> at 0.1.0 — so where the Context and the Consequences say the names are *free* or
-> *unclaimed on the index*, read "they were, and each was claimed by its own first
-> upload". The convention itself is unchanged and is what made the move cost nothing:
-> the git era used the names the published era now uses, so no consumer renamed
-> anything.
 
 ## Context
 
@@ -72,7 +64,9 @@ that to hold.
 
 - **Publication becomes a packaging change, not a migration.** That was the point of
   doing the repository split before the index, and this is the part of it that had to
-  be decided at the start rather than at the end.
+  be decided at the start rather than at the end. The convention is what made the move
+  cost nothing: the git era used the names the published era now uses, so no consumer
+  renamed anything.
 - **The hyphen/underscore pair is one name, not two.** Index names normalize, so
   `little-sister-<x>` and `little_sister_<x>` are the same project. That is what lets
   `/system` derive the distribution from a registered type's import package and show
@@ -91,10 +85,11 @@ that to hold.
   ever bites for a name agreed *ahead* of its code, a fifth plugin agreed but unwritten
   say; every name here has code behind it, so each is claimed by its own first release
   (decision 3) and none of them needs a reservation at all.
-- **The four names are free, and the one near name is not a collision.**
-  `little-sister` and the three plugin names are unclaimed on the index. `littlesis` is
-  taken — a wrapper for an unrelated public-interest database whose own name makes the
-  same joke this project's does — and it normalizes differently, so it is a confusion
+- **The window is closed, and the four names are held by a real release** —
+  `little-sister` 0.3.11 and the three plugins at 0.1.0, each claimed by its own
+  first upload. The one near name is not a collision: `littlesis` is taken — a
+  wrapper for an unrelated public-interest database whose own name makes the same
+  joke this project's does — and it normalizes differently, so it is a confusion
   rather than a conflict; what tells the two apart where a reader meets them is the
   `description`.
 

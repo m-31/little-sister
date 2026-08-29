@@ -1,8 +1,8 @@
 # ADR-0049 — The check-authoring surface is contract, and the gate holds it
 
 - **Status:** Accepted
-- **Date:** 2026-08-08 (decided while preparing the first check types to move into
-  repositories of their own)
+- **Date:** 2026-08-23 (accepted 2026-08-08, decided while preparing the first check
+  types to move into repositories of their own)
 - **Related:** [ADR-0022](0022-generated-release-branch.md) (the tag a dependent
   pins — the thing a surface makes meaningful),
   [ADR-0034](0034-template-slots-for-dependent-packages.md) (the slot contract,
@@ -13,35 +13,6 @@
   promised), [ADR-0043](0043-coverage-backstop.md) (a rule the gate measures rather
   than a rule we remember)
 - **Register:** [`../decisions.md`](../decisions.md)
-
-> **Update (2026-08-10):** the surface promises **names**, and this note adds what it
-> does *not* promise, because the difference drew blood. The **common config fields
-> every check shares grow** — `order` joined them in
-> [ADR-0055](0055-sibling-order.md) — and each one becomes a keyword argument
-> `Check.from_config` passes to the constructor. A check type that spells those
-> keywords out instead of taking `**kwargs` therefore stops binding the day a field
-> is added, although every promised *name* still imports. **So the obligation on a
-> check type is: accept `**kwargs` and hand them to `super().__init__()`.** Adding a
-> common field stays a compatible change under this record's add-is-compatible rule,
-> and a constructor that refuses one is now reported as a `CheckError` naming the
-> file, the type and the keyword, instead of a bare `TypeError` from inside the
-> loader. The epoch (`API_VERSION`) does not move: nothing was removed or renamed.
-
-> **Update (2026-08-16):** decision 4's guard stands; what it guards had a **level of
-> its own** to choose, and the choice was wrong. The default was `DEBUG` — which
-> collects no record little-sister writes, because nothing in it logs below `INFO`,
-> and every record written by everything it is installed beside. That is also what the
-> `httpx` and `markdown_it` caps beside it are: dependencies noticed one at a time,
-> each after somebody read a log. A deployment carrying an AWS check type made the
-> shape plain by being two thirds SDK request detail. **So the default is now `INFO`,
-> and `LOG_LEVEL` names it** — inside the guard, like the level it replaces, so a
-> stray variable in a deployment's environment cannot overrule the level that
-> deployment chose in code. An unrecognized name falls back to `INFO` and says so in
-> the log it just opened, because a typo in an environment is not a reason to refuse
-> to log. Nothing about the promise moves: logging is still a behavior rather than a
-> name, `little_sister.logger` is still not importable by a plugin, and a chatty
-> dependency is still quieted by capping **its own** logger — which adds no handler
-> to root, and so leaves this default running rather than replacing it.
 
 ## Context
 
@@ -126,14 +97,42 @@ contract; it is a promise about the one name nobody's code writes against.
    when the application has not — so a deployment or a plugin that sets up its own
    logging *before* importing `little_sister.app` keeps its handlers and its level,
    and little-sister's own records arrive there too. Writing that down forced a fix:
-   the root `setLevel(DEBUG)` ran *outside* the has-no-handlers guard, so a dependent
-   that had chosen INFO silently got DEBUG. It now sits inside the guard, with the
+   the root `setLevel()` ran *outside* the has-no-handlers guard, so a dependent
+   that had chosen INFO silently got DEBUG. It sits inside the guard, with the
    third-party noise caps that belong to our default and to nobody else's setup.
    `tests/test_logger.py` holds it.
+
+   What the guard guards has a **level of its own** to choose. **The default is
+   `INFO`, and `LOG_LEVEL` names it** — inside the guard, like the level it replaces,
+   so a stray variable in a deployment's environment cannot overrule the level that
+   deployment chose in code. `DEBUG` collects no record little-sister writes, because
+   nothing in it logs below `INFO`, and every record written by everything it is
+   installed beside; that is also what the `httpx` and `markdown_it` caps beside it
+   are: dependencies noticed one at a time, each after somebody read a log. A
+   deployment carrying an AWS check type made the shape plain by being two thirds SDK
+   request detail. An unrecognized name falls back to `INFO` and says so in the log it
+   just opened, because a typo in an environment is not a reason to refuse to log.
+   Nothing about the promise moves: logging is still a behavior rather than a name,
+   `little_sister.logger` is still not importable by a plugin, and a chatty dependency
+   is still quieted by capping **its own** logger — which adds no handler to root, and
+   so leaves this default running rather than replacing it.
 
 5. **Adding a name is compatible; removing or renaming one is a version bump and a
    new ADR** — [ADR-0034](0034-template-slots-for-dependent-packages.md)'s rule for
    slots, for the same reason and now with a test behind it.
+
+6. **The surface promises *names*, and not what a check's constructor spells out**;
+   the difference drew blood. The **common config fields every check shares grow** —
+   `order` joined them in [ADR-0055](0055-sibling-order.md) — and each one becomes a
+   keyword argument `Check.from_config` passes to the constructor. A check type that
+   spells those keywords out instead of taking `**kwargs` therefore stops binding the
+   day a field is added, although every promised *name* still imports. **So the
+   obligation on a check type is: accept `**kwargs` and hand them to
+   `super().__init__()`.** Adding a common field stays a compatible change under
+   decision 5's add-is-compatible rule, and a constructor that refuses one is
+   reported as a `CheckError` naming the file, the type and the keyword, instead of a
+   bare `TypeError` from inside the loader. The epoch (`API_VERSION`) does not move:
+   nothing is removed or renamed.
 
 ## Consequences
 

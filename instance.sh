@@ -10,7 +10,20 @@
 # What the scripts call this instance in the lines an operator reads.
 NAME="little-sister"
 
-# What gunicorn serves. This repository *is* the library, so it serves the library's
-# own app directly. A deployment serves its `wsgi.py` instead, which registers the
-# check types and extensions it installs before that app is imported.
-APP="little_sister.app:app"
+# What port this instance serves on. The family default — shared with the other
+# installations rather than reserved from them, which is now safe rather than merely
+# tidy: a second checkout on this number is **refused** by `start.sh` and `stop.sh`
+# rather than adopted, so two of them never quietly
+# restart or stop each other. Running two at once is what `LITTLE_SISTER_PORT` is for.
+PORT=8888
+
+# And where `./start.sh --tls` serves instead. The scheme and the port move together,
+# so the two numbers are one decision and are read side by side.
+TLS_PORT=8443
+
+# What gunicorn serves. Every installation in this family serves its own `wsgi.py`,
+# which registers what it adds before `little_sister.app` is imported — and this one
+# is an installation too: it registers no check types, but it does register the
+# system-admin account, and a registration after the app
+# import is a registration that came too late.
+APP="wsgi:app"

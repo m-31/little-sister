@@ -20,11 +20,13 @@ import os
 import pytest
 
 from little_sister.actions import forget_actions
-from little_sister.config_dir import forget_aspects, forget_scanned_roots
+from little_sister.config_dir import forget_aspects
 from little_sister.csp import forget_contributions
 from little_sister.icons import forget_packs
+from little_sister.identity import forget_doors
 from little_sister.link_probe import forget_probe_results
 from little_sister.links import forget_cached_links
+from little_sister.local_login import use_local
 from little_sister.slots import forget_fillers
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -43,9 +45,7 @@ os.environ.setdefault("SECRET_KEY", "test-key")
 def _forget_process_caches():
     """Reset the caches a running process keeps and a test suite must not share.
 
-    The once-per-root candidate warning
-    (:func:`little_sister.config_dir.forget_scanned_roots`) would otherwise depend
-    on which test resolved a root first; the links parse cache
+    The links parse cache
     (:func:`little_sister.links.forget_cached_links`) is keyed on size and mtime,
     which a test rewriting a file within one filesystem tick can defeat; the icon
     registry (:func:`little_sister.icons.forget_packs`) would otherwise let a pack
@@ -59,9 +59,16 @@ def _forget_process_caches():
     package registers into (ADR-0048). The reachability
     answers (:func:`little_sister.link_probe.forget_probe_results`) are the same
     story once more: a verdict one test seeded is a verdict the next test's page
-    would render.
+    would render. The identity doors
+    (:func:`little_sister.identity.forget_doors`) are the sharpest case of it: a
+    door one test registers decides *who every later test is*, and a default one
+    makes ``/login`` somebody else's page (ADR-0069). They are also the one registry
+    that is **put back** rather than merely emptied, and the line below is this
+    suite standing in for the ``wsgi.py`` it does not run: an installation registers
+    its own doors now, so leaving the registry empty would leave every later test on
+    an instance nobody can log into. A case that wants that state asks for it, by
+    calling :func:`~little_sister.identity.forget_doors` itself.
     """
-    forget_scanned_roots()
     forget_actions()
     forget_cached_links()
     forget_packs()
@@ -69,3 +76,5 @@ def _forget_process_caches():
     forget_aspects()
     forget_contributions()
     forget_probe_results()
+    forget_doors()
+    use_local()

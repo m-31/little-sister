@@ -18,7 +18,7 @@ answering for code that is not running. That is a question about *which root* th
 module came from, not about the absolute string — so the answer is the root,
 named:
 
-* ``./little_sister_stress/checks.py`` — under the working directory, which is
+* ``./my_deployment/checks.py`` — under the working directory, which is
   the case that matters: a checkout shadowing an install;
 * ``site-packages/little_sister_github/github.py`` — an ordinary installation
   into the environment (or into the user's, which is a ``site-packages`` too);

@@ -1,7 +1,7 @@
 # ADR-0025 — Check-provided subnode metadata (`about` / `title` on `CheckResult`)
 
 - **Status:** Accepted
-- **Date:** 2026-07-23
+- **Date:** 2026-08-23 (accepted 2026-07-23)
 - **Related:** [ADR-0007](0007-check-result-branches.md) (recursive `CheckResult` —
   the branch shape this extends), [ADR-0012](0012-node-metadata.md) (`about`, its
   sources and precedence), [ADR-0017](0017-node-title.md) (`title`, same sources),
@@ -10,41 +10,6 @@
   already renders these), [ADR-0008](0008-json-output-api.md) (JSON envelope, unchanged
   here).
 - **Register:** [`../decisions.md`](../decisions.md)
-
-> **Update (2026-08-22):** Decision §5 — *where a check sources the labels* — is
-> re-arranged: **the library reads, a check only declares.** The non-label key that
-> later joined this block proved the shape (`show_when_quiet`, ADR-0063): parsed by
-> `Check._parse_common` for every type, applied by the engine per child name, so a
-> deployment states it for any installed branch check with no check release. The
-> labels follow, once their one genuine dependency becomes data: a type declares
-> **`subnode_defaults`** (`name -> {title, about, show_when_quiet}` — §5's shipped
-> per-aspect maps, promoted from a convention the check applies to a declaration the
-> library applies, and shaped like the `subnodes:` block itself, so the type's half
-> mirrors the deployment's key for key: ADR-0063's flag rides the same entries, a
-> roster aspect declared once beside its own label) and **`label_tokens`**
-> (`token -> value`), both ordinary common-field constructor keywords. The library
-> resolves each field once — for text, the configured value when present, else the
-> declared default, `{default}` substituted and `{token}`s expanded by the same
-> plain replace as ever; for the flag, the same merge without the layering — and the
-> engine stores the result per child name; a result-carried label or flag remains
-> only the fallback for a name nothing declared or configured, so a
-> deployment-authored check stamping a dynamic child keeps working.
-> `parse_subnodes`, `resolve_text` and `expand_tokens` thereby lose their
-> external callers and retire from the authoring facade, ADR-0049's surface gate
-> moving with them — a **breaking** change to the surface, taken deliberately while
-> every consumer is family-owned and moves in lockstep; there is deliberately no
-> compatibility window, and the release notes say it at the top. What this record
-> fixed stays fixed: per-field precedence is still `nodes.yaml` > the deployment's
-> block > the check > empty; seed-once / fill-empty is still the mechanism; labels
-> still freeze at the first fill — which now pins tokens to construction-time facts
-> structurally, where before it merely implied them. Two holes close: a `subnodes:`
-> label on a type that never read the block was a silent no-op and now reaches every
-> branch type; and substitution becomes one library contract — a plain
-> `str.replace`, token values inserted as Markdown-active text with raw HTML escaped
-> at render (ADR-0018), so a check exposes only values it would print as Markdown.
-> The per-leaf `descriptions:` map (ADR-0012) is untouched: a different field, with
-> write-through semantics. Registered in [`../decisions.md`](../decisions.md) (*The
-> `subnodes` labels join the library-read block*).
 
 ## Context
 A branch check ([ADR-0007](0007-check-result-branches.md)) emits `CheckResult.children`
@@ -97,25 +62,37 @@ engine or tree learning where a value came from.
    ([ADR-0019](0019-inspection-popover.md)) already walks the whole snapshot, so more
    nodes simply populate. The **JSON contract does not move**: `about` / `title` are
    already node fields in [`../api/openapi.yaml`](../api/openapi.yaml); they merely
-   populate for more nodes.
+   populate for more nodes. The per-leaf `descriptions:` map (ADR-0012) is untouched:
+   a different field, with write-through semantics.
 
-5. **Where a check sources the labels.** Point 1 is the *transport* (`CheckResult`); the
-   *source* is the check's to choose. A check may hardcode a **per-aspect default** in
-   code (`host-metrics`' `ABOUT` map) or read them from its **own config** — a
-   `subnodes:` block, `name -> {title, about}`, in the same file its root's inline
-   `about` / `title` live in, parsed by `little_sister.checks.metadata.parse_subnodes`
-   (with `expand_tokens` for `{token}` placeholders a label wants to reuse, a plain
-   replace so Markdown is untouched). A check with both layers them via
-   `metadata.resolve_text`: the config value when present, the default otherwise — and
-   the config may **extend** rather than replace by writing `{default}` into its own
-   text, which is substituted in place (before token expansion, so tokens inside the
-   default still expand; an aspect with no default resolves it to nothing). So
-   `host-metrics` ships defaults every deployment inherits yet lets one retune or annotate
-   an aspect's `about` in its config, while a deployment-authored branch check can keep
-   its labels wholly in config. The extension form earns its keep when one check *type*
-   runs several times in a deployment — one per team — where config-only labels would put
-   the same paragraphs in every instance's file. This is internal to the check: the tree
-   still sees one *check-provided* value per field, below `nodes.yaml`.
+5. **Where a check sources the labels.** Point 1 is the *transport* (`CheckResult`);
+   **the library reads, a check only declares.** A deployment states the labels in a
+   **`subnodes:` block**, `name -> {title, about, show_when_quiet}`, in the same file
+   the check's root inline `about` / `title` live in. The non-label key in that block
+   sets the shape (`show_when_quiet`, ADR-0063): parsed by `Check._parse_common` for
+   every type, applied by the engine per child name, so a deployment states it for any
+   installed branch check with no check release. The labels follow: a type declares
+   **`subnode_defaults`** (`name -> {title, about, show_when_quiet}` — the per-aspect
+   maps, a declaration the library applies, and shaped like the `subnodes:` block
+   itself, so the type's half mirrors the deployment's key for key: ADR-0063's flag
+   rides the same entries, a roster aspect declared once beside its own label) and
+   **`label_tokens`** (`token -> value`), both ordinary common-field constructor
+   keywords. The library resolves each field once — for text, the configured value when
+   present, else the declared default, `{default}` substituted and `{token}`s expanded
+   by a plain replace; for the flag, the same merge without the layering — and the
+   engine stores the result per child name; a result-carried label or flag remains only
+   the fallback for a name nothing declared or configured, so a deployment-authored
+   check stamping a dynamic child keeps working. The config may **extend** rather than
+   replace by writing `{default}` into its own text, which is substituted in place
+   (before token expansion, so tokens inside the default still expand; an aspect with no
+   default resolves it to nothing). So `host-metrics` ships defaults every deployment
+   inherits yet lets one retune or annotate an aspect's `about` in its config, while a
+   deployment-authored branch check can keep its labels wholly in config. The extension
+   form earns its keep when one check *type* runs several times in a deployment — one
+   per team — where config-only labels would put the same paragraphs in every instance's
+   file. Per-field precedence is `nodes.yaml` > the deployment's block > the check >
+   empty; seed-once / fill-empty is the mechanism; labels freeze at the first fill —
+   which pins tokens to construction-time facts structurally.
 
 ## Consequences
 - A reusable branch check ships its subnode legend **once, in code**, and every
@@ -132,6 +109,16 @@ engine or tree learning where a value came from.
 - The tree and engine stay **provenance-free**: the fill-empty rule is the whole
   mechanism, two lines under the existing status-write lock. No `Status` grows a
   "source" field; no resolved-metadata map is plumbed into the engine.
+- `parse_subnodes`, `resolve_text` and `expand_tokens` lose their external callers and
+  retire from the authoring facade, ADR-0049's surface gate moving with them — a
+  **breaking** change to the surface, taken deliberately while every consumer is
+  family-owned and moves in lockstep; there is deliberately no compatibility window,
+  and the release notes say it at the top.
+- Two holes close: a `subnodes:` label on a type that never read the block was a silent
+  no-op and now reaches every branch type; and substitution becomes one library
+  contract — a plain `str.replace`, token values inserted as Markdown-active text with
+  raw HTML escaped at render (ADR-0018), so a check exposes only values it would print
+  as Markdown.
 
 ## Alternatives considered
 - **A yaml-aware engine** — plumb the resolved `nodes.yaml` metadata map into

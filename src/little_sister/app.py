@@ -18,14 +18,23 @@ from flask import (
     redirect,
     render_template,
     request,
-    session,
     url_for,
 )
+from flask.sessions import SecureCookieSessionInterface
 from flask.typing import ResponseReturnValue
 from jinja2 import ChoiceLoader, StrictUndefined
 from markupsafe import Markup
 
-from little_sister import __version__, csp, link_probe, slots, watch_lines
+from little_sister import (
+    __version__,
+    csp,
+    identity,
+    link_probe,
+    local_login,
+    slots,
+    system_admin,
+    watch_lines,
+)
 from little_sister.actions import register_builtin_fillers
 from little_sister.api import authenticate, parse_api_tokens, problem, status_envelope
 from little_sister.checks import CheckError, parse_duration, plain
@@ -33,6 +42,7 @@ from little_sister.checks.base import TypeOrigin, registered_types
 from little_sister.config import config
 from little_sister.config_dir import (
     CONFIG_DIR_ENV,
+    announce_aspects,
     aspect_owner,
     config_roots,
     fatal,
@@ -61,29 +71,7 @@ from little_sister.spans import coarse_span, format_duration, format_span
 from little_sister.status import HEARTBEAT_PATH, StatusCode
 from little_sister.titles import Labelled, label_parts, shown_title
 from little_sister.tree import StatusSnapshot, status_tree
-from little_sister.users import load_users, read_avatar
-
-
-def _load_dotenv(path: str = ".env") -> None:
-    """Populate ``os.environ`` from a simple ``KEY=VALUE`` ``.env`` file.
-
-    Dependency-free (see ADR-0003). Values already present in the environment
-    take precedence; a missing file is fine.
-    """
-    try:
-        with open(path, encoding="utf-8") as env_file:
-            for raw_line in env_file:
-                line = raw_line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                key, _, value = line.partition("=")
-                os.environ.setdefault(
-                    key.strip(), value.strip().strip('"').strip("'"))
-    except FileNotFoundError:
-        pass
-
-
-_load_dotenv()
+from little_sister.users import read_avatar
 
 app = Flask(import_name=__name__)
 app.jinja_env.undefined = StrictUndefined
@@ -123,6 +111,21 @@ DARK_THEMES = ("dark", "cyberpunk")
 # line above the strip and the grid. Its exit writes the default layout back to
 # the cookie, which is the whole of "leaving" a kiosk.
 KIOSK_LAYOUT = "kiosk"
+
+
+def _connection_is_secure() -> bool:
+    """Whether the request being served arrived over TLS (ADR-0065).
+
+    **The transport answers this** — not a configuration value, not the host name, not
+    a forwarded header we chose to believe. gunicorn sets ``wsgi.url_scheme`` from the
+    socket it is holding, so this is true exactly when *this process* terminated a TLS
+    connection: locally the browser's, and behind a load balancer the second one the
+    balancer opens to the instance. Both are the same fact arrived at the same way,
+    which is what lets one rule cover a laptop and a cloud account.
+
+    Outside a request there is no connection to ask about, so nothing is marked.
+    """
+    return has_request_context() and request.is_secure
 
 
 def _resolve_depth() -> int:
@@ -335,7 +338,7 @@ def csp_report() -> ResponseReturnValue:
     nothing, which is what keeps this slice clear of the persistence decision.
 
     The body is read **from the stream with a limit**, not measured by
-    ``Content-Length`` and then parsed: this is the one route with no session behind
+    ``Content-Length`` and then parsed: this is a route reached with no session behind
     it, and a chunked request carries no length to measure. So the read itself is what
     refuses an oversized body, rather than a header the sender chooses.
     """
@@ -415,8 +418,6 @@ def preferences() -> ResponseReturnValue:
     browser already had, so a hand-edited form cannot write junk that every
     later page then has to defend against.
     """
-    if "username" not in session:
-        return redirect("/login")
     current = _presentation()
     theme = request.form.get("theme", "")
     layout = request.form.get("layout", "")
@@ -426,7 +427,8 @@ def preferences() -> ResponseReturnValue:
     }
     response = make_response(redirect(_safe_next(request.form.get("next"))))
     response.set_cookie(PREFS_COOKIE, urlencode(chosen),
-                        max_age=PREFS_COOKIE_MAX_AGE, samesite="Lax")
+                        max_age=PREFS_COOKIE_MAX_AGE, samesite="Lax",
+                        secure=_connection_is_secure())
     return response
 
 
@@ -958,6 +960,42 @@ def _session_key() -> str:
 
 app.secret_key = _session_key()
 
+
+class _TransportSecureSession(SecureCookieSessionInterface):
+    """Mark the session cookie ``Secure`` when the connection was (ADR-0065).
+
+    Flask reads a fixed ``SESSION_COOKIE_SECURE`` here, which is a second copy of
+    something the transport already knows — and the copy is the one that goes wrong: a
+    deployment that sets it and then starts without TLS locks itself out of its own
+    login page, with nothing on the screen saying why. So the connection decides.
+
+    An explicitly configured ``True`` still wins, because that is Flask's own setting
+    and a deployment that turned it on meant it. There is deliberately no way to turn
+    the flag *off* for a TLS connection: the cookie carries a login, and a library
+    that can be told to hand one out in the clear eventually is.
+    """
+
+    def get_cookie_secure(self, app: Flask) -> bool:
+        return bool(app.config["SESSION_COOKIE_SECURE"]) or _connection_is_secure()
+
+
+app.session_interface = _TransportSecureSession()
+
+# `SameSite=Lax` on the one cookie that carries a login. Flask leaves this unset, which
+# hands the decision to whatever the browser defaults to this year — and it was the one
+# cookie left to a default, while `ls_prefs` and the fold-depth cookie, which carry a
+# theme and a disclosure state, both say `Lax` explicitly (ADR-0028). That is the wrong
+# way round on an application whose state-changing POSTs — set and clear maintenance —
+# carry no CSRF token: `Lax` is what withholds this cookie from a cross-site form post,
+# which is the whole of that attack.
+#
+# `Lax` rather than `Strict` because a door's **callback** is a top-level navigation
+# back from an identity provider (ADR-0069 §4) and `Strict` would drop the cookie on
+# arrival, breaking the redirect flow this seam exists to allow. That callback is a GET
+# by contract, which is exactly what `Lax` still sends — a provider wanting an OIDC
+# `form_post` response mode would need something else, and does not have a route here.
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+
 # The retired single-file user override (ADR-0046). A hard cut: the name is never
 # honored again, and `users.py` does not know it ever existed. It is read here, once,
 # for the opposite purpose — to **refuse**. ADR-0031 §7 retired LITTLE_SISTER_CHECKS_DIR
@@ -981,18 +1019,32 @@ def _refuse_retired_users_override() -> None:
         f"different user lists, and starting on the wrong one is silent.")
 
 
-# Load the allowed users from a deployment-controlled location: the `users` aspect of
-# the configuration path-list, in either legal form (ADR-0046/0031/0045). Users are the
-# one aspect that does **not** merge across roots — the first root declaring it wins
-# whole, because merging identities across layers is a security question wearing a
-# convenience costume. That rule is also what retired the single-file override above: a
-# users-only root named first says the same thing with the mechanism already here.
+# Who may sign in — and **nothing here decides it**. Every door an installation has,
+# its own import-before-app block registered (ADR-0069 §2 and §3),
+# including the built-in login list, which is `local_login.use_local()` in a `wsgi.py`
+# and no longer something this import adds on a deployment's behalf. So all that is
+# left to do at this point is to say what was registered, and to warn where the answer
+# is *nothing* — an omission logs, only a contradiction refuses.
+#
+# The `users` aspect is therefore read by `use_local()` rather than here, which is what
+# lets a deployment with a provider of its own carry no user list at all. When it is
+# read it comes from the configuration path-list in either legal form
+# (ADR-0046/0031/0045) and is the one aspect that does **not** merge across roots: the
+# first root declaring it wins whole, because merging identities across layers is a
+# security question wearing a convenience costume. That rule is also what retired the
+# single-file override above.
 _refuse_retired_users_override()
-_users_config = load_users()
-users = _users_config.users
-user_avatars = _users_config.avatars
+identity.announce_doors()
 
-logger.info("little-sister started with %d configured user(s).", len(users))
+# The same moment, asked about `config/` instead of about the doors. Every aspect any
+# of those registrations declared is now in the table, so a candidate file matching none
+# of them is genuinely unclaimed and can be named as such — with the packages that read
+# the rest, which is what makes a near-miss spelling obvious. This is the *only* place
+# the report is emitted: resolving a configuration root is silent, because the first
+# resolution in this process is somebody's registration reading its own aspect, and
+# every aspect registered after it would have been called unknown for the life of the
+# process (ADR-0070).
+announce_aspects()
 
 # API tokens for the JSON backend (ADR-0008): "name=token,name2=token2" — set
 # directly, or as a value that is itself a secret reference (ADR-0023 update
@@ -1052,6 +1104,71 @@ def _inject_engine_error() -> dict[str, str | None]:
 
 
 @app.context_processor
+def _inject_is_admin() -> dict[str, bool]:
+    """Expose the current identity's role to every template (ADR-0068).
+
+    The shared header partial draws the nav, and the nav has one admin-only entry.
+    It read ``session['admin']`` directly to decide, because most of the pages that
+    include the header do not pass a role of their own — which left the last copy of
+    *who is this request* outside :mod:`little_sister.identity` after the gate was
+    deduplicated into one place. It is not merely a duplicate: an identity that does
+    not come from this session would leave the nav silently short an entry while the
+    page behind it, gated on the same role, stayed reachable.
+
+    A view that passes ``is_admin`` explicitly still wins — Flask applies the render
+    arguments over the context processors — and passes the same value from the same
+    place.
+    """
+    user = identity.current_user()
+    return {"is_admin": user is not None and user.admin}
+
+
+#: Everything ``/health`` may say about the engine — a **closed vocabulary**, and that
+#: is the point rather than a tidiness (ADR-0066). The reason an engine did not start
+#: is a :class:`~little_sister.checks.CheckError` message that can name a config file
+#: or a check, and this is the one route that answers before anybody has logged in.
+ENGINE_STATES = ("running", "disabled", "failed")
+
+
+def _engine_state() -> str:
+    """This process's engine, as one word from :data:`ENGINE_STATES` (ADR-0066).
+
+    ``disabled`` and ``failed`` are both "no engine" and are deliberately not one
+    word: the first is a deployment saying ``LITTLE_SISTER_ENGINE=0`` and getting
+    exactly what it asked for, the second is a configuration this instance could not
+    load. Reporting them the same would make a deliberate quiet indistinguishable
+    from a broken one, which is the confusion this whole application exists to remove.
+    """
+    if engine is not None:
+        return "running"
+    return "failed" if engine_error is not None else "disabled"
+
+
+@app.route("/health")
+def health() -> ResponseReturnValue:
+    """Answer *should traffic go here* for something that is not a person (ADR-0066).
+
+    **Liveness, and deliberately not readiness.** ``200`` while this process serves;
+    an engine that failed to start does not change the code, because taking the
+    instance out of service would take away the very page whose banner explains what
+    broke. The engine is *reported* instead, so a probe that wants to alert on it can,
+    and one that only routes traffic is not made to care.
+
+    **No login gate**, like ``/csp-report`` and for the same kind of reason: a load
+    balancer presents no session and no bearer token, and a health check it cannot
+    deliver measures nothing. What that costs is bounded by saying almost nothing —
+    two fields, one of them from a closed vocabulary. The version, the configuration
+    and the reason an engine did not start are all absent on purpose; they are on the
+    pages behind the login, where the reader has already said who they are.
+
+    ``no-store`` because a cached health answer is a lie with a delay on it.
+    """
+    response = jsonify(status="ok", engine=_engine_state())
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@app.context_processor
 def _inject_user_avatar() -> dict[str, str]:
     """Give the shared settings trigger the session user's avatar URL.
 
@@ -1059,8 +1176,16 @@ def _inject_user_avatar() -> dict[str, str]:
     login-gated, username-free route below, so neither the URL nor the template
     exposes the configured user roster (ADR-0045).
     """
-    username = session.get("username", "")
-    url = (url_for("user_avatar") if username in user_avatars
+    user = identity.current_user()
+    if identity.is_system_admin_session():
+        # The distinct packaged avatar (ADR-0069 §5), and it comes *first*: the
+        # account's name is `admin`, which a deployment's own user list may also
+        # have — and the one session that must never wear somebody else's picture
+        # is this one.
+        return {"user_avatar_url": url_for(
+            "static", filename="system-admin-avatar.svg")}
+    avatars = local_login.registered_avatars()
+    url = (url_for("user_avatar") if user is not None and user.name in avatars
            else url_for("static", filename="default-avatar.svg"))
     return {"user_avatar_url": url}
 
@@ -1125,6 +1250,20 @@ def _api_problem(status_code: int, title: str,
     return resp
 
 
+@app.before_request
+def _require_identity() -> ResponseReturnValue | None:
+    """Refuse a request with no identity, unless its endpoint says otherwise.
+
+    **The whole login gate, in one place and refusing by default** — a route added
+    tomorrow is closed until its endpoint is put on one of the two lists in
+    :mod:`little_sister.identity`, which is an edit somebody has to justify rather than
+    a check somebody has to remember. It replaced the same two lines, in thirteen views.
+    """
+    if identity.needs_identity(request.endpoint) and identity.current_user() is None:
+        return identity.challenge()
+    return None
+
+
 @app.route('/')
 def index() -> ResponseReturnValue:
     return redirect("/status")
@@ -1132,24 +1271,31 @@ def index() -> ResponseReturnValue:
 
 @app.route('/login', methods=['GET', 'POST'])
 def login() -> ResponseReturnValue:
-    if request.method == 'POST':
-        username = request.form['username']
-        password = request.form['password']
-        if username in users and users[username]["password"] == password:
-            session['username'] = username
-            session["firstname"] = users[username]["firstname"]
-            session["lastname"] = users[username]["lastname"]
-            session["admin"] = bool(users[username].get("admin", False))
-            return redirect('/status')
-        logger.warning("Failed login attempt for username %r.", username)
-        return render_template('login.html', error='Invalid username or password')
-    return render_template('login.html', error=None)
+    """The way in, at the address every install has: the **default door's** login
+    step, whichever door that is (ADR-0069 §4). On an install that registered the
+    built-in login list that is :mod:`little_sister.local_login`, which is a door
+    like any other — and a ``404`` on one that registered no default at all, which
+    is a state an installation is allowed to start in."""
+    return identity.login_response()
+
+
+@app.route('/login/<door>', methods=['GET', 'POST'])
+def login_door(door: str) -> ResponseReturnValue:
+    """One door's own login step — the address that stays a local form under a
+    provider that redirects, and the reason a way in can be kept for the morning the
+    identity provider is the thing that broke (ADR-0069 §2)."""
+    return identity.login_response(door)
+
+
+@app.route('/auth/callback/<door>')
+def login_callback(door: str) -> ResponseReturnValue:
+    """Where a door's redirect flow comes back to (ADR-0069 §4)."""
+    return identity.callback_response(door)
 
 
 @app.route('/logout')
 def logout() -> ResponseReturnValue:
-    session.clear()
-    return redirect('/login')
+    return identity.logout_response()
 
 
 def _split_heartbeat(
@@ -1197,8 +1343,13 @@ def status(branch: str = "") -> ResponseReturnValue:
             return _api_problem(404, "Not Found",
                                 f"No status node at path {branch!r}.")
         return _api_json(status_envelope(node))
-    if 'username' not in session:
-        return redirect('/login')
+    # This route is not behind the gate (`identity.SELF_AUTHENTICATING_ENDPOINTS`):
+    # the JSON branch above answers a bearer token, and a gate in front of the whole
+    # view would redirect an API client to a login form. So the session half is
+    # checked here, after the negotiation that decides which credential applies.
+    user = identity.current_user()
+    if user is None:
+        return identity.challenge()
     node = status_tree.snapshot(branch)
     # A leaf node (a check) gets its own detail page.
     if branch and node is not None and not node.children:
@@ -1225,11 +1376,11 @@ def status(branch: str = "") -> ResponseReturnValue:
         # members cannot drift (the `/copy` rule, one node down).
         copy_markdown = format_node_markdown(node, _copy_style(), since)
         copy_rich = render_markdown(copy_markdown)
-        return render_template('check.html', username=session['username'],
-                               firstname=session['firstname'], node=node,
+        return render_template('check.html', username=user.name,
+                               firstname=user.firstname, node=node,
                                branch=branch, since=since, focus=focus,
                                focus_orphan=focus_orphan,
-                               is_admin=session.get('admin', False),
+                               is_admin=user.admin,
                                maintenance_default=config.maintenance_default_expiry,
                                maintenance_timezone=config.timezone,
                                copy_markdown=copy_markdown,
@@ -1276,7 +1427,7 @@ def status(branch: str = "") -> ResponseReturnValue:
                                since=since,
                                max_depth=depth, hide_ok=hide_ok,
                                hide_idle=hide_idle, dense=dense,
-                               is_admin=session.get('admin', False),
+                               is_admin=user.admin,
                                heartbeat=heartbeat, reason_cap=config.reason_cap,
                                branch_cap=config.branch_cap,
                                maintenance_cap=config.maintenance_cap,
@@ -1286,12 +1437,12 @@ def status(branch: str = "") -> ResponseReturnValue:
         # The hover card (ADR-0019) must know the strip too: the lifted
         # heartbeat's nodes.yaml title/about join the map like any node's.
         node_meta = _node_meta_map(node) | _node_meta_map(heartbeat)
-        body = render_template('status.html', username=session['username'],
-                               firstname=session['firstname'], node=node,
+        body = render_template('status.html', username=user.name,
+                               firstname=user.firstname, node=node,
                                branch=branch, since=since, max_depth=depth,
                                depth_limit=MAX_DEPTH, hide_ok=hide_ok,
                                hide_idle=hide_idle, dense=dense,
-                               is_admin=session.get('admin', False),
+                               is_admin=user.admin,
                                maintenance_default=config.maintenance_default_expiry,
                                maintenance_timezone=config.timezone,
                                heartbeat=heartbeat, node_meta=node_meta,
@@ -1308,23 +1459,24 @@ def status(branch: str = "") -> ResponseReturnValue:
     if not request.args.get('fragment'):
         if 'depth' in request.args:
             response.set_cookie('depth', str(depth),
-                                max_age=VIEW_COOKIE_MAX_AGE, samesite='Lax')
+                                max_age=VIEW_COOKIE_MAX_AGE, samesite='Lax',
+                                secure=_connection_is_secure())
         for name, value in (('hide_ok', hide_ok), ('hide_idle', hide_idle),
                             ('dense', dense)):
             if request.args.getlist(name) or request.args.get('view'):
                 response.set_cookie(name, '1' if value else '0',
-                                    max_age=VIEW_COOKIE_MAX_AGE, samesite='Lax')
+                                    max_age=VIEW_COOKIE_MAX_AGE, samesite='Lax',
+                                    secure=_connection_is_secure())
     return response
 
 
 @app.route('/history/<path:path>')
 def history(path: str) -> ResponseReturnValue:
-    if 'username' not in session:
-        return redirect('/login')
+    user = identity.signed_in()
     node = status_tree.snapshot(path)
     periods = list(reversed(status_tree.history(path)))
-    return render_template('history.html', username=session['username'],
-                           firstname=session['firstname'], node=node,
+    return render_template('history.html', username=user.name,
+                           firstname=user.firstname, node=node,
                            branch=path, periods=periods)
 
 
@@ -1596,9 +1748,8 @@ def maintenance() -> ResponseReturnValue:
     their own words intact. A post with **no** ``set_at`` field at all (a hand-rolled
     client, never one of our forms) writes unguarded, exactly as before.
     """
-    if 'username' not in session:
-        return redirect('/login')
-    if not session.get('admin'):
+    user = identity.signed_in()
+    if not user.admin:
         abort(403)
     path = request.form['path']
     token = request.form.get('set_at')
@@ -1644,7 +1795,7 @@ def maintenance() -> ResponseReturnValue:
         setter = (partial(status_tree.set_entry_maintenance, path, slug) if slug
                   else partial(status_tree.set_maintenance, path))
         write = setter(reason, expires_at=expires_at,
-                       set_by=session.get('username', ''),
+                       set_by=user.name,
                        expected_set_at=token)
     if write.refused:
         return refused(problem=None, stored=write.current)
@@ -1675,9 +1826,10 @@ def _maintenance_refused(*, path: str, slug: str, back: str, clearing: bool,
     the stored pin moved; a refused compare-and-set is the case that needs a
     refreshed one, and that branch reads it off the entry it is showing.
     """
+    user = identity.signed_in()
     return render_template(
-        'maintenance_conflict.html', username=session['username'],
-        firstname=session['firstname'], path=path, back=back,
+        'maintenance_conflict.html', username=user.name,
+        firstname=user.firstname, path=path, back=back,
         clearing=clearing, stored=stored, slug=slug, problem=problem,
         mine=mine, duration=duration, token=token,
         maintenance_default=config.maintenance_default_expiry,
@@ -1695,22 +1847,20 @@ def maintenance_overview() -> ResponseReturnValue:
     This is the page that has room for **one row per pin**, which is what makes the
     popover's one-row-per-node summary safe: an admin asking *what is silenced right
     now?* gets a complete answer somewhere."""
-    if 'username' not in session:
-        return redirect('/login')
+    user = identity.signed_in()
     node_pins, entry_pins, _ = _maintenance_view(
         status_tree.snapshot(""), datetime.now())
-    return render_template('maintenance.html', username=session['username'],
-                           firstname=session['firstname'],
+    return render_template('maintenance.html', username=user.name,
+                           firstname=user.firstname,
                            pins=_maintenance_pins(node_pins, entry_pins))
 
 
 @app.route('/events')
 def events() -> ResponseReturnValue:
-    if 'username' not in session:
-        return redirect('/login')
+    user = identity.signed_in()
     recent = list(reversed(status_tree.recent_events()))
-    return render_template('events.html', username=session['username'],
-                           firstname=session['firstname'], events=recent)
+    return render_template('events.html', username=user.name,
+                           firstname=user.firstname, events=recent)
 
 
 @dataclass(frozen=True)
@@ -1838,9 +1988,8 @@ def _registering_packages() -> list[PackageRow]:
 
 @app.route('/system')
 def system() -> ResponseReturnValue:
-    if 'username' not in session:
-        return redirect('/login')
-    if not session.get('admin'):
+    user = identity.signed_in()
+    if not user.admin:
         abort(403)
     # Same freshness contract as the dashboard (ADR-0005): one server-formatted
     # stamp per response, seeded into the page and sent as X-Rendered-At for
@@ -1871,8 +2020,8 @@ def system() -> ResponseReturnValue:
         # asked for each origin (ADR-0048 §7).
         in_use, folded = _type_roster(info)
         aspects = [(name, aspect_owner(name)) for name in registered_aspects()]
-        body = render_template('system.html', username=session['username'],
-                               firstname=session['firstname'],
+        body = render_template('system.html', username=user.name,
+                               firstname=user.firstname,
                                version=__version__, info=info,
                                rendered_at=rendered_at,
                                types_in_use=in_use, types_folded=folded,
@@ -1880,6 +2029,9 @@ def system() -> ResponseReturnValue:
                                packages=_registering_packages(),
                                extra_aspects=aspects,
                                resolvers=registered_resolvers(),
+                               doors=identity.registered_doors(),
+                               choosing_at_login=identity.choosing_at_login(),
+                               system_admin=system_admin.registered(),
                                csp_header=CSP_HEADER,
                                csp_directives=csp_policy.directives)
     response = make_response(body)
@@ -1909,16 +2061,15 @@ def copy(branch: str = "") -> ResponseReturnValue:
     operator standing on the page wants without a navigation, and it is already
     rendered from the snapshot behind that page.
     """
-    if 'username' not in session:
-        return redirect('/login')
+    user = identity.signed_in()
     style = _copy_style()
     # One immutable read for both representations: the rich HTML is rendered from
     # the canonical Markdown below, so a check update can never put two different
     # incidents on the same page (ADR-0002).
     node = status_tree.snapshot(branch) if branch else None
     if branch and node is None:
-        return render_template('text.html', username=session['username'],
-                               firstname=session['firstname'],
+        return render_template('text.html', username=user.name,
+                               firstname=user.firstname,
                                copy_markdown="", copy_html=Markup(""),
                                copy_html_text="", copy_preview=True,
                                copy_subject=branch, copy_missing=True), 404
@@ -1930,8 +2081,8 @@ def copy(branch: str = "") -> ResponseReturnValue:
             # (ADR-0036 decision 6). There is no document to make of a line that
             # is not there, and inventing one from the pin's text would hand over
             # a finding the check is no longer making.
-            return render_template('text.html', username=session['username'],
-                                   firstname=session['firstname'],
+            return render_template('text.html', username=user.name,
+                                   firstname=user.firstname,
                                    copy_markdown="", copy_html=Markup(""),
                                    copy_html_text="", copy_preview=True,
                                    copy_subject=node.path,
@@ -1944,8 +2095,8 @@ def copy(branch: str = "") -> ResponseReturnValue:
         subject = ""
     rich = render_markdown(markdown) if markdown else Markup("")
     return render_template(
-        'text.html', username=session['username'],
-        firstname=session['firstname'], copy_markdown=markdown,
+        'text.html', username=user.name,
+        firstname=user.firstname, copy_markdown=markdown,
         copy_html=rich, copy_html_text=str(rich), copy_preview=True,
         copy_subject=subject)
 
@@ -1978,12 +2129,11 @@ def links() -> ResponseReturnValue:
     :attr:`LinksConfig.icons` — the deployment's own map may name a remote URL or
     suppress a name, and neither has bytes at ``/links/icon``.
     """
-    if 'username' not in session:
-        return redirect('/login')
+    user = identity.signed_in()
     links_config = current_links()
     link_probe.refresh_if_due(links_config)
-    return render_template('links.html', username=session['username'],
-                           firstname=session['firstname'],
+    return render_template('links.html', username=user.name,
+                           firstname=user.firstname,
                            links_config=links_config,
                            links_file=_links_file_hint(),
                            probe=link_probe.page_view(links_config),
@@ -2008,8 +2158,6 @@ def links_check() -> ResponseReturnValue:
     `links.yaml` is not necessarily one, and this is the control that person
     needs most. It is the same call the problems block above it already makes.
     """
-    if 'username' not in session:
-        return redirect('/login')
     link_probe.refresh_now(current_links())
     return redirect(_safe_next(request.form.get('next')))
 
@@ -2054,8 +2202,6 @@ def extension_asset(package: str, member: str) -> ResponseReturnValue:
     Login-gated like every other surface: an extension's script is written for the
     deployment's own operators, and its source can name their internals.
     """
-    if 'username' not in session:
-        return redirect('/login')
     asset = slots.asset_for(package, member)
     if asset is None:
         abort(404)
@@ -2091,8 +2237,6 @@ def link_icon(variant: str, name: str) -> ResponseReturnValue:
     Login-gated like every other surface — a deployment's toolbox names its internal
     hosts, and so do the icons beside them.
     """
-    if 'username' not in session:
-        return redirect('/login')
     if variant not in ('on-light', 'on-dark'):
         abort(404)
     icon = current_links().icon_for(name)
@@ -2126,10 +2270,13 @@ def user_avatar() -> ResponseReturnValue:
     that result and reads its current bytes. If the file was removed under the
     running process, the packaged neutral avatar is the honest fallback.
     """
-    username = session.get('username')
-    if not username:
-        return redirect('/login')
-    avatar = user_avatars.get(str(username))
+    user = identity.signed_in()
+    if identity.is_system_admin_session():
+        # Never a configured picture, whatever the user list happens to hold under
+        # this name: the packaged avatar is how a page says which door you came
+        # through, and it is the same answer the context processor gives.
+        return redirect(url_for('static', filename='system-admin-avatar.svg'))
+    avatar = local_login.registered_avatars().get(user.name)
     if avatar is None:
         return redirect(url_for('static', filename='default-avatar.svg'))
     try:
@@ -2157,10 +2304,9 @@ def about() -> ResponseReturnValue:
     nine-line ending are the fixed parts — one answers to the paragraph below
     it, the other is the promise the page exists to make.
     """
-    if 'username' not in session:
-        return redirect('/login')
-    return render_template('about.html', username=session['username'],
-                           firstname=session['firstname'],
+    user = identity.signed_in()
+    return render_template('about.html', username=user.name,
+                           firstname=user.firstname,
                            version=__version__,
                            rings=watch_lines.rings(),
                            says=watch_lines.says())

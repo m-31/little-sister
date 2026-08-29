@@ -1,39 +1,16 @@
 # ADR-0032 — The contribution boundary: what a node shows and what it publishes
 
 - **Status:** Accepted
-- **Date:** 2026-07-31
+- **Date:** 2026-08-23 (accepted 2026-07-31)
 - **Related:** [ADR-0004](0004-status-aggregation-semantics.md) (the roll-up this
   names a second half of), [ADR-0005](0005-dashboard-freshness-and-self-monitoring.md)
   (staleness — the first and, today, only transform),
   [ADR-0002](0002-rlock-snapshot-synchronization.md) (the snapshot this happens in),
   [ADR-0008](0008-json-output-api.md) (the envelope that already carries both codes),
-  [ADR-0014](0014-maintenance-persistence.md) (the one implementation that currently
+  [ADR-0014](0014-maintenance-persistence.md) (the one implementation that once
   breaks the rule below), [ADR-0027](0027-observation-timestamp-semantics.md) (the
   other per-node value resolved in the same snapshot pass).
 - **Register:** [`../decisions.md`](../decisions.md)
-
-> **Update (2026-08-01):** the boundary reaches **one level below a node**, and the
-> table in decision 1 gains a row. A node's **reasons** are addressable keyed entries
-> ([ADR-0036](0036-addressable-reasons.md)), and an entry may carry a suppression of
-> its own. The entries are then **virtual children**: each unsuppressed entry
-> contributes the node's reported status, a suppressed one contributes nothing, and
-> the node's **own** status is the worst of what is left — `MAINTENANCE` when a node
-> that reported entries has none unsuppressed remaining. A node that reported **no**
-> entries is outside the rule, so a check with a code and no reason is unaffected.
->
-> Consequently *own status* is no longer simply *what the node itself reported*: the
-> value the tree stores is the **reported** status, and `own` is the first derived one
-> — the same move the maintenance keystone refactor makes for node pins, which is why
-> the two share one transform in `StatusTree.snapshot`. Decisions 2–7 apply at this
-> level **unchanged**: the evaluation point is still the snapshot (3), no new code is
-> introduced (4), a quiet entry is shown and counted (5), staleness still judges the
-> raw reading (6), and a suppression whose entry is not present simply does not apply
-> (7). Nothing about the boundary itself changes; only its reach is stated.
->
-> One obligation follows for the ADR-0004 split named in *Consequences*: its open edge
-> case — a node whose children are **all** ignored — must be answered the way this
-> rule answers it for virtual children (`MAINTENANCE`, not `UNDEFINED`), or real and
-> virtual children would read differently in one model.
 
 ## Context
 
@@ -75,11 +52,12 @@ record to answer from.
 
 | | meaning | today |
 | --- | --- | --- |
-| **own status** | what the node itself reported — a check's result, or an explicit branch status | `StatusSnapshot.own_code` |
+| **reported status** | what the node itself reported — a check's result, or an explicit branch status | `StatusSnapshot.reported_code` |
+| **own status** | the first derived value — the worst of what its unsuppressed entries leave (decision 8) | `StatusSnapshot.own_code` |
 | **effective status** | what the node *is*, given its own status and its subtree | `StatusSnapshot.code` |
 | **contribution** | what its parent accumulates | implicit — equal to the effective status, except where ADR-0004 §2/§3 skip it |
 
-The first two exist as fields. The third is promoted from an implicit parent-side
+The first three exist as fields. The last is promoted from an implicit parent-side
 rule to the value a policy acts on.
 
 **2. The contribution is where policy applies.** A node's contribution defaults to
@@ -125,6 +103,24 @@ missing or unparseable, the policy is skipped and the status is reported normall
 Suppression is the failure direction that hides outages, and it is the one a naive
 implementation reaches by default.
 
+**8. The boundary reaches one level below a node.** A node's **reasons** are
+addressable keyed entries ([ADR-0036](0036-addressable-reasons.md)), and an entry
+may carry a suppression of its own. The entries are then **virtual children**: each
+unsuppressed entry contributes the node's reported status, a suppressed one
+contributes nothing, and the node's **own** status is the worst of what is left —
+`MAINTENANCE` when a node that reported entries has none unsuppressed remaining. A
+node that reported **no** entries is outside the rule, so a check with a code and no
+reason is unaffected.
+
+*Own status* is not simply *what the node itself reported*: the value the tree
+stores is the **reported** status, and `own` is the first derived one — the same
+move the maintenance keystone refactor makes for node pins, which is why the two
+share one transform in `StatusTree.snapshot`. Decisions 2–7 apply at this level
+**unchanged**: the evaluation point is still the snapshot (3), no new code is
+introduced (4), a quiet entry is shown and counted (5), staleness still judges the
+raw reading (6), and a suppression whose entry is not present simply does not apply
+(7). Nothing about the boundary itself changes; only its reach is stated.
+
 ## Consequences
 
 - **No behavior changes today.** Both fields already exist, staleness is already
@@ -132,38 +128,35 @@ implementation reaches by default.
   status for every counted node. This ADR names what is built.
 - **Rules 4–7 bind future work**, which is the point of writing it before the first
   policy rather than after the fourth.
-- **`MAINTENANCE` as implemented breaks rule 3.** Pinning writes `MAINTENANCE`
-  into the node and discards the check's next reading
+- **`MAINTENANCE` as implemented no longer breaks rule 3.** `_apply_maintenance`
+  records the entry and writes nothing; `_own_code` derives `MAINTENANCE` from the
+  side table, the arm beside the one ADR-0036 added
   ([ADR-0014](0014-maintenance-persistence.md); `tree.py` `_apply_maintenance` /
-  `upsert`). It is the one deviation in the codebase, and correcting it is what a
-  maintenance-policy decision would do.
-
-  > **Corrected 2026-08-02.** `_apply_maintenance` records the entry and writes
-  > nothing; `_own_code` derives `MAINTENANCE` from the side table, the arm beside
-  > the one ADR-0036 added. Three things fall out that were not obvious from here:
-  > clearing a pin restores the last known state because nothing was ever destroyed
-  > (it used to blank the node for a full check interval — a live bug); a silenced
-  > node can finally *say what it is silencing*, which rule 5 required and the old
-  > implementation made impossible; and `StatusSnapshot` grows the
-  > **`reported_code`** field this ADR's own table implies, because once `own_code`
-  > is derived the check's answer has nowhere else to live.
-  >
-  > **There was a second deviation, and it was propping this one up.** `_is_stale`
-  > exempted any pinned node, so a pinned check that died never escalated — rule 6
-  > exactly. It could not be removed on its own: the stale degrade takes
-  > `worst_of(reading, WARN)`, `worst_of` knows only OK/WARN/ERROR, and a node
-  > holding a written-in `MAINTENANCE` reached it and raised. Correcting rule 3 is
-  > what made rule 6 a two-word deletion. The guard that replaced it is on the
-  > **code**, which also closes the same latent crash for a check that reports
-  > `MAINTENANCE` itself.
-  >
-  > Still open, and named below: the split of ADR-0004, the maintenance-policy record
-  > this now implements, and the marked events for transitions that happen under a
-  > pin.
+  `upsert`). Three things fall out that were not obvious from here: clearing a pin
+  restores the last known state because nothing was ever destroyed (it used to blank
+  the node for a full check interval — a live bug); a silenced node can finally *say
+  what it is silencing*, which rule 5 required and the old implementation made
+  impossible; and `StatusSnapshot` grows the **`reported_code`** field this ADR's own
+  table implies, because once `own_code` is derived the check's answer has nowhere
+  else to live.
+- **There was a second deviation, and it was propping this one up.** `_is_stale`
+  exempted any pinned node, so a pinned check that died never escalated — rule 6
+  exactly. It could not be removed on its own: the stale degrade takes
+  `worst_of(reading, WARN)`, `worst_of` knows only OK/WARN/ERROR, and a node
+  holding a written-in `MAINTENANCE` reached it and raised. Correcting rule 3 is
+  what made rule 6 a two-word deletion. The guard that replaced it is on the
+  **code**, which also closes the same latent crash for a check that reports
+  `MAINTENANCE` itself.
+- Still open, and named below: the split of ADR-0004, the maintenance-policy record
+  this now implements, and the marked events for transitions that happen under a
+  pin.
 - **ADR-0004 will be split when that lands.** Its derived-roll-up rules and its
   separate *failing check* decision belong in records of their own, with this one
   as the third piece; the skip rules in §2/§3 are restated above and the
-  `MAINTENANCE` half of §3 is what a policy replaces.
+  `MAINTENANCE` half of §3 is what a policy replaces. One obligation comes with it:
+  its open edge case — a node whose children are **all** ignored — must be answered
+  the way decision 8 answers it for virtual children (`MAINTENANCE`, not
+  `UNDEFINED`), or real and virtual children would read differently in one model.
 - **The envelope already carries `own_code` and `code`.** A contribution that
   differs from the effective status will need a field of its own and a
   `schema_version` decision; that rides the client-facing contract round rather

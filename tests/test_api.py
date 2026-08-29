@@ -190,6 +190,15 @@ class SerializerUnitTests(TestCase):
         self.assertIsNone(api.authenticate("Basic tok", tokens))
         self.assertIsNone(api.authenticate(None, tokens))
 
+    def test_a_non_ascii_bearer_token_is_refused_rather_than_raised(self):
+        # A bearer token arrives off the wire and may be anything at all, while the
+        # standard library's `compare_digest` raises `TypeError` for non-ASCII text
+        # — so the obvious comparison turns a garbage header into a 500 instead of a
+        # 401. `secrets.same_secret` compares bytes, where it does not.
+        self.assertIsNone(api.authenticate("Bearer ünsinn", {"client": "tok"}))
+        self.assertEqual(api.authenticate("Bearer schlüssel",
+                                          {"client": "schlüssel"}), "client")
+
     def test_envelope_uses_utc_and_version(self):
         tree = StatusTree()
         tree.upsert("/db", StatusCode.OK)

@@ -1,7 +1,7 @@
 # ADR-0014 — Persist maintenance to a file, with auto-expiry
 
 - **Status:** Accepted
-- **Date:** 2026-06-25
+- **Date:** 2026-08-23 (accepted 2026-06-25)
 - **Related:** [ADR-0001](0001-in-process-threaded-engine.md) (one process, in
   memory), [ADR-0002](0002-rlock-snapshot-synchronization.md) (the tree owns state),
   [ADR-0003](0003-config-and-secrets-via-env-file.md) (config / secrets in files),
@@ -9,38 +9,6 @@
   [ADR-0015](0015-check-discovery-union.md) (the static check set the reaper keys
   off), [ADR-0008](0008-json-output-api.md) (JSON envelope, unchanged here).
 - **Register:** [`../decisions.md`](../decisions.md)
-
-> **Update (2026-08-02):** the entry carries **both dates** and the write is a
-> **compare-and-set** — see *Editing a pin, and two admins writing it* below. Decision
-> §1's entry shape grows `created_at` / `created_by` beside `set_at` / `set_by`, and a
-> pinned node's set form becomes reachable and prefilled, so extending a window is an
-> edit rather than a clear and a re-set.
->
-> The side-table's **key widens** the same day — `(path, slug)` for a pin on one
-> reason ([ADR-0036](0036-addressable-reasons.md)) — so the file grows a second table;
-> see *Per-entry pins in the side-table* below. The file's shape is a **clean break**,
-> not a migration.
->
-> A later pass the same day makes §4's *finite* expiry **positive and bounded**, and
-> settles what a blank reason means on an edit — see *A window is positive and bounded*
-> below.
->
-> **Update (2026-08-03):** the in-place edit applies to an **entry pin** as well as a
-> node pin, and the form moves behind an explicit read-to-edit disclosure — see
-> *Read first, edit on intent* below. This is presentation only: the side-table entry,
-> the two-table file shape and the write path are unchanged, with no migration.
->
-> Everything else stands: the file is still the side-table serialized, restored once at
-> startup, reaped by coverage, and every entry still carries a mandatory expiry.
->
-> **Update (2026-08-03):** §4's explicit duration widens to a deterministic
-> **duration-or-expiry** form grammar — see *Naming the expiry instead of calculating
-> a duration* below. The form still resolves one `expires_at` before the write, so the
-> entry, file and JSON shapes do not move.
->
-> **Update (2026-08-03):** decision 21 grows one predictable default: a bare weekday,
-> abbreviated or full and in any letter case, means that weekday at 12:00. See
-> *Giving a bare weekday a time* below.
 
 ## Context
 Maintenance (`project.md` §2.6) is a sticky admin override held **only in memory**
@@ -171,8 +139,8 @@ space and §2's file shape grow, nothing above is withdrawn)*
     > a node whose members were all pinned showed a blue card the maintenance page
     > denied — a suppression with no entry in any index, which
     > [ADR-0032](0032-status-contribution-boundary.md) rule 5 forbids. Repaired
-    > 2026-08-02; see [ADR-0036](0036-addressable-reasons.md)'s second update for the
-    > shape the two surfaces settled on. `/maintenance` now lists **one row per pin**
+    > 2026-08-02; see [ADR-0036](0036-addressable-reasons.md) decisions 10 and 12
+    > for the shape the two surfaces settled on. `/maintenance` now lists **one row per pin**
     > and gains a *Silenced* column — what a pin covers, as against *Why* it does —
     > because "reason" names two different things here and one heading over both is a
     > table nobody can read.
@@ -254,8 +222,8 @@ natural-language parser whose meaning changes by locale or library version.
     `HH:MM` means the next occurrence of that time, and `Mon 14:30` / `Monday 14:30`
     means the next matching weekday and time. A same-day midnight has already passed,
     so a month/day rolls to next year and a day-of-month rolls to the next month in
-    which it exists; impossible days are skipped, never clamped. A bare weekday,
-    locale-dependent date order and free-form prose are refused.
+    which it exists; impossible days are skipped, never clamped. Locale-dependent date
+    order and free-form prose are refused.
 22. **Resolve once, in the operator's timezone.** The route captures one `now` for
     parsing and bounds. Unzoned calendar input uses `settings.yaml`'s timezone; `Z` or
     a numeric UTC offset wins when present. A DST hole or fold is refused and asks for

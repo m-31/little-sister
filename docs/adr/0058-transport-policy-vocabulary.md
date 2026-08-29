@@ -1,7 +1,7 @@
 # ADR-0058 — `little_sister.transport`: a vocabulary for asking something that might not answer
 
 - **Status:** Accepted
-- **Date:** 2026-08-15
+- **Date:** 2026-08-23 (accepted 2026-08-15)
 - **Related:** [ADR-0049](0049-the-check-authoring-surface.md) (the surface this adds
   five names to, and its add-is-compatible rule),
   [ADR-0051](0051-what-startup-refuses.md) (the epoch those names sit in),
@@ -18,97 +18,6 @@
   [ADR-0054](0054-python-floor-and-development-version.md) (the floor this module
   stays well below)
 - **Register:** [`../decisions.md`](../decisions.md)
-
-> **Update (2026-08-15):** a service may answer *not now, ask again in N seconds*, and
-> this record had nowhere to put that. It grows one field, one behavior and one helper —
-> and, deliberately, **no fourth `Fault` member**.
->
-> **The principle it turns on: a check and an HTTP request are different realms.** This
-> module serves the second one. Its job is to make a request comfortably and bounded; it
-> is not a scheduler and knows nothing about when a check runs again, what its frequency
-> is, or how a failed reading is re-tried between runs — those belong to the check and to
-> the engine, and [ADR-0033](0033-budgeted-failure-retry.md) governs them. `Deadline` is
-> the one place the two realms touch: the check hands its budget in, and everything here
-> stays inside it.
->
-> **`RemoteError` gains `retry_after: float | None = None`** (decision 5). The `Fault`
-> stays `TRANSIENT`, because *asking again could change the answer* is exactly what a
-> throttle means; what is new is not a kind of failure but **a number the service
-> supplied**. A defaulted keyword-only argument, so every existing subclass and call site
-> is untouched.
->
-> **`ask` spends `error.retry_after` in place of its own `backoff`** when the error
-> carries one (decision 6), and the existing veto is unchanged: the wait happens only if
-> `deadline.affords(...)` it. So a two-second secondary limit is absorbed inside the run,
-> and a twenty-minute primary limit is refused and re-raised — because a wait that
-> outlives the budget the check granted is not this module's to take. Nothing else about
-> `ask` changes.
->
-> **`fetch` gains `retry_after(headers)`**, which reads the **standard** `Retry-After`
-> header and returns seconds. It accepts both forms RFC 9110 allows — delta-seconds *and*
-> an HTTP-date — because that parsing is identical for every service and is easy to get
-> wrong. It reads nothing else: a vendor's own headers, and the precedence between them,
-> stay with the package that knows that vendor.
->
-> **Why not a `Fault.THROTTLED`.** Two reasons, and the second settles it. A throttle is
-> already `TRANSIENT` by this record's own definition. And **the status cannot classify
-> it**: GitHub, for one, documents *both* `403` and `429` for both its primary and its
-> secondary limit, while a bare `403` also means *this credential may not see it* — so
-> the discriminator is a set of vendor headers, and only the package that speaks that
-> vendor's dialect can read them. A member the library could never itself set is a
-> strange thing to promise, and unlike adding a *name*, adding an enum **member** breaks
-> every exhaustive match on `Fault` that already exists, here and in code we do not own.
->
-> **`fault_for` is unchanged, and `429` stays `ANSWERED`.** A `429` with no `Retry-After`
-> may be crawler protection with no stated end, and the safe default for something
-> running unattended forever is not to press a service that is already complaining about
-> volume — GitHub warns that continuing while limited may get an integration banned. A
-> package that knows better classifies it itself, which is the whole shape of this
-> record.
->
-> `retry_after` joins the surface in §11 with the code, not with this note; adding a name
-> does not move the epoch.
-
-> **Update (2026-08-16) — the chunked read did not do what this record says it does.**
-> Nothing below changes as a decision; one sentence of it was **false in the code**, and
-> the correction is a single method name.
->
-> This record and `fetch`'s docstring both claim the bounded chunked read closes the hole
-> `urlopen(timeout=…)` leaves open, so that a server dribbling a byte at a time no longer
-> escapes it. The loop did consult the deadline between chunks, as described. But it read
-> with `read(65536)`, and **`read(n)` blocks until it has all *n* bytes or reaches the
-> end** — so against a trickle the first call did not return until the whole body had
-> arrived, and the clock was then consulted once, after the overrun it was there to
-> prevent. Measured against a real socket dribbling one byte every 200 ms, a **1.5-second
-> budget raised `DeadlineExceeded` after 7.8 seconds**. What it bounded was a *large*
-> body, which is a different promise.
->
-> `read1(n)` hands back what has actually arrived. The same measurement stops at 1.6
-> seconds. `_CHUNK` is unchanged — with `read1` it is a ceiling on one read rather than a
-> target, so a fast large body still costs one iteration per 64 KiB.
->
-> **A test double is what hid it, and that is the part worth remembering.** The existing
-> test answered `read` with one byte immediately, where a socket blocks; the loop turned
-> freely, so the test proved the clock was *consulted* and nothing about *when*. The
-> double now refuses `read` outright, and a real localhost server that dribbles stands
-> beside it as ground truth — asserting on how many bytes the server got to send rather
-> than on elapsed time, so no machine is too slow to pass it. That is the suite's only
-> socket test, because this is the one claim a double could not settle.
->
-> **Two limits are now stated rather than implied.** A caller passing `read_body=False`
-> is not exposed to a slow body at all, so a deadline buys it nothing here — which is why
-> **neither built-in caller was given one**, against the expectation the roadmap carried:
-> the `http` check makes a single request, so the clamp is `min(t, t)` and the entry check
-> looks at a full budget, and it reads no body; the link prober already bounds a hung
-> probe by abandoning it at the pass deadline (ADR-0030). A bound that does nothing is
-> worse than no bound, because the next reader believes it.
->
-> And the clock does not reach the **status line and headers**, which urllib reads inside
-> `opener.open` before this module is handed a stream. A server trickling those is bounded
-> only by the socket timeout per read and by urllib's own header limits, which together
-> are not a bound worth the name. Closing it would mean owning the header parse or running
-> the request on a thread; that is not taken on here, and it is the honest residual for
-> every caller — including the two packages that do read bodies.
 
 ## Context
 
@@ -228,6 +137,12 @@ its exit code — for the *check* to interpret."
    designed to be **subclassed**, so a check-type package keeps its own error class, its
    own message prefixes, and every `except` clause it already has.
 
+   **`RemoteError` also carries `retry_after: float | None = None`.** The `Fault` stays
+   `TRANSIENT`, because *asking again could change the answer* is exactly what a
+   throttle means; what is new is not a kind of failure but **a number the service
+   supplied**. A defaulted keyword-only argument, so every existing subclass and call
+   site is untouched.
+
 6. **`ask(operation, *, deadline=None, retries=1, backoff=1.0, sleep=time.sleep)`** is
    the one bounded retry. It calls `operation()`; before each attempt it raises
    `DeadlineExceeded` if the deadline has expired; on a `RemoteError` it re-raises unless
@@ -236,6 +151,12 @@ its exit code — for the *check* to interpret."
    enough to separate a hiccup from a bad ten minutes, where a second would only buy a
    sharper line at the cost of the run's remaining time. `sleep` and the clock are
    injected for the same reason: the policy is testable without spending real seconds.
+
+   **`ask` spends `error.retry_after` in place of its own `backoff`** when the error
+   carries one, and the veto is the same: the wait happens only if
+   `deadline.affords(...)` it. So a two-second secondary limit is absorbed inside the
+   run, and a twenty-minute primary limit is refused and re-raised — because a wait that
+   outlives the budget the check granted is not this module's to take.
 
    `operation` is an arbitrary callable, which is what makes this reachable from a check
    whose transport is an SDK. Such a check keeps its SDK's retry mode and still gets the
@@ -246,7 +167,8 @@ its exit code — for the *check* to interpret."
    listed in architecture.md §11 as `little_sister.transport` and appended to
    `tests/fixtures/check_api_v1.txt`. Adding a name is a compatible change:
    `API_VERSION` does **not** move, and no installed package is affected until it raises
-   its floor on purpose.
+   its floor on purpose. `retry_after` joins the surface in §11 with the code; adding a
+   name does not move the epoch.
 
 8. **What this record deliberately does not decide.** There is **no mapping from a
    `Fault` to a `StatusCode`**, and no helper producing an `Entry`. That mapping is one
@@ -257,6 +179,78 @@ its exit code — for the *check* to interpret."
    would pin that answer by accident. Nor does this record specify a client, a request
    function, an exception tuple, or a header, redirect, proxy or response-size policy:
    those are HTTP's, and this module is not about HTTP.
+
+9. **A service may answer *not now, ask again in N seconds*.** That is one field, one
+   behavior and one helper — and, deliberately, **no fourth `Fault` member**.
+
+   **The principle it turns on: a check and an HTTP request are different realms.** This
+   module serves the second one. Its job is to make a request comfortably and bounded;
+   it is not a scheduler and knows nothing about when a check runs again, what its
+   frequency is, or how a failed reading is re-tried between runs — those belong to the
+   check and to the engine, and [ADR-0033](0033-budgeted-failure-retry.md) governs them.
+   `Deadline` is the one place the two realms touch: the check hands its budget in, and
+   everything here stays inside it.
+
+   **`fetch` offers `retry_after(headers)`**, which reads the **standard** `Retry-After`
+   header and returns seconds. It accepts both forms RFC 9110 allows — delta-seconds
+   *and* an HTTP-date — because that parsing is identical for every service and is easy
+   to get wrong. It reads nothing else: a vendor's own headers, and the precedence
+   between them, stay with the package that knows that vendor.
+
+   **Why not a `Fault.THROTTLED`.** Two reasons, and the second settles it. A throttle
+   is already `TRANSIENT` by this record's own definition. And **the status cannot
+   classify it**: GitHub, for one, documents *both* `403` and `429` for both its primary
+   and its secondary limit, while a bare `403` also means *this credential may not see
+   it* — so the discriminator is a set of vendor headers, and only the package that
+   speaks that vendor's dialect can read them. A member the library could never itself
+   set is a strange thing to promise, and unlike adding a *name*, adding an enum
+   **member** breaks every exhaustive match on `Fault` that already exists, here and in
+   code we do not own.
+
+   **`fault_for` classifies `429` as `ANSWERED`.** A `429` with no `Retry-After` may be
+   crawler protection with no stated end, and the safe default for something running
+   unattended forever is not to press a service that is already complaining about
+   volume — GitHub warns that continuing while limited may get an integration banned. A
+   package that knows better classifies it itself, which is the whole shape of this
+   record.
+
+10. **The bounded chunked read closes the hole `urlopen(timeout=…)` leaves open**, so
+    that a server dribbling a byte at a time no longer escapes it — and it is `read1`,
+    not `read`, that makes that true. A loop that consults the deadline between chunks
+    is not enough on its own: **`read(n)` blocks until it has all *n* bytes or reaches
+    the end** — so against a trickle the first call does not return until the whole body
+    has arrived, and the clock is then consulted once, after the overrun it was there to
+    prevent. Measured against a real socket dribbling one byte every 200 ms, a
+    **1.5-second budget raised `DeadlineExceeded` after 7.8 seconds**. What that bounds
+    is a *large* body, which is a different promise.
+
+    `read1(n)` hands back what has actually arrived. The same measurement stops at 1.6
+    seconds. `_CHUNK` is, with `read1`, a ceiling on one read rather than a target, so a
+    fast large body still costs one iteration per 64 KiB.
+
+    **A test double is what hid it, and that is the part worth remembering.** That test
+    answered `read` with one byte immediately, where a socket blocks; the loop turned
+    freely, so the test proved the clock was *consulted* and nothing about *when*. The
+    double refuses `read` outright, and a real localhost server that dribbles stands
+    beside it as ground truth — asserting on how many bytes the server got to send
+    rather than on elapsed time, so no machine is too slow to pass it. That is the
+    suite's only socket test, because this is the one claim a double could not settle.
+
+    **Two limits are stated rather than implied.** A caller passing `read_body=False` is
+    not exposed to a slow body at all, so a deadline buys it nothing here — which is why
+    **neither built-in caller was given one**, against the expectation the roadmap
+    carried: the `http` check makes a single request, so the clamp is `min(t, t)` and
+    the entry check looks at a full budget, and it reads no body; the link prober
+    already bounds a hung probe by abandoning it at the pass deadline (ADR-0030). A
+    bound that does nothing is worse than no bound, because the next reader believes it.
+
+    And the clock does not reach the **status line and headers**, which urllib reads
+    inside `opener.open` before this module is handed a stream. A server trickling those
+    is bounded only by the socket timeout per read and by urllib's own header limits,
+    which together are not a bound worth the name. Closing it would mean owning the
+    header parse or running the request on a thread; that is not taken on here, and it
+    is the honest residual for every caller — including the two packages that do read
+    bodies.
 
 ## Consequences
 

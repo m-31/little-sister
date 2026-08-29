@@ -7,7 +7,7 @@ beside it (design rationale lives in the project's ADR-0008).
 
 ## At a glance
 
-- **Base URL** — per deployment (the spec's sample server is `http://localhost:8000`).
+- **Base URL** — per deployment (the spec's sample server is `http://localhost:8888`).
 - **Auth** — a bearer token (below). Required for JSON; the browser/session path is
   separate and not part of this contract.
 - **Format** — request `Accept: application/json`. Responses are a versioned envelope
@@ -35,7 +35,7 @@ yields `401` (see Errors).
 
 ```bash
 TOKEN=s3cr3t
-BASE=http://localhost:8000
+BASE=http://localhost:8888
 
 # the whole tree
 curl -s -H "Accept: application/json" -H "Authorization: Bearer $TOKEN" \

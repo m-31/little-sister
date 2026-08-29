@@ -17,8 +17,11 @@
         ('/links',       'Links',       'link'),
         ('/copy',        'Copy',        'copy'),
     ] -%}
+{#- `is_admin` comes from the identity, not from the session: a view may pass it,
+    and every page gets it from the context processor otherwise. Reading the session
+    here would be the last copy of *who is this request* outside `identity.py`. -#}
 {%- set entries = entries + [('/system', 'System', 'dial')]
-        if session.get('admin') else entries -%}
+        if is_admin else entries -%}
 
 {%- macro nav_icon(name) -%}
 <svg class="ls-rail__icon" width="15" height="15" viewBox="0 0 16 16"

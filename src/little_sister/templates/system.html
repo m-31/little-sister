@@ -265,6 +265,90 @@
         </div>
         {% endif %}
 
+        {# The ways in (ADR-0069 §6). Always shown, like the policy below and unlike
+           the extensions card above: **a way into an application must not be
+           knowable only by reading the source**, which is the whole reason this card
+           exists — every door an install has is registered in its own `wsgi.py`,
+           and that file is not on the screen when somebody is asking *who can log in
+           here, and how*.
+
+           No empty state, and the reason is worth writing down rather than
+           rediscovering: an installation that registered **no** door can be started
+           and warns about itself at startup, but nobody can be signed in on it, so
+           nobody reaches this page. Reading this table at all means one of its rows
+           answered for you.
+
+           One row per door, and the columns are the question the other seam tables
+           answer: what is claimed, and by whom. `Default` rather than a `From`
+           column, because which door `/login` and an unidentified request go to is
+           the fact an operator comes here for, and the package already says whose
+           code answers. #}
+        <div class="card mb-3">
+            <div class="card-body">
+                <h3 class="h6 text-muted text-uppercase">Identity</h3>
+                <table class="table table-sm align-middle mb-0">
+                    <thead>
+                        <tr><th>Door</th><th>Route</th><th>Provider</th><th>Package</th><th>Default</th></tr>
+                    </thead>
+                    <tbody>
+                        {% for door in doors %}
+                        <tr>
+                            {#- The label beside the name only where they differ: it
+                                defaults to the name, and printing `keycloak
+                                (keycloak)` on every row would be a column of noise
+                                to carry one deployment's *Company SSO*. -#}
+                            <td><code>{{ door.name }}</code>{% if door.label != door.name %} <span class="text-muted">({{ door.label }})</span>{% endif %}</td>
+                            <td class="text-muted"><code>{{ door.route }}</code></td>
+                            <td>{{ door.provider_name }}</td>
+                            <td class="text-muted">{{ door.owner }}</td>
+                            <td class="text-muted">{% if door.default %}default{% else %}—{% endif %}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                {#- What `/login` itself does, which the table cannot say: under
+                    `choose_at_login()` it is a page offering these doors rather than
+                    the default one's login step, and an unidentified request still
+                    goes wherever that provider sends it. A way into an application
+                    must not be knowable only by reading the source, and *which
+                    address does what* is part of the way in. -#}
+                <p class="text-muted small mb-0 mt-2">
+                    {% if choosing_at_login %}
+                    <code>/login</code> offers a choice of the doors above; an
+                    unidentified request still goes to the default door.
+                    {% else %}
+                    <code>/login</code> is the default door's own login step.
+                    {% endif %}
+                </p>
+                {#- The system-admin account's own three facts (ADR-0069 §5): that it
+                    is configured at all, whether its credential resolved, and **which
+                    keyword** configured it — so a deployment that took the discouraged
+                    shortcut can be seen to have taken it by somebody who is not
+                    reading `wsgi.py`. A line rather than three more columns of `—`:
+                    one door with a few facts is a sentence, which is the same call the
+                    aspects line makes beside the slot table above.
+
+                    *Configured but unavailable* is the state this line exists for: an
+                    admin who did get in can see why the other door is shut. The
+                    reference is printed and the password never is — a config field
+                    names a secret, it never carries one (ADR-0023). -#}
+                {% if system_admin %}
+                <p class="text-muted small mb-0 mt-2">
+                    System admin: configured by <code>{{ system_admin.keyword }}=</code>
+                    {%- if system_admin.reference %} (<code>{{ system_admin.reference }}</code>){% endif %},
+                    {% if system_admin.available %}credential resolved.
+                    {%- else %}<strong>credential unavailable</strong> — that door is
+                    shut ({{ system_admin.problem }}).{% endif %}
+                </p>
+                {% else %}
+                <p class="text-muted small mb-0 mt-2">
+                    No system-admin account is configured: this instance is reachable
+                    only through the doors above.
+                </p>
+                {% endif %}
+            </div>
+        </div>
+
         {# The effective Content-Security-Policy (ADR-0048 §7). Always shown, unlike
            the extensions card above: there is always a policy, and the reason to
            print it is that a source may come from a *package* — a request blocked

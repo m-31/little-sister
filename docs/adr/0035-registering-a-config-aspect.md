@@ -1,7 +1,7 @@
 # ADR-0035 — A dependent package registers its own configuration aspect
 
 - **Status:** Accepted
-- **Date:** 2026-08-01
+- **Date:** 2026-08-29 (accepted 2026-08-01)
 - **Related:** [ADR-0031](0031-deployment-config-directory.md) (the `config/`
   directory, the aspect vocabulary and the unknown-candidate warning this extends),
   [ADR-0034](0034-template-slots-for-dependent-packages.md) (the sibling seam, decided
@@ -9,17 +9,6 @@
   *configuration* goes), [ADR-0023](0023-secret-references.md) (a credential in that
   file is still a secret reference), [ADR-0020](0020-user-list-location.md)
 - **Register:** [`../decisions.md`](../decisions.md)
-
-> **Update (2026-08-08):** decision §6 now records **who registered** each aspect.
-> `register_aspect` infers the calling package — the one-line call site in a
-> package's `__init__` already says who it is, and a name the caller had to repeat
-> is a name the caller can get wrong — and only a *winning* registration is
-> attributed, so a refused one owns nothing. The name alone answered *is this file
-> declared*; it did not answer *who reads it*, which is the question when the file
-> is misbehaving and the answer is a package somebody else wrote. `/system` prints
-> the owner beside the name and uses the same attribution to place the aspect on
-> its package inventory, which is where a package that registers no check type gets
-> a version at all.
 
 ## Context
 
@@ -58,12 +47,27 @@ package declares an aspect it reads, before the app is imported.
    its feature, not its monitoring — the same posture the check loader and the icon
    packs take. First registration of a name wins; a later, differing one is logged and
    ignored, so import order cannot silently redefine a shape.
-5. **Register before the app is imported.** The unknown-candidate warning fires once
-   per root at the first resolution, so a registration arriving after it has nothing
-   left to prevent. This is the same import-before-app slot check types, icon packs
-   and slot fillers use.
+5. **Register before the app is imported.** It is about the **read**, not about a
+   warning: `aspect_in` looks the name up in `ASPECTS`, so an aspect nobody declared is a
+   `KeyError` rather than a diagnosis. This is the same import-before-app slot check
+   types, icon packs and slot fillers use. The unknown-candidate warning is deliberately
+   *not* the reason, and could not have been: **the registering call is itself the first
+   resolution** — every registrar declares its aspect and then reads it — so whichever ran
+   first performed the scan and every aspect registered after it was reported as unknown
+   for the life of the process. That scan is now silent and the report runs at the end of
+   the registration window, so a registration made anywhere inside it is in time
+   ([ADR-0070](0070-the-unclaimed-file-report-runs-at-the-end-of-registration.md)).
 6. **Registered aspects are visible on `/system`**, beside the slot fillers, for the
-   reason given in ADR-0034 §9.
+   reason given in ADR-0034 §9. The registration also records **who registered** each
+   aspect. `register_aspect` infers the calling package — the one-line call site in a
+   package's `__init__` already says who it is, and a name the caller had to repeat
+   is a name the caller can get wrong — and only a *winning* registration is
+   attributed, so a refused one owns nothing. The name alone answers *is this file
+   declared*; it does not answer *who reads it*, which is the question when the file
+   is misbehaving and the answer is a package somebody else wrote. `/system` prints
+   the owner beside the name and uses the same attribution to place the aspect on
+   its package inventory, which is where a package that registers no check type gets
+   a version at all.
 
 ## Consequences
 

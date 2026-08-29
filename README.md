@@ -61,6 +61,62 @@ floor is checked rather than assumed — the type check runs against it on every
 the whole test suite runs against it on every release. No external services are required —
 all state is kept in memory.
 
+#### Ways in
+**An install can have several doors, and which ones it has is its own choice**
+([ADR-0069](docs/adr/0069-identity-comes-from-outside-and-one-account-does-not.md)).
+A *door* is a registered identity provider with a name and a route of its own —
+`/login/<door>` — and `/login` is whichever one the install made the default. **An
+install registers its own doors, all of them**, in the `wsgi.py` it already has,
+before the app is imported; the library adds none on anybody's behalf, so what that
+file says is what the instance has. One that registers nothing starts, warns that
+nobody can sign in, and lets nobody in. Nothing below is required reading for the case
+this project protects: a personal dashboard on your own machine gets the built-in
+login list, and the line for it is already in the file.
+
+- **The built-in login list** (`local`), described just below: `local_login.use_local()`
+  registers it as the default door, so `/login` is its form. It is the only reader of
+  the user list, which is why an install with a provider of its own needs none.
+- **Your own identity provider**, registered in the same place:
+  `identity.use(name, provider, default=True)`. What a provider answers is
+  *who is this request*, not *the login flow*, so one that verifies a header a load
+  balancer already signed implements two methods and no flow at all. A deployment
+  with a provider of its own **needs no `config/users.yaml`**: the list is read only
+  when its door is the one in use.
+- **The system-admin account** (`system-admin`), the one door the library ships,
+  because the provider can stop answering and that is when somebody needs to get in.
+  It is configured — never generated, never assumed — in the same place:
+
+  ```python
+  identity.use_system_admin(reference="env://LITTLE_SISTER_SYSTEM_ADMIN_PASSWORD")
+  ```
+
+  Login name `admin`, at `/login/system-admin`, always a local form even under a
+  provider that redirects elsewhere. The password is named rather than carried, so a
+  literal in a committed `wsgi.py` fails at startup; if the reference does not
+  resolve, that door is shut and the application keeps serving. A session opened
+  through it wears a distinct avatar and says *System admin* on every page. The
+  built-in login page links to it while it can take a password — which is a
+  convenience for the install whose `/login` is a local form, and not the incident
+  path: under a provider that redirects, `/login` renders nothing of ours.
+
+**Several ways in are allowed; an ordered list of them to try is not.** A session
+records the door that opened it and only that provider is ever asked, so no
+registration order can decide who somebody is. Every door an install has is on
+`/system`, with the package that registered it.
+
+**`/login` can offer the doors instead of going to the default one** — add
+`identity.choose_at_login()` beside your registrations, and give each door a `label=`
+worth reading. What an *unidentified request* gets is unchanged, which is the point:
+under an identity provider with a live session that redirect is silent and stays
+silent, while the address somebody types becomes a page we serve — and therefore one
+that still answers on the morning that provider does not. A redirecting provider needs
+a `login_page()` returning its own redirect to appear on it.
+
+**After `./setup.sh`, the only admin is behind the system-admin door**: the generated
+login is `viewer` with the editable placeholder password, and the credential with real
+entropy is `LITTLE_SISTER_SYSTEM_ADMIN_PASSWORD` in `.env`, which is meant to be read
+rather than typed. Add `admin: true` to a user in the list below for an everyday admin.
+
 #### Users
 The allowed users are defined by the `users` aspect of the configuration roots: either
 **`config/users.yaml`** on its own or **`config/users/users.yaml`** beside optional
@@ -101,7 +157,9 @@ the packaged neutral avatar, and a bad reference never prevents login.
 
 So out of the box `jdoe` logs in with password `change-me` and has admin rights,
 `amorgan` is a viewer — change both passwords before anyone else can reach the
-instance. (Both forms of the real user aspect are git-ignored.)
+instance. (Both forms of the real user aspect are git-ignored.) What `./setup.sh`
+writes instead is one `viewer` login and no admin at all, because the admin of a fresh
+install is the system-admin account above.
 
 #### Secrets
 Configuration secrets reach little-sister through the **environment**
@@ -142,12 +200,18 @@ A deployment can retire the file entirely. `SECRET_KEY` and
 `SECRET_KEY="aws-sm://team/session-key"` — resolved once at startup through the
 same deployment-registered resolvers (which reach their store with ambient
 credentials, e.g. an instance role); or simply omit `SECRET_KEY` for the random
-per-start key. Check credentials move to a store via their references. What
-remains is the **user list** (`config/users.yaml` or `config/users/users.yaml`,
-[ADR-0046](docs/adr/0046-user-list-from-the-configuration-roots.md)) behind the built-in
-username/password login — replacing it (an SSO provider such as Keycloak, or
-password hashes in a database) is the authorization seam of the roadmap; until
-that lands, it is the one secret-bearing file a deployment still owns.
+per-start key. Check credentials move to a store via their references. What would
+otherwise remain is the **user list** (`config/users.yaml` or
+`config/users/users.yaml`,
+[ADR-0046](docs/adr/0046-user-list-from-the-configuration-roots.md)) behind the
+built-in username/password login — and a deployment that supplies an **identity
+provider of its own** carries no such file at all
+([ADR-0069](docs/adr/0069-identity-comes-from-outside-and-one-account-does-not.md)):
+the list is read by `local_login.use_local()` and by nothing else, so an installation
+that does not register that door never looks for it. An install that keeps the
+built-in login keeps
+that one secret-bearing file, which is the right trade for the case it serves — one
+person, one machine, nothing else to run.
 
 #### The configuration directory (`config/`)
 
@@ -277,7 +341,7 @@ admin:
 YAML
 
 # A SINGLE worker: the engine and the status tree live in-process.
-gunicorn --workers 1 --threads 8 --bind 0.0.0.0:8000 little_sister.app:app
+gunicorn --workers 1 --threads 8 --bind 0.0.0.0:8888 little_sister.app:app
 ```
 
 One worker is not a suggestion — the engine and the status tree live in the process
@@ -291,7 +355,7 @@ anyone relies on staying logged in: without one a random key is made per start, 
 sessions end with the process. Runtime state (the log, the maintenance file) is written
 to `var/` beside the configuration.
 
-On your browser, navigate to `http://localhost:8000`.
+On your browser, navigate to `http://localhost:8888`.
 
 #### From a checkout
 
@@ -300,7 +364,7 @@ For developing little sister itself, or running a branch. The project is managed
 
 ```bash
 uv sync                              # create .venv and install from the lockfile
-uv run gunicorn --workers 1 --threads 8 --bind 0.0.0.0:8000 little_sister.app:app
+uv run gunicorn --workers 1 --threads 8 --bind 0.0.0.0:8888 little_sister.app:app
 ```
 
 First-time setup: on a fresh checkout, **`./setup.sh`** creates
@@ -309,19 +373,45 @@ First-time setup: on a fresh checkout, **`./setup.sh`** creates
 existing flat `config/users.yaml` is kept and the script prints the manual move needed
 before adding avatars. Then the
 repo's helper scripts (they need `lsof` and `curl`) manage the run: **`./start.sh`**
-runs gunicorn in the background with safe port handling — it restarts its own instance
-and refuses to touch a foreign process on the port — logging to `var/`. Its preflight
+runs gunicorn in the background with safe port handling — it restarts its own instance,
+under either scheme (a checkout serves one instance, so starting one way replaces one
+started the other), and refuses to touch a foreign process on the port — logging to
+`var/`. Its preflight
 accepts both users-aspect forms (and follows the configured root path-list) before it
-starts. **`./stop.sh`** stops it; **`./test_api.sh`** smoke-tests the running JSON API
+starts. **`./stop.sh`** stops it, whichever scheme it was started under; **`./test_api.sh`**
+smoke-tests the running JSON API
 (token from `LITTLE_SISTER_API_TOKENS`). Override the bind with
 `LITTLE_SISTER_HOST` / `LITTLE_SISTER_PORT`.
+
+An instance belongs to the checkout it runs in — so a second checkout of this
+application on the same port is refused rather than quietly restarted or stopped. The refusal says what is in the
+way; **`--any-instance`** on `./start.sh` or `./stop.sh` acts on it anyway. It reaches a
+gunicorn and nothing else: anything else on the port is still refused.
+
+**`--tls` serves HTTPS**, on its own port (`TLS_PORT` in `instance.sh`, `8443` by
+default) so the two schemes can never be confused for one address. All three scripts
+take it, because each of them has to reach the instance:
+
+```bash
+./start.sh --tls        # https://localhost:8443
+./test_api.sh --tls
+./stop.sh --tls
+```
+
+Set `TLS_CERT` and `TLS_KEY` (both, or neither) to serve a certificate you already
+have; `start.sh` says so if nothing on the machine trusts it. With neither set, it
+**mints a self-signed certificate for the run** and overwrites it at the next start —
+enough for a local instance, and for one behind something that terminates the public
+certificate itself, but a browser will warn every time. The scripts never verify the
+certificate themselves: they are talking to a process on this machine that they just
+started, and a probe that failed on trust would report a serving instance as dead.
 
 To query the read-only JSON API, send a bearer token (from
 `LITTLE_SISTER_API_TOKENS`) with `Accept: application/json`:
 
 ```bash
 curl -H "Accept: application/json" -H "Authorization: Bearer s3cret" \
-     http://localhost:8000/status/system/db
+     http://localhost:8888/status/system/db
 ```
 
 ## Testing scripts locally

@@ -482,7 +482,7 @@ wheels = [
 
 [[package]]
 name = "little-sister"
-version = "0.3.13"
+version = "0.3.14"
 source = { editable = "." }
 dependencies = [
     { name = "flask" },

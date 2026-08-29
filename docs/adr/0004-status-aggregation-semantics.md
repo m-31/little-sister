@@ -29,12 +29,6 @@
   bug in [`../architecture.md`](../architecture.md) §4.3.
 - **Register:** [`../decisions.md`](../decisions.md)
 
-> **Update (2026-07-29):** the decision now states what a **failing check** becomes —
-> see *A check that fails* below. `engine.py` has cited this ADR for "any failure
-> becomes an ERROR" since it was written, but the ADR only covered roll-up; the
-> citation now has something to point at. The same section records the stack trace on
-> the node (`config.yaml`'s `stacktrace`).
-
 ## Context
 A parent's status is derived from its own state and its children
 ([`../project.md`](../project.md) §2.3). The first-draft `get_status_code()` is

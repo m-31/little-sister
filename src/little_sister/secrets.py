@@ -35,6 +35,7 @@ monitoring.
 from __future__ import annotations
 
 import os
+import secrets as stdlib
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -51,6 +52,30 @@ _SCHEME_SEPARATOR = "://"
 #: on purpose — it is what *any* script is called when run directly, so it names no
 #: installation — and a blank in a message naming two claimants would read as a bug.
 UNIDENTIFIED = "an unidentified caller (__main__)"
+
+
+def same_secret(presented: str, stored: str) -> bool:
+    """Compare a presented credential with a stored one, in constant time.
+
+    Every credential comparison in this library goes through here, and the reason
+    it is one function rather than a line at each site is a trap in the standard
+    library that a reviewer had to find twice. ``secrets.compare_digest`` accepts
+    ``str`` **only while both sides are ASCII** and raises ``TypeError`` otherwise —
+    so a comparison written the obvious way works against every password anybody
+    tests it with and raises a ``500`` the first time somebody types an umlaut.
+
+    Both failure modes are worse than they look. An anonymous visitor gets a server
+    error instead of *invalid password*, which is a difference an attacker can read;
+    and a deployment that put a non-ASCII password in its ``.env`` — in a German
+    organization, entirely plausible — has an emergency door that raises on **every**
+    attempt, discovered during the incident it exists for.
+
+    Encoding both sides sidesteps it: the comparison is over bytes, where the
+    function has no such restriction. Length still leaks, as it does for any
+    ``compare_digest`` call, which is why this compares credentials and not the
+    presence of a credential.
+    """
+    return stdlib.compare_digest(presented.encode(), stored.encode())
 
 
 class SecretError(Exception):
@@ -173,6 +198,40 @@ def registered_resolvers() -> tuple[Registration, ...]:
     return tuple(_resolvers[scheme] for scheme in sorted(_resolvers))
 
 
+def load_dotenv(path: str = ".env") -> None:
+    """Populate ``os.environ`` from a simple ``KEY=VALUE`` ``.env`` file (ADR-0003).
+
+    Dependency-free. Values already present in the environment take precedence, and
+    a missing file is fine — a deployment that exports its variables another way, or
+    a container that has none of this, is a legitimate install rather than a broken
+    one.
+
+    **It runs when this module is imported**, which is earlier than it looks and
+    deliberately so. It used to run while ``little_sister.app`` was being imported,
+    which was in time for everything the *app* reads and too late for anything a
+    deployment resolves **before** that import: a registration that names a secret —
+    the system-admin password is the first (ADR-0069 §5) — would have resolved
+    against an environment the file had not reached yet, and been reported as a
+    credential that does not resolve. The module that owns ``env://`` is the right
+    one to have filled it, and importing anything that can resolve a reference now
+    implies the file has been read.
+    """
+    try:
+        with open(path, encoding="utf-8") as env_file:
+            for raw_line in env_file:
+                line = raw_line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                os.environ.setdefault(
+                    key.strip(), value.strip().strip('"').strip("'"))
+    except FileNotFoundError:
+        pass
+
+
+load_dotenv()
+
+
 def _environment(name: str) -> str:
     """The built-in ``env`` resolver: a secret from the process environment,
     which ``.env`` feeds (ADR-0003). Registered below, so it travels the same
@@ -232,6 +291,23 @@ def resolve(reference: str) -> str:
     return value
 
 
+def looks_like_reference(value: str) -> bool:
+    """Whether ``value`` is shaped like ``scheme://address`` rather than a secret.
+
+    The **shape** test, in one place because two callers need the same answer for
+    opposite reasons. :func:`resolve_setting` asks in order to *resolve* a setting
+    that may carry either; a caller taking a literal credential asks in order to
+    **refuse** one — a reference handed to a field that wants the value itself
+    would quietly make the address the password, and that failure is invisible
+    until the day the credential is needed (ADR-0069 §5).
+
+    A shape, not a promise: a scheme nothing has registered still looks like a
+    reference here and fails in :func:`resolve`, which is where the registered
+    schemes are known.
+    """
+    return _SCHEME_SEPARATOR in value.strip()
+
+
 def resolve_setting(value: str) -> str:
     """Resolve an application *setting* whose value may itself be a reference.
 
@@ -243,6 +319,6 @@ def resolve_setting(value: str) -> str:
     note). The reference case raises exactly like :func:`resolve`.
     """
     value = value.strip()
-    if _SCHEME_SEPARATOR in value:
+    if looks_like_reference(value):
         return resolve(value)
     return value

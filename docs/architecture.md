@@ -58,6 +58,7 @@ little-sister/
 │   ├── links.py         # the `links` aspect: curated links, re-read on change
 │   ├── link_probe.py    # reachability for that page: an open starts a pass
 │   ├── users.py         # the `users` aspect: login list + avatar resolution
+│   ├── identity.py      # who a request is from, and the one login gate (ADR-0068)
 │   ├── watch_lines.py   # what /about's hero says: the pools a render draws from
 │   ├── icons.py         # icon names, the pack registry, where the bytes are
 │   ├── icon_pack/       # the built-in marks (our own drawn glyphs) + manifest
@@ -100,12 +101,16 @@ knows a plugin exists.
 | | | |
 |---|---|---|
 | **the library** | this repository | the engine, the built-in types, the web and JSON surfaces, and the seams below |
-| **a plugin** | `little-sister-<x>` | one check type, or one surface extension, in a repository of its own. Depends on the library with a **floor** (`little-sister >= x`), never a pin |
+| **a plugin** | `little-sister-<x>` | one check type, one surface extension, or another registration such as a secret resolver — occasionally more than one of them — in a repository of its own. Depends on the library with a **floor** (`little-sister >= x`), never a pin |
 | **a deployment** | private | the checks, node metadata, users and secrets of one installation. **Pins** the library, installs the plugins it wants, and writes the `wsgi.py` that imports them |
 
-Three plugins exist today — **`little-sister-github`** and **`little-sister-wiz`**
-(check types), and **`little-sister-jira`** (a surface extension: two template slots
-and a configuration aspect, no check type). Each releases on its own version line —
+Four plugins exist today — **`little-sister-github`**, **`little-sister-wiz`** and
+**`little-sister-aws`** (check types), and **`little-sister-jira`** (a surface
+extension: two template slots and a configuration aspect, no check type).
+`little-sister-aws` is the one that carries more than a type: an `aws` check type, the
+`aws-sm://` and `aws-ssm://` secret resolvers (§7) and the identity seam beneath both,
+which is what one vendor, one client and one credential look like when they arrive
+together. Each releases on its own version line —
 same shape as this one, a generated branch and an annotated tag
 ([ADR-0022](adr/0022-generated-release-branch.md)) — and each registers into the seams
 §11 promises.
@@ -669,9 +674,11 @@ environment-variable lookup (fed by `.env`, ADR-0003, and registered like any ot
 scheme), while `aws-sm://…` and friends are resolved by the resolver the
 **application registered** via `register_resolver(scheme, …)` before importing
 `little_sister.app` — the same import slot that registers deployment check types;
-the library ships no store client. There is no bare-name form: a string without a
+the library ships no store client. Those two schemes are carried by
+`little-sister-aws` (§2), which is where a resolver goes once it would have a second
+user; a deployment may equally write one in its own code. There is no bare-name form: a string without a
 scheme is a *pasted secret* far more often than a name, so it is rejected at load
-without being quoted back (ADR-0023's 2026-07-27 update). A malformed reference
+without being quoted back (ADR-0023). A malformed reference
 raises `CheckError`, so the load fails loudly like any config typo; a well-formed
 reference that fails to
 resolve (store unreachable, secret absent) is recorded on the check's
@@ -944,12 +951,13 @@ the `markdown` (block) and `markdown_inline` (one-line, no `<p>`) Jinja filters
 | Route | Methods | Behavior |
 |-------|---------|-----------|
 | `/` | GET | Redirect to `/status`. |
-| `/login`, `/logout` | GET, POST / GET | Session login (stores `username`, name, and an `admin` flag) / clears the session. |
+| `/login`, `/logout` | GET, POST / GET | The **default door's** login step — the built-in login list on an install that registered it (`local_login.use_local()`), which stores `username`, name and an `admin` flag — or, under `identity.choose_at_login()`, a page offering every **enterable** door as a link to its own route, which takes no credential itself (§5.2) / runs the session's door `end_session` step, if it has one, and clears the session ([ADR-0069](adr/0069-identity-comes-from-outside-and-one-account-does-not.md)). |
+| `/login/<door>`, `/auth/callback/<door>` | GET, POST / GET | **One named door's** own login step and the return leg of its redirect flow (§5.2, [ADR-0069](adr/0069-identity-comes-from-outside-and-one-account-does-not.md)). Both dispatch on the name in the path to the provider registered under it — a provider never registers a route, so this costs no general route seam — and both answer `404` for a name nothing claims and for a hook the provider does not implement, since either is a way in this deployment does not have and a redirect there risks a loop. A door's own route matters mechanically rather than stylistically: under a provider that redirects, `/login` never renders a local form. |
 | `/status`, `/status/<path:branch>` | GET | Renders the dashboard from a live snapshot (whole tree or a branch; the `path:` converter passes the slash-separated node path, ADR-0016). A **leaf** check renders its **detail** page. `hide_ok` / `hide_idle` filter the view; `depth` caps how deep the tree renders (clamped to `MAX_DEPTH`, remembered in a `depth` cookie); `fragment=1` returns just the grid (for the page's live polling). With `Accept: application/json` and a valid bearer token, the same routes return the subtree as JSON instead (ADR-0008). A **leaf** page also carries the node's own **hand-off** — the two clipboard buttons of `/copy` aimed at one node: the same document machinery (`copy_status.py`, one formatter for both) over what only this page knows — the path, the observation and the period it bounds, the next update, the run's wall time, the frequency, the report, the configuration and every reason line uncapped — each line with its own code cue and in-flight marker where it declared them, each instant naming its offset. A pin does not change it: the document keeps the **measurement** and says a pin is in force, rather than presenting the pinned code as the reading. Containers get no buttons — their hand-off is `/copy`. |
 | `/history/<path>` | GET | A node's status history (Status / Since / Until / Reason). |
 | `/maintenance` | GET, POST | **GET** — the full, uncapped maintenance overview as its own read-only page (the leaf-detail pattern), reached from the strip pill's "+N more": **one row per pin** — a node's own, or one of its reasons' ([ADR-0036](adr/0036-addressable-reasons.md)) — with the path, what the pin *silences* (the whole node, or one reason line), time left, rendered Markdown explaining *why* it is silenced, and authorship (*pinned by … , last changed by …*). *Silenced* and *Why* are two columns on purpose: both are called "reason" in the model and are not the same thing. An entry row links to its line as `/status/<branch>?reason=<slug>`; the slug is never rendered as text. **POST** — **admin only**: set/edit/clear a node's maintenance with a raw-Markdown reason and optional duration-or-expiry (blank uses the duration from `settings.yaml`), recording who set it. Unit-suffixed durations and full ISO date/times are accepted alongside `MM-DD`, a day-of-month, `HH:MM`, and weekday/time shortcuts; a bare weekday uses 12:00, and unzoned values use the configured timezone. The resolved expiry must be **at least one second and at most 365 days away**; invalid, past, ambiguous-DST or out-of-range input is refused with the admin's words returned, and a blank reason on an *edit* keeps the stored one ([ADR-0014](adr/0014-maintenance-persistence.md)). A `slug` field addresses **one reason** of the node instead of the node ([ADR-0036](adr/0036-addressable-reasons.md)) — never a path segment, since the natural slug for a discovered entry contains a `/`; redirects to the node — or back to the page the form was opened on, via a validated `next` (the card dialog's way home). Every form carries the entry's `set_at` as a hidden **compare-and-set token**, so a write against a pin someone else has since changed is **refused whole** and answered with the conflict page — both rendered stored text and the admin's raw source, who set the stored one and when, the admin's own words preserved and one click to take the stored ones instead ([ADR-0014](adr/0014-maintenance-persistence.md)). |
 | `/events` | GET | The transition log, newest first (When / Status / Service / Reason). A transition that reached nobody is **shown and marked** with the contribution rule that held it back ([ADR-0032](adr/0032-status-contribution-boundary.md) rule 5, [ADR-0041](adr/0041-maintenance-is-a-contribution-rule.md)) — it keeps the status color it would have alarmed in, and the chip beside the code is what says it did not. Marked events are what makes *did it break during the window?* answerable, and they are excluded from `/history`, which answers the other question. |
-| `/system` | GET | **Admin only** — engine uptime, pool size, check counts; per check its type and the in-flight / armed-next / last run, each a time of day plus interval. Carries the dashboard's freshness stamp and ~10s poll (`fragment=1` returns just the info block). Below it, outside the polled fragment because they are settled at startup: the **check-type roster** (§11) — the types this configuration runs first, each with the number of checks behind it, a count that opens into the node path of every one of them so it can be believed without reading a config file, the rest folded into a disclosure so a registered-but-unused type stays readable without filling the card — the **package inventory** (§11), one row per installation outside the library with its distribution, version, loaded path and everything it registered, because a version belongs to the *installation* and a package that registers no check type would otherwise have one nowhere on the page — both tables print that loaded path **against a root the reader has** (`paths.py`): `site-packages/…` or `./…` under the working directory, whichever root is the nearer, because the diagnostic it carries is *which root the module came from* rather than the absolute string, nine tenths of which is the same prefix on every row and starts with somebody's home directory (the origins and the hover `title` keep it whole; a path under neither root stays long, which is the signal) — the **extension seams** (which package fills which slot, which configuration aspects were registered, and who registered each one) and the **effective Content-Security-Policy**, directive by directive, with the contributor of every source — a request blocked inside somebody else's package is otherwise undebuggable from the running instance (§5.4, [ADR-0048](adr/0048-an-assembled-content-security-policy.md)). |
+| `/system` | GET | **Admin only** — engine uptime, pool size, check counts; per check its type and the in-flight / armed-next / last run, each a time of day plus interval. Carries the dashboard's freshness stamp and ~10s poll (`fragment=1` returns just the info block). Below it, outside the polled fragment because they are settled at startup: the **check-type roster** (§11) — the types this configuration runs first, each with the number of checks behind it, a count that opens into the node path of every one of them so it can be believed without reading a config file, the rest folded into a disclosure so a registered-but-unused type stays readable without filling the card — the **package inventory** (§11), one row per installation outside the library with its distribution, version, loaded path and everything it registered, because a version belongs to the *installation* and a package that registers no check type would otherwise have one nowhere on the page — both tables print that loaded path **against a root the reader has** (`paths.py`): `site-packages/…` or `./…` under the working directory, whichever root is the nearer, because the diagnostic it carries is *which root the module came from* rather than the absolute string, nine tenths of which is the same prefix on every row and starts with somebody's home directory (the origins and the hover `title` keep it whole; a path under neither root stays long, which is the signal) — the **extension seams** (which package fills which slot, which configuration aspects were registered, and who registered each one), the **identity card** — one row per registered door with its route, its provider, the package that registered it and which one is the default, and beneath it whether a system-admin account is configured, whether its credential resolved and which keyword configured it, because a way into an application must not be knowable only by reading the source (§5.2, [ADR-0069](adr/0069-identity-comes-from-outside-and-one-account-does-not.md)) — and the **effective Content-Security-Policy**, directive by directive, with the contributor of every source — a request blocked inside somebody else's package is otherwise undebuggable from the running instance (§5.4, [ADR-0048](adr/0048-an-assembled-content-security-policy.md)). |
 | `/about` | GET | The identity page — the gaze, the name and the reasoning behind it, the running instance's `__version__`, the repository link. Auth-gated like every other surface: it names the version of a live instance. |
 | `/preferences` | POST | Records this browser's **theme** and **layout** (§5.3, [ADR-0029](adr/0029-per-user-presentation-preferences.md)) and redirects back to the posting page. A value outside the roster is dropped in favor of what the browser already had; the return path is validated by `_safe_next` (a single leading `/`, and none of the characters a browser rewrites into a second one), so the hidden field cannot become an open redirect. |
 | `/copy`, `/copy/<path:branch>` | GET | Auth-gated incident hand-off, in three sizes from one route and one formatter: the **tree** (`/copy`), one **node** (`/copy/<branch>`) and one **reason line** (`/copy/<branch>?reason=<slug>` — the node a path, the entry a query value, [ADR-0036](adr/0036-addressable-reasons.md) decision 12, because a discovered entry's slug contains a `/`). A line's document is the line and just enough to locate it — the node's title, path and observation — and deliberately not the node's run facts, report or configuration, which the node's own document carries and which is where a secret reference would appear. An unmounted path and a slug this run does not report are both `404` with a page that says which: a suspended pin is not deleted, but a document made from its stored text would hand over a finding the check is no longer making. The tree document: one immutable root snapshot becomes one canonical Markdown document: every non-OK leaf (`WARN`, `ERROR`, `MAINTENANCE`, `UNDEFINED`) plus only the ancestors needed to locate it, in snapshot order; the synthetic root and wholly healthy branches are omitted. Leaves carry a non-colour emoji cue, and so does a **reason line that declared a code of its own** ([ADR-0042](adr/0042-entries-carry-their-own-code.md)) — a healthy workflow under a failing node has to read as healthy in a pasted document too, and a line that declared none takes no cue because it carries its node's. A line whose subject is **running** says so in words: the page's italic is the glance, and a document has none. Authored check and maintenance explanations keep their Markdown, while node/per-reason maintenance also names who set it and its expiry. Every instant it writes — a pin's expiry here, and the whole node document's time facts — names its **UTC offset**: the pages render local time and stay silent about the zone, which is right for a screen somebody is standing in front of, and wrong for a document read in another office. The page renders the rich preview through the same hardened Markdown renderer as every other surface. **Copy Markdown** writes `text/plain`; **Copy Rich HTML** writes both `text/html` and the Markdown as `text/plain`, falling back honestly to plain/manual selection when clipboard access is unavailable — the buttons are one partial (`_copy_controls.html`) shared with the leaf detail page, so the pair is named and ordered the same in both places, and the label names the clipboard member rather than claiming RTF. An all-OK tree gets an empty state rather than an empty clipboard action. |
@@ -958,7 +966,8 @@ the `markdown` (block) and `markdown_inline` (one-line, no `<p>`) Jinja filters
 | `/links/icon/<variant>/<name>` | GET | One resolved icon, for the background `variant` names (`on-light` / `on-dark`). Serves every rung of the search path that holds bytes — the deployment's own file, a registered pack's package data, the built-in pack — so the page has one URL shape for all of them; a **remote** icon is 404 here and is emitted as its own URL rather than proxied. The name is a registry key and never builds a path. Auth-gated, `private` cache with an ETag (§7, [ADR-0030](adr/0030-curated-links.md)). |
 | `/user/avatar` | GET | The signed-in user's configured avatar, if any. Takes no username or path: the session selects a startup-resolved bare name inside the winning users aspect's `avatars/` sandbox, so the route cannot enumerate accounts or construct a filesystem path. Auth-gated, private five-minute cache with an ETag; a removed file falls back to the packaged neutral avatar ([ADR-0045](adr/0045-user-avatars.md)). |
 | `/ext/<package>/<member>` | GET | One registered **extension asset** — a `.css` or `.js` file a dependent package ships for the slot it fills (§6.1, [ADR-0037](adr/0037-extension-static-assets.md)). Read through `importlib.resources` and looked up in the registry, so neither argument ever builds a path; the URL carries a content hash and the response is immutable. Login-gated like every other surface, and the kiosk layout loads none of it. |
-| `/csp-report` | POST | Where a browser posts a **Content-Security-Policy violation**. Each report is one `WARNING` log line — the violated directive, the document, the blocked URI, the source and line — and nothing is stored, which is what keeps the policy clear of the persistence decision. The **one route with no login gate**, necessarily: a violation on the login page has no session, and a report the browser cannot deliver measures nothing. It is bounded instead — an oversized body is refused unread and each reported field is truncated before it reaches the log, because a blocked URI is whatever the page tried to load (§5.4, [ADR-0048](adr/0048-an-assembled-content-security-policy.md)). |
+| `/csp-report` | POST | Where a browser posts a **Content-Security-Policy violation**. Each report is one `WARNING` log line — the violated directive, the document, the blocked URI, the source and line — and nothing is stored, which is what keeps the policy clear of the persistence decision. **No login gate**, necessarily: a violation on the login page has no session, and a report the browser cannot deliver measures nothing. One of two such routes, with `/health` above. It is bounded instead — an oversized body is refused unread and each reported field is truncated before it reaches the log, because a blocked URI is whatever the page tried to load (§5.4, [ADR-0048](adr/0048-an-assembled-content-security-policy.md)). |
+| `/health` | GET | **Liveness for a machine**, and the second route with no login gate ([ADR-0066](adr/0066-health-answers-liveness-and-says-almost-nothing.md)). `200` while this process serves, *whatever the engine is doing* — a load balancer that pulled the instance out of service over a failed check config would remove the very page whose banner explains it. The engine is reported instead: `{"status": "ok", "engine": "running" | "disabled" | "failed"}`, a closed vocabulary in which a deliberate `LITTLE_SISTER_ENGINE=0` (`disabled`) is not the same word as a configuration this instance could not load (`failed`). It says nothing else, and that is the bound an ungated route pays for: not the failure reason (a `CheckError` names config files; the banner carries it behind the login), not the version (`/about` is auth-gated for that reason), not the configuration. Not part of the JSON API and not in `api/openapi.yaml`. `no-store`. |
 | `/favicon.ico` | GET | Redirect to the static favicon. |
 
 Jinja filters back the views: `status_slug` (a CSS class suffix per code),
@@ -977,20 +986,136 @@ trail, rendered by `_breadcrumb.html`; the current node stays plain). The dashbo
 filter logic is `_filter_snapshot` (drops nodes whose effective code is hidden).
 
 ### 5.2 Authentication
-- Session-based; the gate is `username` in `session`, checked per route.
+- Session-based, and **one gate**: a `before_request` hook refuses any request with no
+  identity, unless its endpoint is named in `identity.py`
+  ([ADR-0068](adr/0068-the-login-gate-refuses-by-default.md)). Two lists say which —
+  `OPEN_ENDPOINTS`, which answer without an identity at all (`/login`,
+  `/login/<door>`, `/auth/callback/<door>`, `/logout`, `static`, `/`,
+  `/favicon.ico`, `/csp-report`, `/health`), and
+  `SELF_AUTHENTICATING_ENDPOINTS`, which is `/status` alone because it negotiates
+  between a session and a bearer token and a gate in front of it would redirect an API
+  client to a login form. Everything else is gated, including a route added tomorrow.
+- **`identity.current_user()` is the one answer to *who is this request***, returning an
+  `Identity` (`name`, `firstname`, `lastname`, `admin`) or `None`; `signed_in()` is the
+  same for a view already behind the gate, and answers `401` rather than redirecting,
+  because nobody there means a misclassified route rather than a visitor who has not
+  logged in. Every template gets `is_admin` from that same call, through a context
+  processor, so the shared header's admin-only nav entry follows the **identity** and
+  not the session it happens to be kept in today — a view that passes `is_admin`
+  itself still wins, and passes the same value from the same place.
+- **Who somebody is comes from outside, through doors that are never a chain**
+  ([ADR-0069](adr/0069-identity-comes-from-outside-and-one-account-does-not.md)).
+  `identity.use(name, provider, default=…)` registers an implementation as a named
+  **door** from the import-before-app slot; the registering package is inferred from
+  the call site, a name is claimed once and exactly one door is the default, and a
+  second claim on either refuses at startup naming both. A provider answers
+  `identify()` and `challenge()`; `login_page()`, `submit_login()`,
+  `complete_login()` and `end_session()` are optional, because a provider verifying a
+  header performs no login at all. **Several ways in are allowed, an ordered list of
+  them to try is not**: `sign_in()` records which door produced the session and
+  `current_user()` asks that provider and no other — a session naming a door that is
+  no longer registered is nobody — so registration order cannot decide a `name` that
+  pins and event authorship are stored against. `identify()` is answered once per
+  request, and a provider that raises is **no identity**, logged, never a way
+  through — the same containment covers `enterable()` (raising ⇒ not enterable,
+  so one probe of an unreachable directory cannot take the chooser down for
+  every other door) and `end_session()` (raising ⇒ logged, and the local session
+  is cleared anyway, because logging out has to work *whatever* the provider
+  does, including fails).
+  A door carries an optional **`label`** — what a page calls it out loud, defaulting to
+  the name, which is a path segment — and answers **`enterable`**: it has a
+  `login_page` *and* its provider's optional `enterable()` does not say otherwise.
+  **A contradiction refuses, an omission logs**: a second claim on a name or on the
+  default stops the process where it happens, while *no door at all* and *doors with
+  none of them the default* are a startup `WARNING` from `identity.announce_doors()`
+  naming the line to add, on an instance that serves `/health` and answers `401`
+  everywhere gated — refusing to start would take a monitoring application down for a
+  mistake it can describe, and would refuse the more usable of the two, since doors
+  without a default still admit anybody who knows `/login/<door>`. **A default door can
+  also stop being there**, which is nobody's omission — a credential that fails to
+  resolve closes its own door — so `challenge()` sends an unidentified request to
+  `/login` where the installation asked for the chooser and any door is registered
+  (decided off the registry, never by asking `enterable()`, which a provider may answer
+  by probing); without the chooser that address is the default door's own step and
+  answers `404`, so `401` remains the answer and its message says which of the two
+  states it is in.
+- **The built-in login list is a provider like any other**
+  (`little_sister.local_login.LocalUsers`, on the `local` door), including in how it
+  gets there: `local_login.use_local()`, written in the installation's own
+  import-before-app block like everything else it registers
+  (ADR-0069 §3). The library adds no door on a deployment's behalf, so the ways into an
+  instance are exactly the lines one file names. It stays the fallback for the install
+  that needs no implementation at all, not the shape everyone else fits.
+- **`/login` may offer the doors instead of going to the default one.**
+  `identity.choose_at_login()`, written in the same import-before-app block, makes that
+  address render `identity.door_chooser()` — one link per **enterable** door, the
+  default first, labelled. While there is a door to ask, `challenge()` is untouched, and
+  that is the point: an unidentified request still goes wherever the provider sends it,
+  so a live SSO session still arrives logged in having seen no page, while the address
+  somebody *types* becomes a page **we** serve and therefore one that still answers when
+  the identity provider does not. The exception is the case where there is no provider
+  to ask — a default door that closed — and this page is then where an unidentified
+  request goes, being the only address of ours left. Under it `/login` is not a door — it renders on `GET` and answers
+  `404` to a `POST` — while `/login/<door>` is unchanged, which is what keeps the page
+  from linking back to itself. A redirecting provider adds a `login_page()` returning
+  its own redirect to appear there at all; a header-verifying one has no login step and
+  is not listed, which is how that deployment gets a login page for the first time
+  (§5.1, [ADR-0069](adr/0069-identity-comes-from-outside-and-one-account-does-not.md)).
+- **One door the library ships is not a provider's: the system admin**
+  (`little_sister.system_admin`, on the `system-admin` door), because the provider can
+  stop answering and that is exactly when somebody needs to get in. Configured with
+  `identity.use_system_admin(reference=…)` — a secret reference resolved **once, at
+  registration** — or the discouraged `password=…`; exactly one keyword, and each
+  refuses the other's shape. Login name `admin`, hard-coded, compared with
+  `compare_digest`; the door is never the default and always renders a local form, so
+  it stays usable under a provider that redirects. A **failed** resolution shuts that
+  door (`404`) while the application keeps serving and `/system` says why; a malformed
+  reference still fails startup. Nothing is ever generated. It is visible while in use
+  — a distinct packaged avatar and `System admin` where the chrome prints a name, a
+  `WARNING` on every login and every failed attempt, a row on `/system` — and
+  deliberately without a page banner. The built-in login page links to it below the
+  form while `system_admin.usable_route()` answers one, i.e. while the account is
+  configured *and* its credential resolved: a convenience for the install whose
+  `/login` is a local form, since under a provider that redirects that template is
+  never rendered. `identity.is_system_admin_session()` answers
+  *which door*, so `Identity` keeps its four fields and `set_by` keeps recording the
+  name alone.
 - Users come from a flat `config/users.yaml`, or `config/users/users.yaml` beside
   `config/users/avatars/` (a map of `username → {firstname, lastname, password,
-  admin?, avatar?}`), loaded once at import. `avatar` is a bare file name or stem;
-  invalid, missing and ambiguous references warn and use the packaged neutral image
-  without affecting login ([ADR-0045](adr/0045-user-avatars.md)).
-- **viewer / admin roles** — `login` stores an `admin` flag; admin-only actions
-  (set/clear maintenance, the system page) are gated on it.
-- **Passwords are plaintext** (compared directly); hashing is planned.
+  admin?, avatar?}`), read **by `use_local()` and by nothing else** — so an
+  installation that does not register that door carries no user list at all and never
+  looks for one, while one that does still fails at startup if the list is broken
+  rather than at the first login. `avatar` is a bare file name or stem; invalid,
+  missing and ambiguous references warn and use the packaged neutral image without
+  affecting login ([ADR-0045](adr/0045-user-avatars.md)). The avatars belong to the
+  aspect, so under another provider there are none and every viewer gets the packaged
+  image.
+- **viewer / admin roles** — the built-in list stores an `admin` flag on the session
+  it opens, and another provider decides `Identity.admin` however its directory says;
+  admin-only actions (set/clear maintenance, the system page) are gated on it.
+- **Passwords in the built-in list are plaintext** (compared directly) — what another
+  provider does is its own business. The credentials that are *not* that list — the
+  system-admin password and the JSON API's bearer tokens — go through
+  `secrets.same_secret`, one constant-time comparison over **bytes**: the standard
+  library's own takes `str` only while both sides are ASCII and raises otherwise, so
+  the obvious spelling answers a `500` to the first umlaut anybody types.
+- **The session cookie is `Secure` when the connection was** — decided per request from
+  `request.is_secure`, never from configuration or a host name, so the flag is right on
+  a plain-HTTP install and on a TLS one without either being told which it is. A
+  configured `SESSION_COOKIE_SECURE` can only add the flag, never remove it, and no
+  `Strict-Transport-Security` header is sent
+  ([ADR-0065](adr/0065-the-connection-decides-what-is-secure.md)). It also says
+  **`SameSite=Lax`** outright rather than leaving the one cookie that carries a login
+  to a browser default, which is what withholds it from a cross-site form post on an
+  application whose state-changing POSTs carry no CSRF token; `Lax` rather than
+  `Strict` because a door's callback is a top-level navigation back from an identity
+  provider and `Strict` would arrive there with no cookie
+  ([ADR-0069](adr/0069-identity-comes-from-outside-and-one-account-does-not.md) §4).
 - `secret_key` comes from **`SECRET_KEY`** — a literal value, or itself a secret
   reference resolved once at startup; **unset means a random per-start key**
   (sessions reset on restart)
   ([ADR-0003](adr/0003-config-and-secrets-via-env-file.md),
-  [ADR-0023](adr/0023-secret-references.md) update note). `.env` feeds the
+  [ADR-0023](adr/0023-secret-references.md)). `.env` feeds the
   environment via a dependency-free loader.
 - **JSON backend mode** — `GET /status[/<path:branch>]` with `Accept: application/json`
   is gated by a **bearer token** (named per-client tokens from the
@@ -1039,6 +1164,11 @@ never in the server, so there is no per-user state to store or migrate
   bar and the rail outright, and emits `_kiosk_line.html` instead); `rail` and
   `topbar` are the same markup, with CSS deciding whether the sections show in the
   rail or in the bar.
+- This cookie and the **view** cookies of §5.1 (`depth` and the filter switches) carry
+  `Secure` under the same rule as the session cookie — the connection the request
+  arrived on decides ([ADR-0065](adr/0065-the-connection-decides-what-is-secure.md)).
+  Nothing here is worth stealing; the flag is uniform because a rule with an exception
+  is one somebody has to remember.
 
 ### 5.4 Content-Security-Policy — `csp.py`
 
@@ -1393,8 +1523,8 @@ raises rather than rendering blank):
   fail dates its data ("could not refresh — last ok …") from first paint. A
   response **without** that header is not a fragment at all — the login redirect
   after a session expiry — and counts as a failed poll, so the grid is never
-  overwritten with a login form. A **sustained** outage escalates (ADR-0005
-  update note): after six consecutive misses the line grows a legible age, a
+  overwritten with a login form. A **sustained** outage escalates (ADR-0005):
+  after six consecutive misses the line grows a legible age, a
   banner rises above the content, the frozen content dims (`.poll-stale`) and
   the tab title gains a "(stale) " prefix — one good poll resets everything;
   session expiry banners "reload to log in" instead of an age, and a
@@ -1649,7 +1779,7 @@ icon registry keeps its built-in pack. `/system` marks each filler *built-in* or
 - **API tokens** — the `LITTLE_SISTER_API_TOKENS` setting holds named per-client
   bearer tokens (`name=token,name2=token2`) for the JSON backend (ADR-0008); its
   value may itself be a `scheme://` secret reference, resolved once at startup
-  ([ADR-0023](adr/0023-secret-references.md) update note).
+  ([ADR-0023](adr/0023-secret-references.md)).
 - **What to monitor** — YAML files across the `config/checks/` directories, a
   path-list union selected by `LITTLE_SISTER_CONFIG_DIR` (§4.5).
 - **Node metadata** — an optional `config/nodes.yaml` per root declares each node's
@@ -1815,7 +1945,7 @@ Current gaps.
   script source, deciding what to do about the computed `style=` attributes, and one
   rule an extension's filler would have to follow — none of which is worth committing
   to before the reports say what a strict policy would actually have caught.
-- **Hashed passwords** (plaintext today) and a machine-readable health endpoint.
+- **Hashed passwords** (plaintext today).
 
 ---
 
@@ -1906,14 +2036,20 @@ is explicit. A tag promises to keep these stable:
 - **Configuration aspects** — `little_sister.config_dir`: `register_aspect(name, …)`
   plus the reading helpers a registered aspect then uses, `aspect_files(name)` and
   `sole_aspect_file(name)` ([ADR-0035](adr/0035-registering-a-config-aspect.md)).
-  Registered in the same import-before-app slot as the rest.
+  Registered in the same import-before-app slot as the rest — and the **report on
+  configuration files no aspect claims** sits at the far *end* of that slot rather than
+  at the first read: `announce_aspects()`, called once from the app import, over every
+  configured root, naming the known aspects with the packages that read them
+  ([ADR-0070](adr/0070-the-unclaimed-file-report-runs-at-the-end-of-registration.md)).
+  Resolving a root is silent, because in this family the first resolution *is* somebody's
+  registration reading the aspect it has just declared.
 - **Check-type registry** — `CHECK_TYPES` in `little_sister.checks` (§4.5). A
   deployment adds its own check *types* by importing them before
   `little_sister.app:app` — whether they are modules in its own tree or **installed
   packages**, which is the same seam and was always described as an evolution of it
   rather than a rewrite. That evolution has run: `little-sister-github`,
-  `little-sister-wiz` and `little-sister-jira` register here from packages of their
-  own (§2). Discovery *without* that import — an entry point — does not exist yet.
+  `little-sister-wiz`, `little-sister-aws` and `little-sister-jira` register here from
+  packages of their own (§2). Discovery *without* that import — an entry point — does not exist yet.
   The developer how-to is [`implementing-checks.md`](implementing-checks.md).
 - **Check-authoring surface** — the names a check type written *outside* this
   repository may import ([ADR-0049](adr/0049-the-check-authoring-surface.md)). A
@@ -2130,6 +2266,21 @@ is explicit. A tag promises to keep these stable:
   `SchemeConflictError` at startup naming both, and `replace=True` is how a caller
   that means to displace another package's scheme says so
   ([ADR-0064](adr/0064-the-resolver-is-a-registration.md)).
+- **Identity** — `little_sister.identity`: `use(name, provider, default=…)`,
+  `use_system_admin(reference=… | password=…)`, `choose_at_login()` /
+  `door_chooser()` and `little_sister.local_login.use_local()` for the built-in
+  list, the provider protocol (`identify` /
+  `challenge` required, `login_page` / `submit_login` / `complete_login` /
+  `end_session` optional), the `Identity` type, `current_user()` / `signed_in()`,
+  `sign_in(Identity)` / `sign_out()` / `session_door()` and the route shape a door
+  gets (`/login/<door>`, `/auth/callback/<door>`) —
+  [ADR-0069](adr/0069-identity-comes-from-outside-and-one-account-does-not.md).
+  Registered in the same import-before-app slot as the rest. It is on this list and
+  **not** inside the check-authoring block above, and the difference is the reason
+  the epoch does not move for it: a check type is third-party and numerous and
+  upgrades on its own schedule behind an epoch, while a provider lives in a
+  deployment's own code or in a package that pins this library, so ordinary semver
+  carries it — the same footing `register_resolver` is on.
 - **Environment contract** — how a deployment points the library at its own config
   in the working directory: `LITTLE_SISTER_CONFIG_DIR` (the configuration path-list —
   checks, node metadata, settings and users,

@@ -13,9 +13,10 @@ adds through the same seam. The class is identical in all three; only §4
 
 A type that outgrows the deployment it was written in gets a repository of its own 
 and arrives as an ordinary dependency —
-`little-sister-github` and `little-sister-wiz` both did (and `little-sister-jira`
-made the same move as a surface extension, with no check type of its own), and that
-was the evolution of this seam it was always described as, not a rewrite.
+`little-sister-github`, `little-sister-wiz` and `little-sister-aws` all did (and
+`little-sister-jira` made the same move as a surface extension, with no check type of
+its own), and that was the evolution of this seam it was always described as, not a
+rewrite.
 
 > Grounded in `src/little_sister/checks/` (`base.py`, `loader.py`, the built-in
 > types), `transport.py`, `fetch.py` and `app.py`. If a name here drifts from the
@@ -126,8 +127,8 @@ What the base class gives you and expects:
   common fields out in your own `__init__`. That list **grows**: `order` joined it in
   one minor release and the two retry fields in another, and a constructor naming the
   fields one by one stops binding the day the next one lands, even though every name
-  it imports still resolves ([ADR-0049](adr/0049-the-check-authoring-surface.md)'s
-  update note). If yours does refuse a keyword, the loader says so with the file, the
+  it imports still resolves ([ADR-0049](adr/0049-the-check-authoring-surface.md)
+  decision 6). If yours does refuse a keyword, the loader says so with the file, the
   type and every refused keyword named, rather than raising a bare `TypeError` from
   inside itself.
 - **`config_summary(self) -> str`** *(optional)* — Markdown display metadata for the
@@ -459,7 +460,7 @@ it before importing `little_sister.app`.
   engine writes the result per subnode *name*, at any depth. So **do not parse
   `subnodes:`**, and do not layer a default yourself: the readers you would be
   duplicating have already run, and they are no longer on this surface to call
-  ([ADR-0025](adr/0025-check-provided-subnode-metadata.md)'s 2026-08-19 update — the
+  ([ADR-0025](adr/0025-check-provided-subnode-metadata.md) — the
   same shape `show_when_quiet` uses, and the epoch bump that retired
   `parse_subnodes` / `resolve_text` / `expand_tokens`). Declare anything true of the
   check *type*: a deployment then retunes or annotates one aspect without touching code
@@ -679,11 +680,16 @@ is measured, not hoped for, and it is what keeps an extraction cheap.
 
 ## 8. Testing & the gate
 
-- **The gate is five commands**, byte-identical across the family and run by
-  `hooks/pre-commit`: `ruff check`, `shellcheck` over the tracked shell files, `mypy`,
-  `mypy --python-version 3.11` (the floor `requires-python` promises,
-  [ADR-0054](adr/0054-python-floor-and-development-version.md)), and `pytest -q`.
-  Keep all five green.
+- **Type-check and test against the floor you promise, not only against the
+  interpreter you develop on.** Whatever `requires-python` says is a promise to
+  everybody who installs you, and a promise nobody exercises is a claim that decays —
+  a stdlib name that arrived two versions later type-checks perfectly on your machine
+  and fails on theirs. Running `mypy --python-version <floor>` costs about a second
+  and catches exactly that class
+  ([ADR-0054](adr/0054-python-floor-and-development-version.md) sets out the
+  reasoning). **Your floor is yours to choose**: little-sister promises 3.11, and a
+  plugin that needs 3.15 for something real is welcome to say 3.15 — it simply means
+  the deployments that can install it are the ones already on 3.15.
 - **`mypy` runs over `src` only** — tests are not type-checked. Where a test double
   has to model a real object's shape, nothing mechanical will tell you it drifted;
   say so in the double.
@@ -750,6 +756,24 @@ credentials — one check per team. And the type's prose stops being a file the
 deployment can edit, so a label must be **extendable**, not only replaceable: that is
 what `{default}` in a `subnodes:` value buys (§3), letting a deployment append its own
 note to shipped text and still inherit the next version of it.
+
+### What to call it on PyPI
+
+There is no namespace enforcement on an index, so the convention has to do the work.
+**Please name a third-party plugin `<you>-little-sister-<plugin>`** — your own name or
+your organization's first, then the library, then what the plugin does:
+`acme-little-sister-jenkins`, `rnd-little-sister-grafana`.
+
+That leaves the bare **`little-sister-<plugin>`** form meaning *maintained alongside
+little-sister itself*, which is worth something to the person choosing between two
+packages that both claim to check the same product: they can tell at a glance whose
+release line they are taking on. It is a courtesy rather than a rule — nothing stops
+you, and nothing breaks if you do not — but it keeps the index legible, and it means
+your package's name says who stands behind it rather than only what it talks to.
+
+The import package follows the distribution name, with the hyphens as underscores:
+`acme_little_sister_jenkins`. That is what `wsgi.py` imports, so it is the name a
+deployment's operator actually types.
 
 ---
 
@@ -860,9 +884,8 @@ while the aspect is off and applies again the moment it comes back. Expiry remai
 its backstop. That is the behavior you want for "off for the migration", and it is
 worth knowing before somebody reports the pin as a leak.
 
-**Where this may end up.** Two implementations of a rule are two implementations;
-the family's line is that plumbing solved once is not solved again, so a third
-check type needing `_flag` and this roster is the point at which they stop being a
-pattern in a how-to and become something the check-authoring surface offers
-(`architecture.md` §11). Offering it is a version-contract commitment, so it waits
-for the third — not for the second.
+**Where this may end up.** Two implementations of a rule are two implementations, and
+plumbing solved once should not be solved again — so a third check type needing `_flag`
+and this roster is the point at which they stop being a pattern in a how-to and become
+something the check-authoring surface offers (`architecture.md` §11). Offering it is a
+version-contract commitment, so it waits for the third, not for the second.

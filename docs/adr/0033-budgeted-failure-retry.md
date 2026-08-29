@@ -1,7 +1,7 @@
 # ADR-0033 — A faster second look: the budgeted failure retry
 
 - **Status:** Accepted
-- **Date:** 2026-07-31
+- **Date:** 2026-08-23 (accepted 2026-07-31)
 - **Related:** [ADR-0001](0001-in-process-threaded-engine.md) (the scheduler and
   bounded worker pool this leans on),
   [ADR-0005](0005-dashboard-freshness-and-self-monitoring.md) (freshness, which
@@ -10,16 +10,6 @@
   [ADR-0023](0023-secret-references.md) (the pinned checks this never touches),
   [ADR-0031](0031-deployment-config-directory.md) (where the settings live).
 - **Register:** [`../decisions.md`](../decisions.md)
-
-> **Update (2026-08-15):** decision 2 is amended in two places by
-> [ADR-0060](0060-a-line-makes-no-claim.md), each from a fact not available here.
-> The budget now re-arms on **any change** of the stored code and not only on an
-> `OK` — because ADR-0042 made a chronically non-`OK` node ordinary, and such a check
-> spent its retries once and never got them back, invisibly. And a completed run
-> reporting `UNDEFINED` does **not** arm the retry, a withheld claim being nothing to
-> confirm. The trigger set is otherwise unchanged, so this record's reason for
-> including `WARN` — that the escalation counter must not disagree about what a
-> failure is — still holds; that counter should skip a chosen `UNDEFINED` too.
 
 ## Context
 
@@ -46,12 +36,18 @@ all (the fast look that would not be fast does not count against the budget).
 
 **2. The retry is budgeted per failure episode.** At most `retry_attempts`
 fast attempts follow a failure; then the check falls back to its nominal
-frequency until an `OK` completes, which ends the episode and re-arms the
-budget. A three-day outage costs exactly `retry_attempts` fast runs, then
-normal cadence — the budget bounds the burst by construction. Any non-`OK`
-result triggers, `WARN` included: that is the same set a later escalation
-counter (damping, a coming slice of the same phase) will count, so the two
-features cannot disagree about what a failure is. A **secret-pinned** check
+frequency until the stored code **changes**, which ends the episode and
+re-arms the budget ([ADR-0060](0060-a-line-makes-no-claim.md)). Re-arming on
+any change and not only on an `OK` is what ADR-0042 makes necessary: it made a
+chronically non-`OK` node ordinary, and under an `OK`-only rule such a check
+spends its retries once and never gets them back, invisibly. A three-day
+outage costs exactly `retry_attempts` fast runs, then normal cadence — the
+budget bounds the burst by construction. A completed run reporting `UNDEFINED`
+does **not** arm the retry, a withheld claim being nothing to confirm. Any
+other non-`OK` result triggers, `WARN` included: that is the same set a later
+escalation counter (damping, a coming slice of the same phase) will count, so
+the two features cannot disagree about what a failure is — and that counter
+should skip a chosen `UNDEFINED` too. A **secret-pinned** check
 ([ADR-0023](0023-secret-references.md)) never retries — it is pinned until
 restart, and a fast retry would burn the pool confirming a result that cannot
 change.
@@ -96,7 +92,7 @@ live — check frequency does not grow a second time vocabulary.
   not fought — durable scheduler state would be persistence-phase work.
 - Damping, when it lands, ties its escalation count to this budget — the
   fast looks are what feed `escalate_after` — which is why the trigger set is
-  "any non-OK" on both sides.
+  the same on both sides.
 - Events and history are untouched: a retry run is an ordinary run.
 - `CheckInfo` grows the retry state for `/system`; the JSON API is untouched.
 

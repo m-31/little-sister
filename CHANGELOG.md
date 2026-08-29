@@ -8,6 +8,287 @@ contract versions **separately** — see `docs/api/openapi.yaml` `info.version`.
 
 ## [Unreleased]
 
+## [0.3.14] - 2026-08-29
+
+### Removed
+
+- **`config_dir.forget_scanned_roots()`.** It undid a once-per-root cache that no
+  longer exists: the report on unclaimed configuration files is emitted once, at the
+  app import, rather than at each root's first resolution
+  ([ADR-0070](docs/adr/0070-the-unclaimed-file-report-runs-at-the-end-of-registration.md),
+  and the *Fixed* entry below for what moved). A test suite that called it between
+  cases has nothing left to reset and can drop the call.
+
+### Added
+
+- **A deployment can hand the library an identity implementation of its own.**
+  `little_sister.identity.use(name, provider)` registers one as a named **door**
+  ([ADR-0069](docs/adr/0069-identity-comes-from-outside-and-one-account-does-not.md)),
+  in the same import-before-app slot check types, slot fillers, assets, configuration
+  aspects and secret resolvers already use — because authentication is different in
+  every organization, and the only honest shape is to rely on an implementation the
+  library does not own. What a provider answers is **who is this request**
+  (`identify()`) and **what does an unidentified one get** (`challenge()`); a login
+  flow is four *optional* hooks reached at library-owned routes (`/login/<door>`,
+  `/auth/callback/<door>`, and `/logout`), so a provider sitting behind something that
+  has already completed the exchange — a load balancer injecting a signed header —
+  implements the two required methods and nothing else, and a provider never registers
+  a route of its own. **Several ways in are allowed; an ordered list of them to try is
+  not**: `sign_in()` records which door produced the session and `current_user()` asks
+  that provider and no other, so registration order can never decide who somebody is —
+  which matters here more than in most applications, because a name is a **stored key**
+  that maintenance pins and event authorship are held against, and two directories that
+  both know `michael` cannot be told apart afterwards. A door name is claimed once and
+  exactly one door is the default; a second claim on either **refuses at startup**,
+  naming both. A provider that raises is treated as **no identity**, logged, and never
+  as *let them through* — a failing door takes down itself and no other. That holds for
+  every call into a provider, not only `identify()`: an `enterable()` that raises means
+  *not enterable*, so a provider probing an unreachable directory cannot take the login
+  page down for every **other** door, and an `end_session()` that raises is logged while
+  the local session is cleared anyway, because logging out has to work whatever the
+  provider does — including fails. Where a
+  registration is merely **missing**, the application starts and says so instead: a
+  contradiction refuses, an omission logs. No door at all, and doors with none of them
+  the default, are each a startup `WARNING` naming the line to add, on an instance that
+  still serves `/health` and answers `401` everywhere gated. Refusing to start would
+  take a monitoring application down for a mistake it can describe — and would refuse
+  the *more* usable of the two, since doors without a default still admit anybody who
+  knows `/login/<door>`. **A default door can also stop being there**, and that is
+  nobody's omission: a credential that fails to resolve closes its own door, so an
+  installation whose provider was the default keeps doors that work with none of them
+  marked. Where such an installation asked for `identity.choose_at_login()`, an
+  unidentified request is sent to `/login` — the page the library serves, listing
+  whatever is still enterable — instead of being refused while that page sits there
+  offering a way in. Without the chooser `/login` is the default door's own step and
+  answers `404`, so `401` stays the honest answer; either way the refusal now says which
+  of the two states it is in, and says it once at startup rather than once per request.
+- **The built-in login list is now one of those providers**, on the `local` door —
+  and, like every other door, **the installation registers it**:
+  `local_login.use_local()`, in the same import-before-app block
+  (ADR-0069 §3). The library adds no door on anybody's behalf, so *can anybody log into
+  this instance* is answered by reading one file rather than by working out what would
+  have been inferred from what else was registered. **This is a breaking change for a
+  deployment that supplied no provider**: without that line the instance starts, warns
+  that nobody can sign in, and lets nobody in. `setup.sh` and the shipped `wsgi.py`
+  carry the line, so a checkout of this repository is unaffected.
+  **The `users` aspect is read by that call and by nothing else**, so a deployment with
+  an identity provider of its own carries no `config/users.yaml` at all and never looks
+  for one. It could not before — the list was loaded while the application was being
+  imported, so such an instance died there whatever its provider knew. A broken list is
+  still a startup failure rather than a surprise at the first login. The per-user
+  avatars ([ADR-0045](docs/adr/0045-user-avatars.md)) belong to that same aspect and
+  follow it: under another provider there are none, and every viewer gets the packaged
+  neutral image.
+- **A system-admin account, for the morning the identity provider is the thing that
+  broke.** `identity.use_system_admin(reference="env://…")` configures one — a secret
+  reference ([ADR-0023](docs/adr/0023-secret-references.md)) resolved **once at
+  startup**, or the discouraged `password=…` for a deployment whose store has no
+  resolver here; exactly one keyword, and each refuses the other's shape, because a
+  reference handed over as a password would quietly make the address the credential
+  and nothing would say so until the account was needed. It is a **door like any
+  other** — `/login/system-admin`, login name `admin`, and a constant-time comparison
+  over bytes (`secrets.same_secret`, because the standard library's own refuses a
+  non-ASCII `str` and would answer a `500` to the first umlaut anybody types) — and
+  never the default, which is what keeps it a local form under a provider that redirects to
+  somewhere unreachable. Nothing is ever generated: a generated password has to be
+  readable by the operator, which means putting a live admin credential in the log or
+  on the disk. A credential that **fails to resolve** shuts that door and leaves the
+  application serving, because an unreachable parameter store must not take the
+  dashboard down during the kind of event it is watching; `/system` says *configured
+  but unavailable* and names the reference. It is visible while in use — a distinct
+  packaged avatar and `System admin` where the chrome prints a name, a `WARNING` on
+  every login and every failed attempt — and deliberately without a page banner. The
+  built-in login page links to it below the form while the account is configured *and*
+  its credential resolved, never to the `404` an unusable door answers with and never
+  on that door's own form; it is worth being clear that this reaches the install whose
+  `/login` is a local form and **not** the redirecting install the account mostly
+  exists for, where `/login` renders nothing of ours. What a pin or an event records is
+  still the name alone.
+- **`.env` is read when `little_sister.secrets` is imported, not when the application
+  is.** The file, its precedence (an environment value already set wins) and its
+  absence being fine are all unchanged
+  ([ADR-0003](docs/adr/0003-config-and-secrets-via-env-file.md)); what moved is the
+  moment, and it moved because a **registration** can now name a secret. A deployment
+  resolves `env://…` in its `wsgi.py`, *before* it imports the app — so a file read
+  during that import arrives after its only reader, and the credential would be
+  reported as unresolvable on every real start. The module that owns `env://` is the
+  one that fills it now, and importing anything that can resolve a reference implies
+  the file has been read.
+- **`setup.sh` writes a different pair of credentials, and they are opposites on
+  purpose.** The generated login is now `viewer` and is **not** an admin, keeping the
+  placeholder password `change-me` because that one is meant to be *edited*; `.env`
+  gains a generated `LITTLE_SISTER_SYSTEM_ADMIN_PASSWORD`, because that one is meant to
+  be *read*. After a fresh setup the powerful account is the one with real entropy and
+  the everyday one is the weak editable placeholder — the right way round, and the
+  admin of a fresh install is behind the system-admin door rather than in the user
+  list. An existing installation is untouched: `setup.sh` writes nothing over files
+  that are already there.
+- **`/login` can offer the doors instead of going to the default one.**
+  `identity.choose_at_login()`, beside the registrations it is about, makes that address
+  render a page listing every door somebody can actually go through, each as a link to
+  its own route and each under a `label=` worth reading. **What an unidentified request
+  gets is unchanged**, and that is the point rather than an omission: under an identity
+  provider with a live session the redirect it gets is *silent* — somebody clicks a
+  dashboard link and arrives logged in, having seen no login page at all — so a page in
+  that path would turn zero interactions into one on every visit, forever. What changes
+  is the address somebody **types**, which becomes a page little-sister serves and
+  therefore one that still answers on the morning the identity provider does not. Until
+  now a deployment behind a redirect had no such page: `/login` *was* the redirect, so
+  the system-admin door was reachable only by somebody who remembered its address, and
+  `/system`, which lists it, is behind the login that is not working. Under the new line
+  `/login` is not a door — it renders on `GET` and refuses a `POST`, because a credential
+  is taken at a door's own route — while `/login/<door>` is untouched, which is what
+  keeps the page from linking back to itself. A provider whose flow is a redirect adds
+  one method to appear there, a `login_page()` returning that redirect; one that verifies
+  a header has no login step and is not listed, which is how *that* deployment gets a
+  login page for the first time. Nothing is required of an installation that says
+  nothing: without the line, `/login` is what it always was. The one case where the line
+  does reach an unidentified request is the one where there is nothing to leave
+  unchanged: a default door that closed leaves no provider to ask, and this page is then
+  the only address of ours that still means anything (see the doors entry above).
+- **A door can be called something.** `identity.use(…, label="Company SSO")`, defaulting
+  to the door's name, which is a path segment and not a sentence; the library's own two
+  doors bring their own words (*Local account*, *System administrator*). `/system` prints
+  the label beside the name where they differ. A provider may also answer `enterable()` —
+  whether its door can take a credential right now — which the system-admin account does,
+  because its page is a `404` while its password has not resolved; it is asked once, of
+  the door, by both the chooser and the built-in login page's link.
+- **`/system` now shows the ways in.** One row per registered door — its route, the
+  provider behind it, the package that registered it and which one is the default —
+  plus whether a system-admin account is configured and which keyword configured it.
+  A deployment's provider is registered in its own `wsgi.py`, which is not on the
+  screen when somebody is asking *who can log in here, and how*.
+- **`GET /health`** — a machine-readable liveness answer for something that is not a
+  person ([ADR-0066](docs/adr/0066-health-answers-liveness-and-says-almost-nothing.md)).
+  `200` while the process serves, **whatever the engine is doing**: a check config that
+  fails to load already leaves the application serving behind a banner naming the
+  reason, and a health check that answered "not well" there would have a load balancer
+  remove the one page explaining why. The engine is *reported* instead — `{"status":
+  "ok", "engine": "running" | "disabled" | "failed"}` — with `disabled` (a deployment
+  said `LITTLE_SISTER_ENGINE=0`) told apart from `failed` (a configuration this instance
+  could not load). **No login gate**, because a load balancer has neither a session nor
+  a bearer token; the bound on that is that the route says almost nothing — not the
+  failure reason, not the version, not the configuration. It is deliberately **not**
+  part of the token-authed JSON API and is not in `api/openapi.yaml`. A readiness probe
+  can point `LITTLE_SISTER_PROBE_PATH` here instead of at `/login`.
+- **The run scripts can serve HTTPS** — `./start.sh --tls`, and the same flag on
+  `./stop.sh` and `./test_api.sh`, which also have to reach the instance
+  ([ADR-0067](docs/adr/0067-the-run-scripts-can-serve-tls.md)). The port moves with the
+  scheme (`TLS_PORT` in `instance.sh`, `8443` by default), so the two can never be
+  confused for one address. Set `TLS_CERT` and `TLS_KEY` — both or neither — to serve a
+  certificate you already have; with neither, `--tls` mints a self-signed one for the
+  run (P-384, 200 days, in the gitignored `var/tls/`) and overwrites it at the next
+  start. The scripts deliberately **do not verify** the certificate: each is talking to
+  a process on this machine it started seconds ago, and a probe that failed on trust
+  would report a serving instance as dead — so `start.sh` *reports* instead when nothing
+  on the machine trusts a supplied certificate. A plain run is unchanged, and
+  `PROBE_PATH` now defaults to `/health`. **A checkout still serves one instance**: the
+  scripts ask whether a *stranger* holds the port they are about to bind of that port
+  alone, and whether *this checkout is already serving* of both — so `./start.sh --tls`
+  replaces a plain instance rather than running beside it and truncating the log it is
+  still writing to, and `./stop.sh` stops whatever is running without being told which
+  scheme it was started under. **An instance belongs to the checkout it runs in**,
+  recognised by its working directory rather than by the WSGI target two checkouts can
+  share — so a second checkout on the same port is refused instead of being adopted and
+  stopped. Deliberately not by anything in the command line: macOS `ps` truncates that,
+  and gunicorn rewrites it when `setproctitle` is installed. **`--any-instance`** is the
+  way past the resulting refusal, named in the refusal itself; it reaches a gunicorn and
+  nothing else. The processes named in these refusals are also no longer truncated.
+
+### Changed
+
+- **The default port is `8888`, not `8000`** — `PORT` in `instance.sh`, with the
+  fallback in `lib.sh` following it, so an installation that never edited either lands
+  in the same place. Nothing else moves: an explicit `LITTLE_SISTER_PORT` still wins,
+  and `--tls` still serves on `TLS_PORT` (`8443`). The demo harness of
+  `tests/demo_wsgi.py` deliberately stays on `8000`, which now lets it run beside a real
+  instance instead of fighting it for one port.
+
+- **The login gate is one gate, and it refuses by default**
+  ([ADR-0068](docs/adr/0068-the-login-gate-refuses-by-default.md)). *Who is this
+  request* was `session['username']` read in fourteen views; it is now
+  `identity.current_user()`, and a single `before_request` hook refuses any request with
+  no identity unless its endpoint is named in one of two lists — `OPEN_ENDPOINTS` (the
+  login form and its stylesheet, logout, `/csp-report`, `/health`, and the two
+  redirects — `/` onto `/status`, which refuses on its own account, and `/favicon.ico`
+  onto the packaged icon) and `SELF_AUTHENTICATING_ENDPOINTS` (`/status`
+  alone, which negotiates between a session and a bearer token and would otherwise
+  redirect an API client to a login page). The polarity is the point: a route added
+  tomorrow is closed until somebody classifies it, where a per-view decorator would have
+  left it silently open. The role reaches the templates the same way: the shared nav's
+  admin-only entry asks `current_user()` through a context processor rather than reading
+  the session, so it follows the identity and not the place that identity is kept.
+  Nothing a visitor sees changes.
+
+### Fixed
+
+- **A non-ASCII bearer token no longer answers `500` to the JSON API.**
+  `secrets.compare_digest` accepts `str` only while both sides are ASCII and raises
+  `TypeError` otherwise, so a token arriving off the wire with anything else in it
+  turned a request that should have been refused into a server error — a difference
+  somebody probing can read. The comparison moved to `secrets.same_secret`, which
+  compares bytes and is now the one place in the library any credential is checked
+  ([ADR-0008](docs/adr/0008-json-output-api.md)).
+
+- **A registered configuration aspect is no longer reported as unknown at every
+  start.** The warning about files in a configuration root that no aspect claims fired
+  at the **first resolution** of each root — and since every package that registers an
+  aspect declares it and then immediately reads it, so that a broken configuration file
+  fails at startup rather than at the first click, that first read *was* the scan.
+  Whichever registration ran first performed it, and every aspect registered after it
+  was named unknown for the life of the process; no import order fixed that, because
+  being a registration is what scanned. The scan is now silent and the report runs once
+  at the end of the registration window, from `config_dir.announce_aspects()` at the app
+  import — where the set of aspects is final
+  ([ADR-0070](docs/adr/0070-the-unclaimed-file-report-runs-at-the-end-of-registration.md)).
+  It is public, so a tool that never builds an app can ask for it; it now covers
+  **every** configured root rather than only the ones something resolved; and the
+  message names the known aspects **with the packages that read them**, so a misspelled
+  `identiy.yaml` points at the `identity` it missed. A genuine stray file still warns,
+  and still stops nothing.
+
+### Security
+
+- **Every cookie this application sets is now marked `Secure` when the request that
+  set it arrived over TLS** — the session cookie that carries a login, the
+  presentation preferences and the view switches
+  ([ADR-0065](docs/adr/0065-the-connection-decides-what-is-secure.md)). The
+  **transport** decides, per request: `request.is_secure`, which gunicorn sets from
+  the socket it is holding, so the flag is right on a laptop and on an instance behind
+  a load balancer without either being configured, and it cannot drift from how the
+  process was actually started. A plain-HTTP deployment is unchanged — a `Secure`
+  cookie there is one the browser never sends back, which reads as a login page that
+  will not stay logged in. An explicitly configured `SESSION_COOKIE_SECURE` still
+  wins, so the connection can only ever *add* the flag; there is deliberately no way
+  to remove it from a TLS connection. **No `Strict-Transport-Security` header**: it is
+  scoped to a host and ignores the port, so a library sending one would make every
+  other service on that host unreachable in that browser — a promise about a whole
+  host name is a deployment's to make.
+- **The session cookie says `SameSite=Lax`.** It was the one cookie carrying a login
+  and the only one left to whatever the browser defaults to, while `ls_prefs` and the
+  fold-depth cookie — a theme and a disclosure state — both said `Lax` outright. On an
+  application whose state-changing POSTs carry no CSRF token, that attribute *is* the
+  defence against a cross-site form post. `Lax` rather than `Strict`, because a door's
+  callback is a top-level navigation back from an identity provider and `Strict` would
+  arrive there with no cookie.
+- **`setup.sh` will not invent the system admin's password out of a constant.** Its
+  generator fell back to the literal `change-me` when `python3` was missing — tolerable
+  while it only produced a session key, wrong once it mints the credential of the most
+  powerful account there is, and printed as "random" either way. It now uses `python3`,
+  falls back to `openssl` (which `lib.sh` already requires to mint a certificate), and
+  **refuses** rather than guessing a third time.
+- **`setup.sh` adds the system-admin password to an `.env` that predates it.** Every
+  existing installation takes exactly this path: answering *no* to the overwrite prompt
+  kept a file with no `LITTLE_SISTER_SYSTEM_ADMIN_PASSWORD` in it, which is a door
+  registered and shut — the state you find on the morning it is needed. The one missing
+  key is appended and named on stdout; nothing else in the file is touched, because
+  regenerating `SECRET_KEY` would end every open session and the API tokens are the
+  deployment's own. Answering *yes* still rewrites the file, and the prompt now says so
+  before you answer.
+- `start.sh`'s warning for a missing `.env` said "insecure dev session key", which
+  stopped being true when the app started minting a random key per start. The cost is
+  that every restart logs everyone out, which is what it says now.
+
 ## [0.3.13] - 2026-08-23
 
 ### Removed
@@ -117,7 +398,7 @@ contract versions **separately** — see `docs/api/openapi.yaml` `info.version`.
   per field, and a label still freezes at a node's first fill — and a label a check
   puts on a **dynamically named** child (a volume it discovered) still applies,
   where nothing declared or configured that name
-  ([ADR-0025](docs/adr/0025-check-provided-subnode-metadata.md), 2026-08-19 update).
+  ([ADR-0025](docs/adr/0025-check-provided-subnode-metadata.md)).
 
 - **The dashboard navigation stays reachable while a long tree scrolls.** The bar
   remains at the top in both interactive layouts, and the left rail stays beneath
@@ -1686,7 +1967,7 @@ contract versions **separately** — see `docs/api/openapi.yaml` `info.version`.
 
 - **A secret reference always carries a scheme now** — an environment variable is
   `env://GITHUB_TOKEN`, not a bare `GITHUB_TOKEN`
-  ([ADR-0023](docs/adr/0023-secret-references.md), 2026-07-27 update). **Breaking**
+  ([ADR-0023](docs/adr/0023-secret-references.md)). **Breaking**
   for any config that used a bare name: prefix it with `env://`. The point is that a
   bare name and a pasted credential are the same shape, so a config holding the
   secret itself used to be looked up as a variable name, fail, and print that secret

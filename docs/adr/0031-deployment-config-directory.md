@@ -1,7 +1,7 @@
 # ADR-0031 — One deployment config directory, split by aspect
 
 - **Status:** Accepted
-- **Date:** 2026-07-31
+- **Date:** 2026-08-29 (accepted 2026-07-31)
 - **Related:** [ADR-0015](0015-check-discovery-union.md) (the path-list this generalizes),
   [ADR-0012](0012-node-metadata.md) (`nodes.yaml`, the first non-check tenant),
   [ADR-0030](0030-curated-links.md) (`links.yaml`, the third),
@@ -12,19 +12,6 @@
   [ADR-0021](0021-script-resolution.md) (packaged defaults with an override — the same
   shape, one level down).
 - **Register:** [`../decisions.md`](../decisions.md)
-
-> **Update (2026-08-06):** point 5 below says `LITTLE_SISTER_CONFIG` and
-> `LITTLE_SISTER_USERS` "keep working as explicit single-file overrides". That was a
-> restatement of the two records those overrides belonged to, not a decision taken
-> here, and half of it has since been retired:
-> [ADR-0046](0046-user-list-from-the-configuration-roots.md) removes
-> `LITTLE_SISTER_USERS` — *because* of this record's own first-root-wins rule for
-> `users`, which already expresses a single-file override as a users-only root named
-> first — and makes startup refuse while the name is set. `LITTLE_SISTER_CONFIG`
-> stays: settings **merge per key**, so a prepended settings root layers rather than
-> replaces, and nothing in the path-list reproduces it. Everything this record itself
-> decides — the path-list, aspects and their shapes, the per-aspect combining rules,
-> the clean break — stands unchanged.
 
 ## Context
 `checks/` was accurately named when it held checks. It now holds three unrelated kinds
@@ -89,7 +76,15 @@ two of them."
 
    **Aspect names are known to the library, not discovered.** A **candidate aspect** is a
    `*.yaml` / `*.yml` file or a directory; an unrecognized candidate **warns and is
-   ignored**. Everything else in `config/` — a `README.md`, a dotfile, an editor's `.bak`
+   ignored** — but not at the moment the root is resolved. Resolving a configuration root is
+   **silent**, and the report runs once at the end of the registration window, from
+   `config_dir.announce_aspects()`
+   ([ADR-0070](0070-the-unclaimed-file-report-runs-at-the-end-of-registration.md)). Emitted
+   at the first resolution it named every aspect not yet registered at that instant, which
+   the seam [ADR-0035](0035-registering-a-config-aspect.md) added made unfollowable rather
+   than merely delicate. Late, it also covers **every** configured root rather than only the
+   resolved ones, and it names the packages that read the aspects it knows. Everything else
+   in `config/` — a `README.md`, a dotfile, an editor's `.bak`
    — is not a candidate and passes in **silence**, which matters because the library
    itself ships `config/checks/README.md` into that tree and a permanent warning about a
    deployment's own documentation would train everyone to ignore the log. Nothing here
@@ -127,9 +122,15 @@ two of them."
 5. **`config.yaml` becomes `config/settings.yaml`, and `users.yaml` becomes
    `config/users.yaml`.** Moving them in the same change is the point — a deployment
    reorganizes its layout **once**, not once per aspect. `settings` rather than `config`
-   because `config/config.yaml` reads as a mistake. `LITTLE_SISTER_CONFIG` and
-   `LITTLE_SISTER_USERS` keep working as explicit single-file overrides that **bypass
-   layering entirely**, which is what an override should mean.
+   because `config/config.yaml` reads as a mistake.
+   [ADR-0046](0046-user-list-from-the-configuration-roots.md) removes
+   `LITTLE_SISTER_USERS` — *because* of this record's own first-root-wins rule for
+   `users`, which already expresses a single-file override as a users-only root named
+   first — and makes startup refuse while the name is set. `LITTLE_SISTER_CONFIG` keeps
+   working as an explicit single-file override that **bypasses layering entirely**,
+   which is what an override should mean: settings **merge per key**, so a prepended
+   settings root layers rather than replaces, and nothing in the path-list reproduces
+   it. That is a restatement of the record it belongs to, not a decision taken here.
 
 6. **`.env` and `var/` stay out.** `.env` is secrets and process environment
    ([ADR-0003](0003-config-and-secrets-via-env-file.md),

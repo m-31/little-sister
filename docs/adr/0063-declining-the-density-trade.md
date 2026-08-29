@@ -127,7 +127,7 @@ side configuration errors are already on. The **labels** in the same block neede
 more step: layering them requires the type's default text and tokens
 (`resolve_text`'s `{default}` extension and `{token}` expansion), which at first only
 the check held — so the flag, which has no layering, moved first, and the labels
-follow by declaring that text as data (the 2026-08-19 update on ADR-0025). The
+follow by declaring that text as data (ADR-0025). The
 declaration then closes the loop in the other direction: once `subnode_defaults`
 exists for the labels, the flag rides its entries too, and the type's half of the
 block is one map, shaped like the block itself.

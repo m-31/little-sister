@@ -34,6 +34,14 @@
                     {% set brand_figure = 'gaze' %}
                     {% include '_brand.html' %}
                 </div>
+                {#- Which door this is, when it is not the ordinary one. The
+                    system-admin form is this same document (ADR-0069 §5), and a
+                    person who typed their usual login name into it deserves to be
+                    told where they are before they wonder why it refused. Absent —
+                    and silent — on the default door, which needs no explaining. -#}
+                {% if door_note is defined and door_note %}
+                    <p class="text-muted small">{{ door_note }}</p>
+                {% endif %}
                 {% if error %}
                     <div class="alert alert-danger">{{ error }}</div>
                 {% endif %}
@@ -50,6 +58,19 @@
                         <button type="submit" class="btn btn-primary">Login</button>
                     </div>
                 </form>
+                {#- The other door, when the caller has one to offer. Set only by a
+                    provider that is not the system admin itself — this document is
+                    both forms, and a page linking to itself is a page nobody
+                    trusts — and only while that account can take a password, so
+                    this is never a link to the 404 an unconfigured door answers
+                    with. Below the form and quiet on purpose: it is the way in for
+                    the morning the ordinary one cannot answer, not a second way to
+                    do the thing this page is for. -#}
+                {% if admin_door is defined and admin_door %}
+                    <p class="text-center small mt-4 mb-0">
+                        <a href="{{ admin_door }}" class="link-secondary">System administrator sign-in</a>
+                    </p>
+                {% endif %}
             </div>
         </div>
     </div>

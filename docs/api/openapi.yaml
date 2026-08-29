@@ -62,7 +62,7 @@ externalDocs:
   url: https://github.com/m-31/little-sister
 
 servers:
-  - url: http://localhost:8000
+  - url: http://localhost:8888
     description: A single instance on the internal network (host/port are per deployment).
 
 tags:

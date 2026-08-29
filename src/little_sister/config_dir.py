@@ -108,10 +108,6 @@ _ASPECT_NAME = re.compile(r"[a-z][a-z0-9_-]*")
 # its business; keyed by the same name, cleared with it.
 _ASPECT_OWNERS: dict[str, str] = {}
 
-# Roots already scanned for unrecognized candidates, so the warning is emitted once
-# per root per process and not once per aspect lookup. Keyed by resolved path.
-_scanned: set[Path] = set()
-
 # The pre-ADR-0031 layout, detected *only in order to refuse*. A deployment that
 # upgrades without moving its files would otherwise come up looking alive while
 # watching nothing, because a missing checks directory used to be survivable.
@@ -139,8 +135,14 @@ def register_aspect(name: str, *, as_file: bool = True,
     (:func:`sole_aspect_file`) the built-ins get.
 
     **Register before the app is imported** — in the same slot check types and icon
-    packs use. The unknown-candidate warning fires once per root at the first
-    resolution, so a registration that arrives after it has nothing left to prevent.
+    packs use. The reason is the read, not a warning: :func:`aspect_in` looks the
+    name up in ``ASPECTS``, so a package that resolves its own file before declaring
+    it gets a :class:`KeyError` rather than a diagnosis, and the app resolves
+    configuration during its own import. The report on files no aspect claims runs
+    at the far **end** of that window (:func:`announce_aspects`, ADR-0070) rather
+    than at the first resolution, so a registration made anywhere inside it is in
+    time — which is what makes this rule followable by the package that turns out to
+    be the first thing in the process to read a root.
 
     Every refusal is a warning and a skip, never an exception: the library's own
     aspects are the floor, and an extension may not move it — a registration that
@@ -197,8 +199,8 @@ def aspect_owner(name: str) -> str:
 def forget_aspects() -> None:
     """Drop every registered aspect and put the library's own table back.
 
-    For tests, the counterpart of :func:`forget_scanned_roots`: an aspect one case
-    registers must not decide another case's unknown-candidate warning.
+    For tests: an aspect one case registers must not decide another case's shape
+    enforcement, its ``/system`` attribution or its unknown-candidate report.
     """
     ASPECTS.clear()
     ASPECTS.update(BUILTIN_ASPECTS)
@@ -236,8 +238,6 @@ def config_roots(spec: str | Path | None = None) -> list[Path]:
     for root in roots:
         if not root.is_dir():
             raise fatal(_missing_root_message(root, defaulted))
-    for root in roots:
-        _warn_unknown_candidates(root)
     return roots
 
 
@@ -309,16 +309,35 @@ def aspect_in(root: Path, name: str) -> Path | None:
     return found[0] if found else None
 
 
-def forget_scanned_roots() -> None:
-    """Forget which roots have been scanned, so the next resolution warns again.
+def announce_aspects(spec: str | Path | None = None) -> None:
+    """Report every configuration file no aspect claims — the startup line (ADR-0070).
 
-    The cache below keeps the unrecognized-candidate warning to **once per root
-    per process**, which is right for a running instance and wrong for a test
-    suite: a test that reuses a root another test already resolved would silently
-    see no warning, and which test ran first would decide it. Clearing this
-    per-test keeps that from being possible.
+    Called once, after the deployment's import-before-app block has run, for the same
+    reason :func:`little_sister.identity.announce_doors` is: **that import is the
+    moment the set of aspects is final**, and only then is a leftover file genuinely
+    leftover. Emitted at the first *resolution* instead, as it was, the report named
+    every aspect not yet registered at that instant — and since every registrar in
+    this family declares its aspect and then immediately reads it, the first
+    registration to run performed the scan and each one after it was reported as
+    unknown for the life of the process. That made ADR-0035 §5's ordering rule
+    unfollowable rather than merely delicate: a package cannot register above the
+    call that scans when *being* a registration is what scans.
+
+    Two things follow from the late position, and both are the point rather than a
+    side effect. It covers **every configured root**, not only the roots something
+    has happened to resolve, so a typo in a site root that carries nothing else is
+    reported too. And the message can name the known aspects **with the packages that
+    registered them**, which turns "this file is not an aspect" into a line an
+    operator can act on: a misspelled ``identiy.yaml`` sits one character away from
+    an ``identity`` whose reader the line now names.
+
+    Anything may call it: a tool that reads one aspect and never builds an app gets
+    the same report from the same line, and a process that genuinely has no final
+    moment simply does not ask. Nothing here stops the monitor — an unrecognized
+    candidate is ignored, exactly as before.
     """
-    _scanned.clear()
+    for root in config_roots(spec):
+        _warn_unknown_candidates(root)
 
 
 def _spec_segments(spec: str | Path | None) -> list[Path]:
@@ -354,15 +373,11 @@ def _missing_root_message(root: Path, defaulted: bool) -> str:
 
 
 def _warn_unknown_candidates(root: Path) -> None:
-    """Warn once per root about candidate aspects the library does not know.
+    """Warn about the candidate aspects in one root that nobody has declared.
 
     Nothing here stops the monitor: an unrecognized candidate is ignored, and a
     non-candidate (README, dotfile, ``.bak``) passes in silence.
     """
-    key = root.resolve()
-    if key in _scanned:
-        return
-    _scanned.add(key)
     for entry in sorted(root.iterdir()):
         if entry.name.startswith("."):
             continue
@@ -375,4 +390,18 @@ def _warn_unknown_candidates(root: Path) -> None:
         if name not in ASPECTS:
             logger.warning(
                 "config: %s is not a known configuration aspect and is ignored "
-                "(known: %s)", entry, ", ".join(sorted(ASPECTS)))
+                "(known: %s)", entry, _known_aspects())
+
+
+def _known_aspects() -> str:
+    """The declared aspects, each registered one carrying the package that reads it.
+
+    The attribution is the half worth having and it is only available late: a name
+    alone says the file is not claimed, while ``identity (acme_sso)`` beside it says
+    which package's document the operator meant to be editing, and therefore which one
+    a near-miss spelling belongs to. A built-in is printed bare: this library reads
+    it, which the reader already knows.
+    """
+    return ", ".join(
+        f"{name} ({owner})" if (owner := aspect_owner(name)) else name
+        for name in sorted(ASPECTS))

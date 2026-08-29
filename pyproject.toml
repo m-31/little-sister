@@ -1,6 +1,6 @@
 [project]
 name = "little-sister"
-version = "0.3.13"
+version = "0.3.14"
 description = "Self-hosted status monitoring — checks are plain Python, from a homelab to a team"
 authors = [
     { name = "Michael Meyling" }
@@ -87,7 +87,10 @@ select = ["E", "F", "W", "I", "UP", "B", "C4", "RUF"]
 ignore = ["RUF001", "RUF002", "RUF003"]
 
 [tool.mypy]
-files = ["src"]
+# `wsgi.py` by name beside the package: a bare `files = ["src"]` type-checks
+# everything except the one file that carries this installation's registration
+# order, which is the file where getting it wrong is silent (little-sister ADR-0069).
+files = ["src", "wsgi.py"]
 strict = true
 
 [tool.pytest.ini_options]

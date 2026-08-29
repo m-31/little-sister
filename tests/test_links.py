@@ -493,8 +493,9 @@ class DiscoveredIconTests(TestCase):
 
     def test_the_flat_form_has_no_icons_directory_to_discover(self):
         # An `icons/` beside a flat config/links.yaml is a directory in a
-        # configuration root — the loader warns it is not a known aspect, which is
-        # exactly why an aspect that ships files grows into the directory form.
+        # configuration root that no aspect claims: nothing reads it, and the startup
+        # report names it as unknown (ADR-0070). Which is exactly why an aspect that
+        # ships files grows into the directory form.
         with tempfile.TemporaryDirectory() as directory:
             write(directory, "<svg/>", name="icons/firewall.svg")
             write(directory, SIMPLE)

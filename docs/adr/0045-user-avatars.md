@@ -1,21 +1,12 @@
 # ADR-0045 — User avatars live with the user-list aspect
 
 - **Status:** Accepted
-- **Date:** 2026-08-08
+- **Date:** 2026-08-23 (accepted 2026-08-08)
 - **Related:** [ADR-0020](0020-user-list-location.md) (the deployment owns the user
   list), [ADR-0031](0031-deployment-config-directory.md) (aspect forms, layering and
   the explicit user-file override), [ADR-0035](0035-registering-a-config-aspect.md)
   (an aspect declares its legal forms rather than having them inferred).
 - **Register:** [`../decisions.md`](../decisions.md)
-
-> **Update (2026-08-06):** decision 5 keeps `LITTLE_SISTER_USERS` as an explicit file
-> override, with its `avatars/` beside the named file. That override is retired by
-> [ADR-0046](0046-user-list-from-the-configuration-roots.md), so the case decision 5
-> covers no longer exists: avatars now only ever sit inside the aspect's directory
-> form, which is where decisions 1–4 always put them. Nothing else here changes — the
-> two legal forms, the bare-name reference, the fallback and the login-gated route are
-> untouched, and a deployment keeping its user list outside the main tree reaches the
-> same layout by giving it a configuration root of its own.
 
 ## Context
 
@@ -78,11 +69,12 @@ should declare it explicitly.
    construct a filesystem path. The response is private, carries an ETag and uses a
    short cache so replacing the same file becomes visible without restarting.
 
-5. **`LITTLE_SISTER_USERS` remains an explicit file override.** It still bypasses the
-   configuration-root search and user layering. Its optional images live in an
-   `avatars/` directory beside the named file, which keeps the avatar feature available
-   to deployments that deliberately use the override without turning the override into
-   a second path-list or directory-discovery mechanism.
+5. **`LITTLE_SISTER_USERS` is retired.** The explicit file override that bypassed the
+   configuration-root search and user layering is retired by
+   [ADR-0046](0046-user-list-from-the-configuration-roots.md), so avatars only ever sit
+   inside the aspect's directory form, which is where decisions 1–4 always put them. A
+   deployment keeping its user list outside the main tree reaches the same layout by
+   giving it a configuration root of its own.
 
 ## Consequences
 

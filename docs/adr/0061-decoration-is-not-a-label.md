@@ -2,9 +2,8 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-16
-- **Related:** [ADR-0017](0017-node-title.md) (the title, and its 2026-08-10 update —
-  a title that only repeats the name is not drawn; this is the second question that
-  update opened), [ADR-0019](0019-inspection-popover.md) (the hover card, one of the
+- **Related:** [ADR-0017](0017-node-title.md) (the title, and the rule that one which
+  only repeats the name is not drawn; this is the second question that rule opened), [ADR-0019](0019-inspection-popover.md) (the hover card, one of the
   two surfaces here), [ADR-0018](0018-markdown-rendering.md) (raw HTML in a title is
   escaped, which is why a package cannot solve this from outside),
   [ADR-0016](0016-node-addressing.md) (`name`, the thing a title may or may not stand
@@ -13,8 +12,8 @@
 
 ## Context
 
-A node's `title` is a nicety beside its `name` (ADR-0017), and since that record's
-2026-08-10 update a title that only repeats the name is not drawn at all. Both rules
+A node's `title` is a nicety beside its `name` (ADR-0017), which also says that a
+title which only repeats the name is not drawn at all. Both rules
 live in one predicate, `titles.py`, and every surface calls it.
 
 **Most surfaces draw both halves.** The leaf chip, the card head line, the heartbeat

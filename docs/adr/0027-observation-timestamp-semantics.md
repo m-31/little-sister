@@ -1,42 +1,12 @@
 # ADR-0027 — Observation timestamps: stamped where written, rolled up while unambiguous
 
 - **Status:** Accepted
-- **Date:** 2026-07-30
+- **Date:** 2026-08-23 (accepted 2026-07-30)
 - **Related:** [ADR-0004](0004-status-aggregation-semantics.md) (status roll-up),
   [ADR-0005](0005-dashboard-freshness-and-self-monitoring.md) (staleness),
   [ADR-0008](0008-json-output-api.md) (JSON contract),
   [ADR-0006](0006-config-file-and-timezones.md) (timestamp storage & rendering).
 - **Register:** [`../decisions.md`](../decisions.md)
-
-> **Update (2026-08-06, decided 2026-08-05):** the mount registry **counts checks
-> per path** instead of holding a set of paths, and the engine **stamps the
-> sole-check container** with the run's facts after each run
-> ([ADR-0044](0044-run-facts-on-the-node.md)). This closes the one shape rule 3 did
-> not cover — a branch check's own node is a mount that is never written, so it sat
-> stampless although exactly one check answers for everything below it — and it
-> enforces rule 4 by count rather than by the accident of a node being unwritten:
-> two checks legitimately sharing one mount (host metrics beside a hardware probe)
-> now yield **no** container stamp, where a set would have collapsed them into a
-> "sole" mount whose stamp flipped between two checks' run times. Rule 5 is
-> untouched — nothing is synthesized from children — and the newly stamped container
-> becomes subject to staleness, deliberately: a branch check that stops running now
-> degrades where it is named. Rule 1's reading widens accordingly: on a branch
-> container, *having a timestamp* means *the check behind this node ran*.
-
-> **Update 2 (2026-08-06):** the update above misstates the shape it closes, and
-> the build slice measured it before building: a branch check's own node **is**
-> written — the engine stores the check's result at the check's own path on every
-> run, exactly as this record's context says ("leaves, inner branch nodes, and the
-> mount itself") — so no container ever sat stampless in the model; it sat
-> unrendered, and [ADR-0044](0044-run-facts-on-the-node.md)'s display rule
-> (decision 5) is what closes the visible gap. What the count really fixes sits one
-> step up: the set collapsed two checks sharing one mount into one entry, so rule 3
-> stamped the **unwritten ancestors above them** with a value that flips between
-> two checks' run times — rule 4's ambiguity, smuggled upward. With the count those
-> ancestors inherit **no** stamp, while the shared node itself still answers with
-> its own last write (rule 2, unchanged). What the engine will newly write is the
-> run's **facts** — wall time and next run, which no upsert carries today
-> ([ADR-0044](0044-run-facts-on-the-node.md) decision 4, a later slice).
 
 ## Context
 `Status.timestamp` is meant to be the **observation time**: `update()` re-stamps it on
@@ -62,6 +32,7 @@ run?"** — and it exists only where that question has **exactly one answer**:
 
 1. **No stamp at construction.** `timestamp` is `None` until the node's first
    `update()` / `touch()`. Having a timestamp *means* a check has written the node.
+   On a branch container, *having a timestamp* means *the check behind this node ran*.
 2. **A written node shows its own last write.** A mount written by two checks shows
    the later of the two — still this node's own observation, no attribution needed.
 3. **An unwritten ancestor with exactly one check mount in its subtree inherits that
@@ -87,7 +58,13 @@ the engine seeds its mount paths at startup (the shape of the metadata seeding,
 timestamp — own stamp, sole-mount stamp, or `None` — in the same locked recursion that
 computes effective code and staleness
 ([ADR-0002](0002-rlock-snapshot-synchronization.md)). Nothing derived is stored, so a topology change can never leave
-a stale roll-up behind.
+a stale roll-up behind. The mount registry **counts checks per path** instead of
+holding a set of paths, which enforces rule 4 by count rather than by the accident of a
+node being unwritten: a set collapsed two checks legitimately sharing one mount (host
+metrics beside a hardware probe) into one entry, so rule 3 stamped the **unwritten
+ancestors above them** with a value that flips between two checks' run times — rule 4's
+ambiguity, smuggled upward. With the count those ancestors inherit **no** stamp, while
+the shared node itself still answers with its own last write (rule 2).
 
 **Web.** A dashboard card shows its node's resolved time when present — rendered via
 `localtime` as a time of day (ADR-0006), inside the polled fragment so it refreshes
@@ -113,6 +90,15 @@ first-party and updates in lockstep.
   having one answer. The value never silently changes meaning — it disappears instead.
 - `stale` is untouched: a never-written node was always exempt, and staleness already
   rolls up as any-below (ADR-0005).
+- A branch check's own node **is** written — the engine stores the check's result at
+  the check's own path on every run, exactly as this record's context says ("leaves,
+  inner branch nodes, and the mount itself") — so no container sits stampless in the
+  model; the gap is in rendering, and [ADR-0044](0044-run-facts-on-the-node.md)'s
+  display rule (decision 5) is what closes it. What the engine will newly write is the
+  run's **facts** — wall time and next run, which no upsert carries today
+  ([ADR-0044](0044-run-facts-on-the-node.md) decision 4, a later slice).
+- A branch container is subject to staleness, deliberately: a branch check that stops
+  running degrades where it is named.
 - The event log and `history()` only ever involve written nodes, so they carry real
   stamps as before (typing narrows; behavior doesn't change).
 - `openapi.yaml` updates `timestamp`'s wording and required-ness in the same change as
