@@ -52,7 +52,7 @@ def node_action(*, node: object, surface: str) -> Mapping[str, object] | None:
 
 
 #: Past this many reason lines a per-line chip stops being a control and becomes
-#: wallpaper — the node action is the right unit there. A judgement about *this*
+#: wallpaper — the node action is the right unit there. A judgment about *this*
 #: deployment's pages, which is why it lives in the filler and not in the library.
 REASON_BUDGET = 20
 

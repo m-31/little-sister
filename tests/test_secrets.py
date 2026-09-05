@@ -290,7 +290,7 @@ class RegistrySeamTests(_IsolatedCase):
 class MissingSchemeTests(_IsolatedCase):
     """Every reference carries a scheme, so a string without one is malformed by
     construction — which is exactly the shape of a credential pasted where its
-    reference belongs (ADR-0023, 2026-07-27 update). No shape guessing."""
+    reference belongs (ADR-0023). No shape guessing."""
 
     def _malformed(self, reference: str) -> str:
         with self.assertRaises(secrets.UnknownSchemeError) as caught:
@@ -325,7 +325,7 @@ class MissingSchemeTests(_IsolatedCase):
 
 
 class ParseSecretRefsTests(TestCase):
-    """The ``secrets:`` config block (ADR-0023 update note)."""
+    """The ``secrets:`` config block (ADR-0023)."""
 
     def test_returns_each_named_reference(self):
         config = {"secrets": {"client_id": "env://WIZ_CLIENT_ID",
@@ -500,7 +500,7 @@ class SameSecretTests(TestCase):
         self.assertFalse(same_secret("gänseblumchen", "gänseblümchen"))
 
     def test_the_stdlib_call_it_replaces_would_have_raised(self):
-        # Pinning the reason this function exists rather than only its behaviour: if
+        # Pinning the reason this function exists rather than only its behavior: if
         # the standard library ever stops raising here, this is the test that says
         # the wrapper may go.
         import secrets as stdlib

@@ -1,7 +1,7 @@
 # ADR-0011 — SSH check family: transport, connectivity, command, script
 
 - **Status:** Accepted
-- **Date:** 2026-08-23 (accepted 2026-06-25)
+- **Date:** 2026-08-23 (accepted 2026-06-27)
 - **Related:** [ADR-0007](0007-check-result-branches.md) (recursive `CheckResult`
   branches), [ADR-0009](0009-per-profile-metrics-scripts.md) (per-profile scripts).
 - **Register:** [`../decisions.md`](../decisions.md)
@@ -58,7 +58,7 @@ it asks for stays open.
 - **`qnap-metrics` — NAS hardware** (temperatures, SMART). An `ssh-script` with a
   fixed script, parsed into its own branches.
 
-**Shared pure toolkit — `ssh_metrics` (no I/O).** `parse_metrics` (key=value),
+**Shared pure toolkit — `ssh.metrics` (no I/O).** `parse_metrics` (key=value),
 `grade` (value + thresholds → `StatusCode`), formatting (KB, duration),
 `unavailable`. A deliberate **public** API used by `host-metrics` and
 `qnap-metrics`, replacing the underscore back-door. Pure, so it is unit-testable
@@ -73,7 +73,7 @@ classify a request ([ADR-0058](0058-transport-policy-vocabulary.md));
 one host's parameters.
 
 ## Consequences
-- The four underscore cross-imports become a deliberate `ssh_metrics` API; a new SSH
+- The four underscore cross-imports become a deliberate `ssh.metrics` API; a new SSH
   check composes `SshConnection` + the toolkit instead of reaching into `ssh.py`.
 - The fragile output-parsing is isolated and directly unit-testable — the part the
   sandbox can't exercise on real shells — with its own `test_ssh*` modules split out

@@ -28,7 +28,7 @@
 {%- endmacro %}
 {#- Why the node is blue: who pinned it, until when, and their explanation. It sits
     **above** the reason block and outside the ``reason_cap`` clamp, so the reason
-    for the colour can never be the thing that gets clipped — the placement rule the
+    for the color can never be the thing that gets clipped — the placement rule the
     quiet count already follows. Paints its own maintenance tint, like every other
     maintenance surface, so it does not depend on the card fill under it. -#}
 {% macro pin_banner(node) -%}
@@ -179,7 +179,7 @@
     the node, never the viewer: density off and *hide idle* are untouched, and the
     stable flow profile never saw chip-versus-box in the first place, so no card
     moves. The condition appears three times below because the chip-run wrapper has
-    to agree with it about the neighbours, or a declared node between two chips would
+    to agree with it about the neighbors, or a declared node between two chips would
     leave the run's ``<span>`` open. -#}
 {% macro render_nodes(children, depth0, parent_path, dense, max_depth, branch_cap, reason_cap, shown_time="") -%}
 {%- set ns = namespace(quiet_boxes=0) -%}

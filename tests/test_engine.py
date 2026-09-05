@@ -1,3 +1,4 @@
+import json
 import tempfile
 import threading
 import time
@@ -9,10 +10,11 @@ from unittest import TestCase
 from unittest.mock import patch
 
 from little_sister import engine as engine_module
-from little_sister.checks.base import Check, CheckResult
+from little_sister.checks.base import Check, CheckError, CheckResult
 from little_sister.config import config
 from little_sister.engine import Engine
-from little_sister.status import StatusCode
+from little_sister.limits import Limits
+from little_sister.status import HEARTBEAT_PATH, StatusCode
 from little_sister.tree import StatusTree
 
 
@@ -37,6 +39,23 @@ class _FakeCheck(Check):
         if self._ran is not None:
             self._ran.set()
         return self._result
+
+
+class _CostlyCheck(_FakeCheck):
+    """A check type that declares what a run of it costs, the way a type with an
+    estate to read computes it from its own configuration (ADR-0075)."""
+
+    def __init__(self, *, cost: float | None = None, entries: int | None = None,
+                 **kwargs: object) -> None:
+        super().__init__(**kwargs)
+        self._cost = cost
+        self._entries = entries
+
+    def expected_cost(self) -> float | None:
+        return self._cost
+
+    def expected_entries(self) -> int | None:
+        return self._entries
 
 
 class _ConfiguredCheck(_FakeCheck):
@@ -359,7 +378,7 @@ class EngineTests(TestCase):
         # The accepted consequence of reading `order` on the root (ADR-0055): ranks
         # compare across the whole sibling set, so one check's rank moves its card
         # relative to cards that belong to other checks. Named here so a change in
-        # this behaviour is a decision rather than a surprise.
+        # this behavior is a decision rather than a surprise.
         tree = StatusTree()
         Engine([_FakeCheck(path="/wall/zzz-plugin",
                            result=CheckResult(StatusCode.OK, order=-1)),
@@ -858,12 +877,16 @@ class EmptyConfigurationTests(TestCase):
             assert snap is not None
             # WARN, not OK: with zero checks the tree is *only* the heartbeat, so
             # an OK here would roll up to an all-green root while nothing at all is
-            # being watched.
-            self.assertIn("no checks configured", " ".join(snap.reason))
-            # The searched paths ride in a code block, not loose in the prose:
-            # a reason is Markdown and a path with underscores would italicize.
-            self.assertIn(str(root.resolve()), " ".join(snap.reason))
-            self.assertTrue(any(part.startswith("```") for part in snap.reason))
+            # being watched. The line is the engine's, on its own child
+            # (ADR-0076), and the root's WARN is the roll-up.
+            engine_node = tree.snapshot(f"{HEARTBEAT_PATH}/engine")
+            assert engine_node is not None
+            self.assertIn("no checks configured", " ".join(engine_node.reason))
+            # The searched paths are the engine's report, not a second line, and
+            # ride there in a code block: a report is Markdown and a path with
+            # underscores would italicize (ADR-0076).
+            self.assertIn(str(root.resolve()), engine_node.report)
+            self.assertIn("```", engine_node.report)
             root_snap = tree.snapshot()
             assert root_snap is not None
             self.assertEqual(root_snap.code, StatusCode.WARN)
@@ -958,6 +981,591 @@ class RunLogLineTests(TestCase):
         lines = [line for line in caught.output if "check /svc" in line]
         self.assertEqual(len(lines), 1, caught.output)
         self.assertIn("is not authorized to perform: sts:AssumeRole", lines[0])
+
+
+class SelfReportOnTheBeatTests(TestCase):
+    """The heartbeat is a branch (ADR-0076): the engine's own lines on
+    `/little-sister/engine`, every contributor's on `/little-sister/<name>`, each
+    line a pinnable entry with the contributor's own slug, each child's code the
+    worst of its lines, and the root's the roll-up."""
+
+    def _beat(self, engine: Engine, tree: StatusTree):
+        from little_sister.engine import HEARTBEAT_PATH
+        engine.start()
+        try:
+            self.assertTrue(_wait_for(
+                lambda: tree.snapshot(HEARTBEAT_PATH) is not None))
+        finally:
+            engine.stop()
+        snap = tree.snapshot(HEARTBEAT_PATH)
+        assert snap is not None
+        return snap
+
+    def _child(self, tree: StatusTree, name: str):
+        from little_sister.engine import HEARTBEAT_PATH
+        snap = tree.snapshot(f"{HEARTBEAT_PATH}/{name}")
+        assert snap is not None, f"no /little-sister/{name}"
+        return snap
+
+    def test_a_contributor_is_a_child_carrying_its_lines_at_their_worst_code(self):
+        from little_sister.reasons import Entry
+        from little_sister.self_report import register_contributor
+        register_contributor("state", lambda: [
+            Entry("load.maintenance.json", "not in force", code=StatusCode.ERROR),
+            Entry("save.events.json", "behind", code=StatusCode.WARN)],
+            title="State", about="what a restart keeps")
+        tree = StatusTree()
+        root = self._beat(Engine([_FakeCheck(path="/x")], tree), tree)
+        child = self._child(tree, "state")
+        self.assertTrue(child.members)
+        self.assertEqual([line.slug for line in child.reasons],
+                         ["load.maintenance.json", "save.events.json"])
+        self.assertEqual([line.code for line in child.reasons],
+                         [StatusCode.ERROR, StatusCode.WARN])
+        self.assertEqual(child.own_code, StatusCode.ERROR)
+        self.assertEqual(child.title, "State")
+        self.assertEqual(child.about, "what a restart keeps")
+        # the root carries the beat and nothing of its own; its code is the roll-up
+        self.assertEqual(root.own_code, StatusCode.OK)
+        self.assertEqual(root.code, StatusCode.ERROR)
+
+    def test_a_contributor_s_report_is_the_child_s_and_its_facts_are_no_lines(self):
+        # A contributor's facts are its report (ADR-0044 decision 6, ADR-0076):
+        # written on the child's `report` every tick, shown on its page, never a
+        # line — so nothing uncoded carries the child's worst code, and pinning
+        # the one warning leaves a child that reads MAINTENANCE, as pinning every
+        # line of a coded set does.
+        from datetime import datetime, timedelta
+
+        from little_sister.reasons import Entry
+        from little_sister.self_report import register_contributor
+        register_contributor("aws-keeper", lambda: [
+            Entry("standby", "somebody else is here", code=StatusCode.WARN)],
+            report=lambda: "this instance stands by on `s3://b/p`")
+        tree = StatusTree()
+        self._beat(Engine([_FakeCheck(path="/x")], tree), tree)
+        child = self._child(tree, "aws-keeper")
+        self.assertEqual([line.slug for line in child.reasons], ["standby"])
+        self.assertEqual(child.report, "this instance stands by on `s3://b/p`")
+        self.assertEqual(child.own_code, StatusCode.WARN)
+        tree.set_entry_maintenance(
+            "/little-sister/aws-keeper", "standby", "a test with two instances",
+            expires_at=datetime.now() + timedelta(days=1), set_by="pan",
+            expected_set_at=None)
+        self.assertEqual(self._child(tree, "aws-keeper").own_code,
+                         StatusCode.MAINTENANCE)
+
+    def test_a_report_that_clears_leaves_no_report_on_the_child(self):
+        from little_sister.self_report import register_contributor
+        texts = ["the lease is held here"]
+        register_contributor("aws-keeper", lambda: [], report=lambda: texts[0])
+        tree = StatusTree()
+        self._beat(Engine([_FakeCheck(path="/x")], tree), tree)
+        self.assertEqual(self._child(tree, "aws-keeper").report,
+                         "the lease is held here")
+        texts[0] = ""
+        self._beat(Engine([_FakeCheck(path="/x")], tree), tree)
+        self.assertEqual(self._child(tree, "aws-keeper").report, "")
+
+    def test_an_uncoded_line_arrives_as_a_warn_that_says_so(self):
+        # Every line on a child carries a code; a fact written as a line is a
+        # defect, and it shows where somebody looks rather than counting silently.
+        from little_sister.reasons import Entry
+        from little_sister.self_report import register_contributor
+        register_contributor("aws-keeper", lambda: [
+            Entry("holder", "this instance holds the lease")])
+        tree = StatusTree()
+        with self.assertLogs("little_sister", level="ERROR"):
+            self._beat(Engine([_FakeCheck(path="/x")], tree), tree)
+        child = self._child(tree, "aws-keeper")
+        self.assertEqual([(line.slug, line.code) for line in child.reasons],
+                         [("holder", StatusCode.WARN)])
+        self.assertIn("without a code", child.reasons[0].text)
+
+    def test_the_engine_s_searched_paths_are_its_report_beside_the_no_checks_line(self):
+        from little_sister.engine import ENGINE_REPORT
+        from little_sister.reasons import Entry
+        tree = StatusTree()
+        warning = [Entry("no-checks", "nothing is watched", code=StatusCode.WARN)]
+        self._beat(Engine([_FakeCheck(path="/x")], tree, heartbeat_warning=warning,
+                          heartbeat_report="Searched:\n\n    /srv/config/checks"),
+                   tree)
+        child = self._child(tree, ENGINE_REPORT)
+        self.assertEqual([(line.slug, line.code) for line in child.reasons],
+                         [("no-checks", StatusCode.WARN)])
+        self.assertIn("/srv/config/checks", child.report)
+
+    def test_a_contributor_with_nothing_to_say_is_still_a_child_and_it_is_ok(self):
+        from little_sister.self_report import register_contributor
+        register_contributor("runtime", lambda: [])
+        tree = StatusTree()
+        root = self._beat(Engine([_FakeCheck(path="/x")], tree), tree)
+        child = self._child(tree, "runtime")
+        self.assertEqual(child.own_code, StatusCode.OK)
+        self.assertEqual(child.reasons, ())
+        self.assertIn("/little-sister/runtime", [c.path for c in root.children])
+
+    def test_a_raising_contributor_does_not_stop_the_beat(self):
+        from little_sister.self_report import register_contributor
+
+        def broken():
+            raise RuntimeError("no")
+
+        register_contributor("keeper", broken)
+        tree = StatusTree()
+        with self.assertLogs(level="ERROR"):
+            root = self._beat(Engine([_FakeCheck(path="/x")], tree), tree)
+        child = self._child(tree, "keeper")
+        self.assertEqual(child.own_code, StatusCode.WARN)
+        self.assertEqual([line.slug for line in child.reasons], ["raised"])
+        self.assertEqual(root.code, StatusCode.WARN)
+
+    def test_a_report_clears_and_the_child_and_the_roll_up_follow(self):
+        from little_sister.engine import HEARTBEAT_PATH
+        from little_sister.reasons import Entry
+        from little_sister.self_report import register_contributor
+        holding = [Entry("late", "a run outgrew its period", code=StatusCode.WARN)]
+        register_contributor("engine2", lambda: list(holding))
+        child_path = f"{HEARTBEAT_PATH}/engine2"
+        tree = StatusTree()
+        engine = Engine([_FakeCheck(path="/x")], tree, poll_interval=0.02)
+        engine.start()
+        try:
+            self.assertTrue(_wait_for(
+                lambda: tree.snapshot(HEARTBEAT_PATH) is not None
+                and tree.snapshot(HEARTBEAT_PATH).code is StatusCode.WARN))
+            holding.clear()
+            self.assertTrue(_wait_for(
+                lambda: tree.snapshot(HEARTBEAT_PATH).code is StatusCode.OK))
+        finally:
+            engine.stop()
+        self.assertEqual(tree.snapshot(child_path).reasons, ())
+        # Both movements are transitions of the child the log records.
+        codes = [(event.old, event.new) for event in tree.recent_events()
+                 if event.path == child_path]
+        self.assertIn((StatusCode.WARN, StatusCode.OK), codes)
+
+    def test_a_line_is_pinnable_on_its_child_by_its_own_slug(self):
+        from little_sister.engine import HEARTBEAT_PATH
+        from little_sister.reasons import Entry
+        from little_sister.self_report import register_contributor
+        register_contributor("state", lambda: [
+            Entry("load.maintenance.json", "not in force", code=StatusCode.ERROR)])
+        tree = StatusTree()
+        self._beat(Engine([_FakeCheck(path="/x")], tree), tree)
+        child_path = f"{HEARTBEAT_PATH}/state"
+        self.assertEqual(tree.snapshot(child_path).own_code, StatusCode.ERROR)
+        tree.set_entry_maintenance(child_path, "load.maintenance.json",
+                                   "re-pinned by hand",
+                                   expires_at=datetime.now() + timedelta(days=1),
+                                   set_by="ada")
+        pinned = tree.snapshot(child_path)
+        self.assertEqual(pinned.own_code, StatusCode.MAINTENANCE)
+        self.assertEqual(pinned.reported_code, StatusCode.ERROR)
+
+    def test_the_engines_own_lines_are_its_own_child(self):
+        from little_sister.engine import ENGINE_REPORT, create_engine
+        from little_sister.reasons import Entry
+        from little_sister.self_report import register_contributor
+        register_contributor("state", lambda: [Entry("x", "y", code=StatusCode.OK)])
+        tree = StatusTree()
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / "checks").mkdir()
+            with self.assertLogs(level="WARNING"):
+                engine = create_engine(directory, tree=tree)
+            root = self._beat(engine, tree)
+        engine_node = self._child(tree, ENGINE_REPORT)
+        self.assertEqual([line.slug for line in engine_node.reasons], ["no-checks"])
+        # the searched paths are the engine's report, not a second line
+        self.assertIn("checks", engine_node.report)
+        self.assertEqual(engine_node.title, "Engine")
+        self.assertEqual([line.slug for line in self._child(tree, "state").reasons],
+                         ["x"])
+        self.assertEqual(root.code, StatusCode.WARN)
+
+
+class _Gate(_FakeCheck):
+    """A check that blocks on every run until the gate is opened for it — each
+    ``set()`` lets exactly one run through."""
+
+    def __init__(self, **kwargs: object) -> None:
+        super().__init__(**kwargs)
+        self.gate = threading.Event()
+
+    def run(self) -> CheckResult:
+        self.gate.wait(timeout=5)
+        self.gate.clear()
+        return self._result
+
+
+class EngineOwnLinesTests(TestCase):
+    """The engine's own lines on the beat (ADR-0072): what it records about
+    itself as it runs, read on the tick — the entry count against its limit, a
+    run that outgrew its period, a wait for a worker, a tick that came late, and
+    a timeout above the frequency warned at load and never refused. The
+    sentences themselves are tested in ``test_limits.py``; here is what the
+    engine feeds them from its own records, on its own clock."""
+
+    def setUp(self):
+        from little_sister.limits import Limits
+        self.now = 1000.0
+        # No memory line, whatever this test process weighs; the pool grace
+        # and the lag threshold are the defaults.
+        self.limits = Limits(memory_limit=None)
+
+    def _engine(self, checks, **kwargs) -> tuple[Engine, StatusTree]:
+        tree = StatusTree()
+        engine = Engine(checks, tree, poll_interval=0.02,
+                        clock=lambda: self.now, limits=self.limits, **kwargs)
+        return engine, tree
+
+    def _lines(self, tree: StatusTree) -> dict[str, tuple]:
+        # The engine's own lines live on /little-sister/engine (ADR-0076), with
+        # their own slugs — the path carries the name.
+        from little_sister.engine import ENGINE_REPORT, HEARTBEAT_PATH
+        snap = tree.snapshot(f"{HEARTBEAT_PATH}/{ENGINE_REPORT}")
+        if snap is None:
+            return {}
+        return {line.slug: (line.code, line.text) for line in snap.reasons}
+
+    def _report(self, tree: StatusTree) -> str:
+        from little_sister.engine import ENGINE_REPORT, HEARTBEAT_PATH
+        snap = tree.snapshot(f"{HEARTBEAT_PATH}/{ENGINE_REPORT}")
+        return snap.report if snap is not None else ""
+
+    def _check(self, engine: Engine, path: str):
+        return next(c for c in engine.info().checks if c.path == path)
+
+    def test_the_entry_count_the_tree_holds_is_measured_against_the_limit(self):
+        from little_sister.limits import Limits
+        self.limits = Limits(entry_limit=3, memory_limit=None)
+        check = _FakeCheck(path="/x", result=CheckResult(
+            StatusCode.OK, {"a": "one", "b": "two", "c": "three"}))
+        engine, tree = self._engine([check])
+        engine.start()
+        try:
+            self.assertTrue(_wait_for(
+                lambda: "entries" in self._lines(tree)))
+        finally:
+            engine.stop()
+        code, text = self._lines(tree)["entries"]
+        self.assertIs(code, StatusCode.ERROR)
+        self.assertEqual(text, "the tree holds 3 entries, past its limit of 3")
+
+    def test_a_timeout_above_the_frequency_warns_at_load_and_is_not_refused(self):
+        from little_sister.engine import HEARTBEAT_PATH
+        check = _FakeCheck(path="/aws/prod", timeout_seconds=120.0,
+                           frequency_seconds=60)
+        with self.assertLogs("little_sister.logger", level="WARNING") as caught:
+            engine, tree = self._engine([check])
+        self.assertEqual(len(caught.records), 1)
+        self.assertIn("check /aws/prod: timeout 2m is longer than its frequency "
+                      "1m", caught.output[0])
+        self.assertIn("will run late, not be refused", caught.output[0])
+        engine.start()
+        try:
+            self.assertTrue(_wait_for(
+                lambda: "may run late" in self._report(tree)))
+        finally:
+            engine.stop()
+        # A configuration that *may* run late claims nothing: it is a fact in the
+        # engine's report (ADR-0076), no line, so the node stays OK until a run
+        # actually does.
+        self.assertNotIn("may-run-late.aws-prod", self._lines(tree))
+        self.assertIn("/aws/prod may run late: its timeout of 2m is longer than "
+                      "its frequency of 1m", self._report(tree))
+        self.assertIs(tree.snapshot(HEARTBEAT_PATH).code, StatusCode.OK)
+
+    def test_a_timeout_within_the_frequency_says_nothing(self):
+        check = _FakeCheck(path="/x", timeout_seconds=60.0, frequency_seconds=60)
+        engine, _tree = self._engine([check])
+        self.assertEqual(engine._report.may_run_late, ())
+
+    def test_a_run_past_its_period_is_a_line_while_it_runs_and_until_one_fits(self):
+        check = _FakeCheck(path="/slow", frequency_seconds=60,
+                           block=(block := threading.Event()))
+        engine, tree = self._engine([check])
+        engine.start()
+        try:
+            self.assertTrue(_wait_for(
+                lambda: self._check(engine, "/slow").running_since is not None))
+            self.assertNotIn("late.slow", self._lines(tree))
+            self.now += 100                       # in flight for 1m 40s of a 1m period
+            self.assertTrue(_wait_for(
+                lambda: "late.slow" in self._lines(tree)))
+            code, text = self._lines(tree)["late.slow"]
+            self.assertIs(code, StatusCode.WARN)
+            self.assertEqual(text, "/slow has been running for 1m 40s, longer than "
+                                   "its frequency of 1m — it runs late")
+            block.set()                           # the run completes, at 1m 40s
+            self.assertTrue(_wait_for(
+                lambda: "ran for 1m 40s" in self._lines(tree).get(
+                    "late.slow", (None, ""))[1]))
+            # The next run fits its period (the clock does not move while it
+            # runs), and the line clears with it.
+            self.now += 100
+            self.assertTrue(_wait_for(
+                lambda: "late.slow" not in self._lines(tree)
+                and self._check(engine, "/slow").elapsed_seconds == 0.0))
+        finally:
+            block.set()
+            engine.stop()
+
+    def test_a_wait_for_a_worker_is_saturation_after_the_first_sweep_not_in_it(self):
+        a = _Gate(path="/a", frequency_seconds=60)
+        b = _FakeCheck(path="/b", frequency_seconds=60)
+        engine, tree = self._engine([a, b], max_workers=1)
+        engine.start()
+        try:
+            # The first sweep: a holds the one worker, b is queued behind it.
+            self.assertTrue(_wait_for(
+                lambda: self._check(engine, "/a").running_since is not None
+                and self._check(engine, "/b").running
+                and self._check(engine, "/b").running_since is None))
+            self.now += 30
+            time.sleep(0.1)                       # several ticks at that clock
+            self.assertNotIn("pool", self._lines(tree))
+            a.gate.set()
+            self.assertTrue(_wait_for(
+                lambda: all(c.last_run_at for c in engine.info().checks)))
+            # The second sweep, after both have run once: the same queue is now
+            # a pool too small for its schedule.
+            self.now += 200
+            self.assertTrue(_wait_for(
+                lambda: self._check(engine, "/a").running_since is not None
+                and self._check(engine, "/b").running
+                and self._check(engine, "/b").running_since is None))
+            self.now += 30
+            self.assertTrue(_wait_for(
+                lambda: "pool" in self._lines(tree)))
+            code, text = self._lines(tree)["pool"]
+            self.assertIs(code, StatusCode.WARN)
+            self.assertEqual(text, "the pool is saturated: 1 check is waiting for "
+                                   "its 1 worker, the longest for 30 s")
+            a.gate.set()
+            self.assertTrue(_wait_for(
+                lambda: "pool" not in self._lines(tree)))
+        finally:
+            a.gate.set()
+            engine.stop()
+
+    def test_a_tick_that_came_late_is_a_line(self):
+        engine, tree = self._engine([_FakeCheck(path="/x")])
+        engine.start()
+        try:
+            self.assertTrue(_wait_for(lambda: self._lines(tree) == {}
+                                      and tree.snapshot("/little-sister") is not None))
+            self.now += 30
+            self.assertTrue(_wait_for(lambda: "lag" in self._lines(tree)))
+        finally:
+            engine.stop()
+        code, text = self._lines(tree)["lag"]
+        self.assertIs(code, StatusCode.WARN)
+        self.assertEqual(text, "the scheduler came late within the last 10m: a "
+                               "tick came 30 s after the one before, against an "
+                               "interval of 1s")
+
+    def test_a_run_is_measured_on_the_engines_clock(self):
+        # The one clock: the tick reads a run's start back against the clock the
+        # engine was given, so an injected clock sees an in-flight run age.
+        check = _FakeCheck(path="/x", block=(block := threading.Event()))
+        engine, _tree = self._engine([check])
+        engine.start()
+        try:
+            self.assertTrue(_wait_for(
+                lambda: self._check(engine, "/x").running_since is not None))
+            self.now += 7
+            self.assertEqual(self._check(engine, "/x").running_seconds, 7.0)
+            block.set()
+            self.assertTrue(_wait_for(
+                lambda: self._check(engine, "/x").elapsed_seconds is not None))
+            self.assertEqual(self._check(engine, "/x").elapsed_seconds, 7.0)
+        finally:
+            block.set()
+            engine.stop()
+
+
+class StateOnTheTickTests(TestCase):
+    """The engine drives the state layer (ADR-0071): the kept files on the tick,
+    once more at stop."""
+
+    def test_the_tick_writes_the_kept_files_after_an_interval(self):
+        from little_sister.state import StateLayer
+        with tempfile.TemporaryDirectory() as directory:
+            state = StateLayer(directory, interval_seconds=1)
+            state.keep("a.json", lambda: {"a": 1})
+            tree = StatusTree()
+            engine = Engine([_FakeCheck(path="/x")], tree, poll_interval=0.02,
+                            state=state)
+            engine.start()
+            try:
+                self.assertTrue(_wait_for(lambda: state.path("a.json").exists(),
+                                          timeout=3.0))
+            finally:
+                engine.stop()
+
+    def test_stop_flushes_what_changed(self):
+        from little_sister.state import StateLayer
+        with tempfile.TemporaryDirectory() as directory:
+            state = StateLayer(directory, interval_seconds=3600)
+            payload = {"events": []}
+            state.keep("events.json", lambda: payload)
+            tree = StatusTree()
+            engine = Engine([_FakeCheck(path="/x")], tree, state=state)
+            engine.start()
+            self.assertTrue(_wait_for(lambda: engine.info().started_at is not None))
+            payload["events"].append({"path": "/x"})
+            engine.stop()
+            self.assertEqual(
+                json.loads(state.path("events.json").read_text()),
+                {"events": [{"path": "/x"}]})
+
+
+class CheckOutcomesTests(TestCase):
+    """What the engine records for the readiness answer (ADR-0073): the code each
+    check last stored, counted. The lines made from it are ``test_readiness.py``.
+    """
+
+    def test_nothing_has_completed_before_the_first_run(self):
+        engine = Engine([_FakeCheck(path="/a"), _FakeCheck(path="/b")],
+                        StatusTree())
+        self.assertEqual(engine.outcomes.configured, 2)
+        self.assertEqual(engine.outcomes.completed, 0)
+        self.assertFalse(engine.outcomes.first_pass)
+
+    def test_a_completed_pass_counts_every_check(self):
+        engine = Engine([_FakeCheck(path="/a"), _FakeCheck(path="/b")],
+                        StatusTree())
+        engine.run_once()
+        self.assertEqual(engine.outcomes.completed, 2)
+        self.assertEqual(engine.outcomes.erroring, 0)
+        self.assertTrue(engine.outcomes.first_pass)
+
+    def test_a_check_that_raised_last_stored_an_error(self):
+        engine = Engine([_FakeCheck(path="/a", raises=RuntimeError("boom")),
+                         _FakeCheck(path="/b")], StatusTree())
+        engine.run_once()
+        self.assertEqual(engine.outcomes.erroring, 1)
+
+    def test_every_check_erroring_is_visible_as_the_pattern(self):
+        engine = Engine([_FakeCheck(path="/a", raises=RuntimeError("boom")),
+                         _FakeCheck(path="/b", raises=RuntimeError("boom"))],
+                        StatusTree())
+        engine.run_once()
+        self.assertTrue(engine.outcomes.all_erroring)
+
+    def test_a_recovered_check_is_no_longer_counted(self):
+        # `last_stored` is the *last* result, not a tally: a check that errored and
+        # then recovered must leave the pattern, or the line would never clear.
+        check = _FakeCheck(path="/a", result=CheckResult(StatusCode.ERROR, ["no"]))
+        engine = Engine([check, _FakeCheck(
+            path="/b", result=CheckResult(StatusCode.ERROR, ["no"]))], StatusTree())
+        engine.run_once()
+        self.assertTrue(engine.outcomes.all_erroring)
+        check._result = CheckResult(StatusCode.OK)
+        engine.run_once()
+        self.assertEqual(engine.outcomes.erroring, 1)
+        self.assertFalse(engine.outcomes.all_erroring)
+
+    def test_a_secret_pinned_check_completes_without_running(self):
+        # It never calls run() and stores its ERROR anyway (ADR-0023), so it counts
+        # toward the pass — a first pass that waited for it would never finish.
+        check = _FakeCheck(path="/a")
+        check.secret_errors = ["LITTLE_SISTER_TOKEN is not set"]
+        engine = Engine([check], StatusTree())
+        engine.run_once()
+        self.assertTrue(engine.outcomes.first_pass)
+        self.assertEqual(engine.outcomes.erroring, 1)
+
+
+class DeclaredCapacityTests(TestCase):
+    """Startup sums what the configured checks declared against the pool it will
+    run and the entry limit, and refuses what cannot fit (ADR-0075). The engine's
+    side of it; the arithmetic and its sentences are in `test_limits.py`."""
+
+    def test_a_declared_load_past_the_pool_refuses_naming_the_check(self):
+        checks = [_CostlyCheck(path="/big", cost=600.0, frequency_seconds=60),
+                  _CostlyCheck(path="/small", cost=1.0, frequency_seconds=60)]
+        with self.assertRaises(CheckError) as caught:
+            Engine(checks, StatusTree(), max_workers=2)
+        self.assertIn("/big 10.0 (10m every 1m)", str(caught.exception))
+
+    def test_declared_entries_past_the_limit_refuse(self):
+        check = _CostlyCheck(path="/wide", entries=500, frequency_seconds=60)
+        with self.assertRaises(CheckError) as caught:
+            Engine([check], StatusTree(), limits=Limits(entry_limit=100))
+        self.assertIn("/wide 500", str(caught.exception))
+
+    def test_a_refusal_leaves_nothing_registered_on_the_tree(self):
+        # the refusal comes before the mounts and the heartbeat's about text, so a
+        # process that cannot serve its configuration has not half-built a tree
+        tree = StatusTree()
+        with self.assertRaises(CheckError):
+            Engine([_CostlyCheck(path="/big", cost=600.0, frequency_seconds=60)],
+                   tree, max_workers=2)
+        # a successful construction seeds the heartbeat's `about` and with it the
+        # node, so its absence is the whole difference
+        self.assertIsNone(tree.snapshot(HEARTBEAT_PATH))
+        Engine([_FakeCheck(path="/b")], tree)
+        self.assertIsNotNone(tree.snapshot(HEARTBEAT_PATH))
+
+    def test_the_pool_it_measures_against_is_the_one_it_will_run(self):
+        # eight workers configured, one check, so the pool is one — and 1.5
+        # declared workers do not fit in it
+        check = _CostlyCheck(path="/big", cost=90.0, frequency_seconds=60)
+        with self.assertRaises(CheckError):
+            Engine([check], StatusTree(), max_workers=8)
+
+    def test_a_load_inside_the_limits_starts_and_warns_when_it_is_close(self):
+        checks = [_CostlyCheck(path="/a", cost=48.0, frequency_seconds=60),
+                  _FakeCheck(path="/b")]
+        with self.assertLogs(level="WARNING") as caught:
+            engine = Engine(checks, StatusTree(), max_workers=1)
+        self.assertIn("declare 0.8 of the 1 worker threads", "".join(caught.output))
+        self.assertEqual(engine.check_count, 2)
+
+    def test_what_each_check_declared_is_on_the_system_page(self):
+        checks = [_CostlyCheck(path="/a", cost=6.0, entries=12,
+                               frequency_seconds=60),
+                  _FakeCheck(path="/b")]
+        info = Engine(checks, StatusTree(), max_workers=4).info()
+        declared, silent = info.checks
+        self.assertEqual((declared.expected_cost, declared.expected_entries),
+                         (6.0, 12))
+        self.assertEqual((silent.expected_cost, silent.expected_entries),
+                         (None, None))
+        self.assertEqual(info.declared_workers, 0.1)
+        self.assertEqual(info.declared_entries, 12)
+
+    def test_the_entries_held_stand_beside_the_limit(self):
+        tree = StatusTree()
+        engine = Engine([_FakeCheck(path="/a", result=CheckResult(
+            StatusCode.ERROR, ["one reason"]))], tree,
+            limits=Limits(entry_limit=1234))
+        engine.run_once()
+        info = engine.info()
+        self.assertEqual(info.entries_held, tree.entry_count)
+        self.assertEqual(info.entry_limit, 1234)
+
+
+class WorkerCeilingTests(TestCase):
+    """`max_workers` is a setting (ADR-0075), read when a caller does not say."""
+
+    def test_the_setting_is_the_ceiling_when_none_is_given(self):
+        checks = [_FakeCheck(path=f"/c{index}") for index in range(6)]
+        with patch.object(engine_module, "config", replace(config, max_workers=3)):
+            self.assertEqual(Engine(checks, StatusTree()).info().max_workers, 3)
+
+    def test_an_explicit_ceiling_wins_over_the_setting(self):
+        checks = [_FakeCheck(path=f"/c{index}") for index in range(6)]
+        with patch.object(engine_module, "config", replace(config, max_workers=3)):
+            engine = Engine(checks, StatusTree(), max_workers=5)
+        self.assertEqual(engine.info().max_workers, 5)
+
+    def test_the_pool_is_never_larger_than_the_roster(self):
+        with patch.object(engine_module, "config", replace(config, max_workers=8)):
+            engine = Engine([_FakeCheck(path="/only")], StatusTree())
+        self.assertEqual(engine.info().max_workers, 1)
 
 
 if __name__ == '__main__':

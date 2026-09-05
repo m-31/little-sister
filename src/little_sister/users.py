@@ -25,6 +25,7 @@ from typing import Any
 
 import yaml
 
+from little_sister import self_report
 from little_sister.config_dir import (
     CONFIG_DIR_ENV,
     YAML_SUFFIXES,
@@ -33,7 +34,7 @@ from little_sister.config_dir import (
     sole_aspect_file,
 )
 from little_sister.icons import ICON_TYPES
-from little_sister.logger import logger
+from little_sister.reasons import plain, slug
 
 USERS_ASPECT = "users"
 USERS_DOCUMENT = "users"
@@ -233,6 +234,10 @@ def _inside(directory: Path, candidate: Path) -> Path | None:
 
 
 def _warn(username: str, document: Path, detail: str) -> None:
-    """One non-fatal avatar configuration warning without any user secrets."""
-    logger.warning("users: %s: user %r %s — using the default avatar (ADR-0045)",
-                   document, username, detail)
+    """One non-fatal avatar configuration warning without any user secrets — a
+    standing note, so the operator who wrote the avatar learns it is not shown
+    without reading the log."""
+    self_report.startup.note(
+        slug("users", "avatar", username),
+        plain(f"{document}: user {username!r} {detail} — the default avatar is "
+              f"shown (ADR-0045)"))

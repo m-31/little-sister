@@ -44,7 +44,7 @@ accessible channel, the name is, and nothing is lost.
 On the two surfaces above, everything is lost. `/copy` would print a bare **🔴** — in
 the surface defined as *read somewhere with no chips and no styling* — and the card
 would contain nothing but a circle. A pasted document outlives the person who pasted
-it, and a colour name is the one thing a reader cannot reconstruct from a colour.
+it, and a color name is the one thing a reader cannot reconstruct from a color.
 
 **And a package cannot fix it.** Raw HTML is escaped in titles (ADR-0018,
 `html=False`), so `aria-hidden` and a `title=` attribute are both unavailable to a
@@ -68,7 +68,7 @@ text with nothing in it that a reader could say out loud as the node's name — 
 `not any(character.isalnum() for character in title)`. Deliberately not an ASCII or a
 `[A-Za-z]` test: a Japanese, Cyrillic or Greek title is a word and keeps every right a
 word has here, while an emoji, an arrow, a bullet and a box-drawing character are not.
-A **digit** counts — a node titled `42` is labelled badly but labelled, and inventing a
+A **digit** counts — a node titled `42` is labeled badly but labeled, and inventing a
 rule that a number is not a name would be a second decision hiding inside this one.
 
 One letter anywhere is enough. The test is not *is this mostly a glyph*: a title of
@@ -79,7 +79,7 @@ One letter anywhere is enough. The test is not *is this mostly a glyph*: a title
 `shown_title` is asked before `decorative`, so a title that only repeats the name folds
 away and what is left is *a name with no title* — not a name with a decoration beside
 it. The order matters for one real case: a check that titles a band `Critical` gets
-today's behaviour exactly, and only a check that titles it `🔴` reaches the new rule.
+today's behavior exactly, and only a check that titles it `🔴` reaches the new rule.
 
 ### 4. It returns **parts**, and the drawing stays where it was
 
@@ -96,7 +96,7 @@ about *what a label is* should not become a rule about how two surfaces render.
 
 ### 5. A view rule, never a data one
 
-As with ADR-0017's update. The **snapshot keeps the title**, and the **JSON API keeps
+As with ADR-0017. The **snapshot keeps the title**, and the **JSON API keeps
 emitting it** — dropping or rewriting a field is a contract change (ADR-0008), and a
 client drawing its own chips is entitled to its own decision about the glyph. What
 changes is only what two surfaces draw.
@@ -106,7 +106,7 @@ changes is only what two surfaces draw.
 * A check may title a node with a glyph without any surface losing the word. That
   unblocks the severity ramps in little-sister-github and little-sister-wiz, which are
   held on this record.
-* **One behaviour changes for a node that exists today**: any node whose title is
+* **One behavior changes for a node that exists today**: any node whose title is
   already wordless now shows its name too, on those two surfaces. That is the fix, and
   it is strictly additive — nothing that was drawn stops being drawn.
 * The popover gains a heading that repeats the chip beneath it, for a node with a

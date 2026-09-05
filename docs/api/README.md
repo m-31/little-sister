@@ -3,7 +3,8 @@
 A small, **read-only JSON** view of the aggregated status tree. The same routes serve
 the HTML dashboard; the representation is chosen by the `Accept` header. This page is
 the practical guide; the normative reference is the [`openapi.yaml`](openapi.yaml)
-beside it (design rationale lives in the project's ADR-0008).
+beside it (design rationale lives in little-sister's ADR-0008 — every record this
+page and the spec name is little-sister's, also in the copy a client keeps).
 
 ## At a glance
 
@@ -54,8 +55,9 @@ A node in the response carries its status (`own_code` / `code` / `reasons` / `st
 timing (`timestamp`, `frequency_seconds`), Markdown metadata (`about`, `title`,
 `description`, `config` — **raw Markdown**, render it client-side), `maintenance` plus
 `maintenance_details` when pinned (its `reason` is raw Markdown too), and `children`
-(name-sorted). Full field docs are in
-[`openapi.yaml`](openapi.yaml).
+in a deterministic order — a declared rank first, then case-insensitive name order,
+which is plain name order for the many trees that declare no rank. Full field docs
+are in [`openapi.yaml`](openapi.yaml).
 
 ## Errors
 
@@ -72,8 +74,12 @@ Failures are **Problem JSON** (RFC 9457), media type `application/problem+json`:
 
 Compatible changes are **additive** and bump the spec's minor `info.version`;
 `schema_version` (in the envelope) bumps only on a **breaking** change, which is offered
-through a versioned media type — never a versioned URL. Decode defensively: tolerate
-unknown fields, and refuse an unknown `schema_version` major.
+through a versioned media type — never a versioned URL. Two changes shipped under
+`schema_version` 1 that a strict reading calls incompatible — `timestamp` became
+nullable in v1.2, and `children` order became rank-then-name in v1.3 — and the spec's
+own history says why the bump is deferred to one client-facing revision. Decode
+defensively: tolerate unknown fields, a `null` timestamp and any child order, and
+refuse an unknown `schema_version` major.
 
 ## Rendering the spec
 

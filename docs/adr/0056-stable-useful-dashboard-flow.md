@@ -1,13 +1,14 @@
 # ADR-0056 — Dashboard layout follows stable, useful flow
 
 - **Status:** Accepted
-- **Date:** 2026-08-23 (accepted 2026-08-15)
+- **Date:** 2026-09-05 (accepted 2026-08-15)
 - **Supersedes:** [ADR-0024](0024-dashboard-layout.md)
 - **Related:** [ADR-0005](0005-dashboard-freshness-and-self-monitoring.md)
   (the `little-sister` heartbeat),
   [ADR-0014](0014-maintenance-persistence.md) (maintenance pins),
   [ADR-0019](0019-inspection-popover.md) (chip and maintenance popovers),
-  [ADR-0012](0012-node-metadata.md) (chip and strip metadata).
+  [ADR-0012](0012-node-metadata.md) (chip and strip metadata),
+  [ADR-0076](0076-the-instance-node-is-a-branch.md) (the branch the strip rolls up).
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -39,7 +40,7 @@ record is complete on its own.
 
 ## Decision
 
-### Stable position and bounded content — decided 2026-07-20
+### Stable position and bounded content — decided 2026-07-19
 
 A card's position is a pure function of the filtered, depth-limited node set, its
 declared sibling order and available ordinary grid tracks. Live status, current
@@ -54,13 +55,18 @@ Bound the remaining height variance:
 2. In dense mode, a quiet descendant leaf is a compact name-and-state chip; a
    warn/error leaf remains a full box with its reason. The chip's detail is one
    click away and its metadata remains inspectable.
-3. The reserved, leaf-only `/little-sister` heartbeat leaves the card grid for a
-   fit-content status-strip pill. If that path ever has children it stays a normal
-   card. The loader rejects a user check that claims the reserved namespace.
+3. The reserved `/little-sister` heartbeat leaves the card grid for a fit-content
+   status-strip pill, and it is lifted **with its children**: the path is a branch,
+   one child per contributor ([ADR-0076](0076-the-instance-node-is-a-branch.md)), and
+   the strip is that branch's roll-up — it summarizes the subtree as any branch card
+   does and links to `/status/little-sister`, where the children are the page, so
+   lifting it hides nothing (`_split_heartbeat`). A heartbeat that is not on the root
+   overview is not lifted. The loader rejects a user check that claims the reserved
+   namespace.
 
 The status snapshot and JSON envelope do not change.
 
-### Status band and quiet branches — decided 2026-07-22
+### Status band and quiet branches — decided 2026-07-25
 
 The heartbeat sits in a right-aligned band at the top of `#status-grid`, beneath
 the view controls and inside the polled fragment. Its watching-eye mark distinguishes
@@ -71,7 +77,7 @@ Surplus boxes remain in the DOM behind an in-place `+N more`; a warn/error box i
 never folded, and `branches.js` preserves an open fold across a poll swap. With
 density off every node remains a full box and the cap does nothing.
 
-### Maintenance visibility — decided 2026-07-23
+### Maintenance visibility — decided 2026-07-25
 
 Maintenance is computed from the unfiltered snapshot so shallow depth and hide
 filters cannot erase it. A card whose subtree contains a pin carries an accessible
@@ -81,13 +87,13 @@ pill beside the heartbeat; its capped popover links onward to the complete read-
 not idle and is not hidden by *hide idle*. These surfaces do not change the snapshot,
 maintenance side-table or JSON envelope.
 
-### Reason separators — decided 2026-07-23
+### Reason separators — decided 2026-07-25
 
 Stacked reasons carry a tight `currentColor` hairline and gap between entries on
 both dashboard and detail surfaces. The dashboard folds that boundary height into
 the configured line clamp; the detail page remains uncapped.
 
-### Stable useful column flow — decided 2026-08-12
+### Stable useful column flow — decided 2026-08-15
 
 For each top-level card, the server derives a **stable flow profile** from its
 filtered, depth-limited topology and configured `reason_cap`:
@@ -114,7 +120,7 @@ to source order. A step can consume several tracks atomically. If no useful next
 step fits, tracks remain empty rather than padding a card with width its tree cannot
 use. The summed-gain rule measurably misallocated: two equal roots on a fourteen-track
 grid went `[12, 2]`, because every one of the twelve tracks paid a row while the
-starved neighbour owned the row height throughout. Under min-max they grow
+starved neighbor owned the row height throughout. Under min-max they grow
 alternately.
 
 A descendant level containing at least two direct full boxes uses responsive nested
@@ -166,7 +172,7 @@ byte-for-byte the no-JavaScript page; `flow` is the default, anything else warns
 falls back. That key is deliberately an enum, not a switch: a per-viewer value and a
 possible `packed` mode are later steps of the same control.
 
-### Explicit track counts — decided 2026-08-12
+### Explicit track counts — decided 2026-08-15
 
 Width pricing alone leaves one flaw standing: **at the exact width where `auto-fill`
 adds a track, every track snaps back to the 330 px minimum**, so a span-two card
@@ -227,7 +233,7 @@ test holding the two together. And the finished layout is **memoized on the
 depth-limited tree shape** plus the reason budget — the only inputs it ever reads —
 so a poll that changed nothing but statuses costs a dictionary lookup.
 
-### What a wider viewport promises — decided 2026-08-12
+### What a wider viewport promises — decided 2026-08-15
 
 A fifteen-plus-one fixture rules out a universal "wider never gets taller" claim:
 fifteen leaf roots beside one root whose children are chains of heights

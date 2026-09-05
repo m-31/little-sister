@@ -84,7 +84,7 @@ class LabelPartsTests(TestCase):
     """What to draw where a surface draws the title instead of the name."""
 
     def test_a_word_still_stands_in_for_the_name(self):
-        # Unchanged behaviour, and the reason the rule is narrow: a node titled
+        # Unchanged behavior, and the reason the rule is narrow: a node titled
         # `Cluster A` is better named that way in a pasted document.
         self.assertEqual(label_parts("web", "Cluster A"), ("", "Cluster A"))
 

@@ -22,7 +22,7 @@ def effective_code(own: StatusCode, child_codes: Iterable[StatusCode]) -> Status
 
     **When nothing is counted, the answer depends on why.** A node whose children
     were all skipped because they are *pinned* reads `MAINTENANCE`, not `UNDEFINED` —
-    the open edge case ADR-0032's amendment left for this split, answered the way the
+    the open edge case ADR-0032 left for this split, answered the way the
     same model already answers it one level down: a node whose *virtual* children
     (its reason entries) are all pinned reads `MAINTENANCE`. Real and virtual children
     must not read differently in one model, and "nothing under here is reporting

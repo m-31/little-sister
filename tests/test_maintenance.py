@@ -1,3 +1,4 @@
+import contextlib
 import json
 import tempfile
 import unittest
@@ -5,7 +6,9 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from unittest import TestCase
 
-from little_sister.maintenance import MaintenanceEntry, MaintenanceStore
+from little_sister.codes import StatusCode
+from little_sister.maintenance import RETIRED_PATH, MaintenanceEntry, MaintenanceStore
+from little_sister.state import MAINTENANCE_FILE, StateLayer
 
 
 class MaintenanceEntryTests(TestCase):
@@ -28,41 +31,126 @@ class MaintenanceEntryTests(TestCase):
 
 
 class MaintenanceStoreTests(TestCase):
+    """The side-table as a state file (ADR-0071): read and written through the
+    layer, under its directory, by the file's fixed name."""
+
     def test_save_then_load_round_trips(self):
         with tempfile.TemporaryDirectory() as directory:
-            store = MaintenanceStore(Path(directory) / "sub" / "maintenance.json")
+            state = StateLayer(Path(directory) / "sub" / "state")
+            store = MaintenanceStore(state)
             entries = {"db": MaintenanceEntry("planned", "2026-01-01T00:00:00",
                                               "2026-01-08T00:00:00", "ada")}
-            store.save(entries)       # also creates the missing parent directory
+            store.save(entries)       # also creates the missing directory
             self.assertEqual(store.load(), entries)
+            self.assertTrue((state.path(MAINTENANCE_FILE)).exists())
 
-    def test_missing_file_loads_empty(self):
+    def test_missing_file_loads_empty_and_reports_nothing(self):
+        # a first start is not a failure
         with tempfile.TemporaryDirectory() as directory:
-            self.assertEqual(MaintenanceStore(Path(directory) / "nope.json").load(),
-                             {})
+            state = StateLayer(directory)
+            self.assertEqual(MaintenanceStore(state).load(), {})
+            self.assertEqual(state.lines(), ())
 
-    def test_corrupt_file_loads_empty(self):
+    def test_corrupt_file_loads_empty_and_is_a_load_failure(self):
         with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "maintenance.json"
-            path.write_text("{not valid json")
-            self.assertEqual(MaintenanceStore(path).load(), {})
+            state = StateLayer(directory)
+            state.path(MAINTENANCE_FILE).write_text("{not valid json")
+            with self.assertLogs(level="ERROR"):
+                self.assertEqual(MaintenanceStore(state).load(), {})
+            self.assertEqual([(line.slug, line.code) for line in state.lines()],
+                             [(f"load.{MAINTENANCE_FILE}", StatusCode.ERROR)])
 
-    def test_non_mapping_file_loads_empty(self):
+    def test_non_mapping_file_loads_empty_and_is_a_load_failure(self):
         with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "maintenance.json"
-            path.write_text(json.dumps([1, 2, 3]))
-            self.assertEqual(MaintenanceStore(path).load(), {})
+            state = StateLayer(directory)
+            state.path(MAINTENANCE_FILE).write_text(json.dumps([1, 2, 3]))
+            with self.assertLogs(level="ERROR"):
+                self.assertEqual(MaintenanceStore(state).load(), {})
+            self.assertEqual([line.slug for line in state.lines()],
+                             [f"load.{MAINTENANCE_FILE}"])
+
+    def test_tables_reads_a_payload_in_the_files_shape_for_an_adoption(self):
+        # ADR-0077: the same reader the startup uses, on a payload the layer
+        # hands over at a takeover, answering the two tables or refusing in the
+        # words the startup read reports.
+        entry = MaintenanceEntry("planned", "2026-01-01T00:00:00",
+                                 "2026-01-08T00:00:00", "ada")
+        with tempfile.TemporaryDirectory() as directory:
+            state = StateLayer(directory)
+            MaintenanceStore(state).save({"/db": entry}, {("/db", "slow"): entry})
+            payload = state.read(MAINTENANCE_FILE)
+        nodes, entry_pins = MaintenanceStore.tables(payload)
+        self.assertEqual(nodes, {"/db": entry})
+        self.assertEqual(entry_pins, {("/db", "slow"): entry})
+        self.assertEqual(MaintenanceStore.tables({}), ({}, {}))
+        with self.assertRaisesRegex(ValueError, "not a mapping"):
+            MaintenanceStore.tables([1, 2, 3])
+        with self.assertRaisesRegex(ValueError, "no 'nodes' table"):
+            MaintenanceStore.tables({"/db": entry.to_dict()})
+
+    def test_a_store_built_with_a_tree_registers_the_way_back_at_construction(self):
+        # ADR-0077: the file's other direction is registered where its shape is
+        # known — here — and hands the tables to the tree that holds the pins.
+        from datetime import datetime, timedelta
+
+        from little_sister.state import BACKUP_SUFFIX
+        from little_sister.tree import StatusTree
+        far = (datetime.now() + timedelta(days=1)).isoformat()
+        with tempfile.TemporaryDirectory() as directory:
+            state = StateLayer(directory)
+            tree = StatusTree()
+            store = MaintenanceStore(state, tree=tree)
+            tree.use_maintenance_store(store)
+            store.save({})
+            state.path(MAINTENANCE_FILE + BACKUP_SUFFIX).write_text(json.dumps({
+                "nodes": {"/db": MaintenanceEntry("set aside", "2026-01-01T00:00:00",
+                                                  far, "ada").to_dict()},
+                "entries": {}}))
+            state.take_stock()
+            state.take_backups()
+            self.assertEqual(tree.maintenance_entry("/db").reason, "set aside")
+        with tempfile.TemporaryDirectory() as directory:
+            # without a tree there is nothing to hand the tables to: not registered
+            state = StateLayer(directory)
+            MaintenanceStore(state).save({})
+            state.path(MAINTENANCE_FILE + BACKUP_SUFFIX).write_text("{}")
+            state.take_stock()
+            self.assertEqual(state.take_backups(), "no backup to take")
 
     def test_save_replaces_atomically(self):
         with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "maintenance.json"
-            MaintenanceStore(path).save({})
-            self.assertTrue(path.exists())
+            state = StateLayer(directory)
+            MaintenanceStore(state).save({})
+            self.assertTrue(state.path(MAINTENANCE_FILE).exists())
             self.assertEqual(list(Path(directory).glob("*.tmp")), [])  # tmp replaced
+
+    def test_the_retired_path_is_named_once_at_startup(self):
+        # The move from var/maintenance.json is a clean break: the old file is not
+        # read, and a pin that quietly stopped being in force is the failure the
+        # layer exists to prevent — so the file still sitting there is named.
+        with (tempfile.TemporaryDirectory() as directory,
+              contextlib.chdir(directory)):
+            Path(RETIRED_PATH).parent.mkdir()
+            Path(RETIRED_PATH).write_text(json.dumps({"nodes": {}, "entries": {}}))
+            store = MaintenanceStore(StateLayer(Path(directory) / "var" / "state"))
+            with self.assertLogs(level="WARNING") as captured:
+                self.assertEqual(store.load_all(), ({}, {}))
+            self.assertTrue(any(RETIRED_PATH in line and "no longer read" in line
+                                for line in captured.output))
+
+    def test_the_retired_path_is_not_named_once_the_new_file_exists(self):
+        with (tempfile.TemporaryDirectory() as directory,
+              contextlib.chdir(directory)):
+            Path(RETIRED_PATH).parent.mkdir()
+            Path(RETIRED_PATH).write_text("{}")
+            store = MaintenanceStore(StateLayer(Path(directory) / "var" / "state"))
+            store.save({})
+            with self.assertNoLogs(level="WARNING"):
+                store.load_all()
 
 
 class BothDatesTests(TestCase):
-    """`created_at` / `created_by` beside `set_at` / `set_by` (ADR-0014 amendment)."""
+    """`created_at` / `created_by` beside `set_at` / `set_by` (ADR-0014)."""
 
     def test_an_absent_creation_defaults_to_the_set(self):
         entry = MaintenanceEntry(reason="planned", set_at="2026-01-01T00:00:00",
@@ -110,7 +198,7 @@ class EntryPinFileTests(TestCase):
     (ADR-0036)."""
 
     def _store(self, directory):
-        return MaintenanceStore(Path(directory) / "maintenance.json")
+        return MaintenanceStore(StateLayer(directory))
 
     def test_node_and_entry_pins_round_trip(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -133,16 +221,19 @@ class EntryPinFileTests(TestCase):
 
     def test_the_old_flat_shape_is_a_clean_break(self):
         # runtime state the program owns, every pin bounded by a finite expiry —
-        # so the old shape is ignored rather than carried in the read path forever
+        # so the old shape is not read rather than carried in the read path
+        # forever; what it held is not in force, and the layer says so (ADR-0071)
         with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "maintenance.json"
-            path.write_text(json.dumps({"/db": {"reason": "planned",
-                                                "set_at": "2026-01-01T00:00:00",
-                                                "expires_at": "2026-01-08T00:00:00",
-                                                "set_by": "ada"}}))
-            store = MaintenanceStore(path)
-            self.assertEqual(store.load(), {})
-            self.assertEqual(store.load_entries(), {})
+            state = StateLayer(directory)
+            state.path(MAINTENANCE_FILE).write_text(json.dumps(
+                {"/db": {"reason": "planned", "set_at": "2026-01-01T00:00:00",
+                         "expires_at": "2026-01-08T00:00:00", "set_by": "ada"}}))
+            store = MaintenanceStore(state)
+            with self.assertLogs(level="ERROR"):
+                self.assertEqual(store.load_all(), ({}, {}))
+            (line,) = state.lines()
+            self.assertEqual(line.slug, f"load.{MAINTENANCE_FILE}")
+            self.assertIn("not in force", line.text)
 
     def test_a_slug_with_a_slash_survives_the_file(self):
         with tempfile.TemporaryDirectory() as directory:

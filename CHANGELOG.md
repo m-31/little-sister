@@ -8,6 +8,321 @@ contract versions **separately** — see `docs/api/openapi.yaml` `info.version`.
 
 ## [Unreleased]
 
+## [0.3.15] - 2026-09-05
+
+**Breaking, before the first release with a self-report:** every maintenance pin set
+on `/little-sister` holds nothing after this version. The instance's node is a
+branch now — one child per contributor — and a line lives on its contributor's child
+under its own slug: what was `/little-sister` + `engine.lag` is `/little-sister/engine`
++ `lag`, `state.load.maintenance.json` is `/little-sister/state` + `load.maintenance.json`.
+Set the pin again on the child. No migration is written; no released instance has
+such a pin ([ADR-0076](docs/adr/0076-the-instance-node-is-a-branch.md)).
+
+### Added
+
+- **Authority follows the lease: an instance that takes a keeper's lease over
+  adopts what the store changed while it stood by.** Whoever holds the lease wrote
+  the truth up to the moment it lapsed, so a standby that becomes the holder — or a
+  demoted holder that takes the lease back — no longer writes its own hours-old pins
+  over the store. A state file gains the other direction: `keep(name, producer,
+  restore=…)`, or `restore_with(name, restore)` for a file written through, registers
+  a callable that takes the parsed payload of an adopted copy and replaces what the
+  running process holds — the pins and the event log both have one. The keeper seam
+  gains one optional method, `changed_since_sync() -> Sequence[str]`: the files whose
+  copy in the store differs from what this instance last restored or saved, by a token
+  the library never sees. At the moment the keeper's `tick` turns from declining
+  saves to taking them, every file it names is adopted before the first save — parsed
+  and handed to its `restore`, then the live file set aside as `<file>.bak` (an older
+  one overwritten) and the store's copy written in its place; a keeper that names
+  nothing, or has no such method, makes it a silent takeover with the instance's own
+  state, which is what every takeover was before. A file whose adoption failed —
+  one key of three unreachable — is held out of the mirror until one lands and
+  retried every interval, so the interval's saves never put a standby's shadow over
+  the store. A `.bak` is this machine's own and is never mirrored, and a keeper that
+  lists one is refused as it would be for a path outside the directory.
+  `/little-sister/state` lists every `.bak` beside its live copy
+  with both ages as uncoded `backup.<file>` lines, and offers **take the backups** —
+  admin-only, `POST /little-sister/state/act/take-backups` — which sets the live
+  files aside as `.bak` in turn and adopts the backups through the same path; a
+  `.bak` matching no file the layer keeps is listed and left alone. A copy the process
+  cannot take in, or a disk that refuses it, is the `load.<file>` ERROR line with
+  *adopt* as the verb; a file with no `restore` a WARN saying it was swapped on disk
+  only. Found on the way and fixed beside it: the first flush after a
+  restore from a keeper no longer sends every restored file back once
+  ([ADR-0077](docs/adr/0077-authority-follows-the-lease.md); the S3 keeper's half —
+  the ETag per key, *take the lease, then adopt, then save* — is `little-sister-aws`'s
+  next slice, and until it ships every takeover is the silent kind).
+
+- **The instance's node is a branch, and a package may offer an action on its
+  child.** `/little-sister` carries the beat; `/little-sister/engine` the engine's
+  own lines; `/little-sister/<name>` every registered contributor's — present and OK
+  when it has nothing to say, its code the worst of its lines, the root's the
+  roll-up, which is what the status strip shows before it links to the page. A
+  contributor declares its child's `title` and `about` at registration
+  (`nodes.yaml` still wins), and the library's own six say what they are. A pin
+  lands on one speaker or one line of it, and the event log records a transition
+  per child. New on the seam: `self_report.register_action(contributor, slug,
+  label, handler)` — an admin-only button on the child, run by
+  `POST /little-sister/<contributor>/act/<slug>`, answered on the page it came back
+  to, rendered through the slot seam beside the declarative chips, and followed by
+  a flush of the state layer, so what the action changed reaches the store in the
+  click rather than at the next interval. The first two
+  are the S3 keeper's *take over* and *release*, in `little-sister-aws`
+  ([ADR-0076](docs/adr/0076-the-instance-node-is-a-branch.md); the strip decision of
+  [ADR-0056](docs/adr/0056-stable-useful-dashboard-flow.md) lifts the branch with its
+  children).
+
+
+- **A check type can say what it costs, and startup adds it up.** A type may now
+  answer `expected_cost()` — the worker seconds one run of *this* configuration is
+  expected to occupy — and `expected_entries()`, both computed from its own settings
+  and both optional. At startup the engine sums **what is declared**: each cost over
+  that check's own frequency against `max_workers`, and the entries against
+  `entry_limit`. Past either it refuses to start, naming the largest contributors
+  with their numbers, and the pages stay up with the *engine not started* banner
+  saying why; at 80 % of either it warns in the log and carries an uncoded
+  `capacity.threads` / `capacity.entries` line on `/little-sister`. Until now a
+  configuration that could not be served was discovered by being served badly — the
+  pool saturating, every check late, and nothing anywhere saying the arrangement was
+  impossible.
+
+  A check that declares nothing costs nothing in these sums, which is why they refuse
+  the impossible and promise nothing about what passes; the library's own built-in
+  types declare nothing, because an `http` check's fraction of a second is noise in
+  such a sum. Declare an **estimate of a normal run** and never a bound — a type that
+  declares its timeout will refuse deployments that have been running for months —
+  and a declaration that raises or is not a non-negative number is logged against the
+  check's path and ignored rather than stopping the start. `/system` shows what each
+  check declared beside the wall time it actually took, and the sums beside the
+  entries the tree holds now
+  ([ADR-0075](docs/adr/0075-a-check-declares-what-it-costs.md)).
+
+- **Three engine limits are settings.** `config/settings.yaml` gains `max_workers`
+  (the worker ceiling, default 8 — also what declared costs are measured against),
+  `entry_limit` (default 100,000, the number the engine's own `entries` line watches)
+  and `memory_share` (default 0.5, the share of what the machine gives the process
+  before the `memory` line turns red). They were constants; raising `max_workers` is
+  how a deployment answers a refusal it disagrees with. A bad value falls back to the
+  default with a warning, like every other setting.
+
+- **This instance has a name.** `little_sister.instance` answers with one mark for
+  the life of the process — `<name>:<pid>:<started>:<tag>` — and `/system` says which
+  installation this is, in a section of its own, first. Until now nothing in the
+  library named the running process: that page listed what was installed and never
+  said which instance had installed it.
+
+  `name` is yours, from `instance:` in `config/settings.yaml`, and the **hostname**
+  where you say nothing — which in a container is already the task or pod name. A
+  name that carries the mark's own separator, carries whitespace, or runs past 64
+  characters falls back to the hostname with a warning rather than refusing the
+  start.
+
+  The eight random hex characters at the end are not decoration: they are what makes
+  an **equality test** on the mark sound, and without them two containers of one
+  deployment — one name, pid 1, started in the same second — could hold one mark and
+  read each other as themselves. So a name of your own is safe to give: the
+  uniqueness is the library's and you cannot take it away.
+
+  The mark is **never parsed**. Two things are promised, and a package keeping state
+  outside this machine depends on both: no two processes share a mark, and one
+  process's does not change while it runs
+  ([ADR-0074](docs/adr/0074-this-instance-has-a-name.md)).
+
+- **A readiness answer beside `/health`.** `GET /ready` answers *has this instance
+  finished coming up*, which `/health` deliberately does not: `200 {"status":
+  "ready"}` once an identity door is registered, the machine's trust store holds CA
+  certificates and the engine has run every configured check once, and `503
+  {"status": "not ready", "waiting_for": [...]}` until then — from the closed
+  vocabulary `doors` / `trust` / `first-pass` and nothing else, three words that name
+  no path, count, version or configuration and answer the one question the caller of
+  an unready instance cannot answer for itself: **wait, or roll back**. The answer
+  **latches** — all three are startup facts, so the route goes `503` to `200` once and
+  never back, and a later failure can never withdraw a serving instance and take away
+  the page whose banner explains it. An engine switched off with
+  `LITTLE_SISTER_ENGINE=0` has no pass to wait for and is ready at once; one that
+  could not load its configuration never becomes ready. Ungated like `/health` and
+  `no-store` for the same reasons, outside the JSON API, and `/health` itself is
+  unchanged — which of the two a load balancer aims at is the deployment's choice,
+  `/ready` behind several instances and `/health` behind one, since draining your only
+  target takes away the explanation
+  ([ADR-0073](docs/adr/0073-a-readiness-answer-beside-health.md)).
+
+- **The instance says what it cannot see.** Two failures that were silent behind a
+  `200` and a `running` engine are lines on `/little-sister` now, on the self-report
+  seam and clearing when their condition does. `readiness.trust` at **ERROR** — *the
+  machine's trust store holds no CA certificates* — is a container built without its
+  distribution's CA bundle, where every check reading an `https` address fails on the
+  certificate rather than on the subject and no node says the fault is local.
+  `readiness.all-erroring` at **WARN** — *every check this instance runs is erroring,
+  all N of them* — is the pattern no single node can report: N failures are more likely
+  one cause than N, and it stays at WARN because the failures are already ERROR where
+  they belong and because the world may simply be down. It needs more than one check,
+  since with one it would say nothing that check's own node does not
+  ([ADR-0073](docs/adr/0073-a-readiness-answer-beside-health.md)).
+
+- **What a restart keeps is a directory of files: `var/state/`.** The event log
+  survives a restart now. It is written to `var/state/events.json` at most once per
+  `state_interval` (`settings.yaml`, default 60 s) and once more at graceful
+  shutdown — an unclean shutdown loses at most the interval — and read back at
+  startup, so `/events` and every node's history start where the last process left
+  off; the first run after a restart still records `UNDEFINED → OK`, because the node
+  *was* unobserved. Every write is a temporary file and `os.replace`, the discipline
+  the maintenance file always had, and a kept file whose state did not change is not
+  rewritten. **A failure never refuses to start, and is never silent**: a file that
+  cannot be read starts that state empty and is a line on `/little-sister` at ERROR
+  for as long as the process runs (*what it held before the restart is not in
+  force*); a write that fails keeps the state in memory and is a WARN line until a
+  write succeeds. Nothing that is a service enters the core — a store per record and
+  a **keeper** that mirrors the directory to somewhere durable (S3 first) are the
+  seams a package fills, the keeper next
+  ([ADR-0071](docs/adr/0071-what-a-restart-keeps-is-a-directory-of-files.md)).
+
+- **The instance reports on itself through one seam.** Anything with something to
+  say about the running instance registers a **contributor** —
+  `little_sister.self_report.register_contributor(name, callable)`, in the same
+  import-before-app block as a resolver, under the same claimed-once rules — and
+  every scheduler tick the heartbeat carries the engine's own lines and every
+  contributor's as pinnable member entries, `<name>.<slug>`, the node's status the
+  worst of what they claim and OK when nothing claims anything. A report is recorded
+  state, never a probe; a contributor that raises is caught and stands as one WARN
+  line naming it; a line a contributor stops returning clears. The no-checks warning
+  is the first of the engine's lines (`engine.no-checks`), the state layer's two
+  failure lines the first contributor's (`state.load.<file>`, `state.save.<file>`),
+  and `/system` lists each package's contributors beside its other seams
+  ([ADR-0072](docs/adr/0072-the-instance-reports-on-itself.md)).
+
+- **Two records on the self-report seam, so the log and the node cannot drift
+  apart.** `little_sister.self_report.Standing` keeps a line for the life of the
+  process — `note(slug, text, code)` writes the line and the log entry in one call
+  — and the library's own, `self_report.startup`, reports under `startup`: what the
+  process learned at startup and cannot undo goes there, one call site at a time.
+  `Held(hold_seconds)` keeps what recurs, each occurrence for a window after it was
+  seen — `see(slug, text, code, measure)` — so a line stands while the condition
+  does, clears when it stops, and counts (*17 times in the last 10m*) rather than
+  repeats; where an occurrence has a size, the worst inside the window is the one
+  reported. The engine's `lag` line is the first on that shape, and a late tick is
+  now a log entry as well as a line
+  ([ADR-0072](docs/adr/0072-the-instance-reports-on-itself.md) §7).
+
+- **What the process used to say to the log alone, it says on `/little-sister`.**
+  Three contributors, on the two records: `startup` for what the process learned at
+  startup and cannot undo — an unresolved `SECRET_KEY` reference (every session
+  ends at the next restart) or `LITTLE_SISTER_API_TOKENS` reference (the JSON API
+  rejects every request), no identity door or none the default, the system-admin
+  password unresolved, a `config/` file no aspect claims, an aspect refused at
+  registration or declared in two roots, `instance:` refused, `retry_interval`
+  unreadable, `nodes.yaml` metadata no check covers, a links interval unreadable, an
+  avatar not shown, the retired maintenance file, a slot template, asset, icon or
+  action refused, the theme bootstrap's hash missing — at WARN, and at ERROR where
+  nobody can sign in; `runtime` for what recurs, held ten minutes with a count — a
+  slot's provider or template raising, an identity door raising, a scheduler tick or
+  an upsert raising, a reachability pass failing, overrunning, stuck or giving up;
+  and `security` — failed logins as a rate, a fact below five in ten minutes and WARN
+  from five, and the system-admin account used. Every one is still a log entry, from
+  the same call. `little_sister.reasons.plain` is `little_sister.checks.plain`,
+  promised from both ([ADR-0072](docs/adr/0072-the-instance-reports-on-itself.md)
+  §7).
+
+- **The engine's own lines.** `/little-sister` now says what the engine measures
+  against its limits as it runs — recorded on its side, read on the tick, never
+  probed, and clearing when the condition does. `engine.entries`: the tree's entry
+  count against a limit of 100,000, WARN at 80 % and ERROR at the limit.
+  `engine.memory`: the process's resident size against half of what the machine
+  gives it (physical memory, or a cgroup's smaller limit), the same shape, and no
+  line where the machine cannot say. `engine.pool`: a check that has waited for a
+  worker longer than 10 s, with how many are waiting and the longest wait — the
+  first sweep, where every check is due at once, excepted. `engine.lag`: a
+  scheduler tick that came more than 5 s late, standing for ten minutes.
+  `engine.late.<path>`: a check whose run in flight or last run took longer than
+  its `frequency`, at WARN — a late run, not a broken one. And a `timeout` longer
+  than the `frequency` is now **warned about at engine construction and carried as
+  an uncoded line** (`engine.may-run-late.<path>`), never refused; before, such a
+  check simply ran late in silence. Every line is pinnable by its slug like any
+  entry; the numbers are constants until the declared costs make them settings
+  ([ADR-0072](docs/adr/0072-the-instance-reports-on-itself.md)).
+
+- **A keeper carries `var/state/` off the machine.** A deployment that registers one —
+  `little_sister.keeper.register_keeper(name, keeper)`, in the same
+  import-before-app block as a resolver — has the whole directory restored from it
+  **before anything reads**, and mirrored back to it after the writer, on the same
+  `state_interval` and once more at graceful shutdown. So an instance redeployed onto
+  a fresh machine comes up with the pins and the history it left on the old one. A
+  keeper answers three methods in bytes — `load(name)`, `save(name, data)`, `list()` —
+  and never knows what it carries, so it moves a package's own file as readily as the
+  library's; there is **one per instance**, and a second from another package refuses
+  at startup naming both. Two more it *may* answer: `tick(interval_seconds) -> bool`,
+  called every interval before any save whether or not a file changed — where a store
+  that holds a lease on its prefix renews it — and whose answer says whether this
+  interval's saves are wanted at all; and `close()`, once at graceful shutdown after
+  the last save, so a lease can be given up rather than left to lapse. **A failure
+  never refuses to start**: a keeper that cannot be reached leaves every local file as
+  it is and is an ERROR line on `/little-sister` for the life of the process; a save
+  it would not take is a WARN line naming the file until one lands, and a `tick` that
+  raises is a WARN line with no save behind it that interval. The library ships no
+  keeper — a local installation registers none and loses nothing by it — and the
+  first one is S3, in `little-sister-aws`
+  ([ADR-0071](docs/adr/0071-what-a-restart-keeps-is-a-directory-of-files.md)).
+
+- **`little_sister.spans.local_time(moment, fmt=None)` joins the public surface** —
+  one instant in the `timezone` and `time_format` of `settings.yaml`, the rendering
+  every page already used through the application's own formatter, which now
+  delegates to it. Promised so that a plugin writing *when* into a line says it in
+  the page's words; before, the only thing a plugin could write was `GMT`.
+
+- **Durations know weeks: `1w`.** Everywhere a duration is written — a check's
+  `frequency`, `timeout` or `retry_interval`, `maintenance_default_expiry`, a
+  plugin's own duration fields, the maintenance form — `w` is seven days, and an
+  interval that is a whole number of weeks reads back as one (`1w`, never `7d`)
+  wherever a page shows a configured interval.
+
+### Changed
+
+- **A `/little-sister` child's facts are its report; every line is a claim.** A
+  contributor's line without a code — *this instance holds the lease*, *the last
+  transitions*, the paths searched for checks, a configuration that *may* run
+  late, a `.bak` set aside, a few failed logins below the rate — used to arrive on
+  its child uncoded, and an uncoded entry on a coded set carries the node's code,
+  the worst of the warnings beside it: the child stayed WARN after its one warning
+  was pinned, until every fact was pinned too. Facts are now the child's `report`
+  (ADR-0044 decision 6) — `register_contributor(…, report=)` answers Markdown,
+  shown on the child's page and never on a card — and only claims are lines, so
+  pinning the one warning quiets the child and the per-line pin sits only where a
+  claim is ([ADR-0076](docs/adr/0076-the-instance-node-is-a-branch.md) decision
+  1). A line that arrives without a code is refused into a WARN under its own slug
+  that says so; `Standing.note` and `Held.see` take a `StatusCode`, no longer
+  `None`. `security_report`, `StateLayer.report` and `EngineReport.report` carry
+  the moved facts. The `no-checks.searched`, `may-run-late.<check>`,
+  `capacity.<limit>` and `backup.<file>` slugs are gone — nothing could usefully
+  pin them.
+- **Duration units are lowercase, and `M` is refused by name.** The parser used to
+  lowercase the text first, so `5H` read as five hours and `6M` as six *minutes* — a
+  `6M` that meant six months was a pin gone in six minutes, or an `error_max_age` of
+  six. A configuration that wrote a capital unit now fails to load at startup naming
+  the value: write `5h`. For `M` the refusal says what `m` is and why a month is not a
+  unit here — it is not a number of seconds — and to write weeks or days instead.
+- **A maintenance window has to reach the next run of the check it silences.** The
+  form refuses a duration or expiry shorter than the interval of the slowest check
+  the pin covers — the check on the node, the checks below a container, the branch
+  check above a leaf — and names it: `'2m' ends before /payments/reconcile (every
+  20m) runs again, so the pin would cover no run of it. Use at least 20m.` A pin that
+  ends before the check runs again silences nothing, and once it expired the stale
+  reading came back anyway. A window equal to the interval passes; a blank field
+  still takes the configured default whatever the interval, because that value never
+  refuses ([ADR-0014](docs/adr/0014-maintenance-persistence.md)).
+- **`var/maintenance.json` moved to `var/state/maintenance.json`, and the old path is
+  not read.** A deployment that upgrades moves the file before the restart or loses
+  its pins — a warning at startup names the file while it still sits at the old
+  path. A clean break rather than a migration, for the reason the file's shape
+  change was one: runtime state the program owns, bounded by a finite expiry, and
+  nothing outside the family reads it
+  ([ADR-0071](docs/adr/0071-what-a-restart-keeps-is-a-directory-of-files.md)).
+  `MaintenanceStore` now takes the state layer rather than a path, and a file of an
+  older shape is a load-failure line on the heartbeat rather than a log warning.
+- **The heartbeat's reasons are entries with declared slugs**, so the no-checks
+  warning can be pinned like any other line and its status now moves — WARN or
+  ERROR while a line stands, OK when it clears — with the transitions in the event
+  log. A client reading `reasons` sees the same texts as before.
+
 ## [0.3.14] - 2026-08-29
 
 ### Removed
@@ -188,7 +503,7 @@ contract versions **separately** — see `docs/api/openapi.yaml` `info.version`.
   replaces a plain instance rather than running beside it and truncating the log it is
   still writing to, and `./stop.sh` stops whatever is running without being told which
   scheme it was started under. **An instance belongs to the checkout it runs in**,
-  recognised by its working directory rather than by the WSGI target two checkouts can
+  recognized by its working directory rather than by the WSGI target two checkouts can
   share — so a second checkout on the same port is refused instead of being adopted and
   stopped. Deliberately not by anything in the command line: macOS `ps` truncates that,
   and gunicorn rewrites it when `setproctitle` is installed. **`--any-instance`** is the
@@ -268,7 +583,7 @@ contract versions **separately** — see `docs/api/openapi.yaml` `info.version`.
   and the only one left to whatever the browser defaults to, while `ls_prefs` and the
   fold-depth cookie — a theme and a disclosure state — both said `Lax` outright. On an
   application whose state-changing POSTs carry no CSRF token, that attribute *is* the
-  defence against a cross-site form post. `Lax` rather than `Strict`, because a door's
+  defense against a cross-site form post. `Lax` rather than `Strict`, because a door's
   callback is a top-level navigation back from an identity provider and `Strict` would
   arrive there with no cookie.
 - **`setup.sh` will not invent the system admin's password out of a constant.** Its
@@ -436,7 +751,7 @@ contract versions **separately** — see `docs/api/openapi.yaml` `info.version`.
   its whole title
   ([ADR-0034](docs/adr/0034-template-slots-for-dependent-packages.md)).
 
-## [0.3.12] - 2026-08-17
+## [0.3.12] - 2026-08-16
 
 ### Added
 
@@ -567,7 +882,7 @@ contract versions **separately** — see `docs/api/openapi.yaml` `info.version`.
 ### Changed
 
 - **The default log level is now `INFO`, and `LOG_LEVEL` names it**
-  ([ADR-0049](docs/adr/0049-the-check-authoring-surface.md), amended). This reaches
+  ([ADR-0049](docs/adr/0049-the-check-authoring-surface.md)). This reaches
   only installations that let little-sister configure logging: an application that
   sets up its own — before importing `little_sister.app` — keeps its level exactly as
   it did, and `LOG_LEVEL` does not reach it.
@@ -842,6 +1157,32 @@ contract versions **separately** — see `docs/api/openapi.yaml` `info.version`.
 
 ## [0.3.0] - 2026-08-09
 
+### Removed
+
+- **`LITTLE_SISTER_USERS` is gone.** The user list comes only from the `users` aspect
+  of the configuration roots now — `config/users.yaml`, or `config/users/users.yaml`
+  beside `config/users/avatars/`. A deployment that already keeps its list there needs
+  to change nothing.
+
+  A deployment that used the variable to name a file elsewhere gives that file a
+  **configuration root of its own** and names it first:
+
+  ```
+  LITTLE_SISTER_CONFIG_DIR=/etc/little-sister/identity:config
+  ```
+
+  That does exactly what the variable did: `users` is the one aspect that does not
+  layer, so the first root declaring it wins whole and the rest of the tree still comes
+  from the roots behind it. Avatars for such a list live in that root's
+  `users/avatars/`, as they do anywhere else.
+
+  **The variable is not ignored — it is refused.** A startup that finds it set stops
+  with a message naming the move, and `./start.sh` fails before it starts the server.
+  Leaving it set while a user list also sits in the configuration tree would otherwise
+  bring the instance up looking healthy while authenticating against a *different* set
+  of accounts, and a silent change to who can log in is not something to find out
+  about later.
+
 ### Added
 
 - **A check type can now be a package of its own, and the boundary is enforced.**
@@ -904,7 +1245,7 @@ contract versions **separately** — see `docs/api/openapi.yaml` `info.version`.
   owns.** `from little_sister.reasons import slug`; `slug(repo, "pr", 42)` →
   `repo-pr-42`. Unsafe characters collapse, empty parts drop out, and an over-long
   slug keeps a readable prefix plus a hash of the whole value rather than being
-  truncated onto a neighbour's key. A part that keeps nothing at all — an entity named
+  truncated onto a neighbor's key. A part that keeps nothing at all — an entity named
   in Cyrillic or Japanese — is hashed rather than dropped, so two findings can never
   collapse onto one key; a `None` part drops out like an empty one. Use it wherever a
   check discovers findings that carry real ids: `derived_slug`'s content hash *is*
@@ -985,106 +1326,6 @@ contract versions **separately** — see `docs/api/openapi.yaml` `info.version`.
   folded into the partial the header already used, so the two documents share one
   script — and one hash — rather than two. No behavior changes.
 
-### Removed
-
-- **`LITTLE_SISTER_USERS` is gone.** The user list comes only from the `users` aspect
-  of the configuration roots now — `config/users.yaml`, or `config/users/users.yaml`
-  beside `config/users/avatars/`. A deployment that already keeps its list there needs
-  to change nothing.
-
-  A deployment that used the variable to name a file elsewhere gives that file a
-  **configuration root of its own** and names it first:
-
-  ```
-  LITTLE_SISTER_CONFIG_DIR=/etc/little-sister/identity:config
-  ```
-
-  That does exactly what the variable did: `users` is the one aspect that does not
-  layer, so the first root declaring it wins whole and the rest of the tree still comes
-  from the roots behind it. Avatars for such a list live in that root's
-  `users/avatars/`, as they do anywhere else.
-
-  **The variable is not ignored — it is refused.** A startup that finds it set stops
-  with a message naming the move, and `./start.sh` fails before it starts the server.
-  Leaving it set while a user list also sits in the configuration tree would otherwise
-  bring the instance up looking healthy while authenticating against a *different* set
-  of accounts, and a silent change to who can log in is not something to find out
-  about later.
-
-### Fixed
-
-- **A pinned container that no check has ever written no longer 500s on its
-  history.** An admin pin is a real transition and lands on nodes a check never
-  writes, but the history walk asserted that a node with a transition is stamped;
-  the current period now simply has no end (rendered `—`) instead of taking the
-  page down.
-
-- **User avatars now sit beside the login list and appear in the settings trigger.**
-  The existing `config/users.yaml` form remains valid; deployments that want custom
-  pictures move it to `config/users/users.yaml`, put images in
-  `config/users/avatars/`, and add `avatar: name` (or an explicit filename) to each
-  relevant account. There is no separate registry: the value resolves directly inside
-  that one directory, and a missing, invalid or ambiguous image falls back to the new
-  packaged neutral avatar without affecting login.
-
-  Custom bytes are exposed only through the signed-in user's username-free
-  `/user/avatar` route, with a private short cache and ETag. The configuration
-  framework still does not guess aspect shapes: `users` explicitly opts into file and
-  directory forms, as dependent aspects do through their registration API (ADR-0045).
-
-- **The dashboard now says when the next update is due.** Wherever a check time
-  shows and the node is answered for by a single check, the armed next run joins
-  it: `22:25 → 22:30` — on the grid's cards and boxes and the branch page's head
-  line (the detail pages state it in words instead, in their Time card, where
-  printing both would say it twice). The value is **engine-sourced**, never
-  `timestamp + frequency` arithmetic: while you watch a failure, the fast retry
-  slot is what shows. The format is absolute on purpose — when polling fails, the
-  staleness dim leaves the page on screen, and a frozen relative "in 4m" would
-  keep looking live while a frozen `→ 22:30` stays true and recedes into the
-  past. Grid times drop their seconds with this — the whole pair is minute
-  precision, saving the row width — and the arrow is suppressed where it would
-  repeat the value beside it, so a sub-minute schedule shows a bare time. A
-  mount two checks share and the leaves below a branch check keep their bare
-  times. The run's wall time lands in the model beside it and surfaces in the
-  node-facts block below; the JSON envelope is untouched until the client
-  contract round.
-
-- **A reason entry can carry its own status code — so one node's lines can
-  disagree, and a running rerun no longer hides a failure.** A check whose lines
-  have verdicts of their own (this workflow failed, that one passed) hands over
-  `Entry(slug, text, code, running)` values and declares no node code at all: the
-  node derives it from the lines, an empty entry set reads OK ("nothing to
-  report" is not "nothing reported"), and declaring both is refused at
-  construction rather than silently resolved. Pinning the one failing line now
-  turns the node the worst of what is left — silencing one finding no longer
-  discolors the rest — and pinning every line reads maintenance, exactly as with
-  real children (ADR-0042).
-
-  On the dashboard and the leaf page, every coded line paints its state's own
-  measured tint with a small labeled shape cue (a line has no status word, so the
-  cue is its accessible name) — a passed line is green even inside a red card,
-  which is the point — and `running: true` renders in italic while the line's
-  words still say it: a failed build's retry is legible at a glance without
-  displacing the verdict.
-  Existing checks change nothing: entries without codes keep carrying their
-  node's, permanently. The JSON envelope is untouched; per-entry codes reach it
-  with the client contract round. The live demo grows a `/ci/pipelines` node
-  that walks the whole arc.
-
-- **The Copy page now turns the live incident into paste-ready Markdown or rich
-  text.** It keeps every non-OK leaf and only the ancestor chain needed to locate
-  it, drops wholly healthy branches, preserves authored reason formatting, and
-  marks status without relying on colour. Maintenance stays accountable in the
-  snapshot: whole-node and per-reason pins name who set them and when they expire,
-  while a silenced node still shows the status it is suppressing.
-
-  Both buttons use one immutable tree snapshot and one canonical Markdown document.
-  **Copy Markdown** writes plain text; **Copy rich text** writes HTML with the same
-  Markdown as its plain-text fallback. The page shows the exact source for manual
-  copying when clipboard access is unavailable, and an all-OK tree gets a clear
-  empty state instead of copying an empty document.
-
-### Changed
 
 - **A nested box now ends its head line the way a card does: time and status
   word together, right-aligned.** A box used to append its time straight after
@@ -1164,27 +1405,99 @@ contract versions **separately** — see `docs/api/openapi.yaml` `info.version`.
 
 ### Fixed
 
+- **A pinned container that no check has ever written no longer 500s on its
+  history.** An admin pin is a real transition and lands on nodes a check never
+  writes, but the history walk asserted that a node with a transition is stamped;
+  the current period now simply has no end (rendered `—`) instead of taking the
+  page down.
+
+- **User avatars now sit beside the login list and appear in the settings trigger.**
+  The existing `config/users.yaml` form remains valid; deployments that want custom
+  pictures move it to `config/users/users.yaml`, put images in
+  `config/users/avatars/`, and add `avatar: name` (or an explicit filename) to each
+  relevant account. There is no separate registry: the value resolves directly inside
+  that one directory, and a missing, invalid or ambiguous image falls back to the new
+  packaged neutral avatar without affecting login.
+
+  Custom bytes are exposed only through the signed-in user's username-free
+  `/user/avatar` route, with a private short cache and ETag. The configuration
+  framework still does not guess aspect shapes: `users` explicitly opts into file and
+  directory forms, as dependent aspects do through their registration API (ADR-0045).
+
+- **The dashboard now says when the next update is due.** Wherever a check time
+  shows and the node is answered for by a single check, the armed next run joins
+  it: `22:25 → 22:30` — on the grid's cards and boxes and the branch page's head
+  line (the detail pages state it in words instead, in their Time card, where
+  printing both would say it twice). The value is **engine-sourced**, never
+  `timestamp + frequency` arithmetic: while you watch a failure, the fast retry
+  slot is what shows. The format is absolute on purpose — when polling fails, the
+  staleness dim leaves the page on screen, and a frozen relative "in 4m" would
+  keep looking live while a frozen `→ 22:30` stays true and recedes into the
+  past. Grid times drop their seconds with this — the whole pair is minute
+  precision, saving the row width — and the arrow is suppressed where it would
+  repeat the value beside it, so a sub-minute schedule shows a bare time. A
+  mount two checks share and the leaves below a branch check keep their bare
+  times. The run's wall time lands in the model beside it and surfaces in the
+  node-facts block below; the JSON envelope is untouched until the client
+  contract round.
+
+- **A reason entry can carry its own status code — so one node's lines can
+  disagree, and a running rerun no longer hides a failure.** A check whose lines
+  have verdicts of their own (this workflow failed, that one passed) hands over
+  `Entry(slug, text, code, running)` values and declares no node code at all: the
+  node derives it from the lines, an empty entry set reads OK ("nothing to
+  report" is not "nothing reported"), and declaring both is refused at
+  construction rather than silently resolved. Pinning the one failing line now
+  turns the node the worst of what is left — silencing one finding no longer
+  discolors the rest — and pinning every line reads maintenance, exactly as with
+  real children (ADR-0042).
+
+  On the dashboard and the leaf page, every coded line paints its state's own
+  measured tint with a small labeled shape cue (a line has no status word, so the
+  cue is its accessible name) — a passed line is green even inside a red card,
+  which is the point — and `running: true` renders in italic while the line's
+  words still say it: a failed build's retry is legible at a glance without
+  displacing the verdict.
+  Existing checks change nothing: entries without codes keep carrying their
+  node's, permanently. The JSON envelope is untouched; per-entry codes reach it
+  with the client contract round. The live demo grows a `/ci/pipelines` node
+  that walks the whole arc.
+
+- **The Copy page now turns the live incident into paste-ready Markdown or rich
+  text.** It keeps every non-OK leaf and only the ancestor chain needed to locate
+  it, drops wholly healthy branches, preserves authored reason formatting, and
+  marks status without relying on color. Maintenance stays accountable in the
+  snapshot: whole-node and per-reason pins name who set them and when they expire,
+  while a silenced node still shows the status it is suppressing.
+
+  Both buttons use one immutable tree snapshot and one canonical Markdown document.
+  **Copy Markdown** writes plain text; **Copy rich text** writes HTML with the same
+  Markdown as its plain-text fallback. The page shows the exact source for manual
+  copying when clipboard access is unavailable, and an all-OK tree gets a clear
+  empty state instead of copying an empty document.
+
+
 - **`./start.sh` now accepts both legal forms of the `users` aspect.** Its early
   preflight was still hard-coded to `config/users.yaml`, so it rejected the
   `config/users/users.yaml` layout that carries avatars before the app could load it.
   The preflight now follows `LITTLE_SISTER_CONFIG_DIR` in root order, accepts `.yaml`
-  and `.yml` file or directory forms, honors the explicit `LITTLE_SISTER_USERS` file
-  override, and rejects the same duplicate or malformed shapes as the loader.
+  and `.yml` file or directory forms, and rejects the same duplicate or malformed
+  shapes as the loader.
 
-## [0.2.4] - 2026-08-03
+## [0.2.4] - 2026-08-02
 
 ### Fixed
 
 - **A branch whose children are all silenced no longer reads as "nothing here has
   reported yet".** The roll-up skips a pinned child, and a parent with nothing left to
   count fell through to `UNDEFINED` — the idle state — so silencing every host in a
-  rack turned the rack card grey and dropped it out of the view as unmonitored, rather
+  rack turned the rack card gray and dropped it out of the view as unmonitored, rather
   than blue and accounted for. *We silenced everything under here* and *nothing under
   here has ever reported* are different facts and one of them is an operator's own
   doing. The parent now reads `MAINTENANCE` when a child was skipped because it is
   silenced, and stays `UNDEFINED` when the children have merely not reported.
 
-  This is the edge case ADR-0032's amendment left open, and the model had already
+  This is the edge case ADR-0032 left open, and the model had already
   answered it one level down: a node whose *reasons* are all pinned reads maintenance,
   and its reasons are virtual children of exactly this walk. Real and virtual children
   reading differently in one model was the bug.
@@ -1709,12 +2022,12 @@ contract versions **separately** — see `docs/api/openapi.yaml` `info.version`.
   and the things she watches now orbit *behind the eyes*, on two faint rings, on
   the page's own canvas — no panel, no black box, and wider than the reading
   column, because the terms are the page's air and the paragraphs are its
-  content. The page centres itself in the window rather than piling its empty
+  content. The page centers itself in the window rather than piling its empty
   space underneath.
   Underneath, she says a line at a time: a couple of the ways systems go wrong,
   one longer observation, then nine short lines that end on the promise the page
   exists to make — and then it stops, so the story begins on a quiet page.
-  **Colour means something here.** Green is *seen*: it is spent only on the term
+  **Color means something here.** Green is *seen*: it is spent only on the term
   the eyes are on — and on the phrase in the paragraph that names it, so
   *my eyes stay on the things you care about* lights up as it says it. Pink is
   her, and nothing else takes it. Everything at rest is muted, and monospace is
@@ -2118,7 +2431,7 @@ contract versions **separately** — see `docs/api/openapi.yaml` `info.version`.
   opens the link in a new tab.
 
 
-## [0.2.2] - 2026-07-20
+## [0.2.2] - 2026-07-19
 
 ### Added
 
@@ -2244,7 +2557,7 @@ contract versions **separately** — see `docs/api/openapi.yaml` `info.version`.
   each start** instead of falling back to a fixed, insecure development key.
   Sessions (logins) reset on a restart unless an explicit key is configured.
 
-## [0.2.0] - 2026-07-15
+## [0.2.0] - 2026-07-18
 
 First release. little-sister is a small, self-hosted status dashboard:
 configurable **checks** run on background threads in a single process, their

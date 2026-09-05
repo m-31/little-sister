@@ -1,7 +1,7 @@
 # ADR-0034 — Template slots for dependent packages
 
 - **Status:** Accepted
-- **Date:** 2026-08-23 (accepted 2026-08-01)
+- **Date:** 2026-09-05 (accepted 2026-08-01)
 - **Related:** [ADR-0001](0001-in-process-threaded-engine.md) (the import-before-app
   registration slot this reuses), [ADR-0018](0018-markdown-rendering.md) (what a
   reason is made of, and why raw HTML is escaped there),
@@ -195,11 +195,13 @@ dependent package fills a slot with **a template of its own** plus an optional
   visible here.
 - The JSON envelope (ADR-0008) is **unchanged**. A slot is presentation; a native
   client sees nothing new, and nothing about the status model moves.
-- **An extension can only render link-shaped and inline-styled interactions today.**
-  A filler's template may contain a `<form>` posting to the deployment's own endpoint,
-  or inline `style=`, but it cannot ship a `.js` file — the seam has no way to serve
-  one. This is a real limit, recorded rather than left to be rediscovered; the first
-  consumer does not need it, because a pre-filled issue-creation URL is a link.
+- **An extension renders link-shaped and inline-styled interactions, and may ship its
+  own assets.** A filler's template may contain a `<form>` posting to the deployment's
+  own endpoint, or inline `style=`. It could not ship a `.js` file — the seam had no
+  way to serve one — until [ADR-0037](0037-extension-static-assets.md) gave it
+  `register_assets`, which serves a filler's own `.js` and `.css` content-hashed from
+  the library. The link-shaped default stands, and the first consumer needs nothing
+  more, because a pre-filled issue-creation URL is a link.
 - **Escaping stays the library's.** A provider that returns a string containing markup
   gets it escaped, which is the intended failure direction: an extension that really
   wants markup has to say so in *its own template*, where the reviewer can see it.

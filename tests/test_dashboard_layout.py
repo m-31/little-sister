@@ -213,7 +213,7 @@ class AllocateSpansTests(TestCase):
     def test_the_tallest_card_wins_because_the_row_is_as_tall_as_it(self):
         # Min-max: the shorter card's step has the better reduction per track
         # (8 versus 4), but spending there leaves the row exactly as tall as
-        # before — the 66-row neighbour still owns the row height.
+        # before — the 66-row neighbor still owns the row height.
         profiles = (
             _profile((1, 30), (2, 22)),
             _profile((1, 66), (2, 62)),

@@ -2,6 +2,20 @@
 # Loaded from this file (override the path with LITTLE_SISTER_CONFIG).
 # Any missing option falls back to its default.
 
+# What this instance is called — on /system, and in whatever a package writes down
+# about the process it is running in, such as a keeper marking the state it keeps in
+# a bucket (ADR-0074). Optional; the default is the machine's hostname, which in a
+# container is already the task or pod name.
+#
+# Choose one where a fleet of identical hosts makes `ip-10-0-3-14` say nothing.
+# It is safe to choose: the library appends this process's pid, start time and eight
+# random characters, so two instances given the same name here still hold different
+# marks. It may not contain `:` (the mark's separator) or whitespace, and it is
+# capped at 64 characters; anything else falls back to the hostname with a warning
+# rather than refusing the start.
+#
+# instance: web-frontend
+
 # Timezone for displayed timestamps (an IANA name, e.g. Europe/Berlin, UTC).
 timezone: Europe/Berlin
 
@@ -9,18 +23,18 @@ timezone: Europe/Berlin
 time_format: "%Y-%m-%d %H:%M:%S"
 
 # Reason lines a dashboard card shows before a header chevron reveals the rest (the
-# reason-overflow budget, ADR-0024). Short reasons show this many reasons; a reason that
+# reason-overflow budget, ADR-0056). Short reasons show this many reasons; a reason that
 # wraps to several lines uses more of the budget. A non-negative integer; default 6.
 reason_cap: 6
 
 # Quiet (non-warn/error) child boxes a branch shows in the dense ("chips") view
-# before a "+N more" control reveals the rest (extends ADR-0024). Warn/error boxes
+# before a "+N more" control reveals the rest (ADR-0056). Warn/error boxes
 # are never capped, so nothing urgent is hidden; with the density switch off,
 # everything is spelled out regardless. A non-negative integer; default 3.
 branch_cap: 3
 
 # Maintenance pins the strip pill's popover shows before a "+N more" links to the full
-# /maintenance page (extends ADR-0024). A non-negative integer; default 5 (0 sends
+# /maintenance page (ADR-0056). A non-negative integer; default 5 (0 sends
 # every pin straight to the /maintenance page).
 maintenance_cap: 5
 
@@ -69,3 +83,33 @@ retry_interval: 0
 # Fast attempts per failure episode (the budget). A non-negative integer;
 # default 2.
 retry_attempts: 2
+
+# How often the kept state files under var/state/ — the event log, and what joins
+# it — are written (ADR-0071): at most once per this many seconds, on the scheduler
+# tick, and once more at graceful shutdown, so an unclean shutdown loses at most
+# this much. Maintenance pins are written through as they change and never wait on
+# it. A positive integer; default 60.
+state_interval: 60
+
+# Worker threads the engine's pool is built with (ADR-0075). A ceiling, not a
+# size: the pool is never larger than the number of checks configured. It is also
+# what startup measures the checks' declared cost against — a type may say what a
+# run of it costs, and a configuration whose declared costs cannot fit is refused
+# with the checks named — so this is where a deployment answers such a refusal
+# when it has the threads to spare. A positive integer; default 8.
+max_workers: 8
+
+# How many reason entries the tree may hold, over every node (ADR-0072): what the
+# engine's own `entries` line watches, and what declared entry counts are summed
+# against at startup. At the measured half kilobyte an entry the default is about
+# fifty megabytes held — the snapshot copied per poll and the JSON envelope sent
+# to every client grow with it, and both bind before memory does. A positive
+# integer; default 100000.
+entry_limit: 100000
+
+# The share of what the machine gives this process — its physical memory, or the
+# cgroup limit where one is set and smaller — that the process may be resident at
+# before the engine's `memory` line turns red; amber at 80 % of that. A fraction
+# above 0 and at most 1; default 0.5, one gunicorn worker beside the OS. Where
+# the machine cannot say what it gives the process there is no memory line at all.
+memory_share: 0.5

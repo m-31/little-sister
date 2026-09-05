@@ -23,10 +23,10 @@ The shape of it is three steps:
 3. **Present** — a **web interface** shows that tree (the whole thing, its top
    branches, or a selected branch) plus the history of changes.
 
-It is a plain **Python application** — in principle it runs anywhere Python does, not
-only macOS — though for now it is still run only on macOS. A check reaches whatever the
-host and its network allow: Linux machines, remote servers, and the Apple ecosystem (for
-example a Mac over SSH).
+It is a plain **Python application** and runs wherever Python does: on a Mac on the
+network it watches, or in a Linux container behind a load balancer. A check reaches
+whatever the host and its network allow: Linux machines, remote servers, and the
+Apple ecosystem (for example a Mac over SSH).
 
 little-sister is deliberately a small **core** that a **deployment extends**, not a
 monolith. The core ships the engine, the built-in check types and the web / JSON
@@ -200,7 +200,16 @@ Two related capabilities — the first shipped, the second still planned:
 
 ## 3. Product surfaces (web interface)
 
-The app is gated behind a small user list (login/logout) and offers:
+The app is gated, and **who may sign in comes from outside it**: an installation
+registers one or more named **doors** — the built-in user list (login/logout), or an
+identity provider of its own, whether one the app redirects to or one that has already
+identified the request before it arrives — and little-sister ships one door itself, a
+**system administrator**, for the times the provider cannot answer. A door is entered
+deliberately and never tried in turn, so `/login` is either the default door's own
+login step or a page offering the choice
+([ADR-0069](adr/0069-identity-comes-from-outside-and-one-account-does-not.md)).
+
+The app offers:
 
 - **Status dashboard** (`/status`, `/status/<branch>`) — the live status tree as a
   grid of system cards. Each system and subsystem is a box color-coded by its

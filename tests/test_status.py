@@ -113,7 +113,7 @@ class StatusTests(TestCase):
         self.assertEqual(leaf.get_status_code(), StatusCode.UNDEFINED)
 
     def test_all_ignored_children_read_maintenance_when_one_was_silenced(self):
-        """The edge case ADR-0032's amendment left open, now answered.
+        """The edge case ADR-0032 left open, now answered.
 
         This asserted ``UNDEFINED`` while it was open. The model already answers the
         same question one level down — a node whose *virtual* children (its reason

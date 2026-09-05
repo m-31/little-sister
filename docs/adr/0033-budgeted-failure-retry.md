@@ -1,7 +1,7 @@
 # ADR-0033 — A faster second look: the budgeted failure retry
 
 - **Status:** Accepted
-- **Date:** 2026-08-23 (accepted 2026-07-31)
+- **Date:** 2026-08-23 (accepted 2026-08-01)
 - **Related:** [ADR-0001](0001-in-process-threaded-engine.md) (the scheduler and
   bounded worker pool this leans on),
   [ADR-0005](0005-dashboard-freshness-and-self-monitoring.md) (freshness, which

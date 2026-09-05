@@ -14,7 +14,7 @@
 
 - **Status:** Superseded by
   [ADR-0054](0054-python-floor-and-development-version.md)
-- **Date:** 2026-06-25
+- **Date:** 2026-06-27
 - **Related:** [ADR-0001](0001-in-process-threaded-engine.md) (single-host threaded
   engine), [ADR-0002](0002-rlock-snapshot-synchronization.md) (locking is
   GIL-independent).

@@ -13,11 +13,12 @@ import threading
 import time
 import traceback
 import zlib
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
+from little_sister import self_report
 from little_sister.checks import (
     Check,
     CheckError,
@@ -29,7 +30,12 @@ from little_sister.checks import (
     plain,
 )
 from little_sister.config import config
+from little_sister.limits import EngineReport, LateRun, Limits, Waiting, capacity
 from little_sister.logger import logger
+from little_sister.readiness import Outcomes
+from little_sister.reasons import Entry, derive_code, slug
+from little_sister.spans import format_duration
+from little_sister.state import StateLayer
 from little_sister.status import HEARTBEAT_PATH, StatusCode, join_path, leaf_name
 from little_sister.tree import StatusTree, status_tree
 
@@ -60,7 +66,9 @@ DETAIL_LIMIT = 1200
 #: split across lines that no longer carry it.
 DETAIL_SEPARATOR = " | "
 
-DEFAULT_MAX_WORKERS = 8
+# The worker ceiling is `DEFAULT_MAX_WORKERS` in `limits`, beside the other
+# numbers the engine measures itself against and beside the setting that
+# overrides it; `Engine` reads it through `config` like the rest of them.
 DEFAULT_POLL_INTERVAL = 1.0
 # The spread window for check start times: every check still runs in the first
 # sweep, but its schedule is phase-shifted once, at the first re-arm, by a
@@ -72,7 +80,22 @@ STAGGER_WINDOW_SECONDS = 60.0
 # The engine's self-monitoring node: it heartbeats HEARTBEAT_PATH (reserved —
 # see status.py; the dashboard renders it as the status strip, ADR-0024) every
 # scheduler tick, so a dead scheduler shows up stale and degraded (ADR-0005).
+# The beat carries what the instance says about itself — the engine's own lines
+# and every registered contributor's (ADR-0072) — as pinnable entries whose
+# codes derive the node's own (ADR-0042).
 HEARTBEAT_DESCRIPTION = "little-sister monitoring engine — beats every scheduler tick"
+# The engine's own lines live on this child of the heartbeat, as a contributor's
+# live on the child that carries its name (ADR-0076).
+ENGINE_REPORT = "engine"
+ENGINE_TITLE = "Engine"
+ENGINE_ABOUT = (
+    "What the engine measures about itself against its limits as it runs — the "
+    "entries held, the resident size, the pool, the scheduler's lag, a run that "
+    "outgrew its period — and the configuration it could not serve. Recorded on "
+    "its side and read on the tick, never probed (ADR-0072)."
+)
+# What every child of the heartbeat says on its hover card, after its own `about`.
+CHILD_DESCRIPTION = "what this instance says about itself — one contributor's report"
 # Default `about` for the heartbeat, so the dashboard strip explains itself in
 # the hover card (ADR-0019) out of the box. Seeded at engine construction —
 # before the startup nodes.yaml pass, whose declaration simply overwrites it
@@ -106,9 +129,10 @@ def _retry_settings(check: Check) -> tuple[int, int]:
         try:
             interval = parse_duration(config.retry_interval or None, 0)
         except CheckError:
-            logger.warning(
-                "config: invalid retry_interval %r; the failure retry stays "
-                "off", config.retry_interval)
+            self_report.startup.note(
+                "retry-interval",
+                plain(f"retry_interval {config.retry_interval!r} is not a duration; "
+                      f"the failure retry stays off"))
             interval = 0
     attempts = (check.retry_attempts if check.retry_attempts is not None
                 else config.retry_attempts)
@@ -158,6 +182,9 @@ class _Scheduled:
     retry_used: int = 0
     last_code: StatusCode = StatusCode.UNDEFINED
     retrying: bool = False
+    # When the scheduler handed the check to the pool (the engine's clock), so
+    # the tick can see how long it has waited for a worker (ADR-0072).
+    submitted_mono: float | None = None
     # The in-flight run: its wall-clock start and the monotonic mate, set when
     # execution begins (queue wait excluded), cleared when it finishes.
     run_started_at: str | None = None
@@ -167,6 +194,13 @@ class _Scheduled:
     # never runs, so both stay None. Read under the engine lock.
     last_run_at: str | None = None
     elapsed_seconds: float | None = None
+    # The code of the **last result this check stored**, `None` until the first
+    # one lands — including the ERROR a secret-pinned check stores without ever
+    # calling run(). Deliberately not `last_code` above, which the retry block
+    # moves only when an episode ends and leaves at UNDEFINED for a check with no
+    # retry configured: what the readiness report needs is what every check last
+    # said, on every completion (ADR-0073). Read under the engine lock.
+    last_stored: StatusCode | None = None
 
 
 @dataclass(frozen=True)
@@ -196,34 +230,80 @@ class CheckInfo:
     retrying: bool = False
     retry_attempt: int = 0
     retry_attempts: int = 0
+    #: What this check declared it costs (ADR-0075): worker seconds per run and
+    #: reason entries held, or ``None`` where the type did not estimate. They sit
+    #: beside ``elapsed_seconds`` — the measurement — on purpose: an estimate
+    #: decays as an estate grows, and the page is where that becomes visible.
+    expected_cost: float | None = None
+    expected_entries: int | None = None
 
 
 @dataclass(frozen=True)
 class EngineInfo:
-    """A snapshot of the engine's runtime state."""
+    """A snapshot of the engine's runtime state.
+
+    ``declared_workers`` / ``declared_entries`` are the sums startup measured the
+    configuration against (ADR-0075) and ``entries_held`` is what the tree holds
+    now, so the page can show the estimate and the measurement in one place.
+    """
     started_at: str | None
     uptime_seconds: float
     max_workers: int
     check_count: int
     running: int
     checks: tuple[CheckInfo, ...]
+    declared_workers: float = 0.0
+    declared_entries: int = 0
+    entries_held: int = 0
+    entry_limit: int = 0
 
 
 class Engine:
     """Runs a set of checks on their own schedules against a status tree."""
 
     def __init__(self, checks: list[Check], tree: StatusTree, *,
-                 max_workers: int = DEFAULT_MAX_WORKERS,
+                 max_workers: int | None = None,
                  poll_interval: float = DEFAULT_POLL_INTERVAL,
                  clock: Callable[[], float] = time.monotonic,
-                 heartbeat_warning: list[str] | None = None) -> None:
+                 heartbeat_warning: Sequence[Entry] | None = None,
+                 heartbeat_report: str = "",
+                 state: StateLayer | None = None,
+                 limits: Limits | None = None) -> None:
+        # The limits this engine measures itself against: what the deployment
+        # stated in `settings.yaml`, or the constants in `limits.py` where it
+        # said nothing — unless a caller composed its own and passed them.
+        self._limits = limits or Limits.from_machine(
+            entry_limit=config.entry_limit, memory_share=config.memory_share)
+        # The pool is never larger than the roster: eight workers for three
+        # checks are five threads that can never be used.
+        ceiling = config.max_workers if max_workers is None else max_workers
+        self._max_workers = max(1, min(ceiling, max(1, len(checks))))
+        # What the configured checks **declared** they cost, summed against the
+        # pool this engine will actually run and against the entry limit
+        # (ADR-0075). A declared load that cannot fit refuses here — first, before
+        # anything is registered on the tree, so a refusal leaves nothing half
+        # built — because those checks would still run and still report, without
+        # measuring what the operator believes they measure.
+        self._capacity = capacity(checks, max_workers=self._max_workers,
+                                  limits=self._limits)
+        if refusals := self._capacity.refusals():
+            raise CheckError("; ".join(refusals))
+        for _limit, said in self._capacity.warnings():
+            logger.warning("engine: %s", said)
         self._tree = tree
         # A configured-but-empty deployment: the engine runs, and every beat
-        # carries these reasons at WARN instead of OK (see _tick / ADR-0031 §7).
-        self._heartbeat_warning = heartbeat_warning
+        # carries these lines at WARN instead of OK (see _tick / ADR-0031 §7).
+        self._heartbeat_warning = tuple(heartbeat_warning or ())
+        # What stands beside the warning as a fact — the paths that were searched
+        # for checks — is the engine's report, not a second line (ADR-0076).
+        self._heartbeat_report = heartbeat_report
+        # The state layer (ADR-0071), when the application keeps one: its kept
+        # files are written on the tick and once more at stop().
+        self._state = state
         # Make the self-monitor legible before it ever beats: the strip's
         # hover card can always say what /little-sister is (the nodes.yaml
-        # pass runs later at startup and overrides this default).
+        # pass runs later at startup and overrides this default). The children
+        # take their labels on the tick, fill-only, so the same pass wins there.
         tree.set_about(HEARTBEAT_PATH, HEARTBEAT_ABOUT)
         # Tell the tree where each check writes its result root, so a container above
         # exactly one of them can publish that check's run time as its own observation
@@ -235,7 +315,6 @@ class Engine:
             tree.set_check_mount(check.path)
         self._clock = clock
         self._poll_interval = poll_interval
-        self._max_workers = max(1, min(max_workers, max(1, len(checks))))
         now = clock()
         # Every check is due immediately, so the first sweep populates the
         # tree; the stagger then phase-shifts each schedule once so the
@@ -255,10 +334,39 @@ class Engine:
         self._scheduler: threading.Thread | None = None
         self._started_at: str | None = None
         self._started_monotonic: float | None = None
+        # The engine's own lines (ADR-0072): what it measures against its limits
+        # as it runs, recorded on the tick and read there. A `timeout` longer than
+        # the `frequency` is a configuration that can run late — a warning here,
+        # at load, and an uncoded line on the beat for as long as the process
+        # runs; never a refusal, because a run longer than its period is a late
+        # run, not a broken one.
+        self._report = EngineReport(
+            checks, workers=self._max_workers, poll_interval=poll_interval,
+            limits=self._limits, capacity=self._capacity)
+        for late in self._report.may_run_late:
+            logger.warning(
+                "check %s: timeout %s is longer than its frequency %s, so a run "
+                "may outgrow its period — it will run late, not be refused",
+                late.path, format_duration(int(late.timeout_seconds)),
+                format_duration(late.frequency_seconds))
 
     @property
     def check_count(self) -> int:
         return len(self._scheduled)
+
+    @property
+    def outcomes(self) -> Outcomes:
+        """What this engine's checks have done so far (ADR-0073): how many are
+        configured, how many have stored a result at least once, and how many
+        last stored an ``ERROR``. Recorded state, read under the lock — the
+        readiness answer and the instance's own line both come from here, and
+        neither asks a check anything."""
+        with self._lock:
+            stored = [item.last_stored for item in self._scheduled]
+        return Outcomes(
+            configured=len(stored),
+            completed=sum(1 for code in stored if code is not None),
+            erroring=sum(1 for code in stored if code is StatusCode.ERROR))
 
     def check_roots(self) -> list[str]:
         """Each configured check's node path — the static roots the maintenance
@@ -276,6 +384,13 @@ class Engine:
         # The schedule runs on the monotonic clock; project each next-due onto
         # the wall clock once, here, so the system page can show a time of day.
         wall = datetime.now()
+        # What each check declared, read once from the load-time arithmetic
+        # rather than by asking the checks again: a declaration is computed from
+        # configuration and cannot change while the process runs.
+        declared_cost = {item.path: item.cost_seconds
+                         for item in self._capacity.declared}
+        declared_entries = {item.path: item.entries
+                            for item in self._capacity.declared}
         with self._lock:
             checks = tuple(
                 CheckInfo(path=item.check.path,
@@ -294,7 +409,9 @@ class Engine:
                           elapsed_seconds=item.elapsed_seconds,
                           retrying=item.retrying,
                           retry_attempt=item.retry_used,
-                          retry_attempts=item.retry_attempts)
+                          retry_attempts=item.retry_attempts,
+                          expected_cost=declared_cost.get(item.check.path),
+                          expected_entries=declared_entries.get(item.check.path))
                 for item in self._scheduled)
             running = sum(1 for item in self._scheduled if item.running)
         uptime = (now - self._started_monotonic
@@ -302,7 +419,11 @@ class Engine:
         return EngineInfo(
             started_at=self._started_at, uptime_seconds=uptime,
             max_workers=self._max_workers, check_count=len(self._scheduled),
-            running=running, checks=checks)
+            running=running, checks=checks,
+            declared_workers=self._capacity.workers,
+            declared_entries=self._capacity.entries,
+            entries_held=self._tree.entry_count,
+            entry_limit=self._limits.entry_limit)
 
     def start(self) -> None:
         """Start the scheduler and worker pool (idempotent).
@@ -334,6 +455,12 @@ class Engine:
         executor, self._executor = self._executor, None
         if executor is not None:
             executor.shutdown(wait=False, cancel_futures=True)
+        # The graceful-shutdown write of the kept state files (ADR-0071), after
+        # the scheduler thread is gone so no tick races it, and then the keeper's
+        # close; a run still finishing on the pool may append after this, which is
+        # what "at most the interval" means.
+        if self._state is not None:
+            self._state.shutdown()
 
     def run_once(self) -> None:
         """Run every check once, synchronously, and upsert results.
@@ -351,8 +478,12 @@ class Engine:
             # scheduler thread and stop all monitoring.
             try:
                 self._tick()
-            except Exception:
+            except Exception as error:
                 logger.exception("engine: scheduler tick failed")
+                self_report.runtime.see(
+                    "tick",
+                    plain(f"a scheduler tick raised ({error!r}); the scheduler "
+                          f"went on to the next"), log=False)
             self._stop.wait(timeout=self._poll_interval)
 
     def _tick(self) -> None:
@@ -364,6 +495,7 @@ class Engine:
                 if item.running or item.next_due > now:
                     continue
                 item.running = True
+                item.submitted_mono = now
                 item.next_due = (now + item.check.frequency_seconds
                                  + item.stagger)
                 item.stagger = 0.0
@@ -371,26 +503,92 @@ class Engine:
                 # may pull it earlier (ADR-0033)
                 item.retrying = False
                 executor.submit(self._execute, item)
+        self._observe(now)
         # The engine reports its own liveness as the heartbeat node (the
         # dashboard's status strip); if the scheduler stalls it goes stale and
         # degrades to at least WARN (ADR-0005). With nothing configured to watch,
         # the beat itself carries the WARN: the tree is *only* the heartbeat then,
         # so an OK here would roll up to an all-green root while nothing at all is
         # being monitored — the exact lie ADR-0005 exists to prevent.
+        #
+        # The beat is a branch (ADR-0076): the root carries the beat itself and
+        # nothing else, and every report the instance makes about itself is a
+        # child — the engine's own lines on /little-sister/engine, each
+        # contributor's on /little-sister/<name> — each line a member entry with
+        # the contributor's own slug so it can be pinned there, each child's code
+        # the worst of what its lines claim (ADR-0042) and OK when nothing does,
+        # and the root's the roll-up, which is what the status strip shows. A
+        # child exists whether or not it has something to say: a node that only
+        # appears when something is wrong is an absence a reader would have to
+        # notice. Reading a contributor is recorded state, never a probe, and one
+        # that raises is caught and named by the seam, so this stays a tick.
+        beat = max(1, round(self._poll_interval))
         self._tree.upsert(
-            HEARTBEAT_PATH,
-            StatusCode.OK if self._heartbeat_warning is None else StatusCode.WARN,
-            self._heartbeat_warning,
-            description=HEARTBEAT_DESCRIPTION,
-            frequency_seconds=max(1, round(self._poll_interval)))
+            HEARTBEAT_PATH, StatusCode.OK, (), members=True,
+            description=HEARTBEAT_DESCRIPTION, frequency_seconds=beat)
+        # Every line on a child carries a code; what the speaker merely *knows* is
+        # its report, on the child's page and never on a card (ADR-0044 decision
+        # 6, ADR-0076 decision 1). Written through every tick, empty included, so
+        # a fact the speaker no longer has does not outlive it.
+        own = self._heartbeat_warning + tuple(self._report.lines())
+        own_report = "\n\n".join(
+            part for part in (self._heartbeat_report, self._report.report()) if part)
+        self._tree.upsert(
+            join_path(HEARTBEAT_PATH, ENGINE_REPORT), derive_code(own), own,
+            members=True, description=CHILD_DESCRIPTION, frequency_seconds=beat,
+            title=ENGINE_TITLE, about=ENGINE_ABOUT, report=own_report)
+        for report in self_report.current_reports():
+            self._tree.upsert(
+                join_path(HEARTBEAT_PATH, report.name), derive_code(report.lines),
+                report.lines, members=True, description=CHILD_DESCRIPTION,
+                frequency_seconds=beat, title=report.title or None,
+                about=report.about or None, report=report.report)
         # Expire maintenance pins past their window (ADR-0014); a real transition,
         # so the next check refills the node.
         self._tree.sweep_expired()
+        # The kept state files, at most once per interval (ADR-0071).
+        if self._state is not None:
+            self._state.tick()
+
+    def _observe(self, now: float) -> None:
+        """Record, for the engine's own lines (ADR-0072), what the schedule shows
+        about itself at ``now``: the checks the pool has not started — a check
+        that has never completed a run excepted, because the first sweep submits
+        every check at once by design and a wait there is not saturation — and
+        the runs that outgrew their period, the one in flight measured so far or
+        the last one completed. The tree's entry count rides along; the report
+        measures the resident size itself."""
+        waiting: list[Waiting] = []
+        late: list[LateRun] = []
+        with self._lock:
+            for item in self._scheduled:
+                if (item.running and item.run_started_mono is None
+                        and item.submitted_mono is not None
+                        and item.last_run_at is not None):
+                    waiting.append(Waiting(item.check.path,
+                                           now - item.submitted_mono))
+                period = item.check.frequency_seconds
+                if period <= 0:
+                    continue
+                if (item.run_started_mono is not None
+                        and now - item.run_started_mono > period):
+                    late.append(LateRun(item.check.path,
+                                        now - item.run_started_mono, period,
+                                        in_flight=True))
+                elif (item.elapsed_seconds is not None
+                        and item.elapsed_seconds > period):
+                    late.append(LateRun(item.check.path, item.elapsed_seconds,
+                                        period, in_flight=False))
+        self._report.observe(now, entries=self._tree.entry_count,
+                             waiting=waiting, late=late)
 
     def _execute(self, item: _Scheduled, once: bool = False) -> None:
         check = item.check
         ran = not check.secret_errors
-        started = time.monotonic()
+        # The engine's one clock: the tick reads this start back against the
+        # same clock to see a run that has outgrown its period while still in
+        # flight, which an injected clock could not do against `time.monotonic`.
+        started = self._clock()
         with self._lock:
             item.run_started_at = datetime.now().isoformat()
             item.run_started_mono = started
@@ -417,7 +615,7 @@ class Engine:
                     error, limit=-TRACEBACK_FRAMES)).rstrip()))
             result = CheckResult(StatusCode.ERROR, reason)
         finally:
-            elapsed = time.monotonic() - started
+            elapsed = self._clock() - started
             with self._lock:
                 item.running = False
                 if ran:
@@ -430,6 +628,12 @@ class Engine:
         elapsed_ms = elapsed * 1000
         logger.info("check %s: %s (%.0f ms)%s", check.path,
                     result.stored_code.name, elapsed_ms, _detail(result))
+        with self._lock:
+            # Every completion, whatever it stored: this is what `outcomes` reads
+            # to see a first pass finish and an instance whose every check is
+            # erroring (ADR-0073). It is set before the retry block below, which
+            # may or may not touch `last_code` and means something else by it.
+            item.last_stored = result.stored_code
         # A faster second look on failure (ADR-0033): a non-OK completion pulls
         # the armed slot earlier — never later — to the retry interval, at most
         # `retry_attempts` times per episode. A secret-pinned check (`ran` False)
@@ -484,8 +688,12 @@ class Engine:
                                  next_run_at=next_run_at)
         try:
             self._store(check.path, result, check, is_root=True)
-        except Exception:
+        except Exception as error:
             logger.exception("engine: failed to upsert %s", check.path)
+            self_report.runtime.see(
+                slug("upsert", check.path),
+                plain(f"the result of {check.path} could not be stored "
+                      f"({error!r}); the node shows the run before"), log=False)
 
     def _store(self, path: str, result: CheckResult, check: Check,
                *, is_root: bool = False) -> None:
@@ -512,7 +720,7 @@ class Engine:
         ``nodes.yaml`` override still wins. Their **first** source is not the
         result at all but ``check.subnode_labels`` — the deployment's ``subnodes:``
         block resolved over what the type declared, keyed by subnode *name* at any
-        depth, exactly like the flag below (ADR-0025's 2026-08-19 update). Per
+        depth, exactly like the flag below (ADR-0025). Per
         field: a resolved ``title`` and a stamped ``about`` coexist on one node,
         because that is how every other precedence in this pair works. The result's
         label is read where that map is silent for the name — the dynamically named
@@ -570,10 +778,14 @@ class Engine:
 
 def create_engine(config_dir: str | None = None, *,
                   tree: StatusTree = status_tree,
-                  max_workers: int = DEFAULT_MAX_WORKERS) -> Engine:
+                  max_workers: int | None = None,
+                  state: StateLayer | None = None,
+                  limits: Limits | None = None) -> Engine:
     """Load checks from the ``checks`` aspect of ``config_dir`` (default
     ``config``, ADR-0031) into a new engine bound to ``tree`` (the shared
-    :data:`status_tree` by default).
+    :data:`status_tree` by default) and to ``state``, the application's state
+    layer, when it keeps one (ADR-0071); ``limits`` are the engine's own
+    (:mod:`~little_sister.limits`), derived from the machine when not given.
 
     A configuration tree with **no checks in it yet** is a real and temporary
     state — a fresh install, a deployment mid-bring-up — so the engine starts, a
@@ -583,7 +795,8 @@ def create_engine(config_dir: str | None = None, *,
     :func:`~little_sister.checks.loader.checks_dirs`.)
     """
     checks = load_checks(config_dir)
-    warning: list[str] | None = None
+    warning: list[Entry] | None = None
+    report = ""
     if not checks:
         searched = [str(directory.resolve())
                     for directory in checks_dirs(config_dir)]
@@ -593,8 +806,13 @@ def create_engine(config_dir: str | None = None, *,
         # read as emphasis — `/srv/ls_prod/config_dir/checks` would italicize
         # between its underscores. Same shape the check-error path two functions
         # up uses: the sentence through `plain`, the captured text through `code`.
-        warning = [plain("no checks configured — nothing is being watched. "
-                         "Searched:"),
-                   code("\n".join(searched))]
+        # One condition, two places: the sentence is the WARN line, the searched
+        # paths are a fact and go in the engine's report (ADR-0076).
+        warning = [Entry("no-checks",
+                         plain("no checks configured — nothing is being watched; "
+                               "the report says where it looked"),
+                         code=StatusCode.WARN)]
+        report = "Searched for checks in:\n\n" + code("\n".join(searched))
     return Engine(checks, tree, max_workers=max_workers,
-                  heartbeat_warning=warning)
+                  heartbeat_warning=warning, heartbeat_report=report, state=state,
+                  limits=limits)

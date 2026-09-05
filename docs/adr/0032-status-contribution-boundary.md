@@ -1,7 +1,7 @@
 # ADR-0032 — The contribution boundary: what a node shows and what it publishes
 
 - **Status:** Accepted
-- **Date:** 2026-08-23 (accepted 2026-07-31)
+- **Date:** 2026-08-23 (accepted 2026-08-01)
 - **Related:** [ADR-0004](0004-status-aggregation-semantics.md) (the roll-up this
   names a second half of), [ADR-0005](0005-dashboard-freshness-and-self-monitoring.md)
   (staleness — the first and, today, only transform),
@@ -93,7 +93,7 @@ matters most — on a quiet dashboard.
 
 **6. Every suppression keeps a liveness backstop.** A rule that decides not to
 report something must not also disable the freshness path
-([ADR-0005](0005-dashboard-freshness-and-self-monitoring.md) §1). A check that
+([ADR-0005](0005-dashboard-freshness-and-self-monitoring.md)). A check that
 stops running altogether has to escalate regardless of which policy is holding its
 result back — otherwise the suppression that was meant to quiet a known state
 silently covers a dead check.
@@ -150,10 +150,12 @@ raw reading (6), and a suppression whose entry is not present simply does not ap
 - Still open, and named below: the split of ADR-0004, the maintenance-policy record
   this now implements, and the marked events for transitions that happen under a
   pin.
-- **ADR-0004 will be split when that lands.** Its derived-roll-up rules and its
-  separate *failing check* decision belong in records of their own, with this one
-  as the third piece; the skip rules in §2/§3 are restated above and the
-  `MAINTENANCE` half of §3 is what a policy replaces. One obligation comes with it:
+- **ADR-0004 was split when that landed.** Its derived-roll-up rules are
+  [ADR-0039](0039-status-rollup-semantics.md) and its separate *failing check*
+  decision [ADR-0040](0040-what-a-failing-check-becomes.md), with this one as the
+  third piece; the skip rules are restated above and the `MAINTENANCE` half is what
+  a policy replaced ([ADR-0041](0041-maintenance-is-a-contribution-rule.md)). One
+  obligation came with it:
   its open edge case — a node whose children are **all** ignored — must be answered
   the way decision 8 answers it for virtual children (`MAINTENANCE`, not
   `UNDEFINED`), or real and virtual children would read differently in one model.

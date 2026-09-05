@@ -1,7 +1,10 @@
 # ADR-0015 — Check discovery: a union of config directories
 
-- **Status:** Accepted
-- **Date:** 2026-06-25
+- **Status:** Accepted; `LITTLE_SISTER_CHECKS_DIR` is gone since
+  [ADR-0031](0031-deployment-config-directory.md), which names the configuration
+  roots with `LITTLE_SISTER_CONFIG_DIR` instead — the union of every root's `checks/`
+  and the ownership rules below are unchanged.
+- **Date:** 2026-06-27
 - **Related:** [ADR-0001](0001-in-process-threaded-engine.md) (one process),
   [ADR-0014](0014-maintenance-persistence.md) (the immutable check set the reaper
   relies on). Satellite federation (`project.md` §2.9) is the multi-site mechanism
@@ -47,7 +50,7 @@ Keep per-deployment directories, selected **explicitly** by env; extend the env 
   container is owned by no one and rolls up — `host-metrics` + `qnap-metrics` don't
   clobber, while two of the same branch (identical child sets), or a leaf placed on
   the container (an ancestor of its children), overlap and are caught. The subtree
-  comparison even encodes §4.5's "sit beside" rule: a heartbeat must be a **sibling
+  comparison even encodes `architecture.md` §4.5's "sit beside" rule: a heartbeat must be a **sibling
   child** (`<host>.backup`), not the container's own status. A future **satellite**
   owns its whole graft subtree (it stamps `ERROR` on failure), so two satellites — or
   a satellite and any check beneath it — correctly error.

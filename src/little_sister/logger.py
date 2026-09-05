@@ -76,5 +76,8 @@ if not root_logger.handlers:
     logging.getLogger("markdown_it").setLevel(logging.INFO)
 
     if _level is None:
+        # Log only, and on purpose: this runs while the logger is being built,
+        # beneath every module that could record a self-report line — and a note
+        # about the log level belongs where the level was set, which is here.
         logger.warning("logger: LOG_LEVEL %r is not a level name; using %s",
                        _LEVEL_NAME, _DEFAULT_LEVEL)

@@ -6,7 +6,7 @@
  * (data-rendered-at), so a poll that fails before ever succeeding still
  * reports the page's own render time, not "last ok never".
  *
- * A sustained outage must not look like a blip (ADR-0005 update note): after
+ * A sustained outage must not look like a blip (ADR-0005): after
  * ESCALATE_AFTER consecutive misses the line grows a legible age, a real
  * banner rises above the content, the frozen content dims (.poll-stale) and
  * the tab title gains a "(stale) " prefix — one good poll resets everything,

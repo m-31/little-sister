@@ -23,6 +23,21 @@
                 <div>{{ info.running }}</div>
             </div></div>
         </div>
+        {# What the configuration declared, beside what the process is doing
+           (ADR-0075). The declared figures are what startup measured the
+           configuration against; the entries held is the count the engine's own
+           `entries` line watches. A declaration that has drifted from the
+           measurement is only visible if both are shown. #}
+        <div class="col-auto">
+            <div class="card"><div class="card-body">
+                <div class="text-muted small">Declared load</div>
+                <div>{{ "%.1f"|format(info.declared_workers) }}
+                    <span class="text-muted">of {{ info.max_workers }} worker threads</span></div>
+                <div class="text-muted small mt-2">Entries held</div>
+                <div>{{ "{:,}".format(info.entries_held) }}
+                    <span class="text-muted">of {{ "{:,}".format(info.entry_limit) }}{% if info.declared_entries %} · {{ "{:,}".format(info.declared_entries) }} declared{% endif %}</span></div>
+            </div></div>
+        </div>
     </div>
 
     {# The three schedule columns share one shape: a time of day (the
@@ -33,7 +48,7 @@
        a two-minute run reading `115 s`. #}
     <table class="table table-sm align-middle">
         <thead>
-            <tr><th>Check</th><th>Type</th><th>Frequency</th><th>Running</th><th>Next run</th><th>Last run</th></tr>
+            <tr><th>Check</th><th>Type</th><th>Frequency</th><th>Running</th><th>Next run</th><th>Last run</th><th>Declared</th></tr>
         </thead>
         <tbody>
             {% for c in info.checks %}
@@ -61,9 +76,19 @@
                             —
                         {% endif %}
                     </td>
+                    {# The type's own estimate, beside the run it is an estimate
+                       of. A type that will not estimate says nothing, and the
+                       cell is empty rather than zero — nothing declared is not
+                       the same claim as nothing spent. #}
+                    <td class="text-muted">
+                        {% if c.expected_cost is not none %}{{ c.expected_cost | elapsed }}{% endif %}
+                        {%- if c.expected_cost is not none and c.expected_entries is not none %} · {% endif %}
+                        {%- if c.expected_entries is not none %}{{ "{:,}".format(c.expected_entries) }} entries{% endif %}
+                        {%- if c.expected_cost is none and c.expected_entries is none %}—{% endif %}
+                    </td>
                 </tr>
             {% else %}
-                <tr><td colspan="6" class="text-muted">No checks.</td></tr>
+                <tr><td colspan="7" class="text-muted">No checks.</td></tr>
             {% endfor %}
         </tbody>
     </table>

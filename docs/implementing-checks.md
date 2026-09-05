@@ -121,8 +121,8 @@ What the base class gives you and expects:
   `timeout_seconds`, and `retry_interval_seconds` / `retry_attempts`
   ([ADR-0033](adr/0033-budgeted-failure-retry.md) — `None` inherits the deployment
   default, `0` switches the fast retry off for this check). Durations accept `30s` /
-  `15m` / `2h` / `1d` or a bare number. **`name:` in YAML is rejected** — it was
-  merged into `path` (ADR-0016).
+  `15m` / `2h` / `1d` / `1w` or a bare number, the units lowercase. **`name:` in YAML
+  is rejected** — it was merged into `path` (ADR-0016).
 - **Take `**kwargs` and forward them**, as the sketch above does — do not spell the
   common fields out in your own `__init__`. That list **grows**: `order` joined it in
   one minor release and the two retry fields in another, and a constructor naming the
@@ -145,6 +145,27 @@ What the base class gives you and expects:
   container outright — most of them — keeps the default `{self.path}`. Build the paths
   with `join_path` rather than by hand, or every plugin re-derives ADR-0016's
   normalization by guesswork.
+
+- **`expected_cost(self) -> float | None`** and
+  **`expected_entries(self) -> int | None`** *(optional)* — what one run of *this*
+  configuration is expected to occupy in worker seconds, and how many reason entries
+  it expects to hold ([ADR-0075](adr/0075-a-check-declares-what-it-costs.md)). Compute
+  them from your own parsed fields, in the constructor's arithmetic rather than from a
+  measurement: fifty repositories at two requests each is a different answer from one,
+  and only your type knows which it has. Startup sums what every declaring check
+  answers — each cost over its own `frequency_seconds` against the deployment's
+  `max_workers`, the entries against its `entry_limit` — and **refuses** a
+  configuration whose declared part alone cannot fit, naming the checks; 80 % of
+  either is a warning in the log and an uncoded line on `/little-sister`.
+
+  Declare an **estimate of a normal run**, never a bound: `timeout_seconds` is the
+  bound, and a type that declares it refuses deployments that work. Declare nothing —
+  the default — when the honest answer is *small and roughly constant*; the mechanism
+  is for types that read an estate. A declaration that raises or answers something
+  that is not a non-negative number is logged against your check's path and treated as
+  absent, so a broken estimate never stops a deployment starting. What you declare
+  shows on `/system` beside the wall time of the last run, which is where an estimate
+  that has drifted becomes visible.
 
 Raise **`CheckError`** for any bad configuration; the loader names the offending file.
 
@@ -424,7 +445,7 @@ it before importing `little_sister.app`.
   `critical high informational low medium`, filing *nothing to do* third. Set
   `order` and the snapshot sorts by `(order, name)` — a negative value pulls a node
   up, a positive one pushes it down, ties break by name, and the default `0` is
-  exactly the alphabetical behaviour, so a check that says nothing changes nothing
+  exactly the alphabetical behavior, so a check that says nothing changes nothing
   ([ADR-0055](adr/0055-sibling-order.md)). Unlike `about` / `title` it is read on the
   **root** as well as on children, so a leaf check can rank the node it owns — which
   also means a root rank competes with **other checks'** nodes on the same wall; rank a
@@ -671,10 +692,10 @@ Not because the engine cannot cope — it can, and turns any escaping exception 
 says nothing an operator can act on, and it replaces every line your check had
 published. Catch what you expect and say it properly.
 
-**Keep dependencies light.** Both extracted check-type packages — three check types
-between them — reach their provider through `little_sister.fetch` and
-`little_sister.transport`, and ship with little-sister as their only dependency. That
-is measured, not hoped for, and it is what keeps an extraction cheap.
+**Keep dependencies light.** The extracted check-type packages reach their provider
+through `little_sister.fetch` and `little_sister.transport`, and all but one ship
+with little-sister as their only dependency (the AWS type argued for boto3 in its own
+record). That is measured, not hoped for, and it is what keeps an extraction cheap.
 
 ---
 
@@ -731,11 +752,11 @@ Build a deployment check type so it lifts out cleanly: a **self-contained module
 credentials behind **secret references** (§6). This section is the *design* advice —
 what makes a type liftable when it turns out to have a second user.
 
-The table below is no longer a prediction. Three extractions have run against it and
+The table below is no longer a prediction. Four extractions have run against it and
 every row that applied held — what could not move turned out to be configuration
-already, which is the same line arriving from the other direction. Only the two check-type
-packages — three check types between them — exercised the whole table; the surface
-extension has no credential and no subnode prose, so it tested the knob row alone.
+already, which is the same line arriving from the other direction. The check-type
+packages exercised the whole table; the surface extension has no credential and no
+subnode prose, so it tested the knob row alone.
 
 The line to build against is **type vs deployment**: what is true of the check *type*
 travels inside the package, what is true of one installation stays in that

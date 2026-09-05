@@ -1,7 +1,7 @@
 # ADR-0009 — Per-profile remote metrics scripts (selected by host `profile`)
 
 - **Status:** Accepted
-- **Date:** 2026-06-25
+- **Date:** 2026-06-27
 - **Related:** [ADR-0007](0007-check-result-branches.md) (the `host-metrics` check reports a branch).
 - **Register:** [`../decisions.md`](../decisions.md)
 

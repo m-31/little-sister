@@ -236,7 +236,7 @@ class NeverVerifyTests(TestCase):
     This is the sentence that had already gone wrong once: `test_api.sh` claimed a
     *supplied* certificate was verified normally and only a minted one was not, while
     `tls_curl_args` returned `--insecure` for both. A comment cannot be type-checked,
-    so the behaviour is pinned here instead.
+    so the behavior is pinned here instead.
     """
 
     def _curl_args(self, flags: str = "", **environment: str) -> str:
@@ -522,7 +522,7 @@ class MintedCertificateTests(TestCase):
             self.assertNotEqual(first, second, "the pair was reused, not re-minted")
 
 
-#: A process that binds a port and waits. `is_ours` recognises our gunicorn by the
+#: A process that binds a port and waits. `is_ours` recognizes our gunicorn by the
 #: *command line* -- `*gunicorn*<APP>*` -- so a listener launched with those two words
 #: among its arguments is indistinguishable from the real thing to every function
 #: under test here, and needs neither gunicorn nor the application to run.

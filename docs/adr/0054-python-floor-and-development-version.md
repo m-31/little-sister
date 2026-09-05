@@ -1,8 +1,8 @@
 # ADR-0054 — A supported floor of 3.11, developed on 3.14
 
 - **Status:** Accepted
-- **Date:** 2026-08-09 (restating decisions taken 2026-06-25)
-- **Supersedes:** [ADR-0010](0010-python-version.md) — Target Python 3.14 (2026-06-25)
+- **Date:** 2026-08-09 (restating decisions taken 2026-06-27)
+- **Supersedes:** [ADR-0010](0010-python-version.md) — Target Python 3.14 (2026-06-27)
 - **Related:** [ADR-0001](0001-in-process-threaded-engine.md) (single-host threaded
   engine — the reason free-threading is interesting at all),
   [ADR-0002](0002-rlock-snapshot-synchronization.md) (locking is GIL-independent, so
@@ -13,7 +13,7 @@
 
 ## Context
 
-**Restated from ADR-0010 (2026-06-25).** `requires-python` sat at `>=3.14` with no
+**Restated from ADR-0010 (2026-06-27).** `requires-python` sat at `>=3.14` with no
 recorded rationale, and the question was whether to keep it or loosen it. The code
 forced nothing that new then and forces nothing that new now, so the pin was a
 **choice, not a constraint** — and the runtime context made a high floor cheap: the
@@ -56,7 +56,7 @@ decays silently.**
    code can keep without a port.
 
 2. **Development, the pinned interpreter and the everyday gate stay on 3.14**
-   (restated from ADR-0010, 2026-06-25). `.python-version` pins the exact patch level,
+   (restated from ADR-0010, 2026-06-27). `.python-version` pins the exact patch level,
    so every environment that runs the suite runs it on the same interpreter, and uv
    downloads it rather than adapting to whatever is present. The floor is what we
    *support*; 3.14 is what we *use*.
@@ -77,7 +77,7 @@ decays silently.**
      rules propose modern idioms, and one the floor cannot run is a proposal to break
      decision 1.
 
-4. **The free-threading door stays open** (restated from ADR-0010, 2026-06-25). A floor
+4. **The free-threading door stays open** (restated from ADR-0010, 2026-06-27). A floor
    forbids *requiring* 3.14, not running on it, and correctness never depended on it —
    [ADR-0002](0002-rlock-snapshot-synchronization.md) locks explicitly regardless of the
    GIL.
@@ -97,7 +97,7 @@ decays silently.**
   window in which every `pip install` fails for no gain. The three plugins declare
   `little-sister>=0.3.0`, a floor rather than a pin, which the next version satisfies.
 - **The floor is stated twice and has to agree with itself.** `requires-python` is what
-  a resolver honours; the `Programming Language :: Python :: 3.x` classifiers are what
+  a resolver honors; the `Programming Language :: Python :: 3.x` classifiers are what
   somebody filtering the index reads. Lowering one and not the other hides the package
   from exactly the people the change was for, and it happened the moment the floor moved.
   The classifiers must therefore **start at the floor** and be contiguous from it —
@@ -120,7 +120,7 @@ decays silently.**
   version, or somebody on 3.12 can install the library and not the plugin.
 - **Everyday cost:** one extra second on each commit, and about half a minute on each
   release.
-- **No external contract is affected** (restated from ADR-0010, 2026-06-25): federation
+- **No external contract is affected** (restated from ADR-0010, 2026-06-27): federation
   peers and the client apps speak JSON over HTTP, so the runtime version is invisible to
   them.
 - **A consumer-facing change**, so it belongs in the CHANGELOG rather than only here: a

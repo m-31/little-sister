@@ -1005,7 +1005,7 @@ class ActionChipPaintTests(unittest.TestCase):
             page.close()
 
     def test_the_veil_is_the_card_own_fill(self):
-        # Not merely *some* opaque colour: the fill the chip was already
+        # Not merely *some* opaque color: the fill the chip was already
         # sitting on, which is what keeps every measured ink pair unchanged.
         page = self._open()
         try:

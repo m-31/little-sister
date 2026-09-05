@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import abc
 import inspect
-import re
 import sys
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -31,6 +30,9 @@ from little_sister.reasons import (
     ReasonInput,
     derive_code,
     normalize,
+)
+from little_sister.reasons import (
+    plain as _plain,
 )
 from little_sister.status import StatusCode, join_path, leaf_name, split_path
 from little_sister.values import number, strict_flag
@@ -100,8 +102,8 @@ class CheckResult:
     first fill (stable identity, not live status — text that changes with the
     observation belongs in ``reason``).
 
-    They are the **fallback** channel, not the first one (ADR-0025 update
-    2026-08-19). A label a type ships for a subnode it always emits is
+    They are the **fallback** channel, not the first one (ADR-0025). A label a
+    type ships for a subnode it always emits is
     **declared**, not stamped — ``subnode_defaults`` on the constructor — and the
     library resolves it against the deployment's ``subnodes:`` block and stores it
     per child *name*. What is left for these two fields is the child whose name
@@ -115,7 +117,7 @@ class CheckResult:
     ``low`` before ``medium``, which is a wrong statement about severity. A check
     that knows better says so — ``order=1`` pushes a child down, a negative value
     pulls one up — and the snapshot sorts by ``(order, name)``. **The default `0`
-    is exactly today's behaviour**, so a check that never thought about order
+    is exactly today's behavior**, so a check that never thought about order
     cannot accidentally publish its loop: the rank is declared, never incidental.
 
     Unlike ``name`` / ``about`` / ``title`` it is read on the **root as well as on
@@ -426,9 +428,9 @@ class Check(abc.ABC):
         self.subnode_show_when_quiet: dict[str, bool] = {
             **_declared_show_when_quiet(subnode_defaults),
             **(subnode_show_when_quiet or {})}
-        # The same block's **labels**, resolved here and once (ADR-0025, update
-        # 2026-08-19). Three inputs meet: `subnode_labels` is the deployment's
-        # `subnodes:` block as `_parse_common` read it, `subnode_defaults` is
+        # The same block's **labels**, resolved here and once (ADR-0025). Three
+        # inputs meet: `subnode_labels` is the deployment's `subnodes:` block as
+        # `_parse_common` read it, `subnode_defaults` is
         # what this *type* declares it ships for the subnodes it always emits,
         # and `label_tokens` are the values its own text may reuse. The library
         # resolves them per field — configured text over declared default, with
@@ -469,6 +471,38 @@ class Check(abc.ABC):
         + ``qnap-metrics``) coexist on one host node, while a duplicate or a leaf
         placed on that container is caught."""
         return {self.path}
+
+    def expected_cost(self) -> float | None:
+        """Worker time one run of this check is expected to occupy, in **seconds**
+        — an estimate a type computes from its own configuration, or ``None``,
+        the default, for a type that will not estimate.
+
+        Fifty repositories at two requests each is a different number from one,
+        and only the type can say which it has; the library never guesses one.
+        This is an estimate and not a bound — ``timeout_seconds`` is the bound —
+        and the difference is why the default is silence: startup **sums what is
+        declared** over the checks that declare, against the worker threads the
+        engine runs, and refuses a configuration whose declared part alone cannot
+        fit, naming the checks. A type that declared its timeout here would refuse
+        configurations that work.
+
+        The sum is a lower bound on what the deployment costs, which is all a
+        refusal needs; what it cannot do is promise that a silent configuration
+        fits. The estimate decays as an estate grows, so the measured wall time
+        stands beside it on ``/system``.
+        """
+        return None
+
+    def expected_entries(self) -> int | None:
+        """Reason entries this check expects to hold in the tree at once, over
+        every node it owns — again from its own configuration, and ``None``, the
+        default, for a type that will not estimate.
+
+        Summed at startup against the tree's entry limit exactly as
+        :meth:`expected_cost` is against the worker threads, with the same
+        lower-bound reading and the same refusal naming the checks.
+        """
+        return None
 
     def config_summary(self) -> str:
         """The curated parameters this check ran with, as Markdown, for its detail
@@ -599,7 +633,7 @@ def _resolve_subnode_labels(
         declared: Mapping[str, Mapping[str, object]] | None,
         tokens: Mapping[str, str] | None) -> dict[str, dict[str, str]]:
     """One subnode label map: the text each named subnode's ``title`` / ``about``
-    finally reads (ADR-0025, update 2026-08-19).
+    finally reads (ADR-0025).
 
     ``configured`` is the deployment's ``subnodes:`` block, ``declared`` what the
     check type ships for the subnodes it always emits, ``tokens`` the values its
@@ -615,7 +649,7 @@ def _resolve_subnode_labels(
     A field that resolves to **nothing is left out** rather than stored empty, and
     the two are different things one layer up: the engine reads a child result's
     own label only where this map is silent for that name, which is what keeps a
-    dynamically named child — a volume, a repository the run discovered — labelled
+    dynamically named child — a volume, a repository the run discovered — labeled
     by the check that discovered it.
     """
     configured = configured or {}
@@ -702,7 +736,7 @@ def _parse_common(config: dict[str, Any]) -> dict[str, Any]:
         # default.
         "subnode_show_when_quiet": parse_show_when_quiet(config),
         # The **labels** out of that same block, read by the same library for
-        # the same reason (ADR-0025, update 2026-08-19). They were the type's to
+        # the same reason (ADR-0025). They were the type's to
         # read while its defaults lived as code it applied; once a type declares
         # them (`subnode_defaults`) there is nothing left for it to mediate, and
         # a `subnodes:` label written against a type that never read the block
@@ -737,28 +771,42 @@ def _parse_retry_attempts(value: object) -> int | None:
     return attempts
 
 
+#: The unit suffixes :func:`parse_duration` reads, each a fixed number of seconds.
+#: Lowercase on purpose: a unit is one letter, and the one capital that means
+#: something of its own elsewhere (``M``, a month) must not lowercase quietly into
+#: its neighbor. A month is not here because it is not a number of seconds — a
+#: calendar belongs to the windows work, never to a duration (ADR-0033).
+DURATION_UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}
+
+
 def parse_duration(value: object, default: int) -> int:
     """Parse a duration into whole seconds.
 
     Accepts a number (seconds) or a string with an optional unit suffix —
-    ``s`` seconds, ``m`` minutes, ``h`` hours, ``d`` days (e.g. ``"15m"``). A
-    missing value returns ``default``.
+    ``s`` seconds, ``m`` minutes, ``h`` hours, ``d`` days, ``w`` weeks (e.g.
+    ``"15m"``, ``"2w"``). Units are lowercase: ``5H`` is refused, and ``6M`` is
+    refused by name, because it used to read as six *minutes* to somebody who
+    meant six months. A missing value returns ``default``.
     """
     if value is None:
         return default
     if isinstance(value, (int, float)):
         return int(value)
-    text = str(value).strip().lower()
+    text = str(value).strip()
     if not text:
         return default
-    units = {"s": 1, "m": 60, "h": 3600, "d": 86400}
-    if text[-1] in units:
-        number, factor = text[:-1], units[text[-1]]
+    if text[-1] in DURATION_UNITS:
+        number, factor = text[:-1], DURATION_UNITS[text[-1]]
     else:
         number, factor = text, 1
     try:
         return int(float(number) * factor)
     except ValueError as exc:
+        if text[-1] == "M":
+            raise CheckError(
+                f"invalid duration: {value!r} — M is not a unit: m is minutes, "
+                f"and a month has no fixed length, so write it in weeks or days "
+                f"(26w, 180d)") from exc
         raise CheckError(f"invalid duration: {value!r}") from exc
 
 
@@ -815,27 +863,11 @@ def parse_secret_refs(config: dict[str, Any], *names: str) -> dict[str, str]:
     return references
 
 
-# Inline-active Markdown punctuation: emphasis (*), code spans (`), links and the
-# escape char itself ([ ] \). Escaping these neutralises the constructs that turn
-# untrusted text into formatting or a link. Linkification also recognizes a bare
-# HTTP(S) scheme, so ``plain`` breaks that scheme token without changing its rendered
-# text. Deliberately omitted: raw HTML and
-# unsafe link schemes (already handled by the renderer — html-off, validated
-# links, ADR-0018); ``_`` (literal between word characters in CommonMark, so
-# ``MD0_DATA`` / ``debug_df_raw`` stay clean); and block markers (#, -, >) which
-# are at worst cosmetic — keeping everyday text free of escape noise.
-_MD_ESCAPE = {ord(ch): f"\\{ch}" for ch in "\\`*[]"}
-_WEB_URL_SCHEME = re.compile(r"\bhttps?://", re.IGNORECASE)
-
-
-def plain(text: object) -> str:
-    """Escape inline Markdown so untrusted text — a path, an error, a captured
-    line — renders **literally** in a reason (ADR-0018). Use it when folding
-    external output into a reason; for multi-line / log output prefer
-    :func:`code`."""
-    escaped = str(text).translate(_MD_ESCAPE)
-    return _WEB_URL_SCHEME.sub(
-        lambda match: match.group().replace(":", r"\:"), escaped)
+# ``plain`` is defined beside the entry it escapes for (``little_sister.reasons``),
+# where the modules beneath the check layer can reach it too — a configuration
+# loader folding a path into a self-report line needs it as much as a check does.
+# The promised name stays this one (architecture.md §11).
+plain = _plain
 
 
 def code(text: object) -> str:

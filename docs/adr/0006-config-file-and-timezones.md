@@ -1,7 +1,10 @@
 # ADR-0006 — General config file & display timezones
 
-- **Status:** Accepted
-- **Date:** 2026-08-23 (accepted 2026-06-19)
+- **Status:** Accepted; the file is the `settings` aspect of a configuration root —
+  `config/settings.yaml` — since [ADR-0031](0031-deployment-config-directory.md), and
+  `LITTLE_SISTER_CONFIG` names one file to read instead. The options and the timezone
+  rules below are unchanged.
+- **Date:** 2026-08-23 (accepted 2026-06-20)
 - **Related:** [ADR-0003](0003-config-and-secrets-via-env-file.md) (secrets in `.env`).
 - **Register:** [`../decisions.md`](../decisions.md)
 

@@ -12,6 +12,7 @@ from flask import (
     Flask,
     Response,
     abort,
+    flash,
     has_request_context,
     jsonify,
     make_response,
@@ -31,6 +32,8 @@ from little_sister import (
     identity,
     link_probe,
     local_login,
+    readiness,
+    self_report,
     slots,
     system_admin,
     watch_lines,
@@ -38,7 +41,7 @@ from little_sister import (
 from little_sister.actions import register_builtin_fillers
 from little_sister.api import authenticate, parse_api_tokens, problem, status_envelope
 from little_sister.checks import CheckError, parse_duration, plain
-from little_sister.checks.base import TypeOrigin, registered_types
+from little_sister.checks.base import DURATION_UNITS, TypeOrigin, registered_types
 from little_sister.config import config
 from little_sister.config_dir import (
     CONFIG_DIR_ENV,
@@ -59,6 +62,8 @@ from little_sister.dashboard_layout import dashboard_layout
 from little_sister.engine import Engine, EngineInfo, create_engine
 from little_sister.errors import ConfigError
 from little_sister.icons import known_names, read_icon
+from little_sister.instance import this_instance
+from little_sister.keeper import registered_keeper
 from little_sister.links import LINKS_ASPECT, current_links
 from little_sister.logger import logger
 from little_sister.maintenance import MaintenanceEntry, MaintenanceStore
@@ -67,10 +72,11 @@ from little_sister.origins import PackageOrigin, package_origin
 from little_sister.paths import shown_path
 from little_sister.render import render_markdown, render_markdown_inline
 from little_sister.secrets import SecretError, registered_resolvers, resolve_setting
-from little_sister.spans import coarse_span, format_duration, format_span
-from little_sister.status import HEARTBEAT_PATH, StatusCode
-from little_sister.titles import Labelled, label_parts, shown_title
-from little_sister.tree import StatusSnapshot, status_tree
+from little_sister.spans import coarse_span, format_duration, format_span, local_time
+from little_sister.state import EVENTS_FILE, StateLayer
+from little_sister.status import HEARTBEAT_PATH, StatusCode, on_same_line
+from little_sister.titles import Labeled, label_parts, shown_title
+from little_sister.tree import StatusSnapshot, events_from_payload, status_tree
 from little_sister.users import read_avatar
 
 app = Flask(import_name=__name__)
@@ -289,20 +295,23 @@ def _inline_scripts() -> tuple[str, ...]:
     """
     try:
         rendered = app.jinja_env.get_template(_THEME_BOOTSTRAP).render()
-    except Exception:
-        logger.exception(
-            "csp: %s could not be rendered, so its hash is not in the policy — the "
-            "theme bootstrap will be reported on every page (ADR-0048)",
-            _THEME_BOOTSTRAP)
+    except Exception as error:
+        logger.exception("csp: %s could not be rendered", _THEME_BOOTSTRAP)
+        self_report.startup.note(
+            "csp.theme-hash",
+            plain(f"{_THEME_BOOTSTRAP} could not be rendered ({error!r}), so its "
+                  f"hash is not in the policy — the theme bootstrap is reported on "
+                  f"every page (ADR-0048)"))
         return ()
     # An HTML parser normalizes CRLF to LF in an element's text before the hash is
     # taken, so a CRLF checkout would otherwise hash bytes no browser ever sees.
     found = tuple(match.group(1).replace("\r\n", "\n")
                   for match in _INLINE_SCRIPT.finditer(rendered))
     if not found:
-        logger.warning(
-            "csp: no inline <script> found in %s, so its hash is not in the policy "
-            "(ADR-0048)", _THEME_BOOTSTRAP)
+        self_report.startup.note(
+            "csp.theme-hash",
+            plain(f"no inline <script> found in {_THEME_BOOTSTRAP}, so its hash is "
+                  f"not in the policy (ADR-0048)"))
     return found
 
 
@@ -468,7 +477,7 @@ def _markdown_inline(text: object) -> Markup:
 
 
 @app.template_filter("node_title")
-def _node_title(node: Labelled) -> str:
+def _node_title(node: Labeled) -> str:
     """The node's title, or `""` where it only repeats its name (`titles.py`).
 
     Takes the whole node rather than the title alone, so a template cannot ask
@@ -583,10 +592,12 @@ def _format_local(moment: datetime, fmt: str | None = None) -> str:
     from this same configuration). Not a second implementation of this one: it
     answers a different question, because it is read where the configured zone is
     not the reader's, so it names the offset this deliberately does not.
+
+    The rendering itself is :func:`little_sister.spans.local_time`, on the public
+    surface beside the three spans, so a plugin writing an instant into a line says
+    it in the page's own words; this is the name the templates know.
     """
-    if moment.tzinfo is None:
-        moment = moment.astimezone()
-    return moment.astimezone(config.tzinfo).strftime(fmt or config.time_format)
+    return local_time(moment, fmt)
 
 
 def _copy_style() -> TimeStyle:
@@ -672,14 +683,14 @@ class _MaintenancePin:
     **check's** order, which is information (severity, API order) that sorting by an
     opaque slug would scramble. It is a position *within one node*, and so is not
     the node's ``order`` — the sibling rank of ADR-0055, which this object does not
-    carry although it is otherwise :class:`~little_sister.titles.Labelled`.
+    carry although it is otherwise :class:`~little_sister.titles.Labeled`.
 
     ``total`` is how many reasons the node had when this
     was read, carried so the popover can say *3 of 20* without a second walk, and
     ``expires_at`` so it can pick the soonest of several without re-parsing a
     humanized string.
 
-    Both authorships travel (ADR-0014 amendment) because the two readings differ by
+    Both authorships travel (ADR-0014) because the two readings differ by
     surface: the popover has room for one name and takes ``set_by`` — the writer
     whose note it is showing — while the ``/maintenance`` table has room for the
     whole sentence, *pinned by Anna three days ago, last changed by Ben an hour ago*,
@@ -694,7 +705,7 @@ class _MaintenancePin:
     #: Where this pin sits **among the pins of its own node** — the index of the
     #: reason line it covers, and ``-1`` for the node's own pin so that one sorts
     #: first. Deliberately *not* called `order`: since ADR-0055 that word means a
-    #: node's declared rank among its **siblings**, and this object is `Labelled`,
+    #: node's declared rank among its **siblings**, and this object is `Labeled`,
     #: so the two would sit one attribute apart with different meanings.
     slot: int = -1
     total: int = 0
@@ -936,7 +947,7 @@ def _maintenance_rows(node_pins: list[_MaintenancePin],
 
 
 # Session signing key (ADR-0003): an explicit SECRET_KEY wins — its value may
-# itself be a secret reference (`scheme://address`, ADR-0023 update note) —
+# itself be a secret reference (`scheme://address`, ADR-0023) —
 # otherwise a random per-start key: secure by default, at the price of sessions
 # resetting on restart (one worker, ADR-0001, so no cross-worker key skew). A
 # malformed reference (unknown scheme) raises and fails startup loudly; an
@@ -947,9 +958,11 @@ def _session_key() -> str:
     try:
         key = resolve_setting(raw)
     except SecretError as error:
-        logger.warning(
-            "SECRET_KEY reference failed (%s); using a random per-start key — "
-            "sessions reset on restart.", error)
+        self_report.startup.note(
+            "secret-key",
+            plain(f"the SECRET_KEY reference did not resolve ({error}); a random "
+                  f"per-start key is in use, so every session ends at the next "
+                  f"restart"))
         return token_hex(32)
     if key:
         return key
@@ -1047,16 +1060,17 @@ identity.announce_doors()
 announce_aspects()
 
 # API tokens for the JSON backend (ADR-0008): "name=token,name2=token2" — set
-# directly, or as a value that is itself a secret reference (ADR-0023 update
-# note). Unresolvable ⇒ no tokens (the API rejects all requests until restart)
+# directly, or as a value that is itself a secret reference (ADR-0023).
+# Unresolvable ⇒ no tokens (the API rejects all requests until restart)
 # rather than a crash-loop; a malformed reference still fails startup loudly.
 def _api_token_setting() -> str:
     try:
         return resolve_setting(os.environ.get("LITTLE_SISTER_API_TOKENS", ""))
     except SecretError as error:
-        logger.warning(
-            "LITTLE_SISTER_API_TOKENS reference failed (%s); the JSON API "
-            "will reject all requests until restart.", error)
+        self_report.startup.note(
+            "api-tokens",
+            plain(f"the LITTLE_SISTER_API_TOKENS reference did not resolve "
+                  f"({error}); the JSON API rejects every request until a restart"))
         return ""
 
 
@@ -1074,22 +1088,29 @@ engine: Engine | None = None
 # doesn't take monitoring down with only a log line to show for it; persists
 # until a restart with fixed config.
 engine_error: str | None = None
+#: The state layer this process runs on (ADR-0071), kept here so an action on a
+#: ``/little-sister`` child can be followed by a flush (ADR-0076 decision 6);
+#: ``None`` where no engine runs, which is also every test that does not set one.
+state_layer: StateLayer | None = None
 
 
 def _start_engine_once() -> None:
-    global engine, engine_error
+    global engine, engine_error, state_layer
     if engine is not None:
         return
     if os.environ.get("LITTLE_SISTER_ENGINE", "1").lower() in ("0", "false", "no"):
         logger.info("engine disabled via LITTLE_SISTER_ENGINE")
         return
+    state = state_layer = StateLayer(interval_seconds=config.state_interval)
     try:
-        engine = create_engine()
+        engine = create_engine(state=state)
     except CheckError as error:
         engine_error = str(error)
+        # Log only, on purpose: with no engine there is no tick to read a
+        # self-report line on, and the dashboard's stale beat is the report.
         logger.warning("engine not started: %s", error)
         return
-    _restore_maintenance(engine)
+    _restore_state(engine, state)
     _seed_node_metadata(engine)
     engine.start()
     atexit.register(engine.stop)
@@ -1168,6 +1189,37 @@ def health() -> ResponseReturnValue:
     return response
 
 
+@app.route("/ready")
+def ready() -> ResponseReturnValue:
+    """Answer *has this instance finished coming up* — the other half of the
+    question ``/health`` deliberately does not answer (ADR-0073).
+
+    **Readiness, and it latches.** ``200`` once an identity door is registered,
+    the machine's trust store holds CA certificates and the engine has run every
+    check once; ``503`` with the words it is waiting for until then. All three are
+    startup facts, so this route goes ``503`` to ``200`` exactly once and never
+    back: a later failure can never withdraw a serving instance, which is what
+    would remove the very dashboard whose banner explains it (ADR-0066 §1).
+
+    **No login gate**, like ``/health`` and ``/csp-report``, so what it says is
+    said to whoever can reach the port. The bound is the closed vocabulary
+    (:data:`little_sister.readiness.WAITING_FOR`): three words that name nothing
+    about this deployment and answer the one question a caller of an unready
+    instance cannot work out for itself — whether to wait or to roll back.
+
+    ``no-store``, for the reason ``/health`` has it.
+    """
+    answer = instance_readiness.answer()
+    payload: dict[str, object] = {"status": readiness.READY}
+    if not answer.ready:
+        payload = {"status": readiness.NOT_READY,
+                   "waiting_for": list(answer.waiting_for)}
+    response = jsonify(payload)
+    response.status_code = 200 if answer.ready else 503
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 @app.context_processor
 def _inject_user_avatar() -> dict[str, str]:
     """Give the shared settings trigger the session user's avatar URL.
@@ -1197,7 +1249,10 @@ def _seed_node_metadata(engine: Engine) -> None:
     try:
         metadata = resolve_metadata(engine.checks, load_nodes())
     except CheckError as error:
-        logger.warning("node metadata not loaded: %s", error)
+        self_report.startup.note(
+            "nodes",
+            plain(f"nodes.yaml was not loaded ({error}); every node shows what its "
+                  f"check says and none of the metadata written there"))
         return
     for path, meta in metadata.items():
         status_tree.set_about(path, meta.about)
@@ -1217,20 +1272,134 @@ def _seed_node_metadata(engine: Engine) -> None:
     run_consistency_pass(engine.checks, metadata)
 
 
-def _restore_maintenance(engine: Engine) -> None:
-    """Attach the maintenance store, replay non-expired pins, and reap any whose
-    path no configured check covers — once, post-fork before the engine runs
-    (ADR-0014)."""
-    store = MaintenanceStore()
+def _restore_state(engine: Engine, state: StateLayer) -> None:
+    """Initialize the tree with what the state layer kept (ADR-0071) — once,
+    post-fork before the engine runs.
+
+    **The keeper first, before any of it** (ADR-0071 §5): an instance whose
+    deployment registered one is restored from the copies it holds, so a fresh
+    machine comes up as the instance that stopped on the old one. With no keeper —
+    a local installation — it is a no-op, and with one that cannot be reached the
+    local files stand and the failure is a line.
+
+    Then the event log: put back what the last process wrote, so the events page
+    and every node's history start where they left off, and register the log as a
+    kept file so this process writes it on the tick. Then maintenance: attach the
+    store, replay non-expired pins — whose transitions append to the restored log,
+    as this process's first events — and reap any whose path no configured check
+    covers (ADR-0014). The layer itself is the first self-report contributor: a
+    load that failed here, or a save that fails later, is a line on the heartbeat.
+    A failure never refuses to start — the layer reports it and the state starts
+    empty.
+
+    Each of the two files is registered with its other direction too — the
+    ``restore`` an adoption hands the store's copy to when a keeper's tick makes
+    this instance the holder, or the backup's on *take the backups* (ADR-0077):
+    the tree's ``adopt_events`` beside the log's producer, and the side-table's,
+    which ``MaintenanceStore`` registers itself at construction. The log first,
+    because the pins' adoption writes its transitions into the log and files are
+    adopted in registration order. *Take the backups* is the layer's one action
+    on its child, admin-only like every write.
+    """
+    state.restore_from_keeper()
+    state.take_stock()
+    payload = state.read(EVENTS_FILE)
+    if payload is not None:
+        try:
+            restored = status_tree.restore_events(events_from_payload(payload))
+        except ValueError as error:
+            state.report_load_failure(EVENTS_FILE, str(error))
+        else:
+            logger.info("state: restored %d event(s) from %s", restored,
+                        state.path(EVENTS_FILE))
+    state.keep(EVENTS_FILE, status_tree.events_payload,
+               restore=status_tree.adopt_events)
+    store = MaintenanceStore(state, tree=status_tree)
     status_tree.use_maintenance_store(store)
-    status_tree.restore_maintenance(store.load(), entry_pins=store.load_entries())
+    nodes, entry_pins = store.load_all()
+    status_tree.restore_maintenance(nodes, entry_pins=entry_pins)
     reaped = status_tree.reap_uncovered(engine.check_roots())
     if reaped:
         logger.info("maintenance: reaped %d orphaned pin(s): %s",
                     len(reaped), ", ".join(sorted(reaped)))
+    self_report.register_contributor(
+        "state", state.lines, title="State", report=state.report,
+        about="What a restart keeps — the maintenance pins and the event log under "
+              "`var/state/` — and whether it was restored, written and, where a "
+              "keeper is registered, carried off the machine (ADR-0071); and what "
+              "a takeover set aside as `.bak`, which *take the backups* swaps back "
+              "(ADR-0077).")
+    self_report.register_action("state", "take-backups", "Take the backups",
+                                state.take_backups)
 
 
 _start_engine_once()
+
+
+#: The machine's trust store, counted **once** here and never again (ADR-0073).
+#: It is the one thing in the readiness answer that touches the machine, and a
+#: report on the seam is recorded state rather than a probe (ADR-0072), so the
+#: measurement happens at startup and everything afterwards reads this.
+trust_store = readiness.measure_trust_store()
+
+
+def _first_pass_done() -> bool:
+    """Whether there is a first pass to wait for and the engine has finished it.
+
+    The two ways to have no engine are not one answer (ADR-0066 §2 draws the same
+    line for ``/health``). A deployment that said ``LITTLE_SISTER_ENGINE=0`` has
+    **no pass to wait for** and is ready at once — a deliberate quiet is not a
+    thing to keep traffic away from. A configuration this instance could not load
+    leaves an engine that will never run one, and that instance never becomes
+    ready: it serves, its banner explains itself to whoever opens it, and a
+    balancer with a working instance beside this one sends traffic there.
+    """
+    if engine is not None:
+        return engine.outcomes.first_pass
+    return engine_error is None
+
+
+def _check_outcomes() -> readiness.Outcomes | None:
+    """What the engine's checks last stored, or ``None`` where no engine runs —
+    an instance with no engine makes no claim about checks it is not running."""
+    return engine.outcomes if engine is not None else None
+
+
+#: This instance's readiness (ADR-0073), and the contributor that carries its two
+#: lines to ``/little-sister``. Registered here rather than in the
+#: import-before-app block because two of the three conditions are only settled
+#: once that block and the engine start have both run.
+instance_readiness = readiness.Readiness(
+    doors=lambda: bool(identity.registered_doors()),
+    trust=lambda: trust_store,
+    first_pass=_first_pass_done,
+    outcomes=_check_outcomes)
+self_report.register_contributor(
+    "readiness", instance_readiness.lines, title="Readiness",
+    about="Whether this instance can be sent traffic — what `/ready` answers, and "
+          "the two silent failures of a first rollout as lines (ADR-0073).")
+# What this process learned at startup and cannot undo — a setting it could not
+# honor, a door that is shut — noted into `self_report.startup` wherever it was
+# learned, and read here under one name (ADR-0072 §7).
+self_report.register_contributor(
+    "startup", self_report.startup.lines, title="Startup",
+    about="What this process learned at startup and cannot undo until a restart: a "
+          "setting it could not honor, a credential reference that did not resolve, "
+          "a door nobody can enter, a file no aspect claims. Each line stands for the "
+          "life of the process and is also the log entry it used to be.")
+# What recurs at runtime, and what touches security, each held for a window
+# after it was last seen (ADR-0072 §7): the line stands while the condition does.
+self_report.register_contributor(
+    "runtime", self_report.runtime.lines, title="Runtime",
+    about="What keeps going wrong while this process runs — a renderer that raises, "
+          "a probe that fails, a tick that did not land — each held ten minutes "
+          "after it was last seen, counted rather than repeated.")
+self_report.register_contributor(
+    "security", self_report.security_lines, title="Security",
+    report=self_report.security_report,
+    about="Failed logins as a rate — a fact in the report below five in ten "
+          "minutes, a warning from five — and the system-admin account when it is "
+          "used.")
 
 
 def _api_json(payload: dict[str, object], status_code: int = 200) -> Response:
@@ -1303,14 +1472,13 @@ def _split_heartbeat(
 ) -> tuple[StatusSnapshot | None, StatusSnapshot | None]:
     """Lift the engine's self-heartbeat (ADR-0005) out of a root snapshot's
     children so the dashboard can render it as the status strip (ADR-0024) rather than
-    a near-empty grid card. Returns ``(node_without_heartbeat, heartbeat)``.
+    a grid card. Returns ``(node_without_heartbeat, heartbeat)``.
 
     The heartbeat is only ever a child of the root overview, so on a branch page
     (or when the engine is disabled) this returns ``node`` unchanged with
-    ``None``. A heartbeat that grew children is not lifted either: the strip is
-    a one-line bar and must never hide a subtree, so such a node stays a grid
-    card. (The loader keeps custom checks off the reserved line — this guard is
-    belt and braces, and the fallback for future engine-owned children.)
+    ``None``. The heartbeat is a **branch** — one child per contributor
+    (ADR-0076) — and the strip is its roll-up: it summarizes the subtree the way
+    any branch card does and links to it, so nothing is hidden by lifting it.
     Splitting happens before the hide-ok/hide-idle filter, so the strip stays
     visible regardless of the filters. The JSON API is untouched: it serialises
     the whole snapshot upstream of this call.
@@ -1320,7 +1488,7 @@ def _split_heartbeat(
     heartbeat: StatusSnapshot | None = None
     kept: list[StatusSnapshot] = []
     for child in node.children:
-        if child.path == HEARTBEAT_PATH and not child.children:
+        if child.path == HEARTBEAT_PATH:
             heartbeat = child
         else:
             kept.append(child)
@@ -1419,7 +1587,7 @@ def status(branch: str = "") -> ResponseReturnValue:
     # One server-formatted stamp per response (ADR-0006): rendered into the page
     # so it dates its data from the first paint (page JavaScript cannot read
     # navigation-response headers), and sent as X-Rendered-At so the poll loop
-    # reads the same clock — "updated …" / "could not refresh — last ok …" honour
+    # reads the same clock — "updated …" / "could not refresh — last ok …" honor
     # settings.yaml's time_format and timezone, not the browser's locale.
     rendered_at = _format_local(now)
     if request.args.get('fragment'):
@@ -1483,7 +1651,7 @@ def history(path: str) -> ResponseReturnValue:
 _DEFAULT_MAINTENANCE_SECONDS = 7 * 24 * 3600   # hard fallback if config is unusable
 
 # A maintenance window has to be a **positive** number of seconds, and a bounded one
-# (ADR-0014 amendment). ADR-0014 promised a *finite* expiry; finite was never enough:
+# (ADR-0014). ADR-0014 promised a *finite* expiry; finite was never enough:
 #
 # * a zero or negative duration parses cleanly (`parse_duration("-1d")` is -86400),
 #   lands `expires_at` in the past, and the next scheduler sweep drops the entry — so
@@ -1534,9 +1702,54 @@ _WEEKDAYS = {
 
 def _expiry_help(text: str) -> _BadExpiry:
     return _BadExpiry(
-        f"{text!r} is not a duration or expiry. Use 2h, 17s, "
+        f"{text!r} is not a duration or expiry. Use 2h, 1w, 17s, "
         f"2026-07-10 18:00, 07-10, 17, 18:00, Friday or Fri 18:00. "
         f"Times without an offset use {config.timezone}.")
+
+
+@dataclass(frozen=True)
+class _IntervalFloor:
+    """The slowest check a pin covers — how often it runs and where it sits — which
+    is the least a window has to last to cover one run of everything the pin
+    names (ADR-0014)."""
+    seconds: int
+    path: str
+
+
+def _interval_floor(path: str) -> _IntervalFloor | None:
+    """The floor for a pin at ``path``: the longest ``frequency`` among the checks
+    that cover it — on the same root-to-leaf line, exactly the reaper's reading
+    of *covers* — because a window shorter than that ends before one of the
+    checks it silences runs again. ``None`` where the app cannot see the checks
+    (no engine, as in the tests) or none covers the path; the one-second floor
+    of decision 13 stays there. A check that runs less often than the one-year
+    ceiling could never be covered at all, so it sets no floor either.
+    """
+    if engine is None:
+        return None
+    slowest: _IntervalFloor | None = None
+    for check in engine.checks:
+        seconds = check.frequency_seconds
+        if seconds <= 0 or not on_same_line(path, check.path):
+            continue
+        if slowest is None or seconds > slowest.seconds:
+            slowest = _IntervalFloor(seconds, check.path)
+    if slowest is not None and slowest.seconds > MAX_MAINTENANCE_SECONDS:
+        return None
+    return slowest
+
+
+def _above_the_floor(seconds: float, source: str,
+                     floor: _IntervalFloor | None) -> None:
+    """Refuse a window that ends before the slowest covered check runs again. It
+    reads the **resolved** window, so ``18:00`` typed at 17:59 is measured the
+    same way as ``60s`` — the spelling is not what makes a window pointless."""
+    if floor is not None and seconds < floor.seconds:
+        interval = format_duration(floor.seconds)
+        raise _BadExpiry(
+            f"{source!r} ends before {floor.path} (every {interval}) runs "
+            f"again, so the pin would cover no run of it. Use at least "
+            f"{interval}.")
 
 
 def _server_local(moment: datetime) -> datetime:
@@ -1643,7 +1856,8 @@ def _weekday_candidate(weekday: int, hour: int, minute: int, now: datetime,
     return candidate
 
 
-def _bounded_expiry(candidate: datetime, now: datetime, source: str) -> datetime:
+def _bounded_expiry(candidate: datetime, now: datetime, source: str,
+                    floor: _IntervalFloor | None = None) -> datetime:
     seconds = (candidate.astimezone(UTC) - now).total_seconds()
     if seconds < MIN_MAINTENANCE_SECONDS:
         raise _BadExpiry(
@@ -1652,13 +1866,22 @@ def _bounded_expiry(candidate: datetime, now: datetime, source: str) -> datetime
         raise _BadExpiry(
             f"{source!r} is longer than a year, which is longer than a maintenance "
             f"window is ever meant to be. Pick something sooner.")
+    _above_the_floor(seconds, source, floor)
     return _server_local(candidate)
 
 
-def _duration_expiry(text: str, now: datetime) -> datetime:
+def _duration_expiry(text: str, now: datetime,
+                     floor: _IntervalFloor | None = None) -> datetime:
     try:
         seconds = parse_duration(text, _DEFAULT_MAINTENANCE_SECONDS)
     except (CheckError, OverflowError, ValueError) as error:
+        # The one refusal with a sentence of its own: `6M` used to lowercase into
+        # six *minutes*, and the pin was gone before whoever meant six months
+        # looked again. The generic help would list the forms and not say that.
+        if text.endswith("M"):
+            raise _BadExpiry(
+                f"{text!r} — M is not a unit: m is minutes, and a month has no "
+                f"fixed length. Write 26w, 180d or a date like 2026-07-10.") from error
         raise _expiry_help(text) from error
     if seconds < MIN_MAINTENANCE_SECONDS:
         raise _BadExpiry(
@@ -1668,17 +1891,22 @@ def _duration_expiry(text: str, now: datetime) -> datetime:
         raise _BadExpiry(
             f"{text!r} is longer than a year, which is longer than a maintenance "
             f"window is ever meant to be. Pick something shorter.")
+    _above_the_floor(seconds, text, floor)
     return _server_local(now + timedelta(seconds=seconds))
 
 
-def _maintenance_expiry(raw: str, *, now: datetime | None = None) -> datetime:
+def _maintenance_expiry(raw: str, *, now: datetime | None = None,
+                        floor: _IntervalFloor | None = None) -> datetime:
     """Resolve the maintenance form's duration-or-expiry field (ADR-0014).
 
     ``now`` is captured once by the route and is always compared as an instant.
     Blank uses the configured *duration* default; it is the one value that falls
-    back rather than refusing, so a deployment typo cannot make the form unusable.
-    All explicit calendar shortcuts are resolved in the configured timezone and
-    the result crosses the boundary in the existing naive server-local format.
+    back rather than refusing, so a deployment typo cannot make the form unusable
+    — and it is held to no ``floor`` for the same reason. Every explicit value is:
+    the resolved window has to reach the slowest covered check's next run
+    (:func:`_interval_floor`), whichever spelling produced it. All explicit
+    calendar shortcuts are resolved in the configured timezone and the result
+    crosses the boundary in the existing naive server-local format.
     """
     instant = now or datetime.now(UTC)
     instant = instant.astimezone(UTC)
@@ -1700,12 +1928,15 @@ def _maintenance_expiry(raw: str, *, now: datetime | None = None) -> datetime:
         if not 1 <= day <= 31:
             raise _expiry_help(text)
         return _bounded_expiry(
-            _next_day_of_month(day, instant, text), instant, text)
+            _next_day_of_month(day, instant, text), instant, text, floor)
 
-    # Keep every unit-suffixed duration the shared parser already accepts. It is
-    # deliberately not widened: all other spellings below are calendar forms.
-    if text[-1].lower() in {"s", "m", "h", "d"}:
-        return _duration_expiry(text, instant)
+    # Exactly the unit-suffixed durations the shared parser accepts — its own
+    # unit set, so the two cannot drift — and nothing wider: every other spelling
+    # below is a calendar form. Routed on the letter whatever its case, so that a
+    # capital gets the parser's refusal (`5H`, and `6M` by name) rather than the
+    # calendar's.
+    if text[-1].lower() in DURATION_UNITS:
+        return _duration_expiry(text, instant, floor)
 
     try:
         if _FULL_DATE.fullmatch(text):
@@ -1734,12 +1965,51 @@ def _maintenance_expiry(raw: str, *, now: datetime | None = None) -> datetime:
             raise _expiry_help(text)
     except ValueError as error:
         raise _expiry_help(text) from error
-    return _bounded_expiry(candidate, instant, text)
+    return _bounded_expiry(candidate, instant, text, floor)
+
+
+@app.route('/little-sister/<contributor>/act/<slug>', methods=['POST'])
+def self_report_action(contributor: str, slug: str) -> ResponseReturnValue:
+    """Run an action a package offered on its contributor's node (ADR-0076) —
+    *take over the lease*, *release it* — for an admin, and come back to the
+    node with what it said.
+
+    Gated like every route (identity), admin-only like every write; an action
+    nobody registered is a 404, and whatever the handler raises is caught and
+    shown as the sentence, because a button that answers with a traceback page
+    has told the operator nothing about the thing they pressed it for.
+
+    **An action that ran is followed by a flush of the state layer**: an action
+    is a write into this process, and what it changed reaches the store now
+    rather than at the next interval — a keeper's *take over* adopts and saves
+    in the click, and on an instance that holds the lease already it is the
+    save. The flush is the scheduler's own, serialized with it, and never raises;
+    a handler that raised changed nothing worth flushing.
+    """
+    user = identity.signed_in()
+    if not user.admin:
+        abort(403)
+    action = self_report.find_action(contributor, slug)
+    if action is None:
+        abort(404)
+    try:
+        said = action.handler() or ""
+    except Exception as error:
+        logger.exception("self-report: the action %s on %s raised", slug, contributor)
+        said = f"{action.label} failed: {error!r}"
+    else:
+        logger.info("self-report: %s ran %s on %s%s", user.name, slug, contributor,
+                    f" — {said}" if said else "")
+        if state_layer is not None:
+            state_layer.flush()
+    if said:
+        flash(said)
+    return redirect(url_for("status", branch=f"little-sister/{contributor}"))
 
 
 @app.route('/maintenance', methods=['POST'])
 def maintenance() -> ResponseReturnValue:
-    """Set, edit or clear a pin — a **compare-and-set** write (ADR-0014 amendment).
+    """Set, edit or clear a pin — a **compare-and-set** write (ADR-0014).
 
     Every form here carries the entry's ``set_at`` as a hidden token: the write
     names the pin it believes it is replacing, and an empty token says *"I believe
@@ -1780,12 +2050,13 @@ def maintenance() -> ResponseReturnValue:
     else:
         now = datetime.now(UTC)
         try:
-            expires_at = _maintenance_expiry(duration, now=now)
+            expires_at = _maintenance_expiry(duration, now=now,
+                                             floor=_interval_floor(path))
         except _BadExpiry as bad:
             # Nothing is written and the admin's words come back — the same
             # posture as a refused compare-and-set, for the same reason: a write
             # that silently did something other than what was asked is the thing
-            # this route is not allowed to do (ADR-0014 amendment).
+            # this route is not allowed to do (ADR-0014).
             return refused(problem=str(bad), stored=None)
         # A blank reason on an **edit** means "I did not touch this field", so the
         # stored text stays; on a new pin there is nothing to keep and the literal
@@ -1981,6 +2252,19 @@ def _registering_packages() -> list[PackageRow]:
         if registration.package:
             registers.setdefault(registration.package,
                                  set()).add(f"secret {registration.scheme}://")
+    for reporter in self_report.registered_contributors():
+        # The self-report seam (ADR-0072): a contributor is visible on the
+        # heartbeat only while it has something to say, so this row is the one
+        # place a quiet one can be seen to have registered at all.
+        if reporter.package:
+            registers.setdefault(reporter.package,
+                                 set()).add(f"report {reporter.name}")
+    # The keeper seam (ADR-0071 §5): at most one, and a working one is silent
+    # everywhere else — it says nothing on the heartbeat until it fails, which
+    # makes this row the only place an operator can see that the copies are being
+    # carried at all, and by which installation.
+    if (keeping := registered_keeper()) is not None and keeping.package:
+        registers.setdefault(keeping.package, set()).add(f"keeper {keeping.name}")
     return [PackageRow(origin=package_origin(package),
                        registers=tuple(sorted(registers[package])))
             for package in sorted(registers) if package != "little_sister"]
@@ -2024,6 +2308,8 @@ def system() -> ResponseReturnValue:
                                firstname=user.firstname,
                                version=__version__, info=info,
                                rendered_at=rendered_at,
+                               instance=this_instance(),
+                               instance_named=bool(config.instance),
                                types_in_use=in_use, types_folded=folded,
                                slot_fillers=slots.all_fillers(),
                                packages=_registering_packages(),
@@ -2150,7 +2436,7 @@ def links_check() -> ResponseReturnValue:
     It is a button in a form, so it needs no JavaScript.
 
     Unlike an open, this **waits** — under a deadline, joining the pass already
-    running if there is one (ADR-0030, amended). Whatever has not answered by
+    running if there is one (ADR-0030). Whatever has not answered by
     then keeps its previous verdict and age while the pass finishes behind the
     response.
 

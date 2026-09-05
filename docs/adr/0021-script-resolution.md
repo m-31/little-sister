@@ -1,7 +1,7 @@
 # ADR-0021 — Script resolution: packaged defaults with an override
 
 - **Status:** Accepted
-- **Date:** 2026-07-10
+- **Date:** 2026-07-11
 - **Related:** [ADR-0009 — Per-profile metrics scripts](0009-per-profile-metrics-scripts.md),
   [ADR-0011 — SSH check family](0011-ssh-check-family.md),
   [ADR-0015 — Check discovery: a union of config directories](0015-check-discovery-union.md).

@@ -53,7 +53,7 @@ _OPENS_A_FENCE = re.compile(r" {0,3}(`{3,}|~{3,})")
 
 
 def status_icon(code: StatusCode) -> str:
-    """The portable, non-colour status cue used by the copy document."""
+    """The portable, non-color status cue used by the copy document."""
     return _STATUS_ICON[code]
 
 
@@ -141,7 +141,7 @@ def format_node_markdown(node: StatusSnapshot, style: TimeStyle,
     measurement — so the reading stays, and the document says a pin is in force
     instead of quietly presenting the pinned code as the answer
     ([ADR-0032](../docs/adr/0032-status-contribution-boundary.md) rule 5, in a
-    surface that has no colour to say it with).
+    surface that has no color to say it with).
     """
     document = [f"## {_label(node)} {status_icon(node.reported_code)}", ""]
     document.extend(_node_facts(node, style, since))
@@ -323,7 +323,7 @@ def _reason_cues(reason: ReasonLine) -> str:
 
     **Its own code**, where it declared one.  On the page that claim is a tinted
     surface plus a shape cue whose accessible name is the code word; a document
-    has neither colour nor tint, so it takes the same portable cue the nodes take
+    has neither color nor tint, so it takes the same portable cue the nodes take
     — and a line that declared no code still takes none, which is the whole
     distinction: it carries its node's severity, and the node has already said so.
 

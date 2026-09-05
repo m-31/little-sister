@@ -323,7 +323,7 @@ what the check **measured** and say a pin is in force, never present `maintenanc
 as the reading. And a **container** page (`/status/ci`) must offer no buttons at
 all; its hand-off is `/copy`.
 
-`/ci/actions` is the one to copy for coded lines: each line that declared a code
+`/ci/pipelines` is the one to copy for coded lines: each line that declared a code
 carries its own cue, the uncoded advisory beside them carries none, and a running
 line says `(running)` in the text rather than leaning on the italic the page uses.
 The same lines, cues and all, must appear on `/copy`.
@@ -453,7 +453,7 @@ It found the second one the same way: the links page's *check now* button was
 written as a `btn-outline-secondary`, which Bootstrap paints `#6c757d` on **every**
 canvas — 3.76:1 on the dark one. The button now wears `btn btn-sm` for the shape
 and takes its ink from our tokens, which is the general answer whenever a
-Bootstrap component's own colour has to hold the bar on six canvases.
+Bootstrap component's own color has to hold the bar on six canvases.
 
 The /about hero needs neither half: it paints no surface, so every reading of it
 is a token on the canvas and the gate test measures all of them. Use a browser
@@ -542,5 +542,5 @@ runs cannot delete each other's artifacts.
 
 All five harnesses are **dev-only**: they live under `tests/`, carry no real
 checks, and start no engine except when you run the demo wrapper. Keep them green
-with the rest of the gate — `ruff` + `mypy` + `pytest` — and run Mode 5 by hand
+with the rest of the gate (`hooks/pre-commit`) and run Mode 5 by hand
 when the dashboard layout changes.

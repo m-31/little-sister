@@ -1,7 +1,7 @@
 # ADR-0019 — Inspection popover (hover card)
 
 - **Status:** Accepted
-- **Date:** 2026-08-23 (accepted 2026-06-26)
+- **Date:** 2026-08-23 (accepted 2026-06-27)
 - **Related:** [ADR-0017](0017-node-title.md) (`title`) and [ADR-0012](0012-node-metadata.md)
   (`about`) — the fields the card shows;
   [ADR-0018](0018-markdown-rendering.md) (the card injects server-rendered Markdown);

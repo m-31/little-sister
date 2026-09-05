@@ -11,7 +11,8 @@ os.environ.setdefault("SECRET_KEY", "test-key")
 from jinja2 import TemplateNotFound
 
 from little_sister import app as app_module
-from little_sister import slots
+from little_sister import self_report, slots
+from little_sister.reasons import slug
 from little_sister.status import StatusCode
 from little_sister.tree import StatusTree
 from tests.demo_extension import (
@@ -173,6 +174,25 @@ class RenderTests(TestCase):
             body = self._body()
         self.assertIn("connection refused", body)
         self.assertNotIn("data-demo-action", body)
+
+    def test_a_provider_that_raises_is_a_held_line_that_counts(self):
+        """Per request and swallowed, so it used to be a log entry per page view
+        and nothing else; now it is one line on the node while it recurs, with the
+        count (backlog #70)."""
+        self_report.runtime.forget()
+        self.addCleanup(self_report.runtime.forget)
+        slots.register("reason.actions", DEMO, TEMPLATE, explodes)
+        self._login()
+        self.tree.upsert("/db/main", StatusCode.ERROR, "connection refused")
+        with self.assertLogs("little_sister", level="ERROR"):
+            self._body()
+            self._body()
+        (line,) = self_report.runtime.lines()
+        self.assertEqual(line.slug, slug("slot", DEMO, "reason.actions"))
+        self.assertIs(line.code, StatusCode.WARN)
+        self.assertIn("context provider", line.text)
+        self.assertIn("renders nothing", line.text)
+        self.assertIn("2 times in the last 10m", line.text)
 
     def test_provider_values_are_escaped_by_our_environment(self):
         # The provider hands back a plain string; our Jinja escapes it into the

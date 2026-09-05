@@ -92,10 +92,10 @@ class _Chunked(Protocol):
     :class:`io.BufferedIOBase`'s, and both objects this module reads from have it:
     ``http.client.HTTPResponse`` on the success path and ``HTTPError`` on the answered
     one. Naming the one method narrowly is also a note to whoever writes the next test
-    double: modelling ``read`` is modelling the version of this that could not be
-    bounded, which is the mistake that hid the defect ``read1`` fixes (ADR-0058, amended
-    2026-08-16). Nothing mechanical enforces that — ``mypy`` runs over ``src`` only — so
-    it is said here, where a double's author is most likely to look.
+    double: modeling ``read`` is modeling the version of this that could not be
+    bounded, which is the mistake that hid the defect ``read1`` fixes (ADR-0058).
+    Nothing mechanical enforces that — ``mypy`` runs over ``src`` only — so it is
+    said here, where a double's author is most likely to look.
     """
 
     def read1(self, size: int = ..., /) -> bytes: ...

@@ -21,9 +21,11 @@ from typing import Any
 
 import yaml
 
+from little_sister import self_report
 from little_sister.checks import Check, CheckError
 from little_sister.config_dir import aspect_files
 from little_sister.logger import logger
+from little_sister.reasons import plain, slug
 from little_sister.status import (
     HEARTBEAT_PATH,
     join_path,
@@ -142,8 +144,10 @@ def run_consistency_pass(checks: list[Check],
     roots = [check.path for check in checks] + [HEARTBEAT_PATH]
     for path in sorted(metadata):
         if not any(on_same_line(path, root) for root in roots):
-            logger.warning(
-                "nodes: metadata declared for %r but no check covers it", path)
+            self_report.startup.note(
+                slug("nodes", "orphan", path),
+                plain(f"nodes.yaml declares metadata for {path!r} but no check "
+                      f"covers it"))
     described = {path for path, entry in metadata.items() if entry.about}
     for container in sorted(_containers(checks)):
         if container not in described:

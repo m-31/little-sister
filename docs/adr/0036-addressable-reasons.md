@@ -1,7 +1,7 @@
 # ADR-0036 — Addressable reasons: keyed entries, and maintenance on one of them
 
 - **Status:** Accepted
-- **Date:** 2026-08-23 (accepted 2026-08-01)
+- **Date:** 2026-09-05 (accepted 2026-08-01)
 - **Related:** [ADR-0032](0032-status-contribution-boundary.md) (the contribution
   boundary, amended by this decision to reach one level below a node),
   [ADR-0004](0004-status-aggregation-semantics.md) (the roll-up these entries reuse,
@@ -197,11 +197,12 @@ names an entry in a list is its *line*, and the two texts get two columns: *Sile
 (the line) and *Why* (the pin's own explanation). They are both called "reason" in the
 model and are not the same kind of thing.
 
-**13. The JSON envelope grows additively.** `reason` stays an array of strings,
-unchanged for every existing client; a new `reasons` array carries an object per
-entry — `{"text": …, "code": …, "running": …, "maintenance": … | null}` — objects
-rather than positional pairs, per the API guidelines. It rides the one
-`schema_version` decision of the client contract round rather than arriving on its own.
+**13. The JSON envelope grows additively.** The existing `reasons` array of strings
+stays, unchanged for every existing client; a new array — `entries`, the working name
+— carries an object per entry, `{"text": …, "code": …, "running": …,
+"maintenance": … | null}` — objects rather than positional pairs, per the API
+guidelines. It rides the one `schema_version` decision of the client contract round
+rather than arriving on its own.
 
 ## Consequences
 
@@ -244,9 +245,10 @@ rather than positional pairs, per the API guidelines. It rides the one
   line. Where they are prose, there is exactly one thing to act on and it is the
   **node**: one control, built from the whole reason set (its first line the summary,
   the rest the body). A per-line control there would offer to raise a ticket about a
-  stack trace. That second placement is a slot the roster does not have yet, and it is
-  the first concrete need for one — the card header and the detail page, where "this
-  check is unhappy" is the subject.
+  stack trace. That second placement is the `node.actions` slot — the card header
+  and the detail page, where "this check is unhappy" is the subject — which this
+  record was the first concrete need for and
+  [ADR-0038](0038-declarative-action-list.md) gave the roster.
 
 ## Alternatives considered
 

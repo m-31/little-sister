@@ -296,7 +296,8 @@ class TheDoorTests(_Case):
             page = self._login()
         self.assertEqual(page.status_code, 302)
         self.assertEqual(page.headers["Location"], "/status")
-        self.assertIn("System-admin login", "\n".join(caught.output))
+        self.assertIn("system-admin.used: the local 'admin' account signed in",
+                      "\n".join(caught.output))
         self.assertNotIn(PASSWORD, "\n".join(caught.output))
         self.assertEqual(self.client.get("/events").status_code, 200)
 
@@ -311,7 +312,8 @@ class TheDoorTests(_Case):
             page = self._login(password="not-it")
         self.assertEqual(page.status_code, 200)
         self.assertIn("Invalid username or password", page.get_data(as_text=True))
-        self.assertIn("Failed system-admin login", "\n".join(caught.output))
+        self.assertIn("login.failed: for 'admin' at the system-admin door",
+                      "\n".join(caught.output))
         self.assertEqual(self.client.get("/events").status_code, 302)
 
     def test_an_umlaut_is_a_wrong_password_and_not_a_500(self):

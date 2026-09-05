@@ -227,9 +227,9 @@
                 not be reachable by a stray keystroke while typing. -#}
             <form class="ls-links__recheck" method="post" action="{{ url_for('links_check') }}">
                 <input type="hidden" name="next" value="{{ request.full_path.rstrip('?') }}">
-                {#- `btn btn-sm` for the shape only: the colours come from our own
+                {#- `btn btn-sm` for the shape only: the colors come from our own
                     tokens in overview.css, because Bootstrap's outline secondary
-                    paints one grey on every canvas and it is under the bar on the
+                    paints one gray on every canvas and it is under the bar on the
                     dark ones. -#}
                 <button class="btn btn-sm" type="submit">Check now</button>
             </form>

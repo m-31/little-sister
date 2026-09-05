@@ -1,8 +1,9 @@
 # ADR-0002 — Synchronize shared state with one RLock and copy-on-read snapshots
 
 - **Status:** Accepted
-- **Date:** 2026-06-17
-- **Related:** [ADR-0001 — In-process threaded engine](0001-in-process-threaded-engine.md)
+- **Date:** 2026-09-05 (accepted 2026-06-20)
+- **Related:** [ADR-0001 — In-process threaded engine](0001-in-process-threaded-engine.md),
+  [ADR-0071 — what a restart keeps is a directory of files](0071-what-a-restart-keeps-is-a-directory-of-files.md)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -20,6 +21,10 @@ atomic** under the GIL. Concurrent mutation during a read can cause torn reads o
 - **Reads for rendering** take the lock only long enough to build a lightweight
   **snapshot** (a copy of the branch being shown / a slice of events), then
   release the lock and render the snapshot **outside** it.
+- **A write to disk reads the same way.** The producer of a kept state file
+  ([ADR-0071](0071-what-a-restart-keeps-is-a-directory-of-files.md) §3) copies the
+  event log under the lock and serializes outside it, so no write holds the lock for
+  longer than the copy takes.
 
 ## Rationale
 - One lock for all shared state is the simplest thing that is correct; `RLock`

@@ -21,6 +21,7 @@ from little_sister import (
     local_login,
     origins,
     secrets,
+    self_report,
     slots,
     watch_lines,
 )
@@ -422,18 +423,21 @@ class WebTests(TestCase):
         self.assertIn("engine heartbeat", body)             # title, in the strip
         self.assertIn("the pulse of the scheduler", body)   # about: only the map
 
-    def test_heartbeat_with_children_stays_a_card(self):
-        # Belt and braces: the strip is a one-line bar, so a heartbeat that
-        # (somehow) grew children is not lifted — better a card in the grid
-        # than a subtree hidden behind the strip. The loader keeps custom
-        # checks off the reserved line in the first place.
+    def test_the_heartbeat_branch_is_the_strip_and_its_children_are_a_page(self):
+        # The heartbeat is a branch — a child per contributor (ADR-0076) — and the
+        # strip is its roll-up: it summarizes the subtree the way any branch card
+        # does and links to it, so lifting it hides nothing. The children are the
+        # page behind the link.
         self._login()
         self.tree.upsert("/little-sister", StatusCode.OK, frequency_seconds=3600)
-        self.tree.upsert("/little-sister/satellite", StatusCode.OK)
+        self.tree.upsert("/little-sister/engine", StatusCode.OK)
+        self.tree.upsert("/little-sister/state", StatusCode.WARN, "behind")
         body = self.client.get("/status").get_data(as_text=True)
-        self.assertNotIn("ls-strip", body)
-        self.assertIn('status-card__head" data-path="/little-sister"', body)
-        self.assertIn("satellite", body)                    # nothing vanishes
+        self.assertIn("ls-strip s-warn", body)              # the roll-up
+        self.assertNotIn('status-card__head" data-path="/little-sister"', body)
+        page = self.client.get("/status/little-sister").get_data(as_text=True)
+        self.assertIn("data-path=\"/little-sister/state\"", page)
+        self.assertIn("behind", page)                       # nothing vanishes
 
     def test_quiet_leaf_renders_as_a_chip(self):
         # a card's OK leaf collapses to a compact chip (name + color); its reason,
@@ -666,7 +670,7 @@ class WebTests(TestCase):
         self.assertIn("svc", body)
         self.assertNotIn("boom", body)
         self.assertIn("depth=3", response.headers.get("Set-Cookie", ""))
-        # the saved cookie is honoured on a later plain request
+        # the saved cookie is honored on a later plain request
         self.assertNotIn(
             "boom", self.client.get("/status").get_data(as_text=True))
 
@@ -793,7 +797,7 @@ class WebTests(TestCase):
 
     def test_the_declaration_closes_the_chip_run_around_itself(self):
         # The chip-run wrapper has to agree with the chip condition about the
-        # neighbours, or a declared node between two chips leaves the run's <span>
+        # neighbors, or a declared node between two chips leaves the run's <span>
         # open and every chip after it lands inside the wrong wrapper.
         self._login()
         self.tree.upsert("/aws/alpha", StatusCode.OK)
@@ -1134,7 +1138,7 @@ class WebTests(TestCase):
 
     def test_density_off_persists_via_cookie(self):
         # the density switch persists like depth — set on an explicit
-        # change (SameSite=Lax), honoured on a later plain visit
+        # change (SameSite=Lax), honored on a later plain visit
         self._login()
         self.tree.upsert("/host/cpu", StatusCode.OK)   # quiet leaf, chip by default
         first = self.client.get("/status?view=1")        # chips unchecked
@@ -1223,7 +1227,7 @@ class WebTests(TestCase):
         self.assertIn("Pinned by", body)
         self.assertIn("pan", body)          # created_by = the session user
         self.assertIn("Expires", body)
-        # an untouched pin says nothing about a last change (ADR-0014 amendment)
+        # an untouched pin says nothing about a last change (ADR-0014)
         self.assertNotIn("Last changed by", body)
 
     def test_maintenance_blocks_non_admin(self):
@@ -1233,6 +1237,151 @@ class WebTests(TestCase):
         response = self.client.post("/maintenance",
                                     data={"path": "db", "action": "set"})
         self.assertEqual(response.status_code, 403)
+
+    def _page(self, url: str) -> str:
+        return self.client.get(url).get_data(as_text=True)
+
+    def test_a_self_report_action_runs_for_an_admin_and_comes_back_with_its_word(self):
+        """ADR-0076: a package's action on its contributor's node — a POST, admin
+        only, answered on the page it came back to."""
+        self_report.forget_actions()
+        self.addCleanup(self_report.forget_actions)
+        ran: list[str] = []
+
+        def take_over() -> str:
+            ran.append("took")
+            return "took the lease over"
+
+        self_report.register_action("aws-keeper", "take-over", "Take over", take_over)
+        self._login()   # pan is an admin
+        self.tree.upsert("/little-sister", StatusCode.OK, frequency_seconds=3600)
+        self.tree.upsert("/little-sister/aws-keeper", StatusCode.OK)
+        # the button, on the contributor's node, for an admin
+        page = self._page("/status/little-sister/aws-keeper")
+        self.assertIn('action="/little-sister/aws-keeper/act/take-over"', page)
+        self.assertIn(">Take over<", page)
+
+        response = self.client.post("/little-sister/aws-keeper/act/take-over")
+
+        self.assertEqual(ran, ["took"])
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(response.headers["Location"].endswith(
+            "/status/little-sister/aws-keeper"))
+        page = self._page("/status/little-sister/aws-keeper")
+        self.assertIn("took the lease over", page)
+
+    def test_an_action_that_ran_is_followed_by_a_flush_of_the_state_layer(self):
+        """ADR-0076 decision 6: what an action changed reaches the store now — the
+        kept files written and the keeper given its tick — not at the next
+        interval; a handler that raised is not followed by one."""
+        import tempfile
+
+        from little_sister.state import StateLayer
+        self_report.forget_actions()
+        self.addCleanup(self_report.forget_actions)
+        with tempfile.TemporaryDirectory() as directory:
+            state = StateLayer(directory, interval_seconds=3600)
+            held = {"pins": []}
+            state.keep("kept.json", lambda: held)
+            state.tick()                          # the interval starts; nothing written
+            app_module.state_layer = state
+            self.addCleanup(setattr, app_module, "state_layer", None)
+
+            def take_over() -> str:
+                held["pins"] = ["/db"]
+                return "took the lease"
+
+            def broken() -> str:
+                held["pins"] = ["/never"]
+                raise RuntimeError("bucket unreachable")
+            self_report.register_action("aws-keeper", "take-over", "Take over",
+                                        take_over)
+            self_report.register_action("aws-keeper", "release", "Release", broken)
+            self._login()
+            self.assertFalse(state.path("kept.json").exists())
+
+            self.client.post("/little-sister/aws-keeper/act/take-over")
+
+            self.assertEqual(json.loads(state.path("kept.json").read_text()),
+                             {"pins": ["/db"]})
+            with self.assertLogs("little_sister", level="ERROR"):
+                self.client.post("/little-sister/aws-keeper/act/release")
+            self.assertEqual(json.loads(state.path("kept.json").read_text()),
+                             {"pins": ["/db"]}, "no flush behind a handler that raised")
+
+    def test_a_self_report_action_that_raises_is_its_own_sentence(self):
+        self_report.forget_actions()
+        self.addCleanup(self_report.forget_actions)
+
+        def broken() -> str:
+            raise RuntimeError("bucket unreachable")
+
+        self_report.register_action("aws-keeper", "release", "Release", broken)
+        self._login()
+        with self.assertLogs("little_sister", level="ERROR"):
+            response = self.client.post("/little-sister/aws-keeper/act/release")
+        self.assertEqual(response.status_code, 302)
+        page = self._page("/status/little-sister/aws-keeper")
+        self.assertIn("Release failed", page)
+        self.assertIn("bucket unreachable", page)
+
+    def test_a_self_report_action_is_admin_only_and_unknown_is_404(self):
+        self_report.forget_actions()
+        self.addCleanup(self_report.forget_actions)
+        self_report.register_action("aws-keeper", "take-over", "Take over",
+                                    lambda: "no")
+        with self.client.session_transaction() as sess:
+            sess["username"] = "viewer"
+            sess["admin"] = False
+        self.assertEqual(
+            self.client.post("/little-sister/aws-keeper/act/take-over").status_code,
+            403)
+        # and the button is not offered to a viewer either
+        self.tree.upsert("/little-sister", StatusCode.OK, frequency_seconds=3600)
+        self.tree.upsert("/little-sister/aws-keeper", StatusCode.OK)
+        page = self._page("/status/little-sister/aws-keeper")
+        self.assertNotIn("/act/take-over", page)
+        self._login()
+        self.assertEqual(
+            self.client.post("/little-sister/aws-keeper/act/nothing").status_code,
+            404)
+
+    def test_take_the_backups_is_the_state_childs_action(self):
+        """ADR-0077: the library's own action, registered where the layer is —
+        admin-only, answered on the child's page with what was taken."""
+        from little_sister.state import BACKUP_SUFFIX, MAINTENANCE_FILE, StateLayer
+        self_report.forget_actions()
+        self.addCleanup(self_report.forget_actions)
+
+        class _Roots:
+            def check_roots(self) -> list[str]:
+                return ["/db"]
+        with tempfile.TemporaryDirectory() as directory:
+            state = StateLayer(directory)
+            far = datetime.now() + timedelta(days=1)
+            # what an earlier process set aside: a pin on /db this one lacks
+            state.path(MAINTENANCE_FILE + BACKUP_SUFFIX).write_text(json.dumps({
+                "nodes": {"/db": {"reason": "from the backup",
+                                  "set_at": "2026-01-01T00:00:00",
+                                  "expires_at": far.isoformat(),
+                                  "set_by": "ada"}},
+                "entries": {}}))
+            app_module._restore_state(_Roots(), state)  # type: ignore[arg-type]
+            self._login()   # pan is an admin
+            self.tree.upsert("/little-sister", StatusCode.OK, frequency_seconds=3600)
+            self.tree.upsert("/little-sister/state", StatusCode.OK)
+            page = self._page("/status/little-sister/state")
+            self.assertIn('action="/little-sister/state/act/take-backups"', page)
+            self.assertIn(">Take the backups<", page)
+            self.assertIsNone(self.tree.maintenance_entry("/db"))
+
+            response = self.client.post("/little-sister/state/act/take-backups")
+
+            self.assertEqual(response.status_code, 302)
+            self.assertEqual(self.tree.maintenance_entry("/db").reason,
+                             "from the backup")
+            page = self._page("/status/little-sister/state")
+            self.assertIn("took the backup of maintenance.json", page)
 
     def test_system_page_admin(self):
         self._login()   # pan is an admin
@@ -1300,7 +1449,7 @@ class WebTests(TestCase):
         self.assertIn("classList.add('text-danger')", js)
 
     def test_poll_js_escalates_a_sustained_outage(self):
-        # ADR-0005 update note: six consecutive misses escalate to a banner,
+        # ADR-0005: six consecutive misses escalate to a banner,
         # dimmed content and a tab-title prefix; session expiry escalates
         # immediately; a woken tab re-polls at once
         js = self.client.get("/static/js/poll.js").get_data(as_text=True)
@@ -1625,7 +1774,7 @@ class WebTests(TestCase):
 
     def test_status_fragment_carries_rendered_at_header(self):
         # the poll fragment hands the client a server-formatted timestamp so
-        # "updated …" honours config.time_format rather than toLocaleTimeString
+        # "updated …" honors config.time_format rather than toLocaleTimeString
         self._login()
         self.tree.upsert("/svc/web", StatusCode.OK)
         stamp = self.client.get("/status?fragment=1").headers.get("X-Rendered-At")
@@ -1787,7 +1936,7 @@ class WebTests(TestCase):
 
     def test_stamp_keeps_the_class_the_poll_swaps_for_danger(self):
         # poll.js swaps .text-muted for .text-danger and both are !important in
-        # Bootstrap, so the band must not colour this line itself
+        # Bootstrap, so the band must not color this line itself
         self._login()
         body = self.client.get("/status").get_data(as_text=True)
         self.assertIn('class="text-muted ls-band__updated" id="status-updated"',
@@ -2298,7 +2447,7 @@ class WebTests(TestCase):
         self.assertNotIn("rgba(255, 255, 255, 0.45)", css)
 
     def test_the_history_button_belongs_to_the_palette(self):
-        # btn-info was the one colour on the detail page that followed no theme
+        # btn-info was the one color on the detail page that followed no theme
         self._login()
         self.tree.upsert("/svc/web", StatusCode.OK)
         body = self.client.get("/status/svc/web").get_data(as_text=True)
@@ -2594,7 +2743,7 @@ class LinksPageTests(TestCase):
         self.assertNotIn("&lt; 1m", body)
 
     def test_everything_alive_is_marked_green(self):
-        # A reader mid-incident reads a colour before a sentence, and this is the
+        # A reader mid-incident reads a color before a sentence, and this is the
         # one state the page can report as good.
         config, view = self.probed("https://a.example.org/", True, detail="HTTP 200")
         body = self.page(config, view)
@@ -2681,7 +2830,7 @@ class LinksPageTests(TestCase):
         self.assertIn("Check now", body)
         self.assertIn('method="post"', body)
         # `btn btn-sm` for the shape, our own ink for the color: Bootstrap's
-        # outline secondary is one grey on every canvas, 3.76:1 on the dark one
+        # outline secondary is one gray on every canvas, 3.76:1 on the dark one
         self.assertNotIn("btn-outline", body)
         # in the filter row, at the far end from the box it must not be hit from
         self.assertLess(body.index('id="ls-links-filter"'),
@@ -2707,7 +2856,7 @@ class LinksPageTests(TestCase):
 
     def test_a_pass_that_gave_up_on_a_host_says_so(self):
         # The one condition under which the age beside it stops meaning what it
-        # says (ADR-0030, amended): without this, somebody pressing *check now* and
+        # says (ADR-0030): without this, somebody pressing *check now* and
         # watching nothing move would conclude the button is broken rather than
         # that a target is refusing to answer.
         config, view = self.probed("https://a.example.org/", True, detail="HTTP 200")
@@ -2725,7 +2874,7 @@ class LinksPageTests(TestCase):
         self.assertIn("paused", body)
         self.assertIn("still waiting on a host that has not answered", body)
         # Not red: a failure is drawn on the row it belongs to, and a second
-        # colour up here would compete with it. The sentence sits *inside* the
+        # color up here would compete with it. The sentence sits *inside* the
         # freshness line, so it takes that line's ink and only its own weight.
         self.assertIn("ls-links__stalled", body)
         self.assertLess(body.index("ls-links__probe"),
@@ -2984,13 +3133,21 @@ class LinkIconRouteTests(TestCase):
 
 
 class SettingResolutionTests(TestCase):
-    """SECRET_KEY / LITTLE_SISTER_API_TOKENS at startup (ADR-0023 update)."""
+    """SECRET_KEY / LITTLE_SISTER_API_TOKENS at startup (ADR-0023)."""
 
     def setUp(self):
         for patcher in (mock.patch.dict(os.environ),
                         mock.patch.dict(secrets._resolvers)):
             patcher.start()
             self.addCleanup(patcher.stop)
+        self_report.startup.forget()
+        self.addCleanup(self_report.startup.forget)
+
+    def _noted(self, slug):
+        found = [line for line in self_report.startup.lines() if line.slug == slug]
+        self.assertEqual(len(found), 1, [line.slug for line in
+                                         self_report.startup.lines()])
+        return found[0]
 
     def test_unset_secret_key_gets_a_random_per_start_key(self):
         os.environ.pop("SECRET_KEY", None)
@@ -3013,8 +3170,17 @@ class SettingResolutionTests(TestCase):
             raise RuntimeError("store unreachable")
         secrets.register_resolver("fake", failing)
         os.environ["SECRET_KEY"] = "fake://app/session-key"
-        key = app_module._session_key()
+        with self.assertLogs("little_sister", level="WARNING") as caught:
+            key = app_module._session_key()
         self.assertEqual(len(key), 64)
+        # …and says so where somebody looks, not only in the log (backlog #70):
+        # a standing note, WARN, for the life of the process.
+        line = self._noted("secret-key")
+        self.assertIs(line.code, StatusCode.WARN)
+        self.assertIn("every session ends at the next restart", line.text)
+        self.assertIn("store unreachable", line.text)
+        self.assertIn("secret-key: the SECRET_KEY reference did not resolve",
+                      caught.output[0])
 
     def test_malformed_secret_key_reference_fails_loudly(self):
         os.environ["SECRET_KEY"] = "nope://app/session-key"
@@ -3036,6 +3202,9 @@ class SettingResolutionTests(TestCase):
         secrets.register_resolver("fake", failing)
         os.environ["LITTLE_SISTER_API_TOKENS"] = "fake://app/tokens"
         self.assertEqual(app_module._api_token_setting(), "")
+        line = self._noted("api-tokens")
+        self.assertIs(line.code, StatusCode.WARN)
+        self.assertIn("the JSON API rejects every request", line.text)
 
 
 if __name__ == "__main__":
@@ -3092,6 +3261,7 @@ class CodedReasonLineTests(TestCase):
         # leaf page is where every line always renders (ADR-0036)
         body = self.client.get("/status/ci/actions").get_data(as_text=True)
         self.assertIn("is-coded s-error is-running is-quiet", body)
+
 
 
 class TopmostTimeTests(TestCase):
@@ -3178,7 +3348,7 @@ class TopmostTimeTests(TestCase):
         self.assertEqual(body.count('class="status-card__time"'), 1)
 
     def test_a_shared_two_check_mount_no_longer_times_its_card(self):
-        # The ADR-0044 amendment of ADR-0027: two checks writing one mount leave
+        # ADR-0044, which amends ADR-0027: two checks writing one mount leave
         # the unwritten card above them bare — a single inherited value would
         # present one check's run time as both checks'. The mount's own box
         # still shows its own last write.
@@ -3865,6 +4035,17 @@ class SystemPackagesTests(TestCase):
         body = self._system()
         self.assertNotIn("<code>little_sister</code>", body)
 
+    def test_a_self_report_contributor_puts_its_package_in_the_inventory(self):
+        # the sixth seam (ADR-0071): a contributor is visible on the heartbeat
+        # only while it has something to say, so the row is where a quiet one
+        # can be seen to have registered at all
+        from little_sister.self_report import register_contributor
+        self._login()
+        register_contributor("keeper", lambda: [])
+        body = self._system()
+        self.assertIn("<code>tests</code>", body)
+        self.assertIn("report keeper", body)
+
     def _resolver_row(self, body: str, scheme: str, package: str,
                       replaces: str, origin: str) -> None:
         """Assert the whole four-cell row for `scheme`, in order.
@@ -4219,3 +4400,64 @@ class CopyChipTests(TestCase):
         self.assertIsNone(copy_context(node=replace(node, path=""),
                                        reason=blank.text, line=node.reasons[0],
                                        index=0, surface="grid"))
+
+
+class SystemPageDeclaredCostTests(TestCase):
+    """`/system` shows what a check declared beside what its runs measured
+    (ADR-0075). Rendered from the partial the page's poll re-fetches, with a real
+    engine's `info()` behind it — the block is skipped entirely when no engine is
+    running, which is how the page looks in this test module's own app."""
+
+    def _info(self):
+        from little_sister.checks.base import Check, CheckResult
+        from little_sister.engine import Engine
+
+        class _Declaring(Check):
+            type_name = "declaring"
+
+            def run(self) -> CheckResult:
+                return CheckResult(StatusCode.OK)
+
+            def expected_cost(self) -> float:
+                return 90.0
+
+            def expected_entries(self) -> int:
+                return 1200
+
+        class _Silent(_Declaring):
+            type_name = "silent"
+
+            def expected_cost(self) -> float | None:
+                return None
+
+            def expected_entries(self) -> int | None:
+                return None
+
+        checks = [_Declaring(path="/estate", frequency_seconds=900),
+                  _Silent(path="/quiet", frequency_seconds=900)]
+        return Engine(checks, StatusTree(), max_workers=4).info()
+
+    def _render(self):
+        from flask import render_template
+        with app_module.app.test_request_context():
+            return render_template("_system_info.html", info=self._info())
+
+    def test_the_declared_sums_stand_beside_the_entries_held(self):
+        body = self._render()
+        self.assertIn("Declared load", body)
+        self.assertIn("0.1", body)                      # 90 s every 15m
+        # the pool is the roster's size, two, not the ceiling of four
+        self.assertIn("of 2 worker threads", body)
+        self.assertIn("1,200 declared", body)
+
+    def test_a_check_that_declared_nothing_shows_nothing(self):
+        # the last cell of the row is the declared one, and an em dash is the
+        # whole of it — nothing declared is not the claim that nothing is spent
+        row = self._render().split("/status/quiet")[1].split("</tr>")[0]
+        self.assertEqual(row.rsplit("<td", 1)[1].split(">", 1)[1]
+                         .replace("</td>", "").strip(), "—")
+
+    def test_a_declaring_check_shows_both_figures(self):
+        row = self._render().split("/status/estate")[1].split("</tr>")[0]
+        self.assertIn("1m 30s", row)
+        self.assertIn("1,200 entries", row)

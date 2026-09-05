@@ -32,9 +32,11 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from little_sister import self_report
 from little_sister.errors import ConfigError
 from little_sister.logger import logger
 from little_sister.origins import calling_package
+from little_sister.reasons import plain, slug
 
 CONFIG_DIR_ENV = "LITTLE_SISTER_CONFIG_DIR"
 DEFAULT_CONFIG_DIR = "config"
@@ -154,29 +156,38 @@ def register_aspect(name: str, *, as_file: bool = True,
     question when the file is misbehaving and the answer is a package you did not
     write. Only the winning registration is attributed — a refused one owns nothing.
     """
+    # Every refusal below is a standing note (ADR-0072 §7): a package's file that
+    # is never read is a degradation the process cannot undo, and it names the
+    # package that asked, which a log line alone left to whoever read it.
+    who = calling_package() or "an unidentified package"
     if not _ASPECT_NAME.fullmatch(name):
-        logger.warning(
-            "config: %r is not a usable aspect name — an aspect is a bare lower-case "
-            "stem under a configuration root (ADR-0035)", name)
+        self_report.startup.note(
+            slug("aspect", name),
+            plain(f"{who} registers {name!r}, which is not a usable aspect name — "
+                  f"an aspect is a bare lower-case stem under a configuration root "
+                  f"(ADR-0035); its file is never read"))
         return
     if not as_file and not as_directory:
-        logger.warning(
-            "config: the %r aspect is registered as neither a file nor a directory, "
-            "so nothing could ever hold it — ignored (ADR-0035)", name)
+        self_report.startup.note(
+            slug("aspect", name),
+            plain(f"{who} registers the {name!r} aspect as neither a file nor a "
+                  f"directory, so nothing could ever hold it — ignored (ADR-0035)"))
         return
     aspect = Aspect(name, as_file=as_file, as_directory=as_directory)
     if name in BUILTIN_ASPECTS:
-        logger.warning(
-            "config: %r is one of the library's own aspects (%s) and cannot be "
-            "redefined as %s — the registration is ignored (ADR-0035)", name,
-            BUILTIN_ASPECTS[name].shape(), aspect.shape())
+        self_report.startup.note(
+            slug("aspect", name),
+            plain(f"{who} tries to redefine {name!r}, one of the library's own "
+                  f"aspects ({BUILTIN_ASPECTS[name].shape()}), as {aspect.shape()} "
+                  f"— the registration is ignored (ADR-0035)"))
         return
     existing = ASPECTS.get(name)
     if existing is not None and existing != aspect:
-        logger.warning(
-            "config: the %r aspect is already registered as %s; the later %s is "
-            "ignored — the first registration wins (ADR-0035)", name,
-            existing.shape(), aspect.shape())
+        self_report.startup.note(
+            slug("aspect", name),
+            plain(f"{who} registers the {name!r} aspect as {aspect.shape()}, but it "
+                  f"is already registered as {existing.shape()}; the later one is "
+                  f"ignored — the first registration wins (ADR-0035)"))
         return
     ASPECTS[name] = aspect
     _ASPECT_OWNERS[name] = calling_package()
@@ -268,10 +279,11 @@ def sole_aspect_file(name: str, spec: str | Path | None = None) -> Path | None:
     if not found:
         return None
     if len(found) > 1:
-        logger.warning(
-            "config: the %r aspect is declared in %d roots; the first wins whole "
-            "(ADR-0031) — using %s, ignoring %s", name, len(found),
-            found[0], ", ".join(str(path) for path in found[1:]))
+        self_report.startup.note(
+            slug("aspect", name, "roots"),
+            plain(f"the {name!r} aspect is declared in {len(found)} roots; the first "
+                  f"wins whole (ADR-0031) — using {found[0]}, ignoring "
+                  f"{', '.join(str(path) for path in found[1:])}"))
     return found[0]
 
 
@@ -388,9 +400,10 @@ def _warn_unknown_candidates(root: Path) -> None:
         else:
             continue
         if name not in ASPECTS:
-            logger.warning(
-                "config: %s is not a known configuration aspect and is ignored "
-                "(known: %s)", entry, _known_aspects())
+            self_report.startup.note(
+                slug("ignored", name),
+                plain(f"{entry} is not a known configuration aspect and is ignored "
+                      f"(known: {_known_aspects()})"))
 
 
 def _known_aspects() -> str:

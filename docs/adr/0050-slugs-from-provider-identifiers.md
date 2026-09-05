@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-08 (decided while promoting the deployment's slug helper into the
-  library; the rule itself was first recorded in the deployment on 2026-08-03)
+  library; the rule itself was first recorded in the deployment on 2026-08-02)
 - **Related:** [ADR-0036](0036-addressable-reasons.md) (addressable reasons — the
   seam a slug fills, and the content hash this is the alternative to),
   [ADR-0042](0042-entries-carry-their-own-code.md) (the entry a slug keys),

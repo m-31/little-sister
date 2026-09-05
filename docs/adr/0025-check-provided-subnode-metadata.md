@@ -1,7 +1,7 @@
 # ADR-0025 — Check-provided subnode metadata (`about` / `title` on `CheckResult`)
 
 - **Status:** Accepted
-- **Date:** 2026-08-23 (accepted 2026-07-23)
+- **Date:** 2026-08-23 (accepted 2026-07-25)
 - **Related:** [ADR-0007](0007-check-result-branches.md) (recursive `CheckResult` —
   the branch shape this extends), [ADR-0012](0012-node-metadata.md) (`about`, its
   sources and precedence), [ADR-0017](0017-node-title.md) (`title`, same sources),

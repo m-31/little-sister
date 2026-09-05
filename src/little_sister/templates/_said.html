@@ -1,0 +1,10 @@
+{#- What an action on a self-report node answered (ADR-0076): shown once, on the
+    page the action came back to, outside any polled region so the swap leaves it
+    standing until the next navigation. Flask's flashed messages, nothing more. -#}
+{% with said = get_flashed_messages() %}{% if said %}
+<div class="mt-2" style="max-width: 820px">
+    {% for sentence in said %}
+    <div class="alert alert-info py-2 mb-2" role="status">{{ sentence }}</div>
+    {% endfor %}
+</div>
+{% endif %}{% endwith %}

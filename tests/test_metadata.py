@@ -1,6 +1,6 @@
 """Tests for the `subnodes:` block's readers — all of them the library's own.
 
-Since ADR-0025's 2026-08-19 update no name in `checks.metadata` is on the
+Since ADR-0025 no name in `checks.metadata` is on the
 check-authoring surface: `_parse_common` reads the block for every type and
 `Check.__init__` resolves the labels, so these are internals with one caller
 each. What a *check* now declares instead is tested in `test_checks.py`

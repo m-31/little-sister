@@ -1,7 +1,7 @@
 # ADR-0016 — Node addressing: a single absolute slash path
 
 - **Status:** Accepted
-- **Date:** 2026-06-26
+- **Date:** 2026-06-27
 - **Related:** [ADR-0004](0004-status-aggregation-semantics.md) /
   [ADR-0007](0007-check-result-branches.md) (the tree these paths address),
   [ADR-0008](0008-json-output-api.md) (the JSON `path` field — schema-visible),

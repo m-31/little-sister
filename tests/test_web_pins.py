@@ -232,7 +232,7 @@ class BranchPinTests(TestCase):
 
 class EditAndConflictTests(TestCase):
     """Editing a pin without clearing it first, and the conflict page a refused
-    compare-and-set lands on (ADR-0014 amendment)."""
+    compare-and-set lands on (ADR-0014)."""
 
     def setUp(self):
         app_module.app.config["TESTING"] = True
@@ -1074,7 +1074,7 @@ class PinnedCardTests(TestCase):
 
 class DurationGuardTests(TestCase):
     """A maintenance window must be a **positive, bounded** number of seconds
-    (ADR-0014 amendment). ADR-0014 promised a *finite* expiry; finite was not
+    (ADR-0014). ADR-0014 promised a *finite* expiry; finite was not
     enough."""
 
     def setUp(self):
@@ -1174,7 +1174,118 @@ class DurationGuardTests(TestCase):
         body = self._set("32").get_data(as_text=True)
         self.assertIn('name="duration" value="32"', body)
         self.assertIn("Which formats can I use?", body)
+        # the grammar is visible at the field (ADR-0014), weeks included
+        self.assertIn("<code>1w</code>", body)
         self.assertIn("Nothing was saved", body)
+
+    def test_a_week_is_a_duration_here_too(self):
+        self.assertEqual(self._set("1w").status_code, 302)
+        self.assertIsNotNone(self.tree.maintenance_entry("/db"))
+
+    def test_a_capital_m_is_refused_with_its_own_sentence(self):
+        # `6M` used to lowercase into six *minutes* and the pin was gone before
+        # anyone looked; it is refused by name, and the words come back
+        body = self._set("6M").get_data(as_text=True)
+        self.assertIn("Nothing was saved", body)
+        self.assertIn("M is not a unit", body)
+        self.assertIn("m is minutes", body)
+        self.assertIn('name="duration" value="6M"', body)
+        self.assertIsNone(self.tree.maintenance_entry("/db"))
+
+
+class _Scheduled:
+    """What the floor reads off a configured check: where it sits and how often
+    it runs."""
+
+    def __init__(self, path: str, frequency_seconds: int) -> None:
+        self.path = path
+        self.frequency_seconds = frequency_seconds
+
+
+class IntervalFloorTests(TestCase):
+    """A window shorter than the interval of the check it covers is refused
+    (ADR-0014): the pin would end before that check runs again, so it would cover
+    no run of what it names — whichever spelling produced the window."""
+
+    def setUp(self):
+        app_module.app.config["TESTING"] = True
+        self.tree = StatusTree()
+        app_module.status_tree = self.tree
+        self.client = app_module.app.test_client()
+        self.client.post("/login",
+                         data={"username": "pan", "password": "12345678"})
+        self.tree.upsert("/db", StatusCode.ERROR, "boom")
+        self.tree.upsert("/payments/api", StatusCode.OK, "fine")
+        self.tree.upsert("/payments/reconcile", StatusCode.OK, "fine")
+        app_module.engine = mock.Mock(checks=[
+            _Scheduled("/db", 300),
+            _Scheduled("/payments/api", 60),
+            _Scheduled("/payments/reconcile", 1200),
+        ])
+        self.addCleanup(setattr, app_module, "engine", None)
+
+    def _set(self, path, duration, slug=""):
+        return self.client.post("/maintenance", data={
+            "path": path, "action": "set", "reason": "ada is on it",
+            "duration": duration, "set_at": "", "slug": slug})
+
+    def test_a_window_shorter_than_the_interval_is_refused_and_names_it(self):
+        body = self._set("/db", "2m").get_data(as_text=True)
+        self.assertIn("Nothing was saved", body)
+        self.assertIn("&#39;2m&#39; ends before /db (every 5m) runs again", body)
+        self.assertIn("Use at least 5m", body)
+        self.assertIn('name="duration" value="2m"', body)
+        self.assertIsNone(self.tree.maintenance_entry("/db"))
+
+    def test_a_window_equal_to_the_interval_passes(self):
+        # one run lands inside it
+        self.assertEqual(self._set("/db", "5m").status_code, 302)
+        self.assertIsNotNone(self.tree.maintenance_entry("/db"))
+
+    def test_a_calendar_spelling_is_measured_the_same_way(self):
+        # 18:00 typed at 17:59 is a sixty-second window, however it was spelled
+        soon = datetime.now(app_module.config.tzinfo) + timedelta(seconds=90)
+        body = self._set("/db", soon.strftime("%Y-%m-%d %H:%M:%S")).get_data(
+            as_text=True)
+        self.assertIn("ends before /db (every 5m) runs again", body)
+        self.assertIsNone(self.tree.maintenance_entry("/db"))
+
+    def test_a_container_pin_has_to_clear_the_slowest_check_it_covers(self):
+        body = self._set("/payments", "5m").get_data(as_text=True)
+        self.assertIn(
+            "&#39;5m&#39; ends before /payments/reconcile (every 20m) runs again",
+            body)
+        self.assertIsNone(self.tree.maintenance_entry("/payments"))
+        self.assertEqual(self._set("/payments", "20m").status_code, 302)
+        self.assertIsNotNone(self.tree.maintenance_entry("/payments"))
+
+    def test_an_entry_pin_is_held_to_the_same_floor(self):
+        self.tree.upsert("/db", StatusCode.ERROR, {"f-1": "one"})
+        body = self._set("/db", "1m", slug="f-1").get_data(as_text=True)
+        self.assertIn("ends before /db (every 5m) runs again", body)
+        self.assertIsNone(self.tree.entry_maintenance("/db", "f-1"))
+
+    def test_a_leaf_below_a_branch_check_answers_to_the_check_above_it(self):
+        app_module.engine = mock.Mock(checks=[_Scheduled("/host", 600)])
+        self.tree.upsert("/host/disk", StatusCode.OK, "fine")
+        body = self._set("/host/disk", "1m").get_data(as_text=True)
+        self.assertIn("ends before /host (every 10m) runs again", body)
+        self.assertIsNone(self.tree.maintenance_entry("/host/disk"))
+
+    def test_a_blank_field_keeps_the_configured_default_whatever_the_interval(self):
+        # the one value that never refuses (ADR-0014): the default is the
+        # deployment's own, and a settings typo must not make the form unusable
+        app_module.engine = mock.Mock(checks=[_Scheduled("/db", 30 * 86400)])
+        self.assertEqual(self._set("/db", "").status_code, 302)
+        self.assertIsNotNone(self.tree.maintenance_entry("/db"))
+
+    def test_a_path_no_check_covers_keeps_the_one_second_floor(self):
+        self.tree.upsert("/elsewhere", StatusCode.OK, "fine")
+        self.assertEqual(self._set("/elsewhere", "1s").status_code, 302)
+
+    def test_without_an_engine_the_one_second_floor_stays(self):
+        app_module.engine = None
+        self.assertEqual(self._set("/db", "1s").status_code, 302)
 
 
 class MaintenanceExpiryInputTests(TestCase):
@@ -1201,6 +1312,19 @@ class MaintenanceExpiryInputTests(TestCase):
         self.assertEqual(
             self._resolve("17s", now),
             self._stored(datetime(2026, 8, 3, 10, 0, 17, tzinfo=UTC)))
+        self.assertEqual(
+            self._resolve("1w", now),
+            self._stored(datetime(2026, 8, 10, 10, 0, tzinfo=UTC)))
+
+    def test_a_unit_is_lowercase_on_the_form_as_in_a_config(self):
+        """The form reads exactly what the shared parser reads (ADR-0014): `2W`
+        and `5H` are refused there, so they are refused here, with the help."""
+        now = datetime(2026, 8, 3, 10, 0, tzinfo=UTC)
+        for value in ("2W", "5H", "3D"):
+            with self.subTest(value=value), \
+                    self.assertRaises(app_module._BadExpiry) as caught:
+                self._resolve(value, now)
+            self.assertIn("is not a duration or expiry", str(caught.exception))
 
     def test_a_bare_number_is_the_next_day_of_month(self):
         now = datetime(2026, 8, 3, 10, 0, tzinfo=UTC)  # 12:00 configured time

@@ -1,8 +1,9 @@
 # ADR-0001 — In-process threaded engine with a single shared in-memory status tree
 
 - **Status:** Accepted
-- **Date:** 2026-06-17
-- **Related:** [ADR-0002 — RLock + snapshot synchronization](0002-rlock-snapshot-synchronization.md)
+- **Date:** 2026-09-05 (accepted 2026-06-20)
+- **Related:** [ADR-0002 — RLock + snapshot synchronization](0002-rlock-snapshot-synchronization.md),
+  [ADR-0071 — what a restart keeps is a directory of files](0071-what-a-restart-keeps-is-a-directory-of-files.md)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -21,7 +22,10 @@ live state.
   (not one thread per check).
 - The **overall status tree** and an **event log** (status switches) are
   **module-level, in-memory** objects shared by all threads — engine threads
-  writing, web threads reading.
+  writing, web threads reading. The **event log is also a file** of the state layer
+  ([ADR-0071](0071-what-a-restart-keeps-is-a-directory-of-files.md)), written at most
+  once per interval and at graceful shutdown and read back at startup, so a restart
+  no longer empties it.
 - Because all state is in-process memory, deployment is **pinned to exactly one
   worker process**.
 
@@ -45,14 +49,21 @@ live state.
   not inherited across `fork`; Flask's debug reloader and gunicorn `--preload`
   are double-start / no-start traps.
 - **Robustness:** check threads should be **daemon** threads (or have a stop
-  signal) for clean shutdown, and **every check needs a timeout** so a hung check
-  can't pin a thread or block shutdown. The bounded pool keeps one slow check from
-  starving others. A check that **fails or times out sets its node to `ERROR`**
-  (see ADR-0004).
-- The in-memory **event log must be bounded** (e.g. `collections.deque(maxlen=N)`);
-  durable history is out of scope for the first release.
-- **Traded away by design:** horizontal scaling and restart durability — both
-  recovered by the seam below.
+  signal) for clean shutdown, and **every check honors a timeout of its own** —
+  the engine cannot kill a thread, so a check that never returns pins a pool worker
+  (`architecture.md` §9), and the bounded pool is what keeps one slow check from
+  starving the others. A check that **fails or times out sets its node to `ERROR`**
+  (see [ADR-0040](0040-what-a-failing-check-becomes.md)).
+- The **event log must be bounded** (e.g. `collections.deque(maxlen=N)`), and the
+  bound holds in the file it is written to as well. Durable history stays out of
+  scope: a history *longer than the bound*, or one searched rather than read whole,
+  is a store behind a seam
+  ([ADR-0071](0071-what-a-restart-keeps-is-a-directory-of-files.md) §1) — never a
+  database in the core.
+- **Traded away by design:** horizontal scaling, and the restart durability of the
+  live tree — what the state layer keeps comes back at startup
+  ([ADR-0071](0071-what-a-restart-keeps-is-a-directory-of-files.md)), and a node's
+  current reading waits for its next run. Horizontal scaling is the seam below.
 
 ## Alternatives considered
 - **Multiple gunicorn workers + shared state in Redis/DB** — needed only if we

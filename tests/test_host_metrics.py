@@ -154,7 +154,7 @@ class HostMetricsCheckTests(TestCase):
     def test_disk_volumes_carry_the_disk_about(self):
         # the `disk_path: all` branch and each per-filesystem volume carry the
         # disk about, so every volume hover explains itself too. The branch is
-        # named `disk` and is labelled by the library; a volume is named by the
+        # named `disk` and is labeled by the library; a volume is named by the
         # host, so its label rides its result — the dynamic-child channel.
         from little_sister.checks.ssh.host_metrics import ABOUT
         stdout = (
@@ -196,7 +196,7 @@ class HostMetricsCheckTests(TestCase):
 
     def test_subnodes_config_may_extend_the_declared_about(self):
         # `{default}` is the extension form, and it works for an installed type
-        # from the deployment's file alone (ADR-0025's 2026-08-19 update).
+        # from the deployment's file alone (ADR-0025).
         from little_sister.checks.ssh.host_metrics import ABOUT
         with tempfile.TemporaryDirectory() as directory:
             nodes = self._nodes(

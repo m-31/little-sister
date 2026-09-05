@@ -13,7 +13,7 @@ are imported *by* this module, so the facade is not available to them yet.
 Nothing from ``checks.metadata`` is re-exported here any more. Its three helpers
 were the reader and the layering a branch check ran over its own ``subnodes:``
 block; the library reads that block itself now and a type only **declares** its
-defaults and tokens (ADR-0025's 2026-08-19 update), so the names left the surface
+defaults and tokens (ADR-0025), so the names left the surface
 with the callers that needed them — the check API epoch moving with them
 (ADR-0051).
 """

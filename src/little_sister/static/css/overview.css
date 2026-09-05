@@ -920,7 +920,7 @@ body[data-ls-card-state="below"] .status-card__state {
    maintenance** — the one signal, no strikethrough — with the count beside it
    surviving the reason clamp, which can put the pinned line below the fold.
 
-   It paints its **own surface**, which is what makes the colour safe to rely on. The
+   It paints its **own surface**, which is what makes the color safe to rely on. The
    rule used to set the maintenance ink and leave the background to whatever it landed
    on, and it lands on four different things: our pale `--ls-tint-*` card fills, our
    vivid `--ls-error` / `--ls-maintenance` fills (a node reporting its own problem is
@@ -987,7 +987,7 @@ body[data-ls-card-state="below"] .status-card__state {
 /* Why a node is blue, and what it is silencing (the maintenance keystone).
 
    `.pin-banner` sits above the reason block and outside its clamp: the explanation
-   for the colour must not be the line that gets cut. Like every other maintenance
+   for the color must not be the line that gets cut. Like every other maintenance
    surface it paints its own tint, so it reads the same on a vivid card, on a pale
    one and inside Bootstrap's alert on the leaf page.
 
@@ -1620,7 +1620,7 @@ body[data-ls-card-state="below"] .status-card__state {
 /* keep an embedded image from overflowing the card */
 .inspect-card img { max-width: 100%; height: auto; }
 
-/* Sustained poll failure (ADR-0005 update note): poll.js dims the frozen
+/* Sustained poll failure (ADR-0005): poll.js dims the frozen
    content under its banner — still readable, no longer mistakable for live. */
 .poll-stale { opacity: 0.45; transition: opacity 0.3s ease; }
 
@@ -1963,7 +1963,7 @@ body[data-ls-theme="cyberpunk"] .ls-brand__wordmark { text-shadow: 0 0 9px var(-
    theme, which is also what settles the light themes, where a near-black panel
    read as a hole cut in the page.
 
-   Colour carries one meaning each. **Green is seen** — spent only on the term
+   Color carries one meaning each. **Green is seen** — spent only on the term
    passing the eyes and on the phrase in the paragraph that term names, which is
    what makes *my eyes stay on the things you care about* literal. **Pink is
    her**, and nothing else takes it. Everything else is muted, because a page
@@ -1988,7 +1988,7 @@ body[data-ls-theme="cyberpunk"] .ls-brand__wordmark { text-shadow: 0 0 9px var(-
 /* The hero's geometry is **computed, not chosen**. A flat ring reaches past the
    eyes by a fixed amount, top and bottom, and everything else follows from that
    one number: the padding that keeps the topmost term off the bar, the air under
-   the gaze that keeps the lowest term off her name, and where the field's centre
+   the gaze that keeps the lowest term off her name, and where the field's center
    sits. Change a ring's height or the size of the gaze and the rest re-solves
    itself — which is the point, because every version of this laid out by hand
    put a label somewhere it did not belong. */
@@ -2014,7 +2014,7 @@ body[data-ls-theme="cyberpunk"] .ls-brand__wordmark { text-shadow: 0 0 9px var(-
 /* The field of view: two rings around the eyes, on the page's own canvas. It is
    pinned to the gaze rather than to the block, so the wordmark below never
    arrives inside the orbit. */
-/* Centred on the **eyes**, not on the block: everything below them is text, and
+/* Centered on the **eyes**, not on the block: everything below them is text, and
    the field belongs to the gaze. */
 .ls-hero__field {
     position: absolute;
@@ -2177,7 +2177,7 @@ body[data-ls-theme="cyberpunk"] .ls-brand__wordmark { text-shadow: 0 0 9px var(-
         animation-name: ls-hero-stay;
     }
 }
-/* The angle a station has travelled from where the markup put it. Registered so
+/* The angle a station has traveled from where the markup put it. Registered so
    it can be animated at all: an unregistered custom property is a string to the
    browser, and a string cannot be interpolated. */
 @property --spin {
@@ -2253,7 +2253,7 @@ body[data-ls-theme="cyberpunk"] .ls-brand__wordmark { text-shadow: 0 0 9px var(-
     vertical-align: -0.125em;
 }
 /* A pass that gave up on a host still holding the connection open (ADR-0030,
-   amended). It takes **weight and not colour**: the rule two comments up — nothing
+   amended). It takes **weight and not color**: the rule two comments up — nothing
    turns this line red — is about not competing with the failures drawn on the rows
    themselves, and a stalled pass is a fact about the page's own machinery rather
    than about any entry on it. Inheriting the muted ink also means it needs no
@@ -2271,7 +2271,7 @@ body[data-ls-theme="cyberpunk"] .ls-brand__wordmark { text-shadow: 0 0 9px var(-
    Bootstrap paints that #6c757d whatever the canvas, which measures 3.76:1 on the
    dark one — the same trap the logout link fell into, and the accessibility bar
    outranks the shade (ADR-0028). `btn btn-sm` keeps the shape and the metrics;
-   every colour below comes from a token, so `tests/test_contrast.py` can measure
+   every color below comes from a token, so `tests/test_contrast.py` can measure
    this row without a browser. */
 .ls-links__recheck {
     margin: 0;

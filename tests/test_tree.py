@@ -163,6 +163,22 @@ class StatusTreeTests(TestCase):
         tree.upsert("/db", StatusCode.ERROR)
         self.assertEqual(snap.own_code, StatusCode.OK)         # snapshot frozen
 
+    def test_entry_count_follows_what_the_nodes_hold(self):
+        # The count the engine measures against its entry limit (ADR-0072):
+        # kept on the write path, so it moves with every upsert and never walks.
+        tree = StatusTree()
+        self.assertEqual(tree.entry_count, 0)
+        tree.upsert("/a", StatusCode.WARN, {"x": "one", "y": "two"})
+        tree.upsert("/b", StatusCode.OK, ["prose line"])
+        self.assertEqual(tree.entry_count, 3)
+        tree.upsert("/a", StatusCode.OK, {"x": "one"})       # one entry gone
+        self.assertEqual(tree.entry_count, 2)
+        tree.upsert("/b", StatusCode.OK)                       # none left
+        self.assertEqual(tree.entry_count, 1)
+        tree.set_about("/c", "a container")                    # metadata: no entry
+        tree.upsert("/a", StatusCode.OK, {"x": "one"}, config="- k: v")
+        self.assertEqual(tree.entry_count, 1)
+
     def test_event_log_is_bounded(self):
         tree = StatusTree(event_log_size=3)
         for code in (StatusCode.OK, StatusCode.WARN, StatusCode.ERROR,
@@ -305,7 +321,7 @@ class StatusTreeTests(TestCase):
         self.assertFalse(fresh.stale)
         # The pinned child contributes nothing, and it is the only one — so its
         # parent has nothing counted, and reads MAINTENANCE rather than UNDEFINED.
-        # That was the open edge case ADR-0032's amendment left for the ADR-0004
+        # That was the open edge case ADR-0032 left for the ADR-0004
         # split; this line asserted UNDEFINED while it was open, and changed with it.
         self.assertEqual(tree.effective("/system"), StatusCode.MAINTENANCE)
 
@@ -508,7 +524,7 @@ class MountTimestampTests(TestCase):
                              self._stamp(tree, host + "/host_metrics"))
 
     def test_two_checks_on_one_mount_block_the_ancestors(self):
-        # host-metrics + a hardware probe on one host node (the ADR-0044 amendment
+        # host-metrics + a hardware probe on one host node (the ADR-0044
         # of ADR-0027, reversing the earlier reading): the shared node's own last
         # write answers for *itself* (rule 2), but inherited upward that single
         # value would present one check's run time as both checks' — rule 4's
@@ -1110,6 +1126,48 @@ class MaintenancePersistenceTests(TestCase):
         self.assertIsNone(tree.snapshot("/cache"))     # expired: no node created
         self.assertEqual(set(store.saved), {"/db"})     # file rewritten without it
 
+    def test_adopt_replaces_the_table_in_a_running_process(self):
+        """ADR-0077: the side-table's ``restore`` — what the new table lacks is
+        cleared with a real transition, what it carries is applied, expired pins
+        are dropped, per-entry pins are replaced whole, nothing is written."""
+        store = _RecordingStore()
+        tree = StatusTree(maintenance_store=store)
+        now = datetime.now()
+        tree.upsert("/db", StatusCode.OK)
+        tree.upsert("/cache", StatusCode.OK)
+        tree.set_maintenance("/db", "mine", expires_at=now + timedelta(days=1))
+        tree.set_maintenance("/cache", "mine too", expires_at=now + timedelta(days=1))
+        tree.set_entry_maintenance("/db", "slow", "old pin",
+                                   expires_at=now + timedelta(days=1))
+        written = dict(store.saved)
+        adopted = {
+            "/db": self._entry(now + timedelta(days=2), reason="theirs"),
+            "/web": self._entry(now + timedelta(days=2), reason="new"),
+            "/gone": self._entry(now - timedelta(days=1), reason="expired"),
+        }
+        entry_pins = {("/web", "a"): self._entry(now + timedelta(days=2)),
+                      ("/web", "b"): self._entry(now - timedelta(days=1))}
+
+        tree.adopt_maintenance(adopted, entry_pins=entry_pins, now=now)
+
+        # /cache is cleared back to its reading, /db is edited, /web is pinned,
+        # the expired /gone never lands
+        self.assertEqual(tree.effective("/cache"), StatusCode.OK)
+        self.assertIsNone(tree.maintenance_entry("/cache"))
+        self.assertEqual(tree.maintenance_entry("/db").reason, "theirs")
+        self.assertEqual(tree.effective("/web"), StatusCode.MAINTENANCE)
+        self.assertIsNone(tree.snapshot("/gone"))
+        self.assertEqual([(event.path, event.old, event.new)
+                          for event in tree.recent_events()][-3:],
+                         [("/cache", StatusCode.MAINTENANCE, StatusCode.OK),
+                          ("/db", StatusCode.MAINTENANCE, StatusCode.MAINTENANCE),
+                          ("/web", StatusCode.UNDEFINED, StatusCode.MAINTENANCE)])
+        self.assertIsNone(tree.entry_maintenance("/db", "slow"))
+        self.assertIsNotNone(tree.entry_maintenance("/web", "a"))
+        self.assertIsNone(tree.entry_maintenance("/web", "b"))
+        # nothing written through: the file on disk is the copy being adopted
+        self.assertEqual(store.saved, written)
+
     def test_sweep_expired_clears_and_emits(self):
         tree = StatusTree(maintenance_store=_RecordingStore())
         tree.set_maintenance("/db", "planned",
@@ -1134,7 +1192,7 @@ class MaintenancePersistenceTests(TestCase):
 
 class MaintenanceEditTests(TestCase):
     """Editing a pin in place, and the compare-and-set guard that keeps two admins
-    from silently overwriting one another (ADR-0014 amendment)."""
+    from silently overwriting one another (ADR-0014)."""
 
     def setUp(self):
         self.tree = StatusTree(maintenance_store=_RecordingStore())
@@ -1268,8 +1326,7 @@ class MaintenanceEditTests(TestCase):
 
 
 class EntryMaintenanceTests(TestCase):
-    """Per-entry pins and the virtual-children roll-up (ADR-0036; the ADR-0032
-    amendment)."""
+    """Per-entry pins and the virtual-children roll-up (ADR-0036, ADR-0032)."""
 
     def setUp(self):
         self.tree = StatusTree(maintenance_store=_RecordingStore())
@@ -1530,3 +1587,78 @@ class CodedEntryRollupTests(TestCase):
         self.assertEqual(running, {"build": True, "test": False})
         # display only: the red line's rerun changes nothing about the roll-up
         self.assertEqual(snap.own_code, StatusCode.ERROR)
+
+
+class AdoptedEventLogTests(TestCase):
+    """ADR-0077: the log's ``restore`` direction takes the file's payload."""
+
+    def test_adopt_events_puts_the_payload_in_place_of_the_log(self):
+        written = StatusTree()
+        written.upsert("/x", StatusCode.OK)
+        written.upsert("/x", StatusCode.ERROR, "down")
+        running = StatusTree()
+        running.upsert("/y", StatusCode.OK)
+        running.adopt_events(written.events_payload())
+        self.assertEqual([(event.path, event.new) for event in running.recent_events()],
+                         [("/x", StatusCode.OK), ("/x", StatusCode.ERROR)])
+
+    def test_a_payload_of_another_shape_raises_and_leaves_the_log_alone(self):
+        running = StatusTree()
+        running.upsert("/y", StatusCode.OK)
+        with self.assertRaises(ValueError):
+            running.adopt_events({"events": [{"old": "OK", "new": "NOPE"}]})
+        self.assertEqual([event.path for event in running.recent_events()], ["/y"])
+
+
+class EventLogAsAStateFileTests(TestCase):
+    """The event log survives a restart as a state file (ADR-0071): the payload the
+    layer keeps, and the restore that puts it back before anything has written."""
+
+    def test_an_event_round_trips_through_its_dict(self):
+        event = Event(path="/db", name="db", old=StatusCode.OK,
+                      new=StatusCode.ERROR, reason=("down", "for real"),
+                      timestamp="2026-09-01T10:00:00", suppressed_by="maintenance")
+        self.assertEqual(Event.from_dict(event.to_dict()), event)
+        # codes travel by name, so the file reads without this module
+        self.assertEqual(event.to_dict()["new"], "ERROR")
+
+    def test_the_payload_is_the_log_oldest_first(self):
+        tree = StatusTree()
+        tree.upsert("/a", StatusCode.OK)
+        tree.upsert("/a", StatusCode.ERROR, "down")
+        payload = tree.events_payload()
+        self.assertEqual([raw["new"] for raw in payload["events"]],
+                         ["OK", "ERROR"])
+        self.assertEqual(payload["events"][1]["reason"], ["down"])
+
+    def test_restore_puts_yesterdays_events_back_and_keeps_the_bound(self):
+        from little_sister.tree import events_from_payload
+        written = StatusTree()
+        for code in (StatusCode.OK, StatusCode.ERROR, StatusCode.OK):
+            written.upsert("/a", code)
+        restarted = StatusTree(event_log_size=2)
+        kept = restarted.restore_events(events_from_payload(written.events_payload()))
+        self.assertEqual(kept, 2)
+        self.assertEqual([event.new for event in restarted.recent_events()],
+                         [StatusCode.ERROR, StatusCode.OK])
+        # nodes are untouched: nothing has reported yet
+        self.assertIsNone(restarted.snapshot("/a"))
+
+    def test_history_reads_the_restored_log_once_the_node_is_written_again(self):
+        written = StatusTree()
+        written.upsert("/a", StatusCode.OK)
+        written.upsert("/a", StatusCode.ERROR, "down")
+        restarted = StatusTree()
+        restarted.restore_events(written.recent_events())
+        self.assertEqual(restarted.history("/a"), [])
+        restarted.upsert("/a", StatusCode.OK)
+        codes = [period.code for period in restarted.history("/a")]
+        self.assertEqual(codes, [StatusCode.OK, StatusCode.ERROR, StatusCode.OK])
+
+    def test_a_payload_of_another_shape_is_refused_whole(self):
+        from little_sister.tree import events_from_payload
+        for payload in ([], {"events": "no"}, {"events": [1]},
+                        {"events": [{"old": "OK", "new": "NOPE"}]},
+                        {"events": [{"old": "OK", "new": "OK", "reason": "x"}]}):
+            with self.subTest(payload=payload), self.assertRaises(ValueError):
+                events_from_payload(payload)

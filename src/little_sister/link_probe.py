@@ -9,7 +9,7 @@ about a monitored subject, and it must not turn the dashboard amber for everyone
 Three rules shape this module:
 
 * **A pass is started by somebody opening the page**, and only when the newest
-  answer is older than the configured ``interval:`` (ADR-0030, amended 2026-08-02).
+  answer is older than the configured ``interval:`` (ADR-0030).
   The engine's tick looked like the obvious home and is deliberately not used: it is
   a scheduler built for checks, skipped wherever ``LITTLE_SISTER_ENGINE=0`` — which
   is exactly where this page still works — and in most deployments it would wake to
@@ -27,9 +27,8 @@ Three rules shape this module:
   seconds never times out, and under the old shape that single host held the
   *only* pass slot for as long as it cared to, so reachability froze until restart.
   At the deadline the pass **abandons** what has not answered rather than
-  cancelling it — a request already on the wire cannot be recalled — records what
-  did come back, and gets out of the way of the next one (ADR-0030, amended
-  2026-08-02).
+  canceling it — a request already on the wire cannot be recalled — records what
+  did come back, and gets out of the way of the next one (ADR-0030).
 
 Answers live in **module state**, keyed by URL so a dozen Grafana entries and their
 one icon cost one probe (ADR-0030 §3). That is the same single-process assumption
@@ -55,10 +54,12 @@ from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime
 
+from little_sister import self_report
 from little_sister.checks import CheckError, parse_duration
 from little_sister.fetch import USER_AGENT, fetch
 from little_sister.links import DEFAULT_PROBE_INTERVAL, LinksConfig
 from little_sister.logger import logger
+from little_sister.reasons import plain
 from little_sister.transport import RemoteError
 
 #: How long one request may take. A probe pass now starts from a **request**
@@ -122,7 +123,7 @@ PASS_ABANDON_GRACE = 5.0
 #: starting new ones. Each one holds worker threads and sockets that a host is
 #: refusing to release, and a page that started a fresh pass every six hours against
 #: a target that never answers would accumulate them without bound. Three is a
-#: judgement: enough that a single slow morning does not pause probing, few enough
+#: judgment: enough that a single slow morning does not pause probing, few enough
 #: that the leak is small and the page can say so honestly.
 MAX_STUCK_PASSES = 3
 
@@ -241,7 +242,7 @@ def targets(config: LinksConfig) -> tuple[str, ...]:
 def refresh_if_due(config: LinksConfig) -> threading.Event | None:
     """Start a pass when the newest answer is older than ``interval:``.
 
-    The whole of the trigger (ADR-0030, amended 2026-08-02), and it **returns
+    The whole of the trigger (ADR-0030), and it **returns
     immediately** in every branch: this is called from the request that renders the
     page. A target nothing has ever asked about counts as infinitely old, so an
     entry added to the file is probed on the next open rather than up to an interval
@@ -352,16 +353,19 @@ def start_pass(config: LinksConfig) -> threading.Event:
         if running is not None:
             if not running.overdue():
                 return running.done
-            logger.warning(
-                "links: the reachability pass started %s has not honored its own "
-                "%.0fs deadline — starting a new one (ADR-0030)",
-                running.started_at.isoformat(timespec="seconds"), running.deadline)
+            self_report.runtime.see(
+                "links.overrun",
+                plain(f"a reachability pass started "
+                      f"{running.started_at.isoformat(timespec='seconds')} has "
+                      f"not honored its own {running.deadline:.0f}s deadline — a "
+                      f"new one was started (ADR-0030)"))
         _prune_stuck()
         if len(_stuck) >= MAX_STUCK_PASSES:
-            logger.warning(
-                "links: %d reachability passes are still waiting on a host that "
-                "has not answered — not starting another until one of them lets "
-                "go (ADR-0030)", len(_stuck))
+            self_report.runtime.see(
+                "links.stuck",
+                plain(f"{len(_stuck)} reachability passes are still waiting on a "
+                      f"host that has not answered — no new one is started until "
+                      f"one of them lets go (ADR-0030)"))
             refused = threading.Event()
             refused.set()
             return refused
@@ -492,14 +496,18 @@ def _interval_seconds(config: LinksConfig) -> int:
     try:
         seconds = parse_duration(raw, DEFAULT_INTERVAL_SECONDS)
     except (CheckError, OverflowError, ValueError):
-        logger.warning(
-            "links: %r is not a duration this can read — using the default of %s "
-            "between reachability passes (ADR-0030)", raw, DEFAULT_PROBE_INTERVAL)
+        self_report.startup.note(
+            "links.interval",
+            plain(f"links: {raw!r} is not a duration this can read — the default "
+                  f"of {DEFAULT_PROBE_INTERVAL} between reachability passes is in "
+                  f"use (ADR-0030)"))
         return DEFAULT_INTERVAL_SECONDS
     if seconds <= 0:
-        logger.warning(
-            "links: an interval of %r would make every open due — using the "
-            "default of %s instead (ADR-0030)", raw, DEFAULT_PROBE_INTERVAL)
+        self_report.startup.note(
+            "links.interval",
+            plain(f"links: an interval of {raw!r} would make every open due — the "
+                  f"default of {DEFAULT_PROBE_INTERVAL} is in use instead "
+                  f"(ADR-0030)"))
         return DEFAULT_INTERVAL_SECONDS
     return seconds
 
@@ -571,10 +579,14 @@ def _run_pass(config: LinksConfig, current: _Pass) -> None:
             if _is_current(current):
                 for stale in set(_results) - set(urls):
                     del _results[stale]
-    except Exception:
+    except Exception as error:
         # A links page must never be the reason an instance looks broken, and this
         # runs on a thread nobody is waiting on for correctness.
         logger.exception("links: reachability pass failed")
+        self_report.runtime.see(
+            "links.pass",
+            plain(f"a reachability pass raised ({error!r}); the links keep what "
+                  f"they had"), log=False)
     finally:
         _finish(current)
 
@@ -597,12 +609,16 @@ def _sweep(current: _Pass, urls: tuple[str, ...],
         for future in as_completed(futures, timeout=current.deadline):
             try:
                 verdict = future.result()
-            except Exception:
+            except Exception as error:
                 # `_probe` catches what a probe is expected to fail with; anything
                 # left is a bug, and one target's bug must not cost the other
                 # fifty-nine their answers — that is the shape of the bug this
-                # module has already been bitten by once (ADR-0030, amended).
+                # module has already been bitten by once (ADR-0030).
                 logger.exception("links: probing %s failed", futures[future])
+                self_report.runtime.see(
+                    "links.probe",
+                    plain(f"probing {futures[future]} raised ({error!r}); that "
+                          f"link keeps what it had"), log=False)
                 continue
             if not _store(current, verdict):
                 pool.shutdown(wait=False, cancel_futures=True)
@@ -624,7 +640,7 @@ def _abandon(current: _Pass, pool: ThreadPoolExecutor,
     * **Answered** — the verdict, stored as it arrived. Some of these landed between
       the last :func:`as_completed` yield and the timeout, so they are collected
       here too; a probe that succeeded a millisecond too late is still an answer.
-    * **Never started** — cancelled out of the queue, so nothing was asked and
+    * **Never started** — canceled out of the queue, so nothing was asked and
       nothing is known. Its previous verdict and age stand, which is the truth: this
       pass never got to it.
     * **Started and unfinished** — a verdict of *no answer*, which is exactly what
@@ -638,15 +654,19 @@ def _abandon(current: _Pass, pool: ThreadPoolExecutor,
     a fourth of.
     """
     now = datetime.now()
-    cancelled = {future for future in futures if future.cancel()}
+    canceled = {future for future in futures if future.cancel()}
     for future, url in futures.items():
-        if future in cancelled:
+        if future in canceled:
             continue
         if future.done():
             try:
                 verdict = future.result()
-            except Exception:
+            except Exception as error:
                 logger.exception("links: probing %s failed", url)
+                self_report.runtime.see(
+                    "links.probe",
+                    plain(f"probing {url} raised ({error!r}); that link keeps "
+                          f"what it had"), log=False)
                 continue
         else:
             verdict = Verdict(url, None, f"no answer in {current.deadline:.0f}s",
@@ -654,12 +674,13 @@ def _abandon(current: _Pass, pool: ThreadPoolExecutor,
         if not _store(current, verdict):
             break
     pending = tuple(future for future in futures
-                    if future not in cancelled and not future.done())
+                    if future not in canceled and not future.done())
     pool.shutdown(wait=False, cancel_futures=True)
-    logger.warning(
-        "links: the reachability pass gave up after %.0fs with %d target(s) still "
-        "unanswered and %d never asked — they keep what they had (ADR-0030)",
-        current.deadline, len(pending), len(cancelled))
+    self_report.runtime.see(
+        "links.gave-up",
+        plain(f"the reachability pass gave up after {current.deadline:.0f}s with "
+              f"{len(pending)} target(s) still unanswered and {len(canceled)} never "
+              f"asked — they keep what they had (ADR-0030)"))
     if pending:
         with _lock:
             _prune_stuck()
@@ -727,7 +748,7 @@ def _request(url: str, method: str) -> int:
     ``read_body=False`` there is no body read to bound. What bounds a probe that never
     comes back is the mechanism this module already has: the pass reaches its own
     deadline, **abandons** what has not answered, records what did, and gets out of the
-    way (ADR-0030, amended 2026-08-02). Passing a ``Deadline`` as well would put a
+    way (ADR-0030). Passing a ``Deadline`` as well would put a
     second, weaker clock beside a working one — weaker because it could only fire
     between chunks of a body nobody asks for.
     """

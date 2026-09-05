@@ -1,7 +1,7 @@
 # ADR-0008 — JSON output (backend mode): endpoint, schema & token auth
 
 - **Status:** Accepted
-- **Date:** 2026-08-23 (accepted 2026-06-25)
+- **Date:** 2026-08-23 (accepted 2026-06-27)
 - **Related:** [ADR-0002](0002-rlock-snapshot-synchronization.md) (snapshots are the
   serializable copy), [ADR-0003](0003-config-and-secrets-via-env-file.md) (`.env`
   secrets/tokens), [ADR-0004](0004-status-aggregation-semantics.md) (roll-up),
@@ -55,7 +55,7 @@ readers** — a display client (wants the rolled-up code) and a federating paren
    guidelines:
    ```json
    {
-     "path": "system.db", "name": "db",
+     "path": "/system/db", "name": "db",
      "own_code": "ERROR", "code": "ERROR",
      "reasons": ["HTTP 503 from /health"],
      "timestamp": "2026-06-25T18:04:55Z",
@@ -134,7 +134,7 @@ readers** — a display client (wants the rolled-up code) and a federating paren
 ## Alternatives considered
 - **`/api/v1/...` path versioning.** Rejected: Zalando
   #115 forbids URL versioning and #114 mandates media-type versioning; content
-  negotiation also keeps one canonical resource URL and matches §2.9.
+  negotiation also keeps one canonical resource URL and matches `project.md` §2.9.
 - **Ad-hoc `{ "error": … }` body.** Rejected for Problem JSON (#176).
 - **Codes as numbers** (the `auto()` values). Rejected: brittle and not the severity
   order; string enums per #240.

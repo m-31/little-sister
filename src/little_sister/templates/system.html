@@ -17,6 +17,42 @@
              data-rendered-at="{{ rendered_at }}">updated {{ rendered_at }}</div>
         {% endif %}
 
+        {# Which installation this is (ADR-0074). First, because every other card
+           on this page describes something *about* an instance and until this one
+           the page never said which. Outside the polled fragment on the rule that
+           block states for itself: it is settled at import and cannot change while
+           the process runs.
+
+           Two fields and not four. The mark already contains the pid and the start,
+           and the engine block below shows the start again in local time — a card
+           repeating either would be the same fact three times. What is worth its own
+           row is the *name*, which is the only part a deployment chooses, and the
+           **mark**, because that is the string that ends up in somebody else's
+           bucket and on a status line, and the reason to come to this page at all is
+           to find out whether it is this instance's. #}
+        <div class="card mb-3">
+            <div class="card-body">
+                <h3 class="h6 text-muted text-uppercase">This instance</h3>
+                <table class="table table-sm align-middle mb-0">
+                    <tbody>
+                        <tr>
+                            <td style="width: 8rem">Name</td>
+                            <td><code>{{ instance.name }}</code>
+                                {%- if not instance_named %} <span class="text-muted small">(the hostname &mdash; no <code>instance:</code> in the settings)</span>{% endif %}</td>
+                        </tr>
+                        <tr>
+                            <td>Mark</td>
+                            {#- The whole string, unbroken and selectable: it is
+                                compared for equality elsewhere, so a copy of it has
+                                to be exact. #}
+                            <td><code class="user-select-all">{{ instance.mark }}</code>
+                                <div class="text-muted small">what a package writes down when it has to say which instance did something &mdash; unique to this process, and unchanged while it runs</div></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
         <div id="system-info">
             {% include '_system_info.html' %}
         </div>

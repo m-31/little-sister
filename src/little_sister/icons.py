@@ -35,7 +35,9 @@ from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
 
+from little_sister import self_report
 from little_sister.logger import logger
+from little_sister.reasons import plain, slug
 
 #: The built-in pack's package. Its own data directory, and nothing above it.
 BUILTIN_PACKAGE = "little_sister.icon_pack"
@@ -144,7 +146,10 @@ def register_pack(package: str, names: Mapping[str, object]) -> None:
     for raw_name, value in names.items():
         name = str(raw_name).strip()
         if not name:
-            logger.warning("icons: %s registers an icon with no name", package)
+            self_report.startup.note(
+                slug("icon", package, "unnamed"),
+                plain(f"{package} registers an icon with no name; it is not "
+                      f"served"))
             continue
         icon = _pack_icon(package, name, value)
         if icon is None:
@@ -224,7 +229,10 @@ def _pack_icon(package: str, name: str, value: object) -> Icon | None:
         on_light = _pack_file(package, name, value.get("on_light"))
         on_dark = _pack_file(package, name, value.get("on_dark"))
         if on_light is None and on_dark is None:
-            logger.warning("icons: %s defines %r with no usable file", package, name)
+            self_report.startup.note(
+                slug("icon", package, name),
+                plain(f"{package} defines the icon {name!r} with no usable file; "
+                      f"it is not served"))
             return None
         return Icon(name=name, on_light=on_light, on_dark=on_dark, paired=True)
     single = _pack_file(package, name, value)
@@ -239,17 +247,24 @@ def _pack_file(package: str, name: str, member: object) -> IconFile | None:
         return None
     text = str(member).strip()
     if not _MEMBER.fullmatch(text):
-        logger.warning(
-            "icons: %s names %r for %r — a pack member is a bare file name inside "
-            "its own package data, never a path", package, text, name)
+        self_report.startup.note(
+            slug("icon", package, name),
+            plain(f"{package} names {text!r} for the icon {name!r} — a pack member "
+                  f"is a bare file name inside its own package data, never a "
+                  f"path; it is not served"))
         return None
     if Path(text).suffix.lower() not in ICON_TYPES:
-        logger.warning("icons: %s names %r for %r, which is not an icon file type "
-                       "(%s)", package, text, name, ", ".join(sorted(ICON_TYPES)))
+        self_report.startup.note(
+            slug("icon", package, name),
+            plain(f"{package} names {text!r} for the icon {name!r}, which is not "
+                  f"an icon file type ({', '.join(sorted(ICON_TYPES))}); it is "
+                  f"not served"))
         return None
     if not resources.files(package).joinpath(text).is_file():
-        logger.warning("icons: %s names %r for %r, which is not in its package data",
-                       package, text, name)
+        self_report.startup.note(
+            slug("icon", package, name),
+            plain(f"{package} names {text!r} for the icon {name!r}, which is not "
+                  f"in its package data; it is not served"))
         return None
     return IconFile(package=package, member=text)
 

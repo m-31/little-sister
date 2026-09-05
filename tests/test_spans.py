@@ -4,8 +4,10 @@ The tests are written from the module's claims, not from its branches: each one
 names a sentence the docstrings make and uses the values that sentence is about.
 """
 import unittest
+from datetime import UTC, datetime, timedelta, timezone
+from unittest import mock
 
-from little_sister.spans import coarse_span, format_duration, format_span
+from little_sister.spans import coarse_span, format_duration, format_span, local_time
 
 
 class FormatSpanTests(unittest.TestCase):
@@ -111,9 +113,17 @@ class FormatDurationTests(unittest.TestCase):
 
     def test_it_writes_back_what_somebody_typed(self):
         for seconds, expected in ((900, "15m"), (3600, "1h"), (86400, "1d"),
-                                  (90, "90s"), (300, "5m"), (172800, "2d")):
+                                  (90, "90s"), (300, "5m"), (172800, "2d"),
+                                  (604800, "1w"), (1209600, "2w")):
             with self.subTest(seconds=seconds):
                 self.assertEqual(format_duration(seconds), expected)
+
+    def test_a_week_is_the_largest_unit_and_days_stay_days(self):
+        """`1w` is what `parse_duration` reads, so it is what this writes back;
+        eight days are `8d`, never `1w 1d`, by the same one-unit rule as below."""
+        self.assertEqual(format_duration(7 * 86400), "1w")
+        self.assertEqual(format_duration(8 * 86400), "8d")
+        self.assertEqual(format_duration(14 * 86400), "2w")
 
     def test_it_is_the_other_reading_of_the_same_number(self):
         """The distinction the module exists to keep: 90 seconds is how a config
@@ -138,3 +148,31 @@ class FormatDurationTests(unittest.TestCase):
         self.assertEqual(format_duration(0), "—")
         self.assertEqual(format_duration(None), "—")
         self.assertEqual(format_duration(None, none="never"), "never")
+
+
+class LocalTimeTests(unittest.TestCase):
+    """`local_time` — one instant, in the settings' zone and format."""
+
+    def _settings(self, zone: str, fmt: str):
+        from zoneinfo import ZoneInfo
+        return mock.patch("little_sister.config.config",
+                          mock.Mock(tzinfo=ZoneInfo(zone), time_format=fmt))
+
+    def test_an_aware_instant_is_written_in_the_configured_zone(self):
+        moment = datetime(2026, 9, 4, 20, 32, 39, tzinfo=UTC)
+        with self._settings("Europe/Berlin", "%Y-%m-%d %H:%M:%S"):
+            self.assertEqual(local_time(moment), "2026-09-04 22:32:39")
+
+    def test_a_fixed_offset_is_converted_too(self):
+        moment = datetime(2026, 9, 4, 16, 38, 43, tzinfo=timezone(timedelta(hours=-4)))
+        with self._settings("Europe/Berlin", "%H:%M:%S"):
+            self.assertEqual(local_time(moment), "22:38:43")
+
+    def test_the_format_may_be_overridden_and_the_zone_may_not(self):
+        moment = datetime(2026, 9, 4, 20, 32, 39, tzinfo=UTC)
+        with self._settings("Europe/Berlin", "%Y-%m-%d %H:%M:%S"):
+            self.assertEqual(local_time(moment, "%H:%M"), "22:32")
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -4,8 +4,8 @@
 - **Date:** 2026-08-08 (decided the same day, in the design round on what a
   maintenance pin leaves behind)
 - **Related:** [ADR-0014](0014-maintenance-persistence.md) (the pin, its side-table,
-  the both-dates amendment and the compare-and-set token this reuses; its
-  `reason` field is renamed here),
+  the two dates and the compare-and-set token this reuses; its `reason` field is
+  renamed here),
   [ADR-0036](0036-addressable-reasons.md) (keyed entries — the address space this
   matches, and decision 6's suspend-not-delete, extended to a note),
   [ADR-0032](0032-status-contribution-boundary.md) (the contribution boundary this
@@ -93,7 +93,7 @@ issue tracker buys nothing, and it would not have answered the second half at al
    year later is rewriting history. The note records the owning pin's `created_at`
    as its owner token and is editable exactly while a pin with that token is in the
    table. A note written with no pin is editable while it is the newest note on its
-   node. Dates follow [ADR-0014](0014-maintenance-persistence.md)'s amendment
+   node. Dates follow [ADR-0014](0014-maintenance-persistence.md)
    exactly — `created_at` / `created_by` the first write, `set_at` / `set_by` the
    last — and writes carry the same compare-and-set token, for the same reason two
    admins on one node needed it there.

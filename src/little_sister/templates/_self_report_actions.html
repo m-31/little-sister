@@ -1,0 +1,9 @@
+{#- The actions a package offered on its self-report node (ADR-0076), rendered
+    through the slot seam like every other filler, so they share the rail with the
+    declarative chips. Each is a form: an action is a write, and a write is a POST.
+    Only an admin sees them — the provider answers nothing for anybody else. -#}
+{%- for entry in actions %}
+<form method="post" action="{{ entry.href }}" class="d-inline">
+    <button type="submit" class="{{ chip }}" title="{{ entry.title }}">{{ entry.label }}</button>
+</form>
+{%- endfor %}

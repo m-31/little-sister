@@ -94,7 +94,7 @@ class CopyStatusTests(TestCase):
     def test_a_title_with_no_word_in_it_comes_with_its_name(self):
         # ADR-0061. This document is read with no chips and no styling, so a title
         # that stands in for the name has to *be* a name — and 🔴 is not one. The
-        # colour survives; the word is what a reader cannot reconstruct without it.
+        # color survives; the word is what a reader cannot reconstruct without it.
         self.tree.upsert("/github/severity/critical", StatusCode.ERROR, "one alert")
         self.tree.set_title("/github/severity/critical", "🔴")
 

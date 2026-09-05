@@ -1,6 +1,6 @@
 # ADR-0020 — Deployment-supplied user list
 
-> **Superseded 2026-08-06 by [ADR-0046](0046-user-list-from-the-configuration-roots.md).**
+> **Superseded 2026-08-08 by [ADR-0046](0046-user-list-from-the-configuration-roots.md).**
 > Its decisions that still stand — a deployment-controlled location, the shipped
 > `users.example.yaml` and no packaged list, fail-fast on a missing file, and the
 > unchanged format — are restated there with this record's date. What changed is the
@@ -12,7 +12,7 @@
 
 - **Status:** Superseded by
   [ADR-0046](0046-user-list-from-the-configuration-roots.md)
-- **Date:** 2026-07-10
+- **Date:** 2026-07-11
 - **Related:** [ADR-0003 — Configuration & secrets via a `.env` file](0003-config-and-secrets-via-env-file.md)
   (same cwd convention).
 - **Register:** [`../decisions.md`](../decisions.md)

@@ -34,9 +34,10 @@ from __future__ import annotations
 from flask import redirect, render_template, request
 from flask.typing import ResponseReturnValue
 
-from little_sister import identity, system_admin
+from little_sister import identity, self_report, system_admin
 from little_sister.identity import Identity
 from little_sister.logger import logger
+from little_sister.reasons import plain
 from little_sister.users import AvatarFile, UsersConfig, load_users
 
 #: The door the built-in list is registered on. It is `local` because that is what
@@ -122,7 +123,11 @@ class LocalUsers:
                 lastname=str(entry["lastname"]),
                 admin=bool(entry.get("admin", False))))
             return redirect('/status')
-        logger.warning("Failed login attempt for username %r.", username)
+        # WARN for the log entry; the line's own grade is the rate's
+        # (`security_lines`), and one failed login is a fact there.
+        self_report.security.see(
+            self_report.FAILED_LOGIN,
+            plain(f"for {username!r} at the built-in login list"))
         return render_template('login.html', error='Invalid username or password',
                                admin_door=system_admin.usable_route())
 

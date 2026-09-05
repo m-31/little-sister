@@ -136,11 +136,12 @@ the entire company, assembled from instances that each only know their own
 corner. Because every instance speaks the same JSON, the output of one is simply
 the input of the next.
 
-## 10. Why it lives on a Mac
-little-sister itself runs on **macOS**. From there a check can reach into the
-**Apple ecosystem**, ping the **Linux** boxes on the local network, and call out
-to **remote servers** — the same uniform `Status` regardless of what was actually
-checked or where it lives.
+## 10. Where it lives
+little-sister runs where its checks can reach: on a **Mac** on the office network,
+from where a check reaches into the **Apple ecosystem**, pings the **Linux** boxes
+beside it and calls out to **remote servers** — or in a **container** behind a load
+balancer, watching an estate from inside it. The same uniform `Status` comes back
+regardless of what was actually checked or where it lives.
 
 ## 11. The wall everyone glances at
 

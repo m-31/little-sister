@@ -72,9 +72,9 @@ def parse_show_when_quiet(config: dict[str, Any]) -> dict[str, bool]:
     put the type in the deployment's lane. (The labels beside it were check-read
     at first, on the argument that layering them needs the type's own default
     text — which held only while that text was code a check applied. They joined
-    this reader's side the moment it became a declaration: ADR-0025's 2026-08-19
-    update.) It is therefore **not** on the ``little_sister.checks`` facade — and
-    since that update, neither is any other name here.
+    this reader's side the moment it became a declaration: ADR-0025.) It is
+    therefore **not** on the ``little_sister.checks`` facade — and since that
+    record, neither is any other name here.
 
     A **second reader over one block**, rather than a third key in
     :func:`parse_subnodes`'s ``{title, about}`` mapping, and deliberately so. That

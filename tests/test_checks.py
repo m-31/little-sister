@@ -39,12 +39,34 @@ class DurationTests(TestCase):
         self.assertEqual(parse_duration("15m", 0), 900)
         self.assertEqual(parse_duration("2h", 0), 7200)
         self.assertEqual(parse_duration("1d", 0), 86400)
+        self.assertEqual(parse_duration("1w", 0), 604800)
+        self.assertEqual(parse_duration("2w", 0), 1209600)
         self.assertEqual(parse_duration(45, 0), 45)
         self.assertEqual(parse_duration(None, 900), 900)
 
     def test_parse_duration_invalid(self):
         with self.assertRaises(CheckError):
             parse_duration("abc", 0)
+
+    def test_a_unit_is_one_lowercase_letter(self):
+        """`5H` used to be lowercased into five hours. The units are the lowercase
+        letters and nothing else, so the one capital with a meaning of its own
+        (`M`) cannot slip through as its lowercase neighbor."""
+        for value in ("5H", "2D", "30S", "1W"):
+            with self.subTest(value=value), self.assertRaises(CheckError):
+                parse_duration(value, 0)
+
+    def test_a_capital_m_is_refused_by_name(self):
+        """`6M` used to become six *minutes*; a reader who meant six months got a
+        window that was gone before they looked. It is refused with a sentence
+        that says what `m` is and why a month is not a unit here."""
+        with self.assertRaises(CheckError) as caught:
+            parse_duration("6M", 0)
+        message = str(caught.exception)
+        self.assertIn("'6M'", message)
+        self.assertIn("M is not a unit", message)
+        self.assertIn("m is minutes", message)
+        self.assertIn("month", message)
 
 
 class PathTests(TestCase):
@@ -690,7 +712,7 @@ class InlineAboutTests(TestCase):
 
 class _DeclaringCheck(Check):
     """A branch type that **declares** its subnode labels and one token, the way
-    ADR-0025's 2026-08-19 update says a type states them: two common constructor
+    ADR-0025 says a type states them: two common constructor
     keywords, no reading and no layering of its own."""
 
     DEFAULTS: ClassVar[dict[str, dict[str, str]]] = {
@@ -777,7 +799,7 @@ class DeclaredShowWhenQuietTests(TestCase):
 
 
 class SubnodeLabelTests(TestCase):
-    """The resolution table (ADR-0025, update 2026-08-19): what each named
+    """The resolution table (ADR-0025): what each named
     subnode's `title` / `about` finally reads, resolved once at construction from
     what the type declared and what the deployment's `subnodes:` block says."""
 
@@ -824,7 +846,7 @@ class SubnodeLabelTests(TestCase):
     def test_a_field_nobody_stated_is_absent_rather_than_empty(self):
         # Absent is not the same as empty one layer up: the engine reads the
         # child result's own label exactly where this map is silent, which is
-        # what keeps a dynamically named child labelled by its check.
+        # what keeps a dynamically named child labeled by its check.
         labels = self._check().subnode_labels
         self.assertNotIn("title", labels["memory"])
         self.assertNotIn("lambda", labels)

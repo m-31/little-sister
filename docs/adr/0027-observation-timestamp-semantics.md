@@ -1,7 +1,7 @@
 # ADR-0027 — Observation timestamps: stamped where written, rolled up while unambiguous
 
 - **Status:** Accepted
-- **Date:** 2026-08-23 (accepted 2026-07-30)
+- **Date:** 2026-08-23 (accepted 2026-08-01)
 - **Related:** [ADR-0004](0004-status-aggregation-semantics.md) (status roll-up),
   [ADR-0005](0005-dashboard-freshness-and-self-monitoring.md) (staleness),
   [ADR-0008](0008-json-output-api.md) (JSON contract),

@@ -1,7 +1,7 @@
 # ADR-0007 — Checks may report a branch (recursive `CheckResult`)
 
 - **Status:** Accepted
-- **Date:** 2026-06-24
+- **Date:** 2026-06-27
 - **Related:** [ADR-0002](0002-rlock-snapshot-synchronization.md) (the tree owns
   state), [ADR-0004](0004-status-aggregation-semantics.md) (roll-up),
   [ADR-0005](0005-dashboard-freshness-and-self-monitoring.md) (freshness).
@@ -49,7 +49,7 @@ small **tree**.
 - `CheckResult` stays backward compatible: `code`/`reason` are still the first two
   fields and every existing call site is untouched.
 - The same shape is what a future satellite check will produce by parsing remote
-  JSON into a result tree (§2.9) — no second mechanism needed.
+  JSON into a result tree (`project.md` §2.9) — no second mechanism needed.
 - **Children are not pruned.** If a later run reports fewer children (e.g. the
   host is unreachable, so the `host-metrics` check returns just an `ERROR` root), the
   previously written aspect nodes remain until they go stale (ADR-0005); the root

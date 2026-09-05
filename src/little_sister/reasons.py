@@ -137,6 +137,32 @@ ReasonInput = (
 )
 
 
+# Inline-active Markdown punctuation: emphasis (*), code spans (`), links and the
+# escape char itself ([ ] \). Escaping these neutralises the constructs that turn
+# untrusted text into formatting or a link. Linkification also recognizes a bare
+# HTTP(S) scheme, so ``plain`` breaks that scheme token without changing its rendered
+# text. Deliberately omitted: raw HTML and unsafe link schemes (already handled by
+# the renderer — html-off, validated links, ADR-0018); ``_`` (literal between word
+# characters in CommonMark, so ``MD0_DATA`` / ``debug_df_raw`` stay clean); and block
+# markers (#, -, >) which are at worst cosmetic — keeping everyday text free of
+# escape noise.
+_MD_ESCAPE = {ord(ch): f"\\{ch}" for ch in "\\`*[]"}
+_WEB_URL_SCHEME = re.compile(r"\bhttps?://", re.IGNORECASE)
+
+
+def plain(text: object) -> str:
+    """Escape inline Markdown so untrusted text — a path, an error, a captured
+    line — renders **literally** in an entry (ADR-0018). Use it when folding
+    external output into a line, a check's reason or the instance's own report
+    alike; for multi-line / log output prefer :func:`little_sister.checks.code`.
+    Here rather than in the check layer because the modules beneath it — a
+    configuration loader, the identity doors — fold paths and errors into
+    self-report lines too."""
+    escaped = str(text).translate(_MD_ESCAPE)
+    return _WEB_URL_SCHEME.sub(
+        lambda match: match.group().replace(":", r"\:"), escaped)
+
+
 def derived_slug(text: str) -> str:
     """The content-hash slug for ``text`` — ``h-`` plus ten hex digits of its SHA-1.
 

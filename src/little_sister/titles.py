@@ -69,7 +69,7 @@ import re
 from typing import Protocol
 
 
-class Labelled(Protocol):
+class Labeled(Protocol):
     """Anything that carries both halves of the comparison — a
     :class:`~little_sister.tree.StatusSnapshot`, a maintenance pin. Read-only
     members, so a plain dataclass field and a computed property both answer."""
@@ -97,8 +97,8 @@ def decorative(title: str) -> bool:
 
     ``str.isalnum`` rather than an ASCII test, so a Japanese, Cyrillic or Greek title
     is a word and keeps every right a word has here; an emoji, an arrow and a
-    box-drawing character are not. A digit counts: a node titled ``42`` is labelled,
-    badly, but labelled.
+    box-drawing character are not. A digit counts: a node titled ``42`` is labeled,
+    badly, but labeled.
 
     An empty title is vacuously decorative and never reaches a caller that cares —
     :func:`label_parts` asks :func:`shown_title` first, and an empty answer there

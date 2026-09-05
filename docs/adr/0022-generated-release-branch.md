@@ -1,7 +1,7 @@
 # ADR-0022 — Public releases from a generated, condensed `main`
 
 - **Status:** Accepted
-- **Date:** 2026-07-15
+- **Date:** 2026-07-18
 - **Related:** [ADR-0020 — Deployment-supplied user list](0020-user-list-location.md)
   (the library/deployment split this publishing model completes).
 - **Register:** [`../decisions.md`](../decisions.md)

@@ -1,7 +1,7 @@
 # ADR-0005 — Dashboard freshness & engine self-monitoring
 
 - **Status:** Accepted
-- **Date:** 2026-08-23 (accepted 2026-06-19)
+- **Date:** 2026-08-23 (accepted 2026-06-20)
 - **Related:** [ADR-0001](0001-in-process-threaded-engine.md) (the engine),
   [ADR-0004](0004-status-aggregation-semantics.md) (roll-up).
 - **Register:** [`../decisions.md`](../decisions.md)

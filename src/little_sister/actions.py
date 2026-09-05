@@ -30,9 +30,11 @@ from urllib.parse import quote
 
 import yaml
 
-from little_sister import slots, values
+from little_sister import identity, self_report, slots, values
 from little_sister.config_dir import aspect_files
 from little_sister.logger import logger
+from little_sister.reasons import plain, slug
+from little_sister.status import HEARTBEAT_PATH
 
 #: The configuration aspect this reads — `config/actions.yaml`.
 ACTIONS_ASPECT = "actions"
@@ -105,24 +107,33 @@ def load_actions(config_dir: str | Path | None = None) -> tuple[Action, ...]:
     return tuple(actions)
 
 
+def _refused(path: Path, what: str, index: int | None = None) -> None:
+    """An action file, or one action in it, that is not shown: a standing note,
+    so the operator who wrote it learns it is missing without reading the log."""
+    where = path if index is None else f"{path} action #{index + 1}"
+    self_report.startup.note(
+        slug("actions", path.name, "" if index is None else index + 1),
+        plain(f"{where} {what}"))
+
+
 def _read_layer(path: Path) -> list[Action]:
     try:
         with open(path, encoding="utf-8") as handle:
             data = yaml.safe_load(handle)
     except (OSError, yaml.YAMLError) as error:
-        logger.warning("actions: cannot read %s: %s; ignoring", path, error)
+        _refused(path, f"cannot be read ({error}); it is ignored")
         return []
     if data is None:
         return []
     if not isinstance(data, dict):
-        logger.warning("actions: %s is not a mapping; ignoring", path)
+        _refused(path, "is not a mapping; it is ignored")
         return []
     raw = data.get("actions")
     if raw is None:
-        logger.warning("actions: %s has no 'actions:' list; ignoring", path)
+        _refused(path, "has no 'actions:' list; it is ignored")
         return []
     if not isinstance(raw, list):
-        logger.warning("actions: %s: 'actions' is not a list; ignoring", path)
+        _refused(path, "'actions' is not a list; the file is ignored")
         return []
     found: list[Action] = []
     for index, entry in enumerate(raw):
@@ -136,29 +147,27 @@ def _read_entry(entry: Any, path: Path, index: int) -> Action | None:
     """One entry, or ``None`` with a warning naming what was wrong."""
     where = f"{path} action #{index + 1}"
     if not isinstance(entry, dict):
-        logger.warning("actions: %s is not a mapping; ignoring", where)
+        _refused(path, "is not a mapping; it is ignored", index)
         return None
     label = values.text(entry, "label").strip()
     url = values.text(entry, "url").strip()
     slot = values.text(entry, "slot").strip()
     if not label or not url:
-        logger.warning("actions: %s needs both 'label' and 'url'; ignoring", where)
+        _refused(path, "needs both 'label' and 'url'; it is ignored", index)
         return None
     if slot not in PLACEMENTS:
-        logger.warning(
-            "actions: %s names the slot %r — an action fills one of %s (ADR-0038); "
-            "ignoring", where, slot, ", ".join(PLACEMENTS))
+        _refused(path, f"names the slot {slot!r} — an action fills one of "
+                       f"{', '.join(PLACEMENTS)} (ADR-0038); it is ignored", index)
         return None
     unknown = sorted({field for field in _FIELD.findall(url)
                       if field not in PLACEHOLDERS})
     if unknown:
         # Refused at load rather than rendered broken: an action whose URL still
         # carries `{summary}` would silently send the operator somewhere useless.
-        logger.warning(
-            "actions: %s uses %s in its url — a template may interpolate %s "
-            "(ADR-0038); ignoring", where,
-            ", ".join("{" + field + "}" for field in unknown),
-            ", ".join("{" + field + "}" for field in PLACEHOLDERS))
+        _refused(path, f"uses {', '.join('{' + field + '}' for field in unknown)} "
+                       f"in its url — a template may interpolate "
+                       f"{', '.join('{' + field + '}' for field in PLACEHOLDERS)} "
+                       f"(ADR-0038); it is ignored", index)
         return None
     if slot == "node.actions" and "{reason}" in url and "{reasons}" not in url:
         logger.info(
@@ -278,9 +287,42 @@ def _icon_url(name: str) -> str:
         return ""
 
 
+#: The template for the actions a package offers on its self-report node
+#: (ADR-0076): buttons, because those are writes.
+SELF_REPORT_TEMPLATE = "_self_report_actions.html"
+
+
+def self_report_context(*, node: Any, surface: str) -> Mapping[str, object] | None:
+    """Provider for `node.actions` on a child of ``/little-sister``: the actions a
+    package registered for that contributor, for an admin, as POST forms."""
+    del surface
+    path = str(getattr(node, "path", ""))
+    prefix = f"{HEARTBEAT_PATH}/"
+    if not path.startswith(prefix) or "/" in path[len(prefix):]:
+        return None
+    contributor = path[len(prefix):]
+    offered = self_report.actions_for(contributor)
+    if not offered:
+        return None
+    from flask import url_for
+    try:
+        if not identity.signed_in().admin:
+            return None
+    except Exception:            # no request, or nobody behind the gate
+        return None
+    return {"actions": [{
+        "label": action.label,
+        "href": url_for("self_report_action", contributor=contributor,
+                        slug=action.slug),
+        "title": f"{action.label} — {path}",
+    } for action in offered], "chip": "node-action"}
+
+
 def register_builtin_fillers() -> None:
-    """Register the library's own filler for both slots. Idempotent."""
+    """Register the library's own fillers. Idempotent."""
     slots.register("reason.actions", FILLER_PACKAGE, FILLER_TEMPLATE,
                    reason_context, builtin=True)
     slots.register("node.actions", FILLER_PACKAGE, FILLER_TEMPLATE,
                    node_context, builtin=True)
+    slots.register("node.actions", FILLER_PACKAGE, SELF_REPORT_TEMPLATE,
+                   self_report_context, builtin=True)

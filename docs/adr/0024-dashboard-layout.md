@@ -1,7 +1,7 @@
 # ADR-0024 — Dashboard layout: bounded heights, positional stability
 
 - **Status:** Superseded by ADR-0056
-- **Date:** 2026-08-23 (accepted 2026-07-20)
+- **Date:** 2026-08-23 (accepted 2026-07-19)
 - **Related:** [ADR-0005](0005-dashboard-freshness-and-self-monitoring.md) (the
   `little-sister` heartbeat this strips out of the grid),
   [ADR-0019](0019-inspection-popover.md) (the hover card a collapsed chip keeps),

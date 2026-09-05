@@ -260,7 +260,11 @@ The shipped file documents the rest inline — the dashboard caps (`reason_cap`,
 the card-head placement (`card_status_line`: compact `beside` by default, or the
 standing second line `below`), how cards spend a wide grid's columns
 (`dashboard_columns`: `flow` by default, or `plain` for the fixed one-track
-grid), and the failure-retry budget (`retry_interval`, `retry_attempts`).
+grid), the failure-retry budget (`retry_interval`, `retry_attempts`), how often
+the kept state files are written (`state_interval`), and the engine's three sizing
+numbers — `max_workers`, `entry_limit` and `memory_share`, which are both what the
+instance measures itself against while it runs and what a check type's declared costs
+are summed against at startup.
 
 #### Curated links (`config/links.yaml`)
 
@@ -339,9 +343,16 @@ admin:
   password: "change-me"
   admin: true
 YAML
+cat > wsgi.py <<'PY'
+# An install registers its own doors, all of them, before the app is imported;
+# with none registered nobody can sign in. This one is the built-in login list.
+from little_sister import local_login
+local_login.use_local()
+from little_sister.app import app  # noqa: E402
+PY
 
 # A SINGLE worker: the engine and the status tree live in-process.
-gunicorn --workers 1 --threads 8 --bind 0.0.0.0:8888 little_sister.app:app
+gunicorn --workers 1 --threads 8 --bind 0.0.0.0:8888 wsgi:app
 ```
 
 One worker is not a suggestion — the engine and the status tree live in the process
@@ -350,10 +361,25 @@ second, disagreeing tree. The packaged `users.example.yaml` documents every fiel
 the user list, avatars included.
 
 An empty `checks/` is allowed and reports itself — *nothing is being watched* is a
-state little sister shows you, not a reason to refuse to start. Set `SECRET_KEY` before
+state little sister shows you, not a reason to refuse to start. The same node,
+`/little-sister`, carries what the instance says about itself while it runs: a check
+that runs longer than its `frequency`, a pool with checks waiting for a worker, a
+scheduler tick that came late, the entry count and the resident size near their
+limits, and a `timeout` longer than its `frequency` (warned about, never refused)
+— each a line that clears when the condition does, pinnable like any other. Set
+`SECRET_KEY` before
 anyone relies on staying logged in: without one a random key is made per start, so
-sessions end with the process. Runtime state (the log, the maintenance file) is written
-to `var/` beside the configuration.
+sessions end with the process. Runtime state is written to `var/` beside the
+configuration: the log, and under `var/state/` what a restart keeps — the maintenance
+pins and the event log. That directory is what a **keeper** carries: a deployment that
+registers one has it restored from there at startup and mirrored back to it while the
+instance runs, so a redeployment onto a fresh machine comes up with the state it left
+on the old one. Where two instances share a keeper's store, whoever holds its lease is
+the authority: an instance that takes the lease over adopts what the store changed
+while it stood by, keeps what it had beside each file as `.bak`, and lists them on
+`/little-sister/state`, where an admin can take them back. None ships with the
+library, and an installation that registers none keeps its state on the machine it
+is on.
 
 On your browser, navigate to `http://localhost:8888`.
 
@@ -368,8 +394,9 @@ uv run gunicorn --workers 1 --threads 8 --bind 0.0.0.0:8888 little_sister.app:ap
 ```
 
 First-time setup: on a fresh checkout, **`./setup.sh`** creates
-`config/users/users.yaml`, its empty `avatars/` directory, and `.env` (a default
-`admin` login and a random session key), prompting before it overwrites anything. An
+`config/users/users.yaml`, its empty `avatars/` directory, and `.env` (one `viewer`
+login — the admin of a fresh install is the system-admin door above — and a random
+session key), prompting before it overwrites anything. An
 existing flat `config/users.yaml` is kept and the script prints the manual move needed
 before adding avatars. Then the
 repo's helper scripts (they need `lsof` and `curl`) manage the run: **`./start.sh`**

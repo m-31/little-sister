@@ -2,33 +2,39 @@
 
 Maintenance is a sticky admin override (`project.md` §2.6). The status tree owns
 the side-table — `path -> `:class:`MaintenanceEntry` — and writes it through this
-store on every change, so a restart restores it. The file at
-``var/maintenance.json`` is exactly that table serialized; the path is fixed
-runtime state (not env-configurable). A durable store in a later phase subsumes
-this file — :class:`MaintenanceStore` is the seam.
+store on every change, so a restart restores it. The file is exactly that table
+serialized, and it is one file of the state layer (:mod:`~little_sister.state`,
+ADR-0071): ``var/state/maintenance.json``, written through, atomically, by the
+layer's own discipline — this module knows the file's *shape* and nothing about
+where or how it is written.
 """
 from __future__ import annotations
 
-import json
-import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from little_sister import values
-from little_sister.logger import logger
+from little_sister import self_report, values
+from little_sister.reasons import plain
+from little_sister.state import MAINTENANCE_FILE, StateLayer
 
-# Fixed runtime path (git-ignored ``var/``); not env-overridable (ADR-0014).
-MAINTENANCE_PATH = "var/maintenance.json"
+if TYPE_CHECKING:
+    from little_sister.tree import StatusTree
+
+#: Where the file lived before the state layer (ADR-0014 as first written). It is
+#: **not read** — the move is a clean break, like the shape change before it — but
+#: a file still sitting there is named once at startup, because pins that quietly
+#: stopped being in force are the failure this layer exists to prevent.
+RETIRED_PATH = "var/maintenance.json"
 
 
 @dataclass(frozen=True)
 class MaintenanceEntry:
     """One maintenance pin: why, when, until, and by whom.
 
-    The entry carries **both dates** (ADR-0014 amendment). ``set_at`` / ``set_by``
+    The entry carries **both dates** (ADR-0014). ``set_at`` / ``set_by``
     mean *the last write* — which is what the code always stored, since every set
     rebuilds the entry — and ``created_at`` / ``created_by`` mean *the first*, the
     one piece of history kept without a history. Clearing drops the entry, so a
@@ -79,7 +85,7 @@ class MaintenanceEntry:
     def same_pin_as(self, other: MaintenanceEntry) -> bool:
         """Whether ``other`` says the same thing this entry does — same reason, same
         expiry. A re-submit that changes neither is a no-op the tree writes but does
-        not announce (ADR-0014 amendment); anything else is a real edit."""
+        not announce (ADR-0014); anything else is a real edit."""
         return (self.reason == other.reason
                 and self.expires_at == other.expires_at)
 
@@ -111,92 +117,140 @@ class MaintenanceWrite:
 
 
 class MaintenanceStore:
-    """Atomic JSON persistence for the maintenance side-table.
+    """The maintenance side-table as a state file, written through.
 
     The file holds two tables — ``nodes`` (``{path: entry}``) and ``entries``
     (``{path: {slug: entry}}``, ADR-0036). An entry is ``{reason, set_at,
     expires_at, set_by, created_at, created_by}``. The bare node table this file
-    used to be is a **clean break**, not a migration: it is ignored with a warning.
-    Saves are atomic (temp file + :func:`os.replace`); a failed read
-    yields an empty table and a failed write is logged, leaving the in-memory state
-    intact for the session (no flush-on-shutdown, so a crash never loses a just-set
-    pin — ADR-0014).
+    used to be is a **clean break**, not a migration: it is not read, and the
+    layer reports it as a load failure. Reading and writing — atomic, and never a
+    refusal to start — are the state layer's (ADR-0071); a failed write leaves the
+    in-memory table authoritative for the session and stands as a line on the
+    heartbeat until a write succeeds. There is no flush-on-shutdown, because
+    write-through is what makes a crash never lose a just-set pin (ADR-0014).
     """
 
-    def __init__(self, path: str | Path = MAINTENANCE_PATH) -> None:
-        self._path = Path(path)
+    def __init__(self, state: StateLayer, *, tree: StatusTree | None = None) -> None:
+        self._state = state
+        self._tree = tree
+        # The file's other direction (ADR-0077), registered here at construction
+        # because this is where the file's shape is known: an adopted copy — the
+        # store's at a takeover, the backup's on the way back — is read into its
+        # two tables and handed to the tree that holds the pins. A store built
+        # without a tree (a test's, a reader's) has nothing to hand them to.
+        if tree is not None:
+            state.restore_with(MAINTENANCE_FILE, self._adopt)
+
+    def _adopt(self, payload: object) -> None:
+        """Hand an adopted file's two tables to the tree, under its lock, with a
+        transition for every node that changes (:meth:`StatusTree.adopt_maintenance`).
+        A payload of another shape raises, in the words the startup read reports,
+        and the layer reports the adoption as failed."""
+        assert self._tree is not None
+        nodes, entry_pins = self.tables(payload)
+        self._tree.adopt_maintenance(nodes, entry_pins=entry_pins)
+
+    def load_all(self) -> tuple[dict[str, MaintenanceEntry],
+                                dict[tuple[str, str], MaintenanceEntry]]:
+        """Both tables in one read — the startup restore's call. A file still
+        sitting at the retired ``var/maintenance.json`` is named once here."""
+        if (not self._state.path(MAINTENANCE_FILE).exists()
+                and Path(RETIRED_PATH).exists()):
+            self_report.startup.note(
+                "maintenance.moved",
+                plain(f"{RETIRED_PATH} is no longer read — the file moved to "
+                      f"{self._state.path(MAINTENANCE_FILE)} (ADR-0071); move it "
+                      f"there before the next restart if its pins are still "
+                      f"wanted"))
+        nodes, entries = self._sections()
+        return _node_pins(nodes), _entry_pins(entries)
 
     def load(self) -> dict[str, MaintenanceEntry]:
-        """Read the node table, or an empty one if the file is missing or
-        unreadable. Per-entry pins come from :meth:`load_entries`."""
-        return {str(path): MaintenanceEntry.from_dict(raw)
-                for path, raw in self._sections()[0].items()
-                if isinstance(raw, dict)}
+        """The node table, or an empty one if the file is missing or unusable.
+        Per-entry pins come from :meth:`load_entries`."""
+        return _node_pins(self._sections()[0])
 
     def load_entries(self) -> dict[tuple[str, str], MaintenanceEntry]:
         """The per-entry pins (ADR-0036), keyed ``(path, slug)``. Empty for a file
         written before they existed."""
-        pins: dict[tuple[str, str], MaintenanceEntry] = {}
-        for path, by_slug in self._sections()[1].items():
-            if not isinstance(by_slug, dict):
-                continue
-            for slug, raw in by_slug.items():
-                if isinstance(raw, dict):
-                    pins[(str(path), str(slug))] = MaintenanceEntry.from_dict(raw)
-        return pins
+        return _entry_pins(self._sections()[1])
 
     def _sections(self) -> tuple[dict[str, Any], dict[str, Any]]:
-        """The file's two tables — node pins and per-entry pins.
-
-        The file is ``{"nodes": {path: entry}, "entries": {path: {slug: entry}}}``.
-        When per-entry pins arrived it was a bare node table, and that shape is a
-        **clean break**: there is no reader for it and no migration, in the same
-        spirit as the `config/` move (ADR-0031). A file in the old shape is ignored
-        with a warning and the next save rewrites it — the cost is a pin or two on
-        one upgrade, against a compatibility branch that would sit in the read path
-        forever. This is runtime state the program owns, never hand-authored, and
-        every pin in it is bounded by a finite expiry anyway.
-        """
+        """The file's two tables — node pins and per-entry pins — as the startup
+        read finds them: a file that is not there is two empty tables, and a
+        shape :func:`_split` refuses is a load failure the layer reports."""
+        data = self._state.read(MAINTENANCE_FILE)
+        if data is None:
+            return {}, {}
         try:
-            with open(self._path, encoding="utf-8") as handle:
-                data = json.load(handle)
-        except FileNotFoundError:
+            return _split(data)
+        except ValueError as error:
+            self._state.report_load_failure(MAINTENANCE_FILE, str(error))
             return {}, {}
-        except (json.JSONDecodeError, OSError) as error:
-            logger.warning("maintenance: cannot read %s: %s; ignoring",
-                           self._path, error)
-            return {}, {}
-        if not isinstance(data, dict):
-            logger.warning("maintenance: %s is not a mapping; ignoring", self._path)
-            return {}, {}
-        nodes = data.get("nodes")
-        if not isinstance(nodes, dict):
-            if data:
-                logger.warning(
-                    "maintenance: %s has no 'nodes' table (the pre-ADR-0036 shape "
-                    "is not read); ignoring %d entr(y/ies)", self._path, len(data))
-            return {}, {}
-        entries = data.get("entries")
-        return nodes, entries if isinstance(entries, dict) else {}
+
+    @staticmethod
+    def tables(payload: object) -> tuple[dict[str, MaintenanceEntry],
+                                         dict[tuple[str, str], MaintenanceEntry]]:
+        """Both tables out of a payload in the file's shape — what an adoption at
+        runtime hands to the tree (ADR-0077) — or :class:`ValueError` naming what
+        is wrong with it, in the words the startup read reports."""
+        nodes, entries = _split(payload)
+        return _node_pins(nodes), _entry_pins(entries)
 
     def save(self, entries: Mapping[str, MaintenanceEntry],
              entry_pins: Mapping[tuple[str, str], MaintenanceEntry] | None = None
              ) -> None:
-        """Rewrite the whole table atomically. A write failure is logged, not raised
-        (the in-memory table stays authoritative for the session)."""
+        """Rewrite the whole table, atomically, through the layer. A write
+        failure is recorded there, not raised (the in-memory table stays
+        authoritative for the session)."""
         by_path: dict[str, dict[str, dict[str, str]]] = {}
         for (path, slug), entry in (entry_pins or {}).items():
             by_path.setdefault(path, {})[slug] = entry.to_dict()
-        payload = {
+        self._state.write(MAINTENANCE_FILE, {
             "nodes": {path: entry.to_dict() for path, entry in entries.items()},
             "entries": by_path,
-        }
-        tmp = self._path.with_name(self._path.name + ".tmp")
-        try:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            with open(tmp, "w", encoding="utf-8") as handle:
-                json.dump(payload, handle, indent=2, sort_keys=True)
-            os.replace(tmp, self._path)
-        except OSError as error:
-            logger.warning("maintenance: cannot write %s: %s; keeping in memory",
-                           self._path, error)
+        })
+
+
+def _split(data: object) -> tuple[dict[str, Any], dict[str, Any]]:
+    """The two raw tables of a parsed file, or :class:`ValueError` for a shape
+    this reader does not know.
+
+    The file is ``{"nodes": {path: entry}, "entries": {path: {slug: entry}}}``.
+    When per-entry pins arrived it was a bare node table, and that shape is a
+    **clean break**: there is no reader for it and no migration, in the same
+    spirit as the `config/` move (ADR-0031). A file in the old shape is a load
+    failure the layer reports — the pins it held are not in force — and the
+    next save rewrites it. The cost is a pin or two on one upgrade, against a
+    compatibility branch that would sit in the read path forever: this is
+    runtime state the program owns, never hand-authored, and every pin in it
+    is bounded by a finite expiry anyway. An empty mapping is two empty tables.
+    """
+    if not isinstance(data, dict):
+        raise ValueError("not a mapping")
+    nodes = data.get("nodes")
+    if not isinstance(nodes, dict):
+        if data:
+            raise ValueError(
+                f"no 'nodes' table — the pre-ADR-0036 shape is not read; "
+                f"{len(data)} entr(y/ies) dropped")
+        return {}, {}
+    entries = data.get("entries")
+    return nodes, entries if isinstance(entries, dict) else {}
+
+
+def _node_pins(nodes: Mapping[str, Any]) -> dict[str, MaintenanceEntry]:
+    return {str(path): MaintenanceEntry.from_dict(raw)
+            for path, raw in nodes.items() if isinstance(raw, dict)}
+
+
+def _entry_pins(entries: Mapping[str, Any]
+                ) -> dict[tuple[str, str], MaintenanceEntry]:
+    pins: dict[tuple[str, str], MaintenanceEntry] = {}
+    for path, by_slug in entries.items():
+        if not isinstance(by_slug, dict):
+            continue
+        for slug, raw in by_slug.items():
+            if isinstance(raw, dict):
+                pins[(str(path), str(slug))] = MaintenanceEntry.from_dict(raw)
+    return pins

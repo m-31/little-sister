@@ -1,7 +1,7 @@
 # ADR-0012 — Node metadata: an `about` note, separate from check descriptions
 
 - **Status:** Accepted
-- **Date:** 2026-06-25
+- **Date:** 2026-06-27
 - **Related:** [ADR-0007](0007-check-result-branches.md) (recursive `CheckResult` —
   descriptions on branch leaves), [ADR-0013](0013-check-config-on-node.md) (check
   config on the node), [ADR-0014](0014-maintenance-persistence.md) (the check-root

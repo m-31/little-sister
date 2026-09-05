@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from unittest import TestCase
 
+from little_sister import self_report
 from little_sister.config_dir import (
     ASPECTS,
     CONFIG_DIR_ENV,
@@ -20,6 +21,7 @@ from little_sister.config_dir import (
     sole_aspect_file,
 )
 from little_sister.errors import ConfigError
+from little_sister.reasons import slug
 
 
 @contextmanager
@@ -299,6 +301,11 @@ class LayerTests(TestCase):
             self.assertEqual(winner, Path(d1) / "users.yaml")
             self.assertTrue(any(str(Path(d2) / "users.yaml") in line
                                 for line in logs.output))
+            # and the node says so, for the life of the process (backlog #70)
+            noted = [line for line in self_report.startup.lines()
+                     if line.slug == slug("aspect", "users", "roots")]
+            self.assertEqual(len(noted), 1)
+            self.assertIn("the first wins whole", noted[0].text)
 
     def test_users_in_one_root_is_quiet(self):
         with tempfile.TemporaryDirectory() as directory:

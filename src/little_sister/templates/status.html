@@ -14,6 +14,8 @@
         {% set band_filters = true %}
         {% include '_page_band.html' %}
 
+        {% include '_said.html' %}
+
         <div id="status-grid">
             {% include '_status_grid.html' %}
         </div>
@@ -43,9 +45,9 @@
     <script src="{{ url_for('static', filename='js/poll.js') }}"
             data-target="status-grid"></script>
 
-    {# Topology-weighted card spans (ADR-0024 update): the server sends stable
-       plans; this measures the responsive grid and reapplies the matching one
-       after initial render, a resize or the poll's fragment swap. #}
+    {# Topology-weighted card spans (ADR-0056, superseding ADR-0024): the server
+       sends stable plans; this measures the responsive grid and reapplies the
+       matching one after initial render, a resize or the poll's fragment swap. #}
     <script src="{{ url_for('static', filename='js/dashboard-layout.js') }}"></script>
 
     {# Reason overflow (ADR-0024): clamps each card's reason block to its line

@@ -40,16 +40,27 @@ says.
 All three take seconds, and all three are total functions on a number: no
 exception, no `None` handling beyond what is written, because a formatter that can
 raise turns a display detail into a 500.
+
+**And one instant, beside the three spans.** :func:`local_time` writes a moment the
+way every page does — in the `timezone` and `time_format` of `settings.yaml` — and
+it is here for the same reason the spans are: a plugin that writes *when* into a
+line (*the lease lapsed at …*) must say it in the words of the page it renders
+onto, and a `GMT` beside the page's `Europe/Berlin` was the first thing a plugin
+did when it had nothing here to call. The application's own rendering delegates
+here rather than the other way round.
 """
 from __future__ import annotations
 
+from datetime import datetime
+
 #: The public face, and the code half of the architecture.md §11 promise: a name
 #: added here without being written into that block fails `test_public_surface`.
-__all__ = ["coarse_span", "format_duration", "format_span"]
+__all__ = ["coarse_span", "format_duration", "format_span", "local_time"]
 
 _MINUTE = 60
 _HOUR = 3600
 _DAY = 86400
+_WEEK = 604800
 
 
 def format_span(seconds: float | None, *, none: str = "—") -> str:
@@ -113,7 +124,8 @@ def format_span(seconds: float | None, *, none: str = "—") -> str:
 
 def format_duration(seconds: int | None, *, none: str = "—") -> str:
     """A **configured** interval, in the units the configuration wrote it in:
-    ``900`` is ``15m``, ``3600`` is ``1h``, ``86400`` is ``1d``, ``90`` is ``90s``.
+    ``900`` is ``15m``, ``3600`` is ``1h``, ``86400`` is ``1d``, ``604800`` is
+    ``1w``, ``90`` is ``90s``.
 
     The rule is exact division, largest unit first, and no second unit ever — a
     configured interval is one number somebody typed, and ``1h 1m`` is not what
@@ -127,6 +139,8 @@ def format_duration(seconds: int | None, *, none: str = "—") -> str:
     """
     if not seconds:
         return none
+    if seconds % _WEEK == 0:
+        return f"{seconds // _WEEK}w"
     if seconds % _DAY == 0:
         return f"{seconds // _DAY}d"
     if seconds % _HOUR == 0:
@@ -165,3 +179,20 @@ def coarse_span(seconds: float) -> str:
     if total >= _MINUTE:
         return f"{total // _MINUTE}m"
     return "< 1m"
+
+
+def local_time(moment: datetime, fmt: str | None = None) -> str:
+    """One instant, in the configured timezone and ``time_format``; ``fmt``
+    overrides the format and never the zone.
+
+    A naive ``moment`` is read as the machine's local time, which is what a
+    timestamp somebody built from ``datetime.now()`` means; an aware one is
+    converted. The configuration is read at the call, not at import — this module
+    has no imports of its own and must keep it that way, because the configuration
+    reads the settings file when *it* is imported and imports the limits that
+    import this.
+    """
+    from little_sister.config import config
+    if moment.tzinfo is None:
+        moment = moment.astimezone()
+    return moment.astimezone(config.tzinfo).strftime(fmt or config.time_format)

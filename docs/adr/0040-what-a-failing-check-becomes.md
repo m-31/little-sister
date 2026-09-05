@@ -1,7 +1,7 @@
 # ADR-0040 — What a failing check becomes
 
 - **Status:** Accepted
-- **Date:** 2026-08-02 (decided 2026-07-29 as part of
+- **Date:** 2026-08-02 (decided 2026-08-01 as part of
   [ADR-0004](0004-status-aggregation-semantics.md); lifted into its own record by the
   split that ADR-0032 promised)
 - **Supersedes:** [ADR-0004](0004-status-aggregation-semantics.md)'s *A check that

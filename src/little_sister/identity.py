@@ -55,16 +55,20 @@ from flask import (
 )
 from flask.typing import ResponseReturnValue
 
+from little_sister import self_report
+from little_sister.codes import StatusCode
 from little_sister.logger import logger
 from little_sister.origins import calling_package
+from little_sister.reasons import plain, slug
 from little_sister.secrets import UNIDENTIFIED
 
 #: Endpoints that answer **without any identity at all**, and why each one has to.
 #:
 #: ``login`` and ``static`` are the login page and the stylesheet it is drawn with;
 #: ``logout`` has to work when the session is already gone; ``csp_report`` receives
-#: violations from a page that may have had no session (ADR-0048 §6); ``health`` is
-#: read by a load balancer holding no credential of ours (ADR-0066). The two
+#: violations from a page that may have had no session (ADR-0048 §6); ``health``
+#: and ``ready`` are read by a load balancer holding no credential of ours
+#: (ADR-0066, ADR-0073) — a probe that has to authenticate measures nothing. The two
 #: redirects are open for two different reasons: ``index`` sends a visitor to
 #: ``/status``, which refuses on its own account, so opening the redirect gives
 #: nothing away; ``favicon`` sends a browser to the packaged icon under ``static``,
@@ -78,7 +82,7 @@ from little_sister.secrets import UNIDENTIFIED
 #: page is a redirect loop.
 OPEN_ENDPOINTS = frozenset({
     "index", "login", "login_door", "login_callback", "logout", "static", "favicon",
-    "csp_report", "health",
+    "csp_report", "health", "ready",
 })
 
 #: Endpoints that **choose their own credential** and are therefore not gated here.
@@ -273,10 +277,14 @@ class Door:
             return True
         try:
             return bool(answering())
-        except Exception:
-            logger.exception(
-                "Identity door %r (%s) failed to say whether it can be entered; "
-                "leaving it off the page.", self.name, self.owner)
+        except Exception as error:
+            logger.exception("Identity door %r (%s) failed to say whether it can "
+                             "be entered", self.name, self.owner)
+            self_report.runtime.see(
+                slug("door", self.name),
+                plain(f"the identity door {self.name!r} ({self.owner}) raised "
+                      f"({error!r}) when asked whether it can be entered; it is "
+                      f"left off the page"), log=False)
             return False
 
     @property
@@ -616,10 +624,14 @@ def _ask(opened: Door) -> Identity | None:
     """
     try:
         return opened.provider.identify()
-    except Exception:
-        logger.exception(
-            "Identity door %r (%s) failed to answer; treating the request as "
-            "unidentified.", opened.name, opened.owner)
+    except Exception as error:
+        logger.exception("Identity door %r (%s) failed to answer", opened.name,
+                         opened.owner)
+        self_report.runtime.see(
+            slug("door", opened.name),
+            plain(f"the identity door {opened.name!r} ({opened.owner}) raised "
+                  f"({error!r}) when asked who this is; the request is treated as "
+                  f"unidentified"), log=False)
         return None
 
 
@@ -644,35 +656,48 @@ def announce_doors() -> None:
     So both omissions are a ``WARNING`` naming the missing line, and the instance
     serves: ``/health`` answers for the load balancer (ADR-0066), ``/system`` shows
     the door table, and every gated page refuses with a ``401`` until somebody
-    registers one. The warning is the only place that says so, which is why it says
-    what to add rather than only what is wrong.
+    registers one. The warning is not quite the only place that says so any more —
+    an instance with **no door at all** never becomes ready, and ``/ready`` says
+    ``doors`` for as long as that holds (ADR-0073); doors without a default are an
+    instance anybody who knows the address can enter, so readiness is silent about
+    them and this warning stays the only word. It says what to add rather than only
+    what is wrong, for the same reason.
     """
     doors = registered_doors()
     if not doors:
-        logger.warning(
-            "No identity door is registered, so nobody can sign in: every gated "
-            "page answers 401 and %s answers 404. Register one before importing "
-            "little_sister.app — local_login.use_local() for the built-in login "
-            "list, or identity.use('<name>', <provider>, default=True) for a "
-            "provider of your own (ADR-0069).", LOGIN_PATH)
+        # ERROR, by the loss principle: an instance nobody can sign in to has
+        # lost its readers, which is the one thing a dashboard is for.
+        self_report.startup.note(
+            "doors",
+            plain(f"no identity door is registered, so nobody can sign in: every "
+                  f"gated page answers 401 and {LOGIN_PATH} answers 404. Register "
+                  f"one before importing little_sister.app — "
+                  f"local_login.use_local() for the built-in login list, or "
+                  f"identity.use('<name>', <provider>, default=True) for a "
+                  f"provider of your own (ADR-0069)"),
+            code=StatusCode.ERROR)
         return
     listed = ", ".join(f"{one.name!r} ({one.owner})" for one in doors)
     fallback = default_door()
     if fallback is None and _choose_at_login:
-        logger.warning(
-            "Identity doors are registered and none of them is the default: %s. "
-            "%s still offers the choice and an unidentified request is sent there, "
-            "so this instance is usable — but nothing says which door it expects "
-            "anybody to use. Mark exactly one registration default=True "
-            "(ADR-0069).", listed, LOGIN_PATH)
+        # The instance is usable, and nothing says which door it expects: a
+        # configuration left half-written, which is what WARN is for.
+        self_report.startup.note(
+            "doors",
+            plain(f"identity doors are registered and none of them is the "
+                  f"default: {listed}. {LOGIN_PATH} still offers the choice and an "
+                  f"unidentified request is sent there, so this instance is usable "
+                  f"— but nothing says which door it expects anybody to use. Mark "
+                  f"exactly one registration default=True (ADR-0069)"))
         return
     if fallback is None:
-        logger.warning(
-            "Identity doors are registered and none of them is the default: %s. "
-            "Each is still reachable at its own %s/<door>, but %s answers 404 and "
-            "an unidentified request gets a 401 with nowhere to be sent — mark "
-            "exactly one registration default=True (ADR-0069).",
-            listed, LOGIN_PATH, LOGIN_PATH)
+        self_report.startup.note(
+            "doors",
+            plain(f"identity doors are registered and none of them is the "
+                  f"default: {listed}. Each is still reachable at its own "
+                  f"{LOGIN_PATH}/<door>, but {LOGIN_PATH} answers 404 and an "
+                  f"unidentified request gets a 401 with nowhere to be sent — mark "
+                  f"exactly one registration default=True (ADR-0069)"))
         return
     # **Handed to, not "goes to".** What answers an unidentified request is the
     # default door's own ``challenge()`` (:func:`_unidentified`), and that method is
@@ -858,10 +883,14 @@ def logout_response() -> ResponseReturnValue:
             setattr(g, _ENTERING_KEY, opened.name)
             try:
                 answer = cast("ResponseReturnValue | None", handler())
-            except Exception:
-                logger.exception(
-                    "Identity door %r (%s) failed to end its own session; the local "
-                    "session is cleared anyway.", opened.name, opened.owner)
+            except Exception as error:
+                logger.exception("Identity door %r (%s) failed to end its own "
+                                 "session", opened.name, opened.owner)
+                self_report.runtime.see(
+                    slug("door", opened.name),
+                    plain(f"the identity door {opened.name!r} ({opened.owner}) "
+                          f"raised ({error!r}) ending its own session; the local "
+                          f"session is cleared anyway"), log=False)
     sign_out()
     return answer if answer is not None else redirect(LOGIN_PATH)
 

@@ -101,8 +101,9 @@ its exit code — for the *check* to interpret."
      afterward. A retry certain to be cut off spends the backoff to learn nothing.
 
    A check builds one from its own common `timeout_seconds` at the top of `run()`. The
-   engine does not bound `run()` and never claimed to — §4.6 says only that "the
-   built-in checks honour their own timeouts, and custom checks must too" — and *what* a
+   engine does not bound `run()` and never claimed to — `architecture.md` §4.6 says
+   only that "the built-in checks honor their own timeouts, and custom checks must
+   too" — and *what* a
    check's `timeout:` bounds was never actually stated. It is stated here: **the whole
    run**, one request at a time inside it. A check that spends it as a socket timeout
    instead has hundreds of budgets and no bound.

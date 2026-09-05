@@ -10,7 +10,7 @@ How the codebase is built **today**. For the product (what and why) see
 
 | Concern | Choice |
 |---------|--------|
-| Language | Python ≥ 3.14 |
+| Language | Python ≥ 3.11 — the floor a package promises ([ADR-0054](adr/0054-python-floor-and-development-version.md)); developed and gated on the exact 3.14 patch level `.python-version` pins |
 | Web framework | Flask + Jinja2 (`StrictUndefined`) |
 | WSGI server | gunicorn (single worker, threaded) |
 | Config | YAML (PyYAML); secrets from a `.env` file |
@@ -20,8 +20,9 @@ How the codebase is built **today**. For the product (what and why) see
 | Dependencies | Flask, gunicorn, PyYAML, `markdown-it-py[linkify]` (the extra backs autolinking, ADR-0018) and tzdata — that is all of them; checks use the standard library (the SSH checks shell out to the external `ssh` binary) |
 | License | MIT |
 
-The expected deployment host is **macOS** (so checks can reach the Apple
-ecosystem plus Linux hosts on the network and remote servers).
+A deployment host is anything that runs the floor: a Mac on the network it
+watches, or a Linux container behind a load balancer. The SSH checks shell out to
+the host's `ssh`, so what a host can reach is what its checks can read.
 
 ---
 
@@ -32,7 +33,7 @@ little-sister/
 ├── README.md            # install / run instructions
 ├── pyproject.toml       # metadata, deps, tool config (mypy targets src/)
 ├── uv.lock
-├── hooks/pre-commit     # ruff + mypy + pytest gate (opt-in via core.hooksPath)
+├── hooks/pre-commit     # the gate (§10), opt-in via core.hooksPath
 ├── docs/                # the documentation set
 ├── config/              # the deployment's configuration, by aspect (ADR-0031)
 │   ├── actions.yaml     # deployment action chips (ADR-0038) — example, inert
@@ -46,25 +47,39 @@ little-sister/
 │   ├── app.py           # Flask app: routing, login, .env load, engine start
 │   ├── api.py           # JSON serialization for backend mode (ADR-0008)
 │   ├── status.py        # Status / StatusCode domain model + roll-up
+│   ├── codes.py         # the status vocabulary, a leaf module nothing imports from
+│   ├── reasons.py       # addressable reasons: a node's reason list as keyed entries (ADR-0036)
 │   ├── tree.py          # the shared, thread-safe StatusTree, event log, history
 │   ├── checks/          # Check base + http/file/command + ssh/ family + loader
+│   ├── transport.py     # transport policy: what a check does about a request that may not answer (ADR-0058)
+│   ├── fetch.py         # one HTTP request with that policy applied
 │   ├── engine.py        # scheduler + thread pool: runs checks → upserts the tree
+│   ├── limits.py        # the engine's limits, what it measures against them, its own lines (ADR-0072)
 │   ├── config.py        # general config (config/settings.yaml) → Config
 │   ├── config_dir.py    # the config path-list and its aspects (ADR-0031)
 │   ├── values.py        # typed reads out of decoded YAML/JSON bags (ADR-0026)
 │   ├── errors.py        # CheckError + ConfigError (shared; see below)
 │   ├── secrets.py       # secret references → values; resolver registry (ADR-0023)
-│   ├── maintenance.py   # maintenance side-table persistence (var/maintenance.json)
+│   ├── maintenance.py   # the maintenance side-table as a state file (its shape)
+│   ├── state.py         # the state layer: var/state/, the writer, the two failure lines (ADR-0071)
+│   ├── keeper.py        # the seam that carries var/state/ off the machine (ADR-0071 §5)
+│   ├── self_report.py   # what the instance says about itself: contributors → /little-sister (ADR-0072)
+│   ├── readiness.py     # has this instance come up, and what it can see (ADR-0073)
 │   ├── links.py         # the `links` aspect: curated links, re-read on change
 │   ├── link_probe.py    # reachability for that page: an open starts a pass
 │   ├── users.py         # the `users` aspect: login list + avatar resolution
 │   ├── identity.py      # who a request is from, and the one login gate (ADR-0068)
+│   ├── local_login.py   # the built-in login list, as a provider like any other (ADR-0069)
+│   ├── system_admin.py  # the one door the library ships, and it is not a provider's (ADR-0069)
+│   ├── origins.py       # where an import package came from: distribution, version, file
 │   ├── watch_lines.py   # what /about's hero says: the pools a render draws from
 │   ├── icons.py         # icon names, the pack registry, where the bytes are
 │   ├── icon_pack/       # the built-in marks (our own drawn glyphs) + manifest
 │   ├── nodes.py         # the `nodes` aspect's metadata + startup consistency pass
 │   ├── render.py        # safe server-side Markdown → HTML (markdown-it-py)
 │   ├── titles.py        # a title that repeats the name, or has no word in it
+│   ├── spans.py         # how a span of time is written, on every surface
+│   ├── dashboard_layout.py  # stable, width-priced track allocation for the dashboard (ADR-0056)
 │   ├── paths.py         # a loaded-from path, drawn against a root the reader has
 │   ├── copy_status.py   # the canonical incident hand-off: the tree's outline,
 │   │                    # one node's and one reason's, from one formatter
@@ -135,7 +150,12 @@ little-sister runs as **one process**: `gunicorn --workers 1 --threads N` (the
 - All threads share **one in-memory status tree** plus a bounded in-memory **event
   log**, guarded by a single `threading.RLock`. Reads take an immutable snapshot
   under the lock and render it outside (ADR-0002).
-- There is **no persistence** — state lives in memory only.
+- The tree lives in memory only. What a restart keeps is the **state layer**
+  (§4.8, [ADR-0071](adr/0071-what-a-restart-keeps-is-a-directory-of-files.md)):
+  JSON files under `var/state/` — the admins' maintenance side-table, written
+  through ([ADR-0014](adr/0014-maintenance-persistence.md)), and the event log,
+  written at most once per interval and at graceful shutdown — read back at
+  startup. Nothing that is a service is in the core.
 - The engine starts **once, after the fork** (in the worker), with **daemon
   threads**.
 
@@ -196,7 +216,7 @@ A node in the tree. Fields:
 - `__children: OrderedDict[str, Status]` — keyed by child `name`.
 
 Methods: `update(code, reason)` (record an observation), `touch()` (re-stamp only),
-`add_child(child)` (enforces `child.path == f"{self.path}.{self.name}"`),
+`add_child(child)` (enforces `parent_path(child.path) == self.path`),
 `get_children()`, and `get_status_code()` (§4.3). Code/reason coercion is factored
 into `_coerce_code` / `_coerce_reason`.
 
@@ -207,7 +227,7 @@ into `_coerce_code` / `_coerce_reason`.
 is true is not carrying one condition in several paragraphs, it is carrying a set of
 reasons, and each of those is a child the tree does not hold
 ([ADR-0036](adr/0036-addressable-reasons.md) decision 7; the
-[ADR-0032](adr/0032-status-contribution-boundary.md) amendment). A virtual child has
+[ADR-0032](adr/0032-status-contribution-boundary.md)). A virtual child has
 the two things grading needs and the one thing a person needs: an **identifier** (its
 slug — declared via `slug(*parts)`, or content-hashed to `h-` plus ten hex digits of
 its SHA-1 when the check has nothing better than its own wording), a **code of its
@@ -307,7 +327,7 @@ ignored by its parent. **With nothing counted, the answer depends on why**
 ([ADR-0039](adr/0039-status-rollup-semantics.md) rule 5): children skipped because
 they are *silenced* leave the parent `MAINTENANCE`, children that merely have not
 reported leave it `UNDEFINED`. That is the edge case
-[ADR-0032](adr/0032-status-contribution-boundary.md)'s amendment left open, answered
+[ADR-0032](adr/0032-status-contribution-boundary.md) left open, answered
 the way the same model already answers it one level down — a node whose *virtual*
 children are all pinned reads `MAINTENANCE`
 ([ADR-0036](adr/0036-addressable-reasons.md)) — because real and virtual children
@@ -332,7 +352,10 @@ holds one root `Status` and a bounded `deque` of `Event`s behind one `RLock`.
   when given, never a transition. A node **in maintenance** is written like any
   other — the pin is derived at snapshot time, not stamped into the tree, so a
   silenced node can still say what it is silencing and clearing a pin restores the
-  last known state at once rather than at the next run.
+  last known state at once rather than at the next run. It is also the one path
+  that writes entries, so it keeps **`entry_count`** — how many reason entries the
+  nodes hold between them — as a counter, and the engine's tick reads a number
+  rather than walking the tree (§4.6).
 - `set_check_mount(path)` — register a **check mount**: the node a check writes its
   result root to, and so re-stamps on every run. A registry only — it creates no
   node, so the tree's visible shape still grows only with results — read solely by
@@ -396,14 +419,24 @@ holds one root `Status` and a bounded `deque` of `Event`s behind one `RLock`.
   Maintenance is held in a **side-table**
   (`path → MaintenanceEntry`, i.e. `{reason, set_at, expires_at, set_by, created_at,
   created_by}`) kept in sync with each node's `maintenance` bool and
-  **written through** to `var/maintenance.json` via an injected `MaintenanceStore`
-  ([ADR-0014](adr/0014-maintenance-persistence.md)); an entry read without the two
-  creation fields defaults them to the set values, so a file written before that
-  amendment loads unchanged. `restore_maintenance` replays it
+  **written through** to `var/state/maintenance.json` via an injected
+  `MaintenanceStore`, which knows the file's shape and hands the write to the state
+  layer (§4.8; [ADR-0014](adr/0014-maintenance-persistence.md),
+  [ADR-0071](adr/0071-what-a-restart-keeps-is-a-directory-of-files.md)); an entry
+  read without the two creation fields defaults them to the set values, so a file
+  written before that amendment loads unchanged. `restore_maintenance` replays it
   post-fork at startup (dropping expired); `reap_uncovered` drops pins no check root
   covers (segment-wise — the `status.on_same_line` predicate shared with ADR-0015);
   and `sweep_expired`, run each scheduler tick, clears entries past their window as a
   real transition.
+- **The event log is a state file too.** `events_payload()` copies the log under the
+  lock and serializes it outside; `restore_events(events)` puts a file's log back at
+  startup, before anything has written, keeping the bound. `Event.to_dict()` /
+  `from_dict()` carry the codes by name, and `events_from_payload()` refuses a file
+  of a shape it does not know whole rather than half-reading it — the layer then
+  reports the file (§4.8). A restored log makes `/events` and every node's history
+  start where the last process left off; the first run after a restart still
+  records `UNDEFINED → OK`, because the node *was* unobserved.
 - **Events under a suppression are recorded and marked.** Because a pinned node keeps
   being written, its transitions still happen, and the log keeps all of them: an
   `Event` carries `suppressed_by`, the **name of the contribution rule** that kept
@@ -433,7 +466,7 @@ holds one root `Status` and a bounded `deque` of `Event`s behind one `RLock`.
 - The snapshot derives a node's **own status** rather than copying its stored code
   ([ADR-0036](adr/0036-addressable-reasons.md);
   [ADR-0041](adr/0041-maintenance-is-a-contribution-rule.md); the
-  [ADR-0032](adr/0032-status-contribution-boundary.md) amendment): a **pin** on the
+  [ADR-0032](adr/0032-status-contribution-boundary.md)): a **pin** on the
   node presents `MAINTENANCE`, and a node's member entries are **virtual children** —
   each unsuppressed one contributes its **own code** where the check declared one
   ([ADR-0042](adr/0042-entries-carry-their-own-code.md)) and the reported status
@@ -517,7 +550,8 @@ node like `description` and the detail page renders
 container bare and tags each child's `config` instead.
 `checks/base.py` holds the `Check` ABC, the `CheckResult` / `CheckError` types,
 common config parsing (`path`, `description`, `frequency`, `timeout`;
-`parse_duration` accepts `15m` / `2h` / seconds) and a `type`→class registry.
+`parse_duration` accepts `15m` / `2h` / `1w` / seconds, lowercase units only) and a
+`type`→class registry.
 Config blocks are read with **`values.py`** ([ADR-0026](adr/0026-reading-values-from-decoded-bags.md)):
 `values.text` / `number` / `real` / `flag` / `rows` take a decoded YAML (or JSON)
 bag plus a path of keys and always return the declared type — absent yields the
@@ -877,6 +911,98 @@ its leaves, and its own `about` carries the node-level "what is this box" (ADR-0
   and the engine **heartbeats a top-level `little-sister` node** every tick — if the
   scheduler stalls, that node goes stale and red (ADR-0005). Whole-process death is
   left to an external supervisor (launchd / systemd / gunicorn restart).
+- **The beat is a branch that carries the instance's report of itself** (§4.8,
+  [ADR-0072](adr/0072-the-instance-reports-on-itself.md),
+  [ADR-0076](adr/0076-the-instance-node-is-a-branch.md)): the root
+  `/little-sister` is written every tick with the beat and no lines of its own;
+  `/little-sister/engine` with the engine's own lines (`no-checks` when the checks
+  aspect is empty, the paths it searched as the child's `report`; then the lines
+  below); and `/little-sister/<name>` with each registered contributor's, from
+  `self_report.current_reports()`. Every child is written every tick — present and
+  OK when it has nothing to say — as member entries under the contributor's own
+  slugs, **every line carrying a code** and the contributor's facts as the child's
+  `report` (ADR-0044 §6, ADR-0076 decision 1: a fact written as a line would carry
+  the child's worst code into the roll-up, and arrives instead as a WARN saying it
+  belongs in the report), its code derived from its lines, its `title` and `about`
+  filled from the registration where `nodes.yaml` said nothing; the root's code is
+  the roll-up. The
+  tick also drives the state layer's writer (`state.tick()`), and `stop()` flushes
+  the kept files once more after the scheduler thread is gone.
+- **The engine's own lines** — `limits.py`: what the engine measures against its
+  limits as it runs, **recorded on its side and read on the tick, never probed**.
+  The rule is that a limit the engine enforces is a line it can show, and a limit
+  it cannot compute is one it cannot observe either; every line clears when its
+  condition does. `Limits` holds the numbers — constants today, and the one
+  construction site to change when they become settings — and `EngineReport` the
+  record: the tick's `_observe` hands it the tree's entry count (`entry_count`, a
+  counter the tree keeps on its write path, §4.4), the checks waiting for a worker
+  and the runs that outgrew their period, and the report measures the one thing
+  the engine does not record, the resident size (`/proc/self/statm` on Linux;
+  elsewhere the high-water mark `getrusage` keeps, and the line says *peak*).
+  The lines, each under `engine.`:
+  - `entries` — the entry count against `ENTRY_LIMIT` (100,000): WARN at 80 % of
+    it, ERROR at it. A constant rather than a share of memory, because at the
+    measured half kilobyte an entry the snapshot copied per poll binds long
+    before memory does.
+  - `memory` — the resident size against half of what the machine gives the
+    process (physical memory, or the cgroup's limit where one is set and smaller —
+    the number that kills the process), WARN at 80 %, ERROR at the limit, the
+    machine's figure named beside it. No line where the machine cannot say.
+  - `pool` — WARN once a check has waited for a worker longer than 10 s, with how
+    many are waiting and the longest wait. A check that has never completed a
+    run does not count: the first sweep submits every check at once by design,
+    and a wait there is the start, not saturation.
+  - `lag` — WARN when a tick came more than 5 s late beyond the poll interval,
+    standing for ten minutes after the worst late tick inside that window; a
+    tick's own work is inside the measurement, so a slow sweep, a lock held by a
+    large snapshot, a state flush and a starved process all read the same way.
+  - `late.<path>` — WARN per check whose run in flight, measured so far, or whose
+    last completed run exceeded its `frequency`; it clears with the next run that
+    fits. A run longer than its period is a late run, not a broken one.
+  - **The engine's report** (`EngineReport.report()`, the child's `report` field,
+    ADR-0076 decision 1) carries what the engine *knows* and does not claim, for the
+    life of the process, each beside one warning in the log at load: a check whose
+    `timeout` is longer than its `frequency` *may* run late — a shipped example runs
+    at 60 s with a 120 s timeout, and it is not refused — and a limit whose
+    *declared* sum (below) is at or above 80 % of it and inside it. Neither is a
+    line: a declaration claims something about what will happen, and the coded
+    line for what did is `late.<path>` or `entries` above, so the node stays OK
+    until a run actually does.
+  The path in a line's slug is `slug(path)` (§4.3's declared slug, narrowed to
+  `[A-Za-z0-9._-]`), so a line is pinnable per check like any entry. `run()` is measured on the engine's one
+  clock — the `clock` it was constructed with — which is what lets the tick see a
+  run's age while it is still in flight.
+- **What each check last stored** (§4.9,
+  [ADR-0073](adr/0073-a-readiness-answer-beside-health.md)) — one `StatusCode` per
+  scheduled check, `None` until its first result lands, written on **every**
+  completion. Deliberately not the `last_code` the retry block keeps, which moves
+  only when a failure episode ends and stays `UNDEFINED` for a check with no retry
+  configured. `Engine.outcomes` reads it under the lock into three counts —
+  configured, completed, erroring — which are what the readiness answer's first-pass
+  condition and the instance's `all-erroring` line are both made of. Nothing new runs
+  on the tick for it.
+
+- **What the configuration declares it costs**, summed at **construction**
+  ([ADR-0075](adr/0075-a-check-declares-what-it-costs.md)) — the one thing here that
+  is arithmetic before the first tick rather than a measurement after a run. A check
+  type may answer `expected_cost()` (worker seconds one run is expected to occupy)
+  and `expected_entries()` (reason entries it expects to hold) from its own
+  configuration; both default to `None`, and only the library's *dependents* have
+  numbers worth declaring — a built-in `http` check costs a fraction of a second, and
+  a sum of such estimates would be noise. `limits.capacity()` sums **what is
+  declared**: each cost over that check's own period against `max_workers` — the pool
+  the engine will actually run, which is the roster's size when that is smaller — and
+  the entries against `entry_limit`. Past either, the engine raises `CheckError`
+  naming the largest contributors worst-first (five, then a count), which is the
+  content failure below: the pages stay up with the banner and no engine runs. At or
+  above `amber_share` of a limit it is a log warning and the uncoded line above.
+  Because a silent check contributes nothing, the sums are a **lower bound** — enough
+  to refuse what cannot fit, and deliberately no promise about what passes. A
+  declaration that raises or is not a non-negative number is logged with the check's
+  path and treated as absent. The refusal runs **before** the check mounts and the
+  heartbeat's metadata are registered, so a refused configuration leaves no half-built
+  tree; and `info()` carries the sums, the entries the tree holds now and each check's
+  declared figures, so `/system` shows the estimate beside the measurement.
 
 `app.py` starts the engine once at import (post-fork worker), guarded by
 `LITTLE_SISTER_ENGINE` (set `0` to disable); the dev server uses
@@ -902,7 +1028,7 @@ deliberate `LITTLE_SISTER_ENGINE=0` disable, and clears only with a restart
 against a fixed config. The JSON API carries no engine-health signal.
 
 A hung check still occupies a pool worker (Python can't kill threads); the built-in
-checks honour their own timeouts, and custom checks must too.
+checks honor their own timeouts, and custom checks must too.
 
 ### 4.7 Markdown rendering — `render.py`
 The node text fields (`title`, `about`, leaf `description`, each `reason`) and an
@@ -915,7 +1041,7 @@ the `markdown` (block) and `markdown_inline` (one-line, no `<p>`) Jinja filters
   default*: raw HTML is **escaped** (`html=False`), link schemes are validated (so
   `javascript:` / unsafe `data:` never become links), and every link gets
   `rel="noopener noreferrer"`. **Images** were initially disabled (beacons / mixed
-  content) but are **currently enabled** (ADR-0018 Update note); untrusted reasons
+  content) but are **currently enabled** (ADR-0018); untrusted reasons
   stay safe because `plain()` / `code()` escape `[` / `]`, so the exposure is the
   operator-authored fields. The declared `markdown-it-py[linkify]` extra also turns
   fully qualified bare `http://` and `https://` URLs into the same hardened link tokens;
@@ -942,6 +1068,230 @@ the `markdown` (block) and `markdown_inline` (one-line, no `<p>`) Jinja filters
   `maintenance` sentinel is not displayed. `maintenance_details.reason` likewise
   remains raw Markdown in JSON; neither persistence nor the API shape changes.
 
+### 4.8 The state layer and the self-report — `state.py`, `self_report.py`
+
+What a restart keeps is a **directory of JSON files**, `var/state/`
+([ADR-0071](adr/0071-what-a-restart-keeps-is-a-directory-of-files.md)): a fixed
+path relative to the working directory, git-ignored, not env-overridable. Two write
+disciplines, one atomic write, and a seam for what the instance says about itself.
+
+- `StateLayer(directory, interval_seconds)` owns the directory. `read(name)` returns
+  the parsed file, or `None` for a file that is not there (a first start) — and also
+  for one that cannot be read, which is a **load failure** the layer records and
+  logs; a reader that finds a shape it cannot use says so with
+  `report_load_failure(name, detail)`. `write(name, payload)` is the
+  **write-through** discipline — a temp file in the same directory and
+  `os.replace`, never raised, the outcome recorded. `keep(name, producer)` registers
+  a **kept** file: `tick()`, called by the engine every scheduler tick, writes every
+  kept file at most once per `state_interval` (`settings.yaml`, default 60 s, §7)
+  and only when its serialized state changed; `flush()` writes them once more at
+  graceful shutdown. A producer copies under its own lock and returns — the layer
+  is never inside the tree's lock for longer than the copy takes (ADR-0002).
+  **Every file may have the other direction too**
+  ([ADR-0077](adr/0077-authority-follows-the-lease.md)): `keep(name, producer,
+  restore=…)` or, for a file written through, `restore_with(name, restore)` — a
+  callable that takes the parsed payload of a copy adopted at runtime and replaces
+  what the process holds, under the process's own lock and no longer than the swap.
+  `take_stock()` reads the directory once at startup — which files are there, when
+  each was written, which `.bak` an earlier process set aside — so the report never
+  has to.
+- **The files today**: `maintenance.json` (written through by the tree's
+  `MaintenanceStore`, §4.4; moved from `var/`, a clean break — the old path is not
+  read, and a file still there is named once at startup) and `events.json` (kept:
+  `status_tree.events_payload`, restored by `app._restore_state` before the pins
+  are replayed, so this process's first transitions append to yesterday's). Run
+  facts stay ephemeral. The notes and the series files join as they are built.
+- **A failure never refuses to start, and is never silent.** `lines()` is the
+  layer's self-report: per file, `load.<file>` at ERROR for as long as the process
+  runs (what the file held before the restart is not in force) and `save.<file>`
+  at WARN until a write of that file succeeds (nothing is lost yet; the next
+  restart is). The same two slugs carry what an adoption leaves standing, with
+  *adopt* as the verb — ERROR for a copy the process could not take in, WARN for
+  one written to disk with nothing registered to take it. The `.bak` files are the
+  child's **report** (`StateLayer.report()`, ADR-0076 decision 1), one item each:
+  when it was last written beside when the live copy was, both local files on one
+  clock. Recorded state, read — neither touches the disk.
+- **Authority follows the lease** ([ADR-0077](adr/0077-authority-follows-the-lease.md)).
+  When the keeper's `tick` turns from *not taking saves* to *taking them* — a
+  standby became the holder, a demoted holder took the lease back, or the first
+  interval a keeper takes at all — `flush()` asks the keeper's optional
+  `changed_since_sync()` and adopts every file it names before this interval's
+  first save: parsed and handed to its `restore`, then the live file set aside as
+  `<file>.bak` (an older one overwritten) and the store's copy written in its
+  place — the temporary file written first, so a disk that refuses moves nothing —
+  and the mirror's digest seeded so it is not sent back until it changes. A file
+  whose adoption failed is **held out of the mirror** until one lands, since its
+  local copy is the shadow the rule forbids saving over the store, and is adopted
+  again by name every interval the keeper takes saves. A keeper that names nothing,
+  or has no such method, makes it a silent takeover with the instance's own state.
+  A `.bak` is this machine's own: never mirrored, and refused from a keeper's
+  listing like a walk upwards. The `restore` callables live in one registry, filled
+  by their owners — the tree's `adopt_events` beside the log's producer, the
+  side-table's by `MaintenanceStore(state, tree=…)` at construction.
+  **`take_backups()`** is the way back and the layer's one action on its child —
+  *take the backups*, admin-only, `POST /little-sister/state/act/take-backups`: for
+  every `.bak` beside a file the layer keeps or restores, the live file is set aside
+  as `.bak` in turn and the backup adopted through the same path, so the mirror then
+  takes what came back; a `.bak` matching no registered file is listed and left
+  alone. The flush and the button are serialized on a lock of their own, and a pin
+  written through never waits on it.
+- **The self-report seam** ([ADR-0072](adr/0072-the-instance-reports-on-itself.md)):
+  `self_report.register_contributor(name, callable)` claims a name under
+  ADR-0064's rules (the calling package inferred and recorded, the same package
+  replaces silently, another package refuses unless `replace=True`, the replacement
+  remembered); `current_lines()` asks each contributor for its current entries and
+  prefixes every slug with the name, which is a reader's flat view of what the
+  children carry — a pin holds against the child and the bare slug
+  (`/little-sister/state` + `load.maintenance.json`), never the flat form. A
+  contributor that raises, or answers with something that is not lines, is logged
+  and stands as one WARN line `<name>.raised` — the beat still lands. A report
+  **clears**: a line the contributor stops returning is gone, and the node's code
+  follows. `/system` prints `report <name>` on the package's
+  inventory row. The application registers the state layer as `state` in
+  `_restore_state`; a package or a deployment registers its own in the
+  import-before-app block, beside its resolvers.
+  - **Each contributor is a child of `/little-sister`**
+    ([ADR-0076](adr/0076-the-instance-node-is-a-branch.md)): `current_reports()`
+    answers one `Report` per contributor — `name`, `title`, `about`, and its lines
+    under the contributor's **own** slugs — which the engine writes onto
+    `/little-sister/<name>` every tick; `current_lines()` is the flat view with the
+    `<name>.<slug>` prefix. `register_contributor(name, lines, title=…, about=…,
+    report=…)` declares the child's labels, filled where `nodes.yaml` said nothing,
+    and the contributor's **report** — a callable answering Markdown, the child's
+    `report` field (ADR-0044 §6), for what the contributor knows and does not claim:
+    `state.report` lists the `.bak` files, `security_report` the failed logins
+    below the rate, `EngineReport.report` the configurations that may run late and
+    the declared load near a limit. A report that raises is the `raised` stand-in
+    beside the lines. **Every line carries a code**; one without is refused into a
+    WARN under its own slug that says so (ADR-0076 decision 1).
+  - **An action per child**: `register_action(contributor, slug, label, handler)`
+    claims one under the contributor's rules; `actions_for()` and `find_action()`
+    are what the filler and the route read; the handler takes nothing and answers
+    the sentence the page shows, or raises and the label and error are the sentence.
+    Run by `POST /little-sister/<contributor>/act/<slug>` (§5), admin-only, and
+    **followed by `state_layer.flush()`** where the handler returned: what the
+    action changed reaches the store now, not at the next interval, and a keeper's
+    take-over adopts and saves in the click (ADR-0076 decision 6).
+  - **Two records, one call each** (ADR-0072 §7): `Standing` keeps lines for the
+    life of the process — `note(slug, text, code=WARN)` records and logs at the
+    line's severity (a `StatusCode`, never `None`: a fact is the report's), one line
+    per slug, a second note on a slug replacing the first
+    — and the library's own is `self_report.startup`, registered as `startup`
+    beside `readiness`. `Held(hold_seconds)` keeps occurrences of what recurs —
+    `see(slug, text, code=WARN, measure=None, now=None)` records and logs one — for
+    the window after each; `lines()` writes the plain line per slug (the latest
+    text, *n times in the last …* where there was more than one), and `worst()`,
+    `latest()`, `count()` and `slugs()` are for a contributor that writes its own
+    sentence, as the engine's `lag` line does from the worst measure inside the
+    window. Every method takes `now` so a caller with the engine's clock in hand
+    gives it; the clock is otherwise monotonic and injectable.
+  - **The library's three, registered in `app.py`**: `startup` (a `Standing`) for
+    what the process learned at startup — an unresolved `SECRET_KEY` or
+    `LITTLE_SISTER_API_TOKENS` reference, no identity door or none the default
+    (ERROR where nobody can sign in), the system-admin password unresolved, a
+    `config/` file no aspect claims, an aspect declared in two roots or refused at
+    registration, `instance:` refused, `retry_interval` unreadable, `nodes.yaml`
+    metadata no check covers or the file not loaded, a links interval unreadable,
+    an avatar not shown, the retired maintenance file, a slot template, asset, icon
+    or action refused, the theme bootstrap's hash missing; `runtime` (a `Held`, ten
+    minutes) for what recurs — a slot's provider or template raising, an identity
+    door raising, a scheduler tick or an upsert raising, a reachability pass
+    failing, overrunning, stuck or giving up; and `security` (a `Held`, ten
+    minutes, graded by `security_lines`) — failed logins as a rate, a fact below
+    five in the window and WARN from five, and the system-admin account used.
+    `plain()` lives in `little_sister.reasons` so these sites can fold a path or an
+    error into a line; `little_sister.checks.plain` is the same function. Two sites
+    stay log-only and say why in place: `LOG_LEVEL` unreadable (`logger.py`, beneath
+    the seam) and an engine that did not start (no tick to read a line on).
+- **The keeper** (`keeper.py`) — a file store that mirrors the whole directory to
+  somewhere durable **without knowing what it carries**: `load(name)`,
+  `save(name, data)`, `list()`, in bytes, so it moves `events.json` and a package's
+  sqlite file with the same code. `register_keeper(name, keeper)` claims the seam in
+  the import-before-app slot under ADR-0064's rules, and there is **one slot rather
+  than one per name** — two keepers would each carry a copy of what the other wrote,
+  and import order would decide which one a restart came back as. `/system` lists it
+  on the registering package's row, which is the only place a working keeper is
+  visible: it says nothing until it fails.
+  - `restore_from_keeper()` runs **first** in `_restore_state`, before any file is
+    read, so a fresh machine comes up as the instance that stopped on the old one.
+    What the keeper holds wins over a local file of the same name — the point on a
+    new machine, and reachable on an old one only where a save to the keeper had
+    already failed and said so. A name that is not a plain file name is refused: it
+    arrives from outside the library and is used as a path component.
+  - `flush()` mirrors the directory **after** the writer, on the same interval and
+    once more at shutdown, sending every file in it — including one no producer here
+    registered — and skipping a file whose bytes the keeper already took.
+  - **Three methods a keeper may answer**, looked for by name (`keeper.takes_saves`,
+    `keeper.close_keeper`, `keeper.changed_since_sync`):
+    `tick(interval_seconds) -> bool`, called by `flush()` every interval *before*
+    any save, whether or not a file changed — where a store
+    that holds a lease on its prefix renews it, and one that is not the holder reads
+    who is — whose answer says whether this interval's saves are wanted at all
+    (`False` sends nothing and leaves every file marked not yet taken, so the next
+    `True` sends what changed meanwhile; not a failure, and no line of the layer's —
+    the keeper says why through its own contributor); and `close()`, from
+    `shutdown()` after the last flush, the one signal that the process is ending on
+    purpose, so a lease can be given up rather than left to lapse; and
+    `changed_since_sync() -> Sequence[str]`, asked once at the moment `tick` turns
+    from declining to taking, naming the files whose copy in the store differs from
+    what this instance last restored or saved, by a token the library never sees —
+    what the layer then adopts ([ADR-0077](adr/0077-authority-follows-the-lease.md)).
+    A keeper without them is called as before.
+  - **A failure never refuses to start and is never silent**, exactly as for a local
+    file: a keeper that cannot be reached leaves every local file as it is and is
+    `keeper.load` at ERROR for the life of the process; a save it would not take is
+    `keeper.save.<file>` at WARN until one of that file lands — *nothing is lost yet,
+    the next machine is*; a `tick` that raises is `keeper.tick` at WARN, with no save
+    behind it that interval, until one returns. Nothing a keeper raises reaches the
+    tick.
+  - Two obligations the seam cannot enforce, stated in `keeper.py` for whoever writes
+    one: **bound the client in seconds**, because saving and `tick` run on the
+    scheduler tick, and **say it rather than merging it away** — two instances against
+    one store is not resolved by merging files; whatever the keeper does instead (the
+    S3 keeper holds a lease and puts the other instance in standby, little-sister-aws
+    ADR-0004), the operator is told through the self-report seam. The library ships
+    no keeper; a local installation registers none and loses nothing by it.
+
+### 4.9 Readiness, and what the instance can see — `readiness.py`
+
+`/health` answers *is this process serving* and deliberately nothing else
+([ADR-0066](adr/0066-health-answers-liveness-and-says-almost-nothing.md)). This module
+answers the other half — *has this instance finished coming up* — and holds, beside it,
+the two lines the instance says about its own ability to observe anything at all
+([ADR-0073](adr/0073-a-readiness-answer-beside-health.md)).
+
+- **`Readiness`** takes the three conditions as callables, because two of them are only
+  settled after the application has finished importing, and answers an `Answer`:
+  `ready`, or the words it is waiting for. `app.py` composes it once and the route in
+  §5.1 renders it.
+  - **`doors`** — `identity.registered_doors()` is not empty (§5.2).
+  - **`trust`** — `measure_trust_store()` counted CA certificates in a default TLS
+    context. Measured **once**, at startup, and it is the only thing here that touches
+    the machine; a count that raised answers `TrustStore(None)`, which is *unknown*
+    and never reported as empty.
+  - **`first-pass`** — `Engine.outcomes.first_pass` (§4.6): every configured check has
+    stored a result. An engine switched off with `LITTLE_SISTER_ENGINE=0` has no pass
+    to wait for and is ready; one that could not load its configuration never is, and
+    `app.py`'s `_first_pass_done` is where the two stop being one answer.
+- **The answer latches.** All three are startup facts; once they hold the conditions
+  are not asked again and no later failure takes the answer back. That is what stops a
+  readiness route from withdrawing a *serving* instance and removing the very page
+  whose banner explains what broke, which is the thing ADR-0066 refused to build.
+- **`Outcomes`** is what the engine records for both: `configured`, `completed` and
+  `erroring`, from the code each check **last stored** — a field per scheduled check,
+  set on every completion and read under the engine's lock. The counts satisfy
+  `erroring <= completed <= configured`, which is why `all_erroring` needs no separate
+  first-pass guard.
+- **Two lines on the seam** (§4.8), registered as `readiness`, recorded state read on
+  the tick, clearing when their condition does: `readiness.trust` at ERROR (*the
+  machine's trust store holds no CA certificates*, so every check reading an `https`
+  address fails on the certificate rather than on the subject) and
+  `readiness.all-erroring` at WARN (*every check this instance runs is erroring, all N
+  of them*, where N is more than one — a reading of the **pattern**, not a second red
+  for failures their own nodes already report). Neither is the readiness answer: why an
+  instance did not become ready is the startup log and `/system`, where the reader has
+  said who they are.
+
 ---
 
 ## 5. Web layer — `app.py`
@@ -955,19 +1305,21 @@ the `markdown` (block) and `markdown_inline` (one-line, no `<p>`) Jinja filters
 | `/login/<door>`, `/auth/callback/<door>` | GET, POST / GET | **One named door's** own login step and the return leg of its redirect flow (§5.2, [ADR-0069](adr/0069-identity-comes-from-outside-and-one-account-does-not.md)). Both dispatch on the name in the path to the provider registered under it — a provider never registers a route, so this costs no general route seam — and both answer `404` for a name nothing claims and for a hook the provider does not implement, since either is a way in this deployment does not have and a redirect there risks a loop. A door's own route matters mechanically rather than stylistically: under a provider that redirects, `/login` never renders a local form. |
 | `/status`, `/status/<path:branch>` | GET | Renders the dashboard from a live snapshot (whole tree or a branch; the `path:` converter passes the slash-separated node path, ADR-0016). A **leaf** check renders its **detail** page. `hide_ok` / `hide_idle` filter the view; `depth` caps how deep the tree renders (clamped to `MAX_DEPTH`, remembered in a `depth` cookie); `fragment=1` returns just the grid (for the page's live polling). With `Accept: application/json` and a valid bearer token, the same routes return the subtree as JSON instead (ADR-0008). A **leaf** page also carries the node's own **hand-off** — the two clipboard buttons of `/copy` aimed at one node: the same document machinery (`copy_status.py`, one formatter for both) over what only this page knows — the path, the observation and the period it bounds, the next update, the run's wall time, the frequency, the report, the configuration and every reason line uncapped — each line with its own code cue and in-flight marker where it declared them, each instant naming its offset. A pin does not change it: the document keeps the **measurement** and says a pin is in force, rather than presenting the pinned code as the reading. Containers get no buttons — their hand-off is `/copy`. |
 | `/history/<path>` | GET | A node's status history (Status / Since / Until / Reason). |
+| `/little-sister/<contributor>/act/<slug>` | POST | **Admin only.** Runs an action a package offered on its self-report child ([ADR-0076](adr/0076-the-instance-node-is-a-branch.md)) — `self_report.register_action(contributor, slug, label, handler)` — logs who ran what, flushes the state layer (what the action changed reaches the store now), and redirects to `/status/little-sister/<contributor>` with the sentence the handler returned shown once (a flashed message, rendered by `_said.html` on the status and leaf pages); a handler that raises is caught and its label and error are the sentence. Unknown action: 404. The buttons are the library's built-in filler on `node.actions` (`_self_report_actions.html`), rendered only on a child of `/little-sister` and only for an admin, as POST forms. |
 | `/maintenance` | GET, POST | **GET** — the full, uncapped maintenance overview as its own read-only page (the leaf-detail pattern), reached from the strip pill's "+N more": **one row per pin** — a node's own, or one of its reasons' ([ADR-0036](adr/0036-addressable-reasons.md)) — with the path, what the pin *silences* (the whole node, or one reason line), time left, rendered Markdown explaining *why* it is silenced, and authorship (*pinned by … , last changed by …*). *Silenced* and *Why* are two columns on purpose: both are called "reason" in the model and are not the same thing. An entry row links to its line as `/status/<branch>?reason=<slug>`; the slug is never rendered as text. **POST** — **admin only**: set/edit/clear a node's maintenance with a raw-Markdown reason and optional duration-or-expiry (blank uses the duration from `settings.yaml`), recording who set it. Unit-suffixed durations and full ISO date/times are accepted alongside `MM-DD`, a day-of-month, `HH:MM`, and weekday/time shortcuts; a bare weekday uses 12:00, and unzoned values use the configured timezone. The resolved expiry must be **at least one second and at most 365 days away**; invalid, past, ambiguous-DST or out-of-range input is refused with the admin's words returned, and a blank reason on an *edit* keeps the stored one ([ADR-0014](adr/0014-maintenance-persistence.md)). A `slug` field addresses **one reason** of the node instead of the node ([ADR-0036](adr/0036-addressable-reasons.md)) — never a path segment, since the natural slug for a discovered entry contains a `/`; redirects to the node — or back to the page the form was opened on, via a validated `next` (the card dialog's way home). Every form carries the entry's `set_at` as a hidden **compare-and-set token**, so a write against a pin someone else has since changed is **refused whole** and answered with the conflict page — both rendered stored text and the admin's raw source, who set the stored one and when, the admin's own words preserved and one click to take the stored ones instead ([ADR-0014](adr/0014-maintenance-persistence.md)). |
 | `/events` | GET | The transition log, newest first (When / Status / Service / Reason). A transition that reached nobody is **shown and marked** with the contribution rule that held it back ([ADR-0032](adr/0032-status-contribution-boundary.md) rule 5, [ADR-0041](adr/0041-maintenance-is-a-contribution-rule.md)) — it keeps the status color it would have alarmed in, and the chip beside the code is what says it did not. Marked events are what makes *did it break during the window?* answerable, and they are excluded from `/history`, which answers the other question. |
 | `/system` | GET | **Admin only** — engine uptime, pool size, check counts; per check its type and the in-flight / armed-next / last run, each a time of day plus interval. Carries the dashboard's freshness stamp and ~10s poll (`fragment=1` returns just the info block). Below it, outside the polled fragment because they are settled at startup: the **check-type roster** (§11) — the types this configuration runs first, each with the number of checks behind it, a count that opens into the node path of every one of them so it can be believed without reading a config file, the rest folded into a disclosure so a registered-but-unused type stays readable without filling the card — the **package inventory** (§11), one row per installation outside the library with its distribution, version, loaded path and everything it registered, because a version belongs to the *installation* and a package that registers no check type would otherwise have one nowhere on the page — both tables print that loaded path **against a root the reader has** (`paths.py`): `site-packages/…` or `./…` under the working directory, whichever root is the nearer, because the diagnostic it carries is *which root the module came from* rather than the absolute string, nine tenths of which is the same prefix on every row and starts with somebody's home directory (the origins and the hover `title` keep it whole; a path under neither root stays long, which is the signal) — the **extension seams** (which package fills which slot, which configuration aspects were registered, and who registered each one), the **identity card** — one row per registered door with its route, its provider, the package that registered it and which one is the default, and beneath it whether a system-admin account is configured, whether its credential resolved and which keyword configured it, because a way into an application must not be knowable only by reading the source (§5.2, [ADR-0069](adr/0069-identity-comes-from-outside-and-one-account-does-not.md)) — and the **effective Content-Security-Policy**, directive by directive, with the contributor of every source — a request blocked inside somebody else's package is otherwise undebuggable from the running instance (§5.4, [ADR-0048](adr/0048-an-assembled-content-security-policy.md)). |
 | `/about` | GET | The identity page — the gaze, the name and the reasoning behind it, the running instance's `__version__`, the repository link. Auth-gated like every other surface: it names the version of a live instance. |
 | `/preferences` | POST | Records this browser's **theme** and **layout** (§5.3, [ADR-0029](adr/0029-per-user-presentation-preferences.md)) and redirects back to the posting page. A value outside the roster is dropped in favor of what the browser already had; the return path is validated by `_safe_next` (a single leading `/`, and none of the characters a browser rewrites into a second one), so the hidden field cannot become an open redirect. |
-| `/copy`, `/copy/<path:branch>` | GET | Auth-gated incident hand-off, in three sizes from one route and one formatter: the **tree** (`/copy`), one **node** (`/copy/<branch>`) and one **reason line** (`/copy/<branch>?reason=<slug>` — the node a path, the entry a query value, [ADR-0036](adr/0036-addressable-reasons.md) decision 12, because a discovered entry's slug contains a `/`). A line's document is the line and just enough to locate it — the node's title, path and observation — and deliberately not the node's run facts, report or configuration, which the node's own document carries and which is where a secret reference would appear. An unmounted path and a slug this run does not report are both `404` with a page that says which: a suspended pin is not deleted, but a document made from its stored text would hand over a finding the check is no longer making. The tree document: one immutable root snapshot becomes one canonical Markdown document: every non-OK leaf (`WARN`, `ERROR`, `MAINTENANCE`, `UNDEFINED`) plus only the ancestors needed to locate it, in snapshot order; the synthetic root and wholly healthy branches are omitted. Leaves carry a non-colour emoji cue, and so does a **reason line that declared a code of its own** ([ADR-0042](adr/0042-entries-carry-their-own-code.md)) — a healthy workflow under a failing node has to read as healthy in a pasted document too, and a line that declared none takes no cue because it carries its node's. A line whose subject is **running** says so in words: the page's italic is the glance, and a document has none. Authored check and maintenance explanations keep their Markdown, while node/per-reason maintenance also names who set it and its expiry. Every instant it writes — a pin's expiry here, and the whole node document's time facts — names its **UTC offset**: the pages render local time and stay silent about the zone, which is right for a screen somebody is standing in front of, and wrong for a document read in another office. The page renders the rich preview through the same hardened Markdown renderer as every other surface. **Copy Markdown** writes `text/plain`; **Copy Rich HTML** writes both `text/html` and the Markdown as `text/plain`, falling back honestly to plain/manual selection when clipboard access is unavailable — the buttons are one partial (`_copy_controls.html`) shared with the leaf detail page, so the pair is named and ordered the same in both places, and the label names the clipboard member rather than claiming RTF. An all-OK tree gets an empty state rather than an empty clipboard action. |
+| `/copy`, `/copy/<path:branch>` | GET | Auth-gated incident hand-off, in three sizes from one route and one formatter: the **tree** (`/copy`), one **node** (`/copy/<branch>`) and one **reason line** (`/copy/<branch>?reason=<slug>` — the node a path, the entry a query value, [ADR-0036](adr/0036-addressable-reasons.md) decision 12, because a discovered entry's slug contains a `/`). A line's document is the line and just enough to locate it — the node's title, path and observation — and deliberately not the node's run facts, report or configuration, which the node's own document carries and which is where a secret reference would appear. An unmounted path and a slug this run does not report are both `404` with a page that says which: a suspended pin is not deleted, but a document made from its stored text would hand over a finding the check is no longer making. The tree document: one immutable root snapshot becomes one canonical Markdown document: every non-OK leaf (`WARN`, `ERROR`, `MAINTENANCE`, `UNDEFINED`) plus only the ancestors needed to locate it, in snapshot order; the synthetic root and wholly healthy branches are omitted. Leaves carry a non-color emoji cue, and so does a **reason line that declared a code of its own** ([ADR-0042](adr/0042-entries-carry-their-own-code.md)) — a healthy workflow under a failing node has to read as healthy in a pasted document too, and a line that declared none takes no cue because it carries its node's. A line whose subject is **running** says so in words: the page's italic is the glance, and a document has none. Authored check and maintenance explanations keep their Markdown, while node/per-reason maintenance also names who set it and its expiry. Every instant it writes — a pin's expiry here, and the whole node document's time facts — names its **UTC offset**: the pages render local time and stay silent about the zone, which is right for a screen somebody is standing in front of, and wrong for a document read in another office. The page renders the rich preview through the same hardened Markdown renderer as every other surface. **Copy Markdown** writes `text/plain`; **Copy Rich HTML** writes both `text/html` and the Markdown as `text/plain`, falling back honestly to plain/manual selection when clipboard access is unavailable — the buttons are one partial (`_copy_controls.html`) shared with the leaf detail page, so the pair is named and ordered the same in both places, and the label names the clipboard member rather than claiming RTF. An all-OK tree gets an empty state rather than an empty clipboard action. |
 | `/links` | GET | The **shared toolbox**: this deployment's curated links (§7, [ADR-0030](adr/0030-curated-links.md)), one flat level of groups flowed into columns, each entry a mark and a title in the configured order. Icons resolve through the search path; a name nothing defines falls through to the entry's own origin favicon and then to a neutral glyph. Structural problems in the file are shown on the page — the person who maintains it is the one looking. A **client-side filter** sits above the columns and narrows by entry and group title. The configuration is re-read only when it changed, so an edit needs no restart. Opening the page is also what **triggers a reachability pass** (§7) when the newest answer is older than the configured interval — on a daemon thread, so the render never waits on the network. |
 | `/links/check` | POST | **Check now**: probes the links page's targets and redirects back to it, the return path validated by `_safe_next`. Unlike an open this one **waits**, under a deadline, joining the pass already running rather than starting a second — whatever has not answered by then keeps its previous verdict and age while the pass finishes behind the response, and the page says a pass is still going. A forced pass has a minimum gap, which is the whole of the abuse story; open to every logged-in viewer, not only an admin, because whoever maintains the file is not necessarily one (§7, [ADR-0030](adr/0030-curated-links.md)). |
 | `/links/icon/<variant>/<name>` | GET | One resolved icon, for the background `variant` names (`on-light` / `on-dark`). Serves every rung of the search path that holds bytes — the deployment's own file, a registered pack's package data, the built-in pack — so the page has one URL shape for all of them; a **remote** icon is 404 here and is emitted as its own URL rather than proxied. The name is a registry key and never builds a path. Auth-gated, `private` cache with an ETag (§7, [ADR-0030](adr/0030-curated-links.md)). |
 | `/user/avatar` | GET | The signed-in user's configured avatar, if any. Takes no username or path: the session selects a startup-resolved bare name inside the winning users aspect's `avatars/` sandbox, so the route cannot enumerate accounts or construct a filesystem path. Auth-gated, private five-minute cache with an ETag; a removed file falls back to the packaged neutral avatar ([ADR-0045](adr/0045-user-avatars.md)). |
 | `/ext/<package>/<member>` | GET | One registered **extension asset** — a `.css` or `.js` file a dependent package ships for the slot it fills (§6.1, [ADR-0037](adr/0037-extension-static-assets.md)). Read through `importlib.resources` and looked up in the registry, so neither argument ever builds a path; the URL carries a content hash and the response is immutable. Login-gated like every other surface, and the kiosk layout loads none of it. |
-| `/csp-report` | POST | Where a browser posts a **Content-Security-Policy violation**. Each report is one `WARNING` log line — the violated directive, the document, the blocked URI, the source and line — and nothing is stored, which is what keeps the policy clear of the persistence decision. **No login gate**, necessarily: a violation on the login page has no session, and a report the browser cannot deliver measures nothing. One of two such routes, with `/health` above. It is bounded instead — an oversized body is refused unread and each reported field is truncated before it reaches the log, because a blocked URI is whatever the page tried to load (§5.4, [ADR-0048](adr/0048-an-assembled-content-security-policy.md)). |
+| `/csp-report` | POST | Where a browser posts a **Content-Security-Policy violation**. Each report is one `WARNING` log line — the violated directive, the document, the blocked URI, the source and line — and nothing is stored, which is what keeps the policy clear of the persistence decision. **No login gate**, necessarily: a violation on the login page has no session, and a report the browser cannot deliver measures nothing. One of three such routes, with `/health` and `/ready` below. It is bounded instead — an oversized body is refused unread and each reported field is truncated before it reaches the log, because a blocked URI is whatever the page tried to load (§5.4, [ADR-0048](adr/0048-an-assembled-content-security-policy.md)). |
 | `/health` | GET | **Liveness for a machine**, and the second route with no login gate ([ADR-0066](adr/0066-health-answers-liveness-and-says-almost-nothing.md)). `200` while this process serves, *whatever the engine is doing* — a load balancer that pulled the instance out of service over a failed check config would remove the very page whose banner explains it. The engine is reported instead: `{"status": "ok", "engine": "running" | "disabled" | "failed"}`, a closed vocabulary in which a deliberate `LITTLE_SISTER_ENGINE=0` (`disabled`) is not the same word as a configuration this instance could not load (`failed`). It says nothing else, and that is the bound an ungated route pays for: not the failure reason (a `CheckError` names config files; the banner carries it behind the login), not the version (`/about` is auth-gated for that reason), not the configuration. Not part of the JSON API and not in `api/openapi.yaml`. `no-store`. |
+| `/ready` | GET | **Readiness for a machine**, and the third route with no login gate ([ADR-0073](adr/0073-a-readiness-answer-beside-health.md)). `200 {"status": "ready"}` once an identity door is registered, the machine's trust store holds CA certificates and the engine has run every configured check once; `503 {"status": "not ready", "waiting_for": [...]}` until then, from the closed vocabulary `doors` / `trust` / `first-pass` and nothing else — three words that name no path, count, version or configuration and answer the one question the caller of an unready instance cannot answer itself, *wait or roll back*. It **latches**: the three are startup facts, so this route goes `503` to `200` once and never back, which is what keeps it from withdrawing a serving instance and removing the page whose banner explains the failure. An engine switched off with `LITTLE_SISTER_ENGINE=0` has no pass to wait for and is ready; one that could not load its configuration never is. Which of the two routes a load balancer aims at is the deployment's choice — `/ready` behind several instances, `/health` behind one. Not part of the JSON API and not in `api/openapi.yaml`. `no-store`. |
 | `/favicon.ico` | GET | Redirect to the static favicon. |
 
 Jinja filters back the views: `status_slug` (a CSS class suffix per code),
@@ -991,7 +1343,7 @@ filter logic is `_filter_snapshot` (drops nodes whose effective code is hidden).
   ([ADR-0068](adr/0068-the-login-gate-refuses-by-default.md)). Two lists say which —
   `OPEN_ENDPOINTS`, which answer without an identity at all (`/login`,
   `/login/<door>`, `/auth/callback/<door>`, `/logout`, `static`, `/`,
-  `/favicon.ico`, `/csp-report`, `/health`), and
+  `/favicon.ico`, `/csp-report`, `/health`, `/ready`), and
   `SELF_AUTHENTICATING_ENDPOINTS`, which is `/status` alone because it negotiates
   between a session and a bearer token and a gate in front of it would redirect an API
   client to a login form. Everything else is gated, including a route added tomorrow.
@@ -1031,7 +1383,11 @@ filter logic is `_filter_snapshot` (drops nodes whose effective code is hidden).
   naming the line to add, on an instance that serves `/health` and answers `401`
   everywhere gated — refusing to start would take a monitoring application down for a
   mistake it can describe, and would refuse the more usable of the two, since doors
-  without a default still admit anybody who knows `/login/<door>`. **A default door can
+  without a default still admit anybody who knows `/login/<door>`. **No door at all is
+  also the one of the two that `/ready` answers for** (§4.9,
+  [ADR-0073](adr/0073-a-readiness-answer-beside-health.md)): an instance nobody can
+  sign in to never becomes ready, while doors without a default are an instance anybody
+  who knows the address can enter and readiness stays silent about them. **A default door can
   also stop being there**, which is nobody's omission — a credential that fails to
   resolve closes its own door — so `challenge()` sends an unidentified request to
   `/login` where the installation asked for the chooser and any door is registered
@@ -1049,7 +1405,7 @@ filter logic is `_filter_snapshot` (drops nodes whose effective code is hidden).
 - **`/login` may offer the doors instead of going to the default one.**
   `identity.choose_at_login()`, written in the same import-before-app block, makes that
   address render `identity.door_chooser()` — one link per **enterable** door, the
-  default first, labelled. While there is a door to ask, `challenge()` is untouched, and
+  default first, labeled. While there is a door to ask, `challenge()` is untouched, and
   that is the point: an unidentified request still goes wherever the provider sends it,
   so a live SSO session still arrives logged in having seen no page, while the address
   somebody *types* becomes a page **we** serve and therefore one that still answers when
@@ -1324,12 +1680,12 @@ raises rather than rendering blank):
   screen is precisely where a frozen one must announce itself), and **exit**, which
   is not a mode switch but a POST writing `default_layout` back to the presentation
   cookie.
-- `about.html` — the identity page, built as **one hero** and centred in the
+- `about.html` — the identity page, built as **one hero** and centered in the
   window: the gaze, the wordmark and the version, with the terms she watches in
   orbit **behind the eyes** on two faint rings wider than the reading column, and a line at a time underneath — a couple of clauses, an
   observation, then the nine-line ending, after which it stops. The identity is
   told once here rather than three times (the bar, a block, and an animation with
-  an eye of its own). Colour carries one meaning each: **green is seen** — spent
+  an eye of its own). Color carries one meaning each: **green is seen** — spent
   only on the term the eyes are on and on the phrase in the story that term names
   (`data-topic`, paired by `static/js/watch.js`) — **pink is her**, and everything
   at rest is muted. Monospace is for the orbiting **signals** only; a sentence is
@@ -1503,9 +1859,12 @@ raises rather than rendering blank):
   auto-fill grid is the no-JavaScript fallback, and a narrow viewport resolves to one
   track without horizontal overflow ([ADR-0056](adr/0056-stable-useful-dashboard-flow.md)). The engine's own
   **heartbeat** (`/little-sister`,
-  ADR-0005) is lifted out of the grid into a compact **status-strip pill** at the top
+  ADR-0005) — a branch with a child per contributor
+  ([ADR-0076](adr/0076-the-instance-node-is-a-branch.md)) — is lifted out of the
+  grid with its children into a compact **status-strip pill** at the top
   (fit-content — a side note under the "updated …" line, not a page-wide
-  banner); it renders inside the polled fragment, so it
+  banner) that wears the branch's roll-up and links to `/status/little-sister`,
+  where the children are the page; it renders inside the polled fragment, so it
   refreshes with the grid and dims with it under a sustained outage — and a stalled
   scheduler shows it **vivid** (its self-alarm), not dimmed; the engine seeds a
   default `about` so the pill's hover card explains the heartbeat out of the
@@ -1678,7 +2037,7 @@ decides where a deployment's action belongs
   reasons are individually addressable members. A provider receives **the names it
   declares** — or all of them if it declares `**kwargs` — so a context that grows
   never costs a filler written against an earlier one its chip
-  ([ADR-0034](adr/0034-template-slots-for-dependent-packages.md), amended). The
+  ([ADR-0034](adr/0034-template-slots-for-dependent-packages.md)). The
   library's own **copy chip** fills this slot: a link to
   `/copy/<path>?reason=<slug>`, on member lines only, since prose has one thing to
   hand over and it is the node.
@@ -1900,7 +2259,18 @@ icon registry keeps its built-in pack. `/system` marks each filler *built-in* or
   plan and keeps every card at one ordinary track, the no-JavaScript grid) and
   the **failure retry** — `retry_interval` /
   `retry_attempts` (default off / 2; [ADR-0033](adr/0033-budgeted-failure-retry.md),
-  §4.6), both overridable per check — loaded once into `config.py`'s `Config`
+  §4.6), both overridable per check — `state_interval` (default 60, the seconds
+  between writes of the kept state files, §4.8), the engine's three sizing numbers —
+  `max_workers` (default 8, the worker ceiling and what declared costs are summed
+  against), `entry_limit` (default 100,000) and `memory_share` (default 0.5, a
+  fraction in `(0, 1]`), whose defaults are the constants in `limits.py` beside the
+  measurements that read them ([ADR-0075](adr/0075-a-check-declares-what-it-costs.md),
+  §4.6) — and `instance` (default the
+  hostname: what this instance is called, on `/system` and in whatever a package
+  writes down about the process — [ADR-0074](adr/0074-this-instance-has-a-name.md);
+  validated in `instance.py`, which appends the parts that make the mark unique, so
+  a name here is safe to choose and a bad one falls back with a warning) — loaded
+  once into `config.py`'s `Config`
   ([ADR-0006](adr/0006-config-file-and-timezones.md)). Displayed timestamps are
   stored as server-local and converted to that timezone by the `localtime` filter
   (`zoneinfo` + `tzdata`); the same zone interprets maintenance expiry input that has
@@ -1917,9 +2287,15 @@ that same sentence at WARN** (§4.6, [ADR-0005](adr/0005-dashboard-freshness-and
 — with zero checks the tree is only the heartbeat, so an OK there would roll up to an
 all-green root while nothing at all is watched.
 
-- **Maintenance** — admin maintenance pins (per node and per reason) persist to `var/maintenance.json`
-  (git-ignored runtime state, a fixed path), restored at startup; durable storage of
-  the rest of the tree is still deferred (§8, [ADR-0014](adr/0014-maintenance-persistence.md)).
+- **State** — `var/state/` (git-ignored runtime state, a fixed path) holds what a
+  restart keeps: the admin maintenance pins (per node and per reason) in
+  `maintenance.json`, written through, and the event log in `events.json`, written
+  every `state_interval` and at graceful shutdown; both restored at startup (§4.8,
+  [ADR-0071](adr/0071-what-a-restart-keeps-is-a-directory-of-files.md)). The tree
+  itself is rebuilt by the checks. Where a deployment registers a **keeper**, the
+  whole directory is mirrored to it on the same interval and restored from it before
+  anything reads — which is what carries this state across a redeployment onto a
+  fresh machine (§4.8).
 
 ---
 
@@ -1927,9 +2303,15 @@ all-green root while nothing at all is watched.
 
 Current gaps.
 
-- **Persistence** — durable storage/retention of the **tree and history** (the
-  in-memory log is bounded and lost on restart); only admin **maintenance** persists
-  so far, to a file (§7, [ADR-0014](adr/0014-maintenance-persistence.md)).
+- **A queryable store** — a history longer than the bounded event log, searched
+  rather than read whole, and retention as a decision rather than a deque. The log
+  itself survives a restart now (§4.8); what a store would add is a package's seam,
+  never a database in the core
+  ([ADR-0071](adr/0071-what-a-restart-keeps-is-a-directory-of-files.md)).
+- **A keeper to register.** The seam is built (§4.8) and the library ships no
+  implementation of it, which is the design rather than a gap — a store is a
+  package's business, and a local installation wants none. Out of the box, then,
+  nothing carries `var/state/` off the machine it is on.
 - **Filtering `/events`.** Every transition is now recorded, marked or not (§4.4), so
   a long maintenance window over a flapping check writes rows nobody wants first. The
   page shows all of them today. Hiding marked ones by default behind a toggle is a
@@ -1945,22 +2327,25 @@ Current gaps.
   script source, deciding what to do about the computed `style=` attributes, and one
   rule an extension's filler would have to follow — none of which is worth committing
   to before the reports say what a strict policy would actually have caught.
-- **Hashed passwords** (plaintext today).
 
 ---
 
 ## 9. Known limitations
 
 - A **hung check** ties up a pool worker until it returns (Python can't kill
-  threads); built-in checks enforce their own timeouts.
+  threads); built-in checks enforce their own timeouts. The beat says so once the
+  run has outlived its period (`engine.late.<path>`, §4.6), and names the checks
+  queued behind it when the pool is saturated (`engine.pool`).
 
 ---
 
 ## 10. Quality gates
 
-`hooks/pre-commit` runs `uv run ruff check`, `uv run mypy`, `uv run pytest -q` and
-blocks a commit on any failure (enable per clone with
-`git config core.hooksPath hooks`). mypy targets `src/`.
+`hooks/pre-commit` runs `uv run ruff check`, `shellcheck` over every tracked shell
+script, `uv run mypy` twice — on the pinned interpreter and with
+`--python-version 3.11`, the floor — and `uv run pytest`, and blocks a commit on any
+failure (enable per clone with `git config core.hooksPath hooks`). mypy targets
+`src/`.
 
 Test suites: `test_status.py` (the `Status` model + ADR-0039 roll-up),
 `test_tree.py` (the tree, events, history, maintenance + its persistence),
@@ -1994,8 +2379,8 @@ pins: the card pin control and the subtree page's maintenance card), `test_api.p
 `test_contrast.py` (the AA bar of ADR-0028, measured rather than eyeballed),
 `test_ui_fixtures.py` and `test_demo_check.py` (gate coverage for the two UI
 harnesses), and `test_docs_links.py`
-(every relative Markdown link resolves). The suite passes under
-Python 3.14 with ruff and mypy clean.
+(every relative Markdown link resolves). The suite passes on the pinned 3.14 with
+ruff and mypy clean, and once per release on a real 3.11.
 
 ---
 
@@ -2043,6 +2428,41 @@ is explicit. A tag promises to keep these stable:
   ([ADR-0070](adr/0070-the-unclaimed-file-report-runs-at-the-end-of-registration.md)).
   Resolving a root is silent, because in this family the first resolution *is* somebody's
   registration reading the aspect it has just declared.
+- **The self-report seam** — `little_sister.self_report`:
+  `register_contributor(name, callable)`, the callable answering a sequence of
+  `little_sister.reasons.Entry` lines, and the `<name>.<slug>` shape those lines are
+  addressed by in the flat view ([ADR-0072](adr/0072-the-instance-reports-on-itself.md)),
+  the `title`, `about` and `report` a registration may declare for its child of
+  `/little-sister`, the two records a contributor may keep its lines in, `Standing`
+  and `Held`, each writing the line and the log entry in one call (§4.8), and
+  `register_action(contributor, slug, label, handler)` for a button on that child
+  ([ADR-0076](adr/0076-the-instance-node-is-a-branch.md)). Registered in the same
+  import-before-app slot as the rest. What the *library's own* lines say is not part
+  of the contract; that a registered contributor's lines reach
+  `/little-sister/<name>` every tick under their own slugs, clear when it stops
+  returning them, and that its actions run admin-only from its child's page and
+  are each followed by a flush of the state layer, is.
+- **This instance's identity** — `little_sister.instance`: `this_instance()` and the
+  `Instance` it answers with, carrying `name`, `pid`, `started`, `tag` and the joined
+  `mark` ([ADR-0074](adr/0074-this-instance-has-a-name.md)). Resolved on the first
+  call and memoised, so a package may import this module before a configuration root
+  exists and still get one mark for the life of the process. Two things are
+  promised and they are the two a store depends on: **no two processes share a mark**,
+  and **one process's mark does not change while it runs**. What is *not* promised is
+  the shape — the mark is compared for equality and printed, never parsed, and the
+  parts may gain a sibling. A package that writes it into storage outliving the
+  process is why this is a contract at all.
+- **The keeper seam** — `little_sister.keeper`: `register_keeper(name, keeper,
+  replace=…)` and the three methods a keeper answers — `load(name) -> bytes | None`,
+  `save(name, data)`, `list()` — the file store that mirrors `var/state/` somewhere
+  durable ([ADR-0071](adr/0071-what-a-restart-keeps-is-a-directory-of-files.md) §5,
+  §4.8 here), and the three it may answer — `tick(interval_seconds) -> bool`,
+  `close()`, `changed_since_sync() -> Sequence[str]`
+  ([ADR-0077](adr/0077-authority-follows-the-lease.md)) — each looked for by name and
+  done without. One per instance, registered in the same import-before-app slot. The
+  *names and contents* of the files it carries are deliberately **not** promised: a
+  keeper moves bytes and never reads them, which is what lets the directory grow a
+  file without a keeper release.
 - **Check-type registry** — `CHECK_TYPES` in `little_sister.checks` (§4.5). A
   deployment adds its own check *types* by importing them before
   `little_sister.app:app` — whether they are modules in its own tree or **installed
@@ -2066,18 +2486,26 @@ is explicit. A tag promises to keep these stable:
       code  coerce_code  config_markdown  parse_duration  parse_secret_refs  plain
       CHECKS_ASPECT  checks_dirs  load_checks
   little_sister.reasons
-      Entry  MAX_SLUG_LENGTH  ReasonError  derived_slug  normalize  slug
+      Entry  MAX_SLUG_LENGTH  ReasonError  derived_slug  normalize  plain  slug
   little_sister.status
       StatusCode  join_path
   little_sister.values
       flag  number  real  rows  strict_flag  text
   little_sister.spans
-      coarse_span  format_duration  format_span
+      coarse_span  format_duration  format_span  local_time
   little_sister.transport
       Deadline  DeadlineExceeded  Fault  RemoteError  ask
   little_sister.fetch
       Response  fault_for  fetch  retry_after
   ```
+
+  Two **optional declarations** on `Check` join that surface additively
+  ([ADR-0075](adr/0075-a-check-declares-what-it-costs.md)): `expected_cost()` and
+  `expected_entries()`, what one run is expected to occupy in worker seconds and what
+  the check expects to hold in reason entries, each computed by the type from its own
+  configuration and each `None` by default. What is promised is that a type that
+  overrides them is summed at startup against the worker ceiling and the entry limit,
+  and that a type that does not is unaffected — never that a particular sum refuses.
 
   `little_sister.spans` is on the list because a check writes a duration into a
   reason line — *"the backup took 2h 7m"* — and one that formatted its own would
@@ -2090,6 +2518,11 @@ is explicit. A tag promises to keep these stable:
   question the other two do not — how a **configured** interval is written back,
   in the units somebody typed it in (`900` is `15m`) — which is why the copy
   document can state a check's frequency in the same words as the page.
+  `local_time` is the one **instant** beside the three spans: a moment in the
+  `timezone` and `time_format` of `settings.yaml`, the rendering every page uses
+  (the application's own `_format_local` delegates to it), promised so that a
+  plugin writing *when* into a line — *the lease lapsed at …* — says it in the
+  page's words rather than in `GMT` beside the page's zone.
 
   `little_sister.transport` is on the list because a check that reads a remote service
   has to answer four things before it can report anything — how long one request may
@@ -2161,7 +2594,7 @@ is explicit. A tag promises to keep these stable:
   `read(n)` blocks until it has all *n* bytes, so the first call would not return until
   the trickle finished and the clock would be consulted only after the overrun it was
   there to prevent. That is not a detail: it is the difference between the bound working
-  and merely being described (ADR-0058, amended 2026-08-16).
+  and merely being described (ADR-0058).
 
   Three limits of it, stated rather than implied. The clock bites **only when a deadline
   is given**. A caller passing `read_body=False` has no body read to bound, so a deadline
@@ -2205,10 +2638,10 @@ is explicit. A tag promises to keep these stable:
   import order decide whose code answers for somebody else's configuration
   ([ADR-0051](adr/0051-what-startup-refuses.md)). `/system` lists every registered
   type with the package and version that answers for it, and beside it every
-  registering package once — a check type is only one of four seams a package can
-  arrive through (a slot filler, an asset, a configuration aspect are the others),
-  and the release that answers for it belongs to the installation rather than to
-  the seam. `origins.py` is the single lookup both read, and `paths.py` the single
+  registering package once — a check type is only one of the seams a package can
+  arrive through (a slot filler, an asset, a configuration aspect, a secret
+  resolver, an identity provider are the others), and the release that answers for
+  it belongs to the installation rather than to the seam. `origins.py` is the single lookup both read, and `paths.py` the single
   rule both print a loaded-from path through (§5.1).
 
   What each name *does* is documented where it is designed — `CheckResult`'s fields

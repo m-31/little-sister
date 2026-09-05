@@ -27,9 +27,10 @@ from __future__ import annotations
 from flask import abort, redirect, render_template, request
 from flask.typing import ResponseReturnValue
 
-from little_sister import identity
+from little_sister import identity, self_report
 from little_sister.identity import Identity
 from little_sister.logger import logger
+from little_sister.reasons import plain
 from little_sister.secrets import (
     SecretError,
     looks_like_reference,
@@ -154,14 +155,20 @@ class SystemAdmin:
                 and same_secret(password, self._password)):
             identity.sign_in(Identity(name=LOGIN_NAME, firstname=DISPLAY_NAME,
                                       admin=True))
-            logger.warning(
-                "System-admin login: the local %r account signed in at "
-                "%s/%s. This account exists for when the identity provider "
-                "cannot answer — close the session when the incident is over.",
-                LOGIN_NAME, identity.LOGIN_PATH, DOOR_NAME)
+            # Held rather than standing: a fact for the window, not a condition —
+            # and WARN, because this account exists for an incident.
+            self_report.security.see(
+                "system-admin.used",
+                plain(f"the local {LOGIN_NAME!r} account signed in at "
+                      f"{identity.LOGIN_PATH}/{DOOR_NAME}. This account exists for "
+                      f"when the identity provider cannot answer — close the "
+                      f"session when the incident is over"))
             return redirect('/status')
-        logger.warning("Failed system-admin login attempt for username %r.",
-                       username)
+        # WARN for the log entry; the line's own grade is the rate's
+        # (`security_lines`), and one failed login is a fact there.
+        self_report.security.see(
+            self_report.FAILED_LOGIN,
+            plain(f"for {username!r} at the system-admin door"))
         return render_template('login.html', door_note=_NOTE,
                                error='Invalid username or password')
 
@@ -233,10 +240,11 @@ def use_system_admin(*, reference: str = "", password: str = "") -> None:
     except SecretError as error:
         _register(SystemAdmin("", keyword=BY_REFERENCE, reference=reference,
                               problem=str(error)))
-        logger.warning(
-            "System-admin password %r did not resolve (%s); that door is shut "
-            "and the application keeps serving. /system says so.",
-            reference, error)
+        self_report.startup.note(
+            "system-admin",
+            plain(f"the system-admin password {reference!r} did not resolve "
+                  f"({error}); that door is shut and the application keeps "
+                  f"serving — /system says so too"))
         return
     _register(SystemAdmin(value, keyword=BY_REFERENCE, reference=reference))
     logger.info("System-admin account configured from %r.", reference)

@@ -1,7 +1,7 @@
 # ADR-0013 — Surface check config as node display metadata
 
 - **Status:** Accepted
-- **Date:** 2026-06-25
+- **Date:** 2026-06-27
 - **Related:** [ADR-0007](0007-check-result-branches.md) (recursive `CheckResult` —
   refined here), [ADR-0002](0002-rlock-snapshot-synchronization.md) (the tree owns
   state), [ADR-0008](0008-json-output-api.md) (JSON envelope, unchanged here).

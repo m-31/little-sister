@@ -1,7 +1,7 @@
 # ADR-0018 — Markdown rendering for node text
 
 - **Status:** Accepted
-- **Date:** 2026-08-23 (accepted 2026-06-26)
+- **Date:** 2026-08-23 (accepted 2026-06-27)
 - **Related:** [ADR-0012](0012-node-metadata.md) (`about`), [ADR-0013](0013-check-config-on-node.md)
   (check `config`), [ADR-0017](0017-node-title.md) (`title`) — the fields rendered
   here; [ADR-0007](0007-check-result-branches.md) (`CheckResult.reason`, where the
@@ -57,7 +57,7 @@ filters; render **all four fields**, and give checks helpers to keep reason cont
    Markdown for now.
 
 ### Maintenance explanations
-*(decided 2026-08-03; the rendered-field set grows, nothing above is withdrawn)*
+*(decided 2026-08-02; the rendered-field set grows, nothing above is withdrawn)*
 
 An admin-authored **maintenance explanation** joins the rendered fields. It uses the
 same block/inline filters and the same trust boundary; raw HTML is still escaped, and
@@ -78,7 +78,7 @@ the persisted/JSON value is still raw Markdown.
    involved.
 
 ### Bare web URLs
-*(decided 2026-08-03; link recognition grows, nothing above is withdrawn)*
+*(decided 2026-08-02; link recognition grows, nothing above is withdrawn)*
 
 Fully qualified bare `http://` and `https://` URLs are linkified through
 markdown-it-py's own link rule. The scope is deliberately narrow: bare domains, email

@@ -23,7 +23,7 @@
 - **Status:** Superseded by [ADR-0039](0039-status-rollup-semantics.md),
   [ADR-0040](0040-what-a-failing-check-becomes.md) and
   [ADR-0041](0041-maintenance-is-a-contribution-rule.md)
-- **Date:** 2026-06-17
+- **Date:** 2026-06-20
 - **Related:** [ADR-0001](0001-in-process-threaded-engine.md) (engine),
   [ADR-0002](0002-rlock-snapshot-synchronization.md) (synchronization). Fixes the
   bug in [`../architecture.md`](../architecture.md) §4.3.

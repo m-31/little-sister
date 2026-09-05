@@ -1,13 +1,15 @@
 # ADR-0014 — Persist maintenance to a file, with auto-expiry
 
 - **Status:** Accepted
-- **Date:** 2026-08-23 (accepted 2026-06-25)
+- **Date:** 2026-09-05 (accepted 2026-06-27)
 - **Related:** [ADR-0001](0001-in-process-threaded-engine.md) (one process, in
   memory), [ADR-0002](0002-rlock-snapshot-synchronization.md) (the tree owns state),
   [ADR-0003](0003-config-and-secrets-via-env-file.md) (config / secrets in files),
-  [ADR-0006](0006-config-file-and-timezones.md) (`config.yaml`),
+  [ADR-0006](0006-config-file-and-timezones.md) (`settings.yaml`),
   [ADR-0015](0015-check-discovery-union.md) (the static check set the reaper keys
-  off), [ADR-0008](0008-json-output-api.md) (JSON envelope, unchanged here).
+  off), [ADR-0008](0008-json-output-api.md) (JSON envelope, unchanged here),
+  [ADR-0071](0071-what-a-restart-keeps-is-a-directory-of-files.md) (the state layer
+  this file belongs to, and the path it moved to).
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -28,20 +30,27 @@ entry with an expiry.
    ([ADR-0004](0004-status-aggregation-semantics.md)) and the `upsert` guard.
    `set_maintenance` / `clear_maintenance` are the single choke points that keep the
    two in sync.
-2. **Write-through JSON at `var/maintenance.json`.** Every set / clear / expiry /
+2. **Write-through JSON at `var/state/maintenance.json`.** Every set / clear / expiry /
    reap rewrites the whole file **atomically** (temp + `os.replace`); the file is
    exactly the side-table serialized. It is runtime state the app writes (not
    hand-authored config), so the path is **fixed** (not env-overridable) and
-   git-ignored. A failed write logs and keeps the in-memory state for the session —
-   there is **no flush-on-shutdown**, so a crash right after a set never loses it.
+   git-ignored. The file is one of the state layer's
+   ([ADR-0071](0071-what-a-restart-keeps-is-a-directory-of-files.md)), which does the
+   writing and holds every state file to this discipline; the move out of `var/` is a
+   clean break in the spirit of decision 11 — the old path is not read, and a file
+   still sitting there is named once at startup. A failed write keeps the in-memory
+   state for the session — there is **no flush-on-shutdown**, so a crash right after a
+   set never loses it — and it is a line on `/little-sister` under a stable slug, as
+   is a file that could not be read at startup: what this decision left to the log,
+   the layer says where somebody looks (ADR-0071 §4).
 3. **Restore post-fork, before the engine starts** (single worker,
    [ADR-0001](0001-in-process-threaded-engine.md), so once). Replay each non-expired
    entry via `set_maintenance` — which auto-creates the node, so replay before any
    check has run is safe (`upsert` respects the flag). Already-expired entries are
    dropped and the file rewritten once.
 4. **Auto-expiry.** Setting maintenance applies a **default duration** — one week,
-   configurable in `config.yaml` ([ADR-0006](0006-config-file-and-timezones.md)) —
-   unless an explicit duration is given (`parse_duration`: `2h`, `3d`, …). **No
+   configurable in `settings.yaml` ([ADR-0006](0006-config-file-and-timezones.md)) —
+   unless an explicit duration is given (`parse_duration`: `2h`, `3d`, `2w`, …). **No
    indefinite.** The scheduler ([ADR-0001](0001-in-process-threaded-engine.md))
    sweeps each tick and clears entries past `expires_at` via `clear_maintenance` — a
    real `MAINTENANCE → UNDEFINED` transition and event — and the next check refills
@@ -152,8 +161,11 @@ precise, nothing above is withdrawn)*
 Three defects with one shape: a write that quietly did something other than what was
 asked.
 
-13. **A window must be a positive, bounded number of seconds** — at least one, at most
-    a year. §4 said *finite*, and finite was not enough. `-1d` and `0` parse cleanly,
+13. **A window must be positive, bounded, and long enough to silence a run.** At least
+    one second and at most a year — and, because a window that ends before the check
+    it covers runs again silences no run of it, at least the longest `frequency`
+    among the checks that **cover** the pin, *covers* read exactly as §5 reads it.
+    §4 said *finite*, and finite was not enough. `-1d` and `0` parse cleanly,
     land `expires_at` in the past, and the very next sweep drops the entry — so the
     reason text and both authorships are gone within a tick, behind a redirect that
     looked like a success. That is exactly the lost-explanation failure the
@@ -161,14 +173,21 @@ asked.
     far end, `99999999d` and `1e20` parse and then raise `OverflowError` out of the
     date arithmetic, and `inf` raises it inside the duration parser — which is not a
     `CheckError`, so catching that alone turned a typo into a 500. A year is far past
-    any real window and keeps the arithmetic nowhere near the overflow.
+    any real window and keeps the arithmetic nowhere near the overflow. The floor a
+    frequency sets is refused the same way and named: the form says which check and
+    what interval the window is held to, and an equal window passes, because one run
+    lands inside it. Where **no** check covers the path, or the app cannot see the
+    check set, the one-second floor is the whole of it. A pin that expired before its
+    check ran again was the same defect in another coat: the stale reading came back,
+    and the write had quietly done less than it said.
 14. **Out of range is refused, not clamped.** The form comes back with the admin's
     words intact and a sentence saying what was wrong — the same page and the same
     posture as a refused compare-and-set, because the situation is the same: nothing
     was written, and the words are still theirs. An admin who typed `-1d` and silently
     got a week has learned nothing. The one value that still falls back is the
     deployment's **configured default**: a `settings.yaml` typo must not make the form
-    unusable.
+    unusable. A blank field therefore keeps that exemption whole — the default is
+    never refused, and is held to no floor of §13's.
 15. **A blank reason on an edit keeps the stored text.** Blank means *"I did not touch
     this field"*, so an edit that only moves the window keeps the explanation. On a
     **new** pin there is nothing to keep and the literal `maintenance` stays the honest
@@ -176,7 +195,7 @@ asked.
     admin left alone must not change anything.
 
 ### Read first, edit on intent
-*(decided 2026-08-03; decision §6's in-place edit grows to entry pins and the form's
+*(decided 2026-08-02; decision §6's in-place edit grows to entry pins and the form's
 presentation changes, nothing above is withdrawn)*
 
 A maintenance explanation is something viewers read far more often than an admin
@@ -202,7 +221,7 @@ trying to reach. The two depths now follow one interaction.
     no migrator or compatibility reader — rather than making this UI pass a migration.
 
 ### Naming the expiry instead of calculating a duration
-*(decided 2026-08-03; decision §4's explicit input widens, and §13's bound applies to
+*(decided 2026-08-02; decision §4's explicit input widens, and §13's bound applies to
 the resolved result; nothing persisted changes)*
 
 An admin often knows *until when* a maintenance lasts — the end of a change window or
@@ -211,7 +230,11 @@ The form now accepts that boundary directly, with a small grammar rather than a
 natural-language parser whose meaning changes by locale or library version.
 
 20. **One field accepts duration or expiry.** Blank still means the configured default
-    duration. Unit-suffixed durations (`17s`, `90m`, `2h`, `3d`) keep their meaning.
+    duration. Unit-suffixed durations (`17s`, `90m`, `2h`, `3d`, `2w` — a `w` is seven
+    days) keep their meaning, and the suffix is **case-sensitive**: `6M` is refused by
+    name rather than read as six *minutes*, because a month is not a number of seconds
+    and a calendar belongs to the windows work
+    ([ADR-0033](0033-budgeted-failure-retry.md)).
     The posted field remains named `duration`, but a digits-only value is now reserved
     for a day of the month: seconds must carry `s`. This compatibility cut is confined
     to the maintenance form; the shared check-configuration duration parser is
@@ -227,9 +250,10 @@ natural-language parser whose meaning changes by locale or library version.
 22. **Resolve once, in the operator's timezone.** The route captures one `now` for
     parsing and bounds. Unzoned calendar input uses `settings.yaml`'s timezone; `Z` or
     a numeric UTC offset wins when present. A DST hole or fold is refused and asks for
-    an explicit offset. After resolution, the expiry must be at least one second and
-    at most 365 days away, exactly as §13 requires, and is converted to the existing
-    naive server-local timestamp before the tree sees it.
+    an explicit offset. After resolution, the expiry must clear every floor §13 sets —
+    one second, and the covering checks' longest `frequency` — and be at most 365 days
+    away, and is converted to the existing naive server-local timestamp before the
+    tree sees it.
 23. **The grammar is visible at the field.** Every shared maintenance editor labels
     the control *Duration or expiry*, states the configured timezone and carries a
     click-opened, keyboard-native format table. It is closed by default and never
@@ -237,7 +261,7 @@ natural-language parser whose meaning changes by locale or library version.
     compare-and-set token unchanged.
 
 ### Giving a bare weekday a time
-*(decided 2026-08-03; additive refinement of decision 21)*
+*(decided 2026-08-02; additive refinement of decision 21)*
 
 24. **A bare weekday means noon.** `Fri`, `Friday` and case variants resolve to the
     next Friday at 12:00 in the configured timezone. When today already has that
@@ -258,8 +282,10 @@ natural-language parser whose meaning changes by locale or library version.
   optional duration; the detail page shows "set by X, expires …".
 - Crash-safe: write-through at mutation time means a `kill -9` never loses a just-set
   pin.
-- The persisted record is a small contract; the durable store subsumes this
-  file — the side-table is the seam.
+- The persisted record is a small contract, and it is the durable state itself: what
+  a database was going to subsume is a store per record behind a package's seam
+  ([ADR-0071](0071-what-a-restart-keeps-is-a-directory-of-files.md) §6), never a
+  service in the core.
 - The JSON envelope ([ADR-0008](0008-json-output-api.md)) is **not** changed here;
   whether `maintenance_expires_at` joins it is the API-envelope round's decision.
 - *(2026-08-02)* **The token is designed once and widens later.** Per-entry pins key the

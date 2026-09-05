@@ -24,9 +24,11 @@ from little_sister.config_dir import forget_aspects
 from little_sister.csp import forget_contributions
 from little_sister.icons import forget_packs
 from little_sister.identity import forget_doors
+from little_sister.keeper import forget_keeper
 from little_sister.link_probe import forget_probe_results
 from little_sister.links import forget_cached_links
 from little_sister.local_login import use_local
+from little_sister.self_report import forget_contributors
 from little_sister.slots import forget_fillers
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -59,7 +61,12 @@ def _forget_process_caches():
     package registers into (ADR-0048). The reachability
     answers (:func:`little_sister.link_probe.forget_probe_results`) are the same
     story once more: a verdict one test seeded is a verdict the next test's page
-    would render. The identity doors
+    would render, and so are the self-report contributors
+    (:func:`little_sister.self_report.forget_contributors`), whose lines one test
+    registers would otherwise ride every later test's heartbeat; and the keeper
+    (:func:`little_sister.keeper.forget_keeper`), the one seam whose leftover
+    registration would have a later test's state layer writing into somebody
+    else's store. The identity doors
     (:func:`little_sister.identity.forget_doors`) are the sharpest case of it: a
     door one test registers decides *who every later test is*, and a default one
     makes ``/login`` somebody else's page (ADR-0069). They are also the one registry
@@ -77,4 +84,6 @@ def _forget_process_caches():
     forget_contributions()
     forget_probe_results()
     forget_doors()
+    forget_contributors()
+    forget_keeper()
     use_local()

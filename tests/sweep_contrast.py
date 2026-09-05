@@ -3,7 +3,7 @@
 Mode 4 of the UI harness. Runs a real server, serves the vendored Bootstrap CSS
 and JS from disk (the dropdown needs the JS to open at all), and for every theme
 opens the gear menu, walks the `/links` rows and the **coded reason lines** of a
-seeded tree, reading each row's *computed* colour and the background it actually
+seeded tree, reading each row's *computed* color and the background it actually
 lands on — compositing every translucent layer, folding stacked opacity — then
 reports the WCAG ratio.
 

@@ -6,7 +6,8 @@ openapi: 3.1.0
 # URL versioning (#115), Problem JSON errors (#176), snake_case properties (#118),
 # UPPER_SNAKE_CASE enums (#240), RFC 3339 UTC date-times (#238), required meta (#218).
 #
-# Field provenance (maintainers — ADRs in docs/adr/): node addressing ADR-0016;
+# Field provenance (maintainers — little-sister's ADRs, in its docs/adr/, also where a
+# client keeps a copy of this file): node addressing ADR-0016;
 # about + leaf description ADR-0012; title ADR-0017; config ADR-0013; Markdown text
 # fields ADR-0018; maintenance + maintenance_details ADR-0014; roll-up & staleness
 # ADR-0039 / ADR-0005; observation timestamp ADR-0027; bearer token ADR-0003. Consumer-facing `description:` text is

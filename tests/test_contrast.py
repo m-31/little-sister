@@ -1,7 +1,7 @@
 """The settings menu and the dead verdict hold AA in every gated theme.
 
 ADR-0028 puts the accessibility bar above any picked swatch and says status
-colour is verified by *measurement*, not by class presence. The faithful
+color is verified by *measurement*, not by class presence. The faithful
 measurement is a browser one — that is Mode 4 of the UI harness,
 ``tests/sweep_contrast.py`` — but a harness that needs Playwright cannot be the
 thing that stops a regression landing, and one did land: the logout link kept
@@ -26,7 +26,7 @@ The logout link was a surface nobody had written down — the blind spot the
 paragraph above already names. The silenced-reason line was not: it was a *listed
 ink that a later declaration in its own rule dimmed*. This module folds alpha — it
 does it for the hover wash — so it knew how; it simply never looked for ``opacity``
-on a rule that sets a colour. The token was picked and measured undimmed at 7.6:1,
+on a rule that sets a color. The token was picked and measured undimmed at 7.6:1,
 ``opacity: 0.75`` composited it to 4.2, and nothing re-measured the result. So: a
 rule may not dim an ink it also sets, and where an opacity applies inside a block,
 the number measured here is the composite.
@@ -52,7 +52,7 @@ DROPDOWN = {"light": "#ffffff", "dark": "#212529"}
 # And the same for a row that takes `color: inherit`: what it inherits is
 # Bootstrap's `--bs-dropdown-color`, not our `--ls-ink`. The two happen to agree
 # on a light canvas and do not on a dark one (#dee2e6 against our #e9edf1), so a
-# row measured against `--ls-ink` would be measuring a colour nobody paints.
+# row measured against `--ls-ink` would be measuring a color nobody paints.
 DROPDOWN_INK = {"light": "#212529", "dark": "#dee2e6"}
 
 # (label, the token block to read, which dropdown surface). `auto` is the dark
@@ -86,7 +86,7 @@ MENU_ROWS = (
 # The links page's own rows. These sit on **our** canvas rather than on a surface
 # Bootstrap paints, which is what lets them be measured from the tokens alone. The
 # button is the interesting one: it wears `btn btn-sm` for the shape and takes its
-# ink from us precisely because `btn-outline-secondary` paints one grey on every
+# ink from us precisely because `btn-outline-secondary` paints one gray on every
 # canvas — 3.76:1 on the dark one, the logout link's mistake a second time.
 # (row, its ink token, the token for the surface it lands on.)
 PAGE_ROWS = (
@@ -102,7 +102,7 @@ PAGE_ROWS = (
 
 # The /about hero paints no surface of its own — it sits on the page canvas in
 # every theme, which is what settled the light themes. What it does own is a
-# **colour vocabulary**, and these are the two readings that carry meaning: a
+# **color vocabulary**, and these are the two readings that carry meaning: a
 # quiet signal (information, one step firmer than the furniture it rides) and a
 # term the eyes are on (seen, and the only green on the page). The signal ink is
 # a mix, so the weight is written down here as the sheet writes it.
@@ -178,7 +178,7 @@ def _tokens(blocks, selector):
 
 
 def _rgb(value):
-    """A hex colour as three 0–255 floats. Only hex reaches here by design."""
+    """A hex color as three 0–255 floats. Only hex reaches here by design."""
     value = value.strip().lstrip("#")
     if len(value) == 3:
         value = "".join(c * 2 for c in value)
@@ -199,7 +199,7 @@ def _luminance(rgb):
 
 
 def _ratio(ink, surface):
-    """The WCAG contrast ratio between two opaque colours."""
+    """The WCAG contrast ratio between two opaque colors."""
     light, dark = sorted((_luminance(ink), _luminance(surface)), reverse=True)
     return (light + 0.05) / (dark + 0.05)
 
@@ -235,9 +235,9 @@ class StylesheetTests(TestCase):
                          "color: var(--ls-danger-ink);")
 
     def test_the_check_now_button_paints_from_our_tokens(self):
-        # `btn btn-sm` for the shape, our ink for the colour: Bootstrap's outline
-        # secondary is one grey on every canvas, and the measurements above are
-        # fiction the moment this row takes its colour from it instead
+        # `btn btn-sm` for the shape, our ink for the color: Bootstrap's outline
+        # secondary is one gray on every canvas, and the measurements above are
+        # fiction the moment this row takes its color from it instead
         rules = _by_selector(self.blocks)
         for rule in (".ls-links__recheck .btn",
                      ".ls-links__recheck .btn:hover"):
@@ -248,7 +248,7 @@ class StylesheetTests(TestCase):
         # Sticky chrome now crosses the page as it scrolls. A translucent nav
         # token would composite against each card it passes and make every
         # contrast measurement above a moving target, so the surface itself is
-        # part of the contract now. Keep it an explicit opaque colour in every
+        # part of the contract now. Keep it an explicit opaque color in every
         # effective theme palette.
         for theme, selector, _ in THEMES:
             with self.subTest(theme=theme):

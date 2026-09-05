@@ -1,7 +1,7 @@
 # ADR-0049 — The check-authoring surface is contract, and the gate holds it
 
 - **Status:** Accepted
-- **Date:** 2026-08-23 (accepted 2026-08-08, decided while preparing the first check
+- **Date:** 2026-09-05 (accepted 2026-08-08, decided while preparing the first check
   types to move into repositories of their own)
 - **Related:** [ADR-0022](0022-generated-release-branch.md) (the tag a dependent
   pins — the thing a surface makes meaningful),
@@ -54,22 +54,26 @@ contract; it is a promise about the one name nobody's code writes against.
    the current layout and not something a dependent should have to know. The facade
    already existed for `Entry` ("so a check type imports its whole vocabulary from
    one place"); this makes it the rule and adds the names that were missing from it
-   (`register`, `coerce_code`, `config_markdown`, `parse_secret_refs`, and the
-   subnode-metadata helpers `parse_subnodes` / `resolve_text` / `expand_tokens`). The
+   (`register`, `coerce_code`, `config_markdown`, `parse_secret_refs`). The
    library's own built-in checks keep importing `.base` directly — they are imported
    *by* the facade, so it does not exist yet when they run. A public face the
    library's own modules cannot use is normal for a facade, and worth saying out loud
    once.
 
-   Two consequences of taking that seriously. The subnode-metadata helpers are
-   re-exported here rather than promised at `checks.metadata`: promising a module
-   path we had just declared *not* to be the promise would have left a plugin no
-   legal way to import the three names `implementing-checks.md` tells every branch
-   check to use. And `join_path` **is** promised, from `little_sister.status`, for
-   the same kind of reason — `owned_nodes` is a documented override, every branch
-   check in this repository builds its child paths with it, and a plugin left to
-   assemble paths by hand would re-derive [ADR-0016](0016-node-addressing.md)'s
-   normalization by guesswork.
+   Two consequences of taking that seriously. The subnode-metadata helpers
+   (`parse_subnodes` / `resolve_text` / `expand_tokens`) were re-exported through the
+   facade rather than promised at `checks.metadata`: promising a module path we had
+   just declared *not* to be the promise would have left a plugin no legal way to
+   import the three names `implementing-checks.md` then told every branch check to
+   use. They left the surface in **0.3.13**, when
+   [ADR-0025](0025-check-provided-subnode-metadata.md) made the `subnodes:` block a
+   declaration the library reads and left a check nothing to call — the breaking
+   change decision 5 asks a record and a version for, taken there, with the check API
+   epoch moving to **2**. And `join_path` **is** promised, from
+   `little_sister.status`, for the same kind of reason — `owned_nodes` is a
+   documented override, every branch check in this repository builds its child paths
+   with it, and a plugin left to assemble paths by hand would re-derive
+   [ADR-0016](0016-node-addressing.md)'s normalization by guesswork.
 
 3. **The gate holds the surface, in both directions.** `tests/test_public_surface.py`
    parses the block out of §11, imports every name in it (doc → code) and, for every

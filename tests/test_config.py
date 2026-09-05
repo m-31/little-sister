@@ -8,7 +8,11 @@ from zoneinfo import ZoneInfo
 from little_sister.config import (
     DEFAULT_BRANCH_CAP,
     DEFAULT_MAINTENANCE_CAP,
+    DEFAULT_MAX_WORKERS,
+    DEFAULT_STATE_INTERVAL,
     DEFAULT_TIMEZONE,
+    ENTRY_LIMIT,
+    MEMORY_SHARE,
     load_config,
 )
 
@@ -173,6 +177,83 @@ class SettingsLayeringTests(TestCase):
             with self.assertLogs(level="WARNING"):
                 cfg = load_config(config_dir=f"{d1}{os.pathsep}{d2}")
             self.assertEqual(cfg.reason_cap, 9)
+
+
+class StateIntervalTests(TestCase):
+    """`state_interval` (ADR-0071): how often the kept state files are written."""
+
+    def test_reads_the_interval(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.yaml"
+            path.write_text("state_interval: 15\n")
+            self.assertEqual(load_config(path).state_interval, 15)
+
+    def test_defaults_to_a_minute(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.yaml"
+            path.write_text("timezone: UTC\n")
+            self.assertEqual(load_config(path).state_interval, DEFAULT_STATE_INTERVAL)
+            self.assertEqual(DEFAULT_STATE_INTERVAL, 60)
+
+    def test_a_bad_or_non_positive_value_falls_back_with_a_warning(self):
+        # a typo must not make the writer spin, or stop
+        for value in ("often", "0", "-5"):
+            with tempfile.TemporaryDirectory() as directory, self.subTest(value=value):
+                path = Path(directory) / "settings.yaml"
+                path.write_text(f"state_interval: {value}\n")
+                with self.assertLogs(level="WARNING"):
+                    self.assertEqual(load_config(path).state_interval,
+                                     DEFAULT_STATE_INTERVAL)
+
+
+class EngineSizingTests(TestCase):
+    """`max_workers`, `entry_limit` and `memory_share` (ADR-0075): the three
+    numbers the engine measures itself and its configuration against, which a
+    deployment may state and which fall back to the constants in `limits.py`."""
+
+    def _load(self, text: str):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.yaml"
+            path.write_text(text)
+            return load_config(path)
+
+    def test_reads_the_three(self):
+        cfg = self._load("max_workers: 24\nentry_limit: 5000\nmemory_share: 0.25\n")
+        self.assertEqual(cfg.max_workers, 24)
+        self.assertEqual(cfg.entry_limit, 5000)
+        self.assertEqual(cfg.memory_share, 0.25)
+
+    def test_default_to_the_limits_constants(self):
+        cfg = self._load("timezone: UTC\n")            # keys absent → the defaults
+        self.assertEqual(cfg.max_workers, DEFAULT_MAX_WORKERS)
+        self.assertEqual(cfg.entry_limit, ENTRY_LIMIT)
+        self.assertEqual(cfg.memory_share, MEMORY_SHARE)
+        self.assertEqual((DEFAULT_MAX_WORKERS, ENTRY_LIMIT, MEMORY_SHARE),
+                         (8, 100_000, 0.5))
+
+    def test_a_bad_worker_ceiling_falls_back_with_a_warning(self):
+        # a typo must not leave the engine with no thread to run a check on
+        for value in ("many", "0", "-2"):
+            with self.subTest(value=value), self.assertLogs(level="WARNING"):
+                self.assertEqual(self._load(f"max_workers: {value}\n").max_workers,
+                                 DEFAULT_MAX_WORKERS)
+
+    def test_a_bad_entry_limit_falls_back_with_a_warning(self):
+        # a limit of zero would put the engine's own line past it before a check ran
+        for value in ("lots", "0", "-1"):
+            with self.subTest(value=value), self.assertLogs(level="WARNING"):
+                self.assertEqual(self._load(f"entry_limit: {value}\n").entry_limit,
+                                 ENTRY_LIMIT)
+
+    def test_a_memory_share_outside_the_fraction_falls_back_with_a_warning(self):
+        # above one is a limit the process cannot reach without being killed first
+        for value in ("half", "0", "-0.5", "1.5"):
+            with self.subTest(value=value), self.assertLogs(level="WARNING"):
+                self.assertEqual(self._load(f"memory_share: {value}\n").memory_share,
+                                 MEMORY_SHARE)
+
+    def test_a_share_of_exactly_one_is_allowed(self):
+        self.assertEqual(self._load("memory_share: 1\n").memory_share, 1.0)
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 # ADR-0031 — One deployment config directory, split by aspect
 
 - **Status:** Accepted
-- **Date:** 2026-08-29 (accepted 2026-07-31)
+- **Date:** 2026-08-29 (accepted 2026-08-01)
 - **Related:** [ADR-0015](0015-check-discovery-union.md) (the path-list this generalizes),
   [ADR-0012](0012-node-metadata.md) (`nodes.yaml`, the first non-check tenant),
   [ADR-0030](0030-curated-links.md) (`links.yaml`, the third),

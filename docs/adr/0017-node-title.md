@@ -1,7 +1,7 @@
 # ADR-0017 — Node title: a short display label
 
 - **Status:** Accepted
-- **Date:** 2026-08-23 (accepted 2026-06-26)
+- **Date:** 2026-09-05 (accepted 2026-06-27)
 - **Related:** [ADR-0012](0012-node-metadata.md) (node metadata — `about`; `title`
   shares its sources and `nodes.yaml` shape), [ADR-0016](0016-node-addressing.md)
   (`name` is the derived last path segment `title` sits beside),
@@ -47,9 +47,11 @@ Add an optional **`title`** — a short display label for the node.
    and the JSON envelope still emits it. Registered in
    [`../decisions.md`](../decisions.md) (*A title that only repeats the name is not
    drawn*).
-4. **Web-only this slice.** It surfaces in the snapshot and renders in the web UI;
-   it is **not** added to the JSON envelope ([ADR-0008](0008-json-output-api.md)) here
-   — that is the `status_envelope` item.
+4. **Web-only in this slice, in the envelope since contract v1.1.** The field
+   surfaces in the snapshot and renders in the web UI, and the JSON envelope
+   ([ADR-0008](0008-json-output-api.md)) came after: `title` joined it in contract
+   **v1.1** with the other node-metadata fields, which is why decision 3 says the
+   envelope emits it. `docs/api/openapi.yaml` keeps that history.
 
 ## Consequences
 - Friendly labels without touching identity: the path/name stays the stable address

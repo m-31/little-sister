@@ -1,7 +1,7 @@
 # ADR-0026 — Reading values from decoded bags (`values.py`)
 
 - **Status:** Accepted
-- **Date:** 2026-07-29
+- **Date:** 2026-08-01
 - **Related:** [ADR-0018](0018-markdown-rendering.md) (`plain` / `code` — the
   render-time escaping this ADR keeps *separate* from reading),
   [ADR-0023](0023-secret-references.md) (`secrets:` block — a config seam parsed the

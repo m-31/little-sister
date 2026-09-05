@@ -651,7 +651,7 @@ class IntervalTests(TestCase):
 
 
 class DeadlineTests(TestCase):
-    """A pass that cannot finish must end anyway (ADR-0030, amended 2026-08-02).
+    """A pass that cannot finish must end anyway (ADR-0030).
 
     ``REQUEST_TIMEOUT`` bounds one socket operation and not one request, so a
     server that dribbles a byte every four seconds never times out. Under the old
@@ -802,7 +802,7 @@ class DeadlineTests(TestCase):
         self.assertEqual(answers[slow].detail, "no answer in 1s")
 
     def test_a_target_the_pass_never_reached_keeps_what_it_had(self):
-        # Cancelled out of the queue means nothing was asked, so nothing is known —
+        # Canceled out of the queue means nothing was asked, so nothing is known —
         # and overwriting a good answer with *no answer* would be this module
         # inventing a failure it never observed.
         slow, later = "https://slow.example.org/", "https://later.example.org/"

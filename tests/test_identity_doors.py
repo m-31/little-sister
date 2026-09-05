@@ -31,7 +31,8 @@ os.environ.setdefault("SECRET_KEY", "test-key")
 from flask import redirect, request, session
 
 from little_sister import app as app_module
-from little_sister import identity, local_login
+from little_sister import identity, local_login, self_report, system_admin
+from little_sister.codes import StatusCode
 from little_sister.identity import Identity
 
 _REPO = Path(__file__).resolve().parents[1]
@@ -865,6 +866,22 @@ class MissingDoorTests(_DeploymentCase):
     who knows ``/login/<door>``.
     """
 
+    def test_the_system_admin_door_alone_is_a_door_and_the_line_is_warn(self):
+        """The ERROR on the node is for an instance *nobody* can sign in to. The
+        system-admin door is a way in, so an installation with only that door — an
+        identity provider not yet wired, say — is WARN like any door set without a
+        default, never ERROR."""
+        self_report.startup.forget()
+        self.addCleanup(self_report.startup.forget)
+        system_admin.use_system_admin(password="only-for-this-test")
+        with self.assertLogs("little_sister", level="WARNING"):
+            identity.announce_doors()
+        (line,) = [line for line in self_report.startup.lines()
+                   if line.slug == "doors"]
+        self.assertIs(line.code, StatusCode.WARN)
+        self.assertIn("'system-admin'", line.text)
+        self.assertNotIn("nobody can sign in", line.text)
+
     def test_doors_without_a_default_warn_and_name_what_was_found(self):
         _from_package("deployment_x")("keycloak", RedirectFlow())
         with self.assertLogs("little_sister", level="WARNING") as caught:
@@ -875,12 +892,20 @@ class MissingDoorTests(_DeploymentCase):
         self.assertIn("default=True", message)
 
     def test_no_door_at_all_warns_and_says_which_line_is_missing(self):
+        self_report.startup.forget()
+        self.addCleanup(self_report.startup.forget)
         with self.assertLogs("little_sister", level="WARNING") as caught:
             identity.announce_doors()
         message = "\n".join(caught.output)
         self.assertIn("nobody can sign in", message)
         self.assertIn("local_login.use_local()", message)
         self.assertIn("identity.use(", message)
+        # And on the node, at ERROR: an instance nobody can sign in to has lost
+        # its readers (backlog #70).
+        (line,) = self_report.startup.lines()
+        self.assertEqual(line.slug, "doors")
+        self.assertIs(line.code, StatusCode.ERROR)
+        self.assertIn("nobody can sign in", line.text)
 
     def test_a_default_door_is_announced_at_info_and_warns_about_nothing(self):
         _from_package("deployment_x")("keycloak", RedirectFlow(), default=True)

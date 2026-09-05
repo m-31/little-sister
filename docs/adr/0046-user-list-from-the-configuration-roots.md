@@ -1,7 +1,7 @@
 # ADR-0046 — The user list comes from the configuration roots, and nowhere else
 
 - **Status:** Accepted
-- **Date:** 2026-08-08 (restating the decisions ADR-0020 took on 2026-07-10)
+- **Date:** 2026-08-08 (restating the decisions ADR-0020 took on 2026-07-11)
 - **Supersedes:** [ADR-0020](0020-user-list-location.md) — wholly, as this project
   supersedes: its still-live decisions (a deployment-controlled location, the shipped
   example, fail-fast, the unchanged format) are restated below with their original
@@ -19,7 +19,7 @@
 
 ## Context
 
-**Why the list left the package** *(2026-07-10, restated from ADR-0020).* The allowed
+**Why the list left the package** *(2026-07-11, restated from ADR-0020).* The allowed
 users were once read from **inside** the package — `app.py` loaded
 `importlib.resources.files("little_sister")/"users.yaml"`, shipped as git-ignored
 package data. The repo split turned little-sister into a **library** consumed by a
@@ -27,7 +27,7 @@ separate deployment repository, and a deployment must define **its own** users w
 the library carries **none**. While the file lived inside the package, a deployment
 could not supply its user list without editing installed package files.
 
-**Why one door is now enough** *(2026-08-06).* ADR-0020 answered that with two paths:
+**Why one door is now enough** *(2026-08-08).* ADR-0020 answered that with two paths:
 `LITTLE_SISTER_USERS` if set, otherwise a conventional location beside the process's
 other runtime files. Two later records moved the conventional half —
 [ADR-0031](0031-deployment-config-directory.md) made it the `users` **aspect** of a
@@ -61,20 +61,20 @@ override — which is why this record retires that one variable and only that on
 
 ## Decision
 
-1. **The user list is deployment-controlled and never packaged.** *(2026-07-10)* The
+1. **The user list is deployment-controlled and never packaged.** *(2026-07-11)* The
    library ships no real users; a deployment owns and git-ignores its own list.
-2. **The package ships `users.example.yaml` as a template only.** *(2026-07-10)*
-3. **Fail fast.** *(2026-07-10)* A resolved list that is not there raises at startup,
+2. **The package ships `users.example.yaml` as a template only.** *(2026-07-11)*
+3. **Fail fast.** *(2026-07-11)* A resolved list that is not there raises at startup,
    naming the paths it looked at. An instance with no user list is not a running
    instance with a login problem; it is a misconfiguration, and it says so.
-4. **The format is unchanged.** *(2026-07-10)* One top-level key per login name, with
+4. **The format is unchanged.** *(2026-07-11)* One top-level key per login name, with
    `firstname` / `lastname` / `password` / optional `admin`, plus the optional
    `avatar` [ADR-0045](0045-user-avatars.md) added. This record changes a **location**,
    not an auth mechanism: plaintext passwords and the viewer/admin role model are
    untouched, password hashing stays a later phase, and a pluggable auth provider
    would make this static file merely the *default* provider.
 5. **Path resolution is the `users` aspect of the configuration roots — and nothing
-   else.** *(2026-08-06)* `LITTLE_SISTER_CONFIG_DIR` (default `config`) is the only
+   else.** *(2026-08-08)* `LITTLE_SISTER_CONFIG_DIR` (default `config`) is the only
    input: the first root declaring the aspect wins whole, in either legal form
    ([ADR-0031](0031-deployment-config-directory.md),
    [ADR-0045](0045-user-avatars.md)). A deployment that wants one exact file, outside
@@ -82,7 +82,7 @@ override — which is why this record retires that one variable and only that on
    names that root **first**. There is no file-shaped entrance beside the aspect, and
    the loader has no idea an environment variable was ever involved.
 6. **`LITTLE_SISTER_USERS` is a hard cut — never honored again — and startup
-   **refuses** while it is set.** *(2026-08-06)* The name is read in exactly one
+   **refuses** while it is set.** *(2026-08-08)* The name is read in exactly one
    place, the application's startup seam, for exactly one purpose: to refuse, naming
    the move. The run scripts' preflight refuses identically, so `./start.sh` fails
    before it forks a worker. The refusal is **permanent**, not a sunset: it costs a
@@ -124,7 +124,7 @@ override — which is why this record retires that one variable and only that on
 
 - **Keep the override** — rejected: it is redundant, and redundancy in the path that
   decides who may log in is not a convenience but a second thing to keep true.
-- **Remove it silently, as §7 removed `LITTLE_SISTER_CHECKS_DIR`** — rejected for the
+- **Remove it silently, as ADR-0031 §7 removed `LITTLE_SISTER_CHECKS_DIR`** — rejected for the
   reason in decision 6: that removal was self-announcing and this one is not.
 - **Keep honoring it for one release, with a deprecation warning** — rejected: a
   warning in a service log is exactly what nobody reads, and it would keep both

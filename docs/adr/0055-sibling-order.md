@@ -1,7 +1,7 @@
 # ADR-0055 — Sibling order: alphabetical, unless somebody declares a rank
 
 - **Status:** Accepted
-- **Date:** 2026-08-10
+- **Date:** 2026-08-09
 - **Supersedes:** the *Node sibling ordering* entry in
   [`../decisions.md`](../decisions.md) (2026-06, no ADR of its own), whose decision
   is restated in full below
@@ -40,7 +40,7 @@ table was *insertion* order, which a check produces by accident. A rank a check 
 
 ### 1. Siblings sort by `(order, name)` — the original name order, with a rank in front
 
-*(the name half restated from the superseded entry, 2026-06; the rank is new, 2026-08-10)*
+*(the name half restated from the superseded entry, 2026-06; the rank is new, 2026-08-09)*
 
 Sort siblings by their **declared rank** first and then by **name**,
 **case-insensitive** and **natural** — digit runs compared numerically, so `node2`
@@ -55,7 +55,7 @@ breaks [ADR-0024](0024-dashboard-layout.md)'s positional rule. A rank is not a s
 It says what a node is *about* — the severity it collects when something turns up in
 it — and a band's subject never moves, so neither does its rank.
 
-### 2. The default is `0`, so saying nothing is exactly today's behaviour
+### 2. The default is `0`, so saying nothing is exactly today's behavior
 
 `CheckResult` grows `order: int = 0`, carried onto the node. A check that says nothing
 gets `0` for every child and therefore precisely the order it had before this record

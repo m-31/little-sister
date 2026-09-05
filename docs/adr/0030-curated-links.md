@@ -1,7 +1,7 @@
 # ADR-0030 — Curated links come from a deployment-supplied file
 
 - **Status:** Accepted
-- **Date:** 2026-08-23 (accepted 2026-07-31)
+- **Date:** 2026-08-23 (accepted 2026-08-01)
 - **Related:** [ADR-0031](0031-deployment-config-directory.md) (the `config/` directory
   and its layering, which this file is an aspect of),
   [ADR-0015](0015-check-discovery-union.md) (the path-list underneath it),
@@ -239,7 +239,7 @@ three broken-image glyphs, all of them internal hosts.
    deadline the pass keeps what came back, says what did not, stops waiting, and lets
    the next pass have the slot. The three fates are exact, and the middle one is why
    this is worth writing down. **Answered** — the verdict, at the age it arrived.
-   **Never started** (still queued, so cancelled) — nothing was asked, so nothing
+   **Never started** (still queued, so canceled) — nothing was asked, so nothing
    changes and the previous verdict and age stand; overwriting it would be this module
    inventing a failure it never observed. **Started and unfinished** — *no answer*,
    which is a value this ADR already has (§10) and deliberately not a death: silence

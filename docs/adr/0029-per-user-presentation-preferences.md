@@ -1,7 +1,7 @@
 # ADR-0029 — Presentation preferences live in a cookie, not in the server
 
 - **Status:** Accepted
-- **Date:** 2026-07-31
+- **Date:** 2026-08-01
 - **Related:** [ADR-0028](0028-design-tokens-and-themes.md) (what a theme *is*),
   [ADR-0001](0001-in-process-threaded-engine.md) / [ADR-0002](0002-rlock-snapshot-synchronization.md)
   (why there is nowhere to put server state),
@@ -58,7 +58,7 @@ renders them onto `<body>` as `data-ls-theme` and `data-ls-layout`.
 - A value the roster no longer *offers* is still **honored** if a browser already
   carries it, so a preference is never silently thrown away by a change of menu.
 
-**Explicitly not covered:** per-user *functional* settings — overrides of `config.yaml`
+**Explicitly not covered:** per-user *functional* settings — overrides of `settings.yaml`
 defaults, which are about what the surface reports rather than how it looks. Those need
 a real store and a real identity, so they wait for the persistence phase; the menu
 reserves a grayed entry for them so the seam is visible.

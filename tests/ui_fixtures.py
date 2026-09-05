@@ -255,7 +255,7 @@ def _observation_times() -> StatusSnapshot:
     value could answer for both and its card carries **none**. ``never-run`` is a
     registered mount that has not reported yet — registration is not an observation, so
     that card is bare too. The absence is the point, and this is the layout case where
-    a card in the wall has no time while its neighbours do."""
+    a card in the wall has no time while its neighbors do."""
     tree = StatusTree()
     for path in ("/solo/host_metrics", "/pair/host_metrics", "/pair/audit"):
         tree.set_check_mount(path)

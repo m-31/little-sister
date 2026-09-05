@@ -6,7 +6,9 @@ single ``RLock``; reads copy an immutable snapshot under the lock and render it
 outside (ADR-0002). Roll-up follows ADR-0039 via ``Status.get_status_code``.
 
 Two histories are kept:
-- the **event log** — every status transition, newest appended (the source); and
+- the **event log** — every status transition, newest appended (the source), a
+  state file the layer keeps across restarts (:meth:`StatusTree.events_payload`
+  / :meth:`StatusTree.restore_events`, ADR-0071); and
 - per-node **status history** — derived from the event log for one path
   (:meth:`StatusTree.history`).
 """
@@ -15,8 +17,10 @@ from __future__ import annotations
 import re
 import threading
 from collections import deque
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 
 from little_sister.maintenance import (
     MaintenanceEntry,
@@ -54,7 +58,7 @@ STALE_MIN_GRACE_SECONDS = 30.0
 class ReasonLine:
     """One of a node's reasons, with its key and whatever is pinned on it.
 
-    The **virtual child** of [ADR-0036] decision 7 and the ADR-0032 amendment: an
+    The **virtual child** of [ADR-0036] decision 7 and the ADR-0032: an
     entry with a pin contributes nothing to its node; the rest contribute their
     **own** ``code`` where the check declared one (ADR-0042), and the node's
     reported status where it did not — which is every entry that predates coded
@@ -203,6 +207,49 @@ class Event:
     timestamp: str
     suppressed_by: str = ""
 
+    def to_dict(self) -> dict[str, Any]:
+        """The event as the state file carries it (ADR-0071): codes by name,
+        the reason texts as a list."""
+        return {"path": self.path, "name": self.name, "old": self.old.name,
+                "new": self.new.name, "reason": list(self.reason),
+                "timestamp": self.timestamp, "suppressed_by": self.suppressed_by}
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> Event:
+        """One event back from the state file. Raises :class:`ValueError` on a
+        shape this reader does not know — a code name it has no member for, a
+        reason that is not a list of text — so the layer can report the file
+        rather than half-read it."""
+        try:
+            old = StatusCode[str(data.get("old", ""))]
+            new = StatusCode[str(data.get("new", ""))]
+        except KeyError as error:
+            raise ValueError(f"an event carries an unknown code: {error}") from error
+        reason = data.get("reason", [])
+        if not isinstance(reason, list) or not all(
+                isinstance(text, str) for text in reason):
+            raise ValueError("an event's reason is not a list of text")
+        return cls(path=str(data.get("path", "")), name=str(data.get("name", "")),
+                   old=old, new=new, reason=tuple(reason),
+                   timestamp=str(data.get("timestamp", "")),
+                   suppressed_by=str(data.get("suppressed_by", "")))
+
+
+def events_from_payload(payload: object) -> list[Event]:
+    """The events in a state file's payload, oldest first, or
+    :class:`ValueError` when the payload is not the shape
+    :meth:`StatusTree.events_payload` writes. Nothing is half-read: one event this
+    reader cannot use refuses the whole file, and the layer reports it."""
+    if not isinstance(payload, Mapping) or not isinstance(
+            payload.get("events"), list):
+        raise ValueError("no 'events' list")
+    events: list[Event] = []
+    for raw in payload["events"]:
+        if not isinstance(raw, Mapping):
+            raise ValueError("an event is not a mapping")
+        events.append(Event.from_dict(raw))
+    return events
+
 
 @dataclass(frozen=True)
 class StatusPeriod:
@@ -256,6 +303,10 @@ class StatusTree:
         # the facts belong to the check behind the node, and nothing derived is
         # stored on the nodes.
         self._run_facts: dict[str, RunFacts] = {}
+        # How many reason entries the nodes hold between them — the count the
+        # engine measures against its entry limit every tick (ADR-0072). Kept
+        # here, on the one write path, so reading it never walks the tree.
+        self._entry_count = 0
 
     def use_maintenance_store(self, store: MaintenanceStore) -> None:
         """Attach the persistence store (once, at startup, before restore)."""
@@ -339,11 +390,22 @@ class StatusTree:
             if show_when_quiet is not None and node.show_when_quiet is None:
                 node.show_when_quiet = show_when_quiet
             old = node.code
+            held = len(node.reason_entries)
             node.update(code, reason, members)
+            self._entry_count += len(node.reason_entries) - held
             if node.code == old:
                 return False
             self._emit(node, old)
             return True
+
+    @property
+    def entry_count(self) -> int:
+        """How many reason entries the tree holds, over every node — what the
+        engine measures against its entry limit (ADR-0072). Maintained on
+        :meth:`upsert`, the one path that writes entries, so the read is a
+        number and never a walk. Thread-safe."""
+        with self._lock:
+            return self._entry_count
 
     def set_about(self, path: str, about: str) -> None:
         """Seed a node's ``about`` (subject metadata; ADR-0012). Auto-creates the
@@ -398,7 +460,7 @@ class StatusTree:
 
         Unlike :meth:`set_about` this is **registry-only** — deliberately no
         ``_ensure_node``, so the tree's visible shape still grows only with results.
-        The registry **counts checks per path** (the ADR-0044 amendment of
+        The registry **counts checks per path** (ADR-0044, which amends
         ADR-0027): two checks legitimately sharing one mount register a count of
         two, so an ancestor above them inherits **no** stamp — the shared node's
         own last write answers for itself (rule 2), but attributed upward it would
@@ -436,7 +498,7 @@ class StatusTree:
         ``created_at`` / ``created_by`` and replaces the rest, so "one more day"
         keeps the original explanation and the original author.
 
-        ``expected_set_at`` is the **compare-and-set token** (ADR-0014 amendment):
+        ``expected_set_at`` is the **compare-and-set token** (ADR-0014):
         the ``set_at`` the caller believes it is replacing, or ``""`` for *"I
         believe nothing is pinned"*. When it does not match what the table holds,
         **nothing is written** and the refusal carries the stored entry. ``None``
@@ -468,7 +530,7 @@ class StatusTree:
 
         Clearing carries the same ``expected_set_at`` token as
         :meth:`set_maintenance` — clearing someone else's pin should not be the one
-        write that stays silent (ADR-0014 amendment).
+        write that stays silent (ADR-0014).
         """
         with self._lock:
             stored = self._maintenance.get(join_path(path))
@@ -512,6 +574,32 @@ class StatusTree:
                 if not entry.is_expired(moment):
                     self._entry_maintenance[key] = entry
             self._persist()
+
+    def adopt_maintenance(self, entries: dict[str, MaintenanceEntry],
+                          entry_pins: dict[tuple[str, str],
+                                           MaintenanceEntry] | None = None,
+                          now: datetime | None = None) -> None:
+        """Replace the side-table in a **running** process with ``entries`` and
+        ``entry_pins`` — the store's at a takeover, the backup's on the way back
+        (ADR-0077): the ``restore`` direction of the maintenance file. Under the
+        one lock: every node pin the new table lacks, or carries expired, is
+        cleared — a real ``MAINTENANCE -> reading`` transition with its event, as
+        a sweep makes — and every non-expired pin it carries is applied, a set or
+        an edit, with the event each earns; the per-entry pins are replaced
+        whole. Nothing is written through: the file on disk is the copy being
+        adopted, and the sweep drops what is expired from it."""
+        moment = now or datetime.now()
+        with self._lock:
+            keep = {path for path, entry in entries.items()
+                    if not entry.is_expired(moment)}
+            for path in [path for path in self._maintenance if path not in keep]:
+                self._clear_node(path)
+            for entry_path, entry in entries.items():
+                if entry_path in keep:
+                    self._apply_maintenance(entry_path, entry)
+            self._entry_maintenance = {
+                key: entry for key, entry in (entry_pins or {}).items()
+                if not entry.is_expired(moment)}
 
     def sweep_expired(self, now: datetime | None = None) -> list[str]:
         """Clear every entry past its ``expires_at`` — a real
@@ -573,8 +661,8 @@ class StatusTree:
 
         No status is written: the pin lives in the side-table under ``(path,
         slug)`` and the snapshot joins it, so the check's next run cannot destroy
-        it. Carries the same compare-and-set token as the node pin (ADR-0014
-        amendment), and the same expiry rules. Thread-safe.
+        it. Carries the same compare-and-set token as the node pin (ADR-0014), and
+        the same expiry rules. Thread-safe.
         """
         moment = datetime.now().isoformat()
         with self._lock:
@@ -662,6 +750,31 @@ class StatusTree:
         with self._lock:
             events = tuple(self._events)
         return events if limit is None else events[-limit:]
+
+    def events_payload(self) -> dict[str, Any]:
+        """The event log as the state layer keeps it (ADR-0071): copied under the
+        lock, serialized outside it. The producer the layer calls on the
+        scheduler tick."""
+        return {"events": [event.to_dict() for event in self.recent_events()]}
+
+    def adopt_events(self, payload: object) -> None:
+        """The event log's ``restore`` direction (ADR-0077): an adopted file's
+        payload — the store's at a takeover, the backup's on the way back — read
+        by :func:`events_from_payload` and put in place of the log, oldest first,
+        as at startup. A payload of another shape raises, and the layer reports
+        the adoption as failed."""
+        self.restore_events(events_from_payload(payload))
+
+    def restore_events(self, events: Iterable[Event]) -> int:
+        """Replace the log with ``events`` — the state file's, at startup before
+        anything has written — keeping the bound: with more events than the log
+        holds, the oldest are dropped. Nodes are untouched; a restored event
+        describes a node the next run will write again, and history reads it from
+        then on. Returns how many were kept."""
+        with self._lock:
+            self._events.clear()
+            self._events.extend(events)
+            return len(self._events)
 
     def history(self, path: str) -> list[StatusPeriod]:
         """The status history of the node at ``path`` — one period per status it
@@ -761,7 +874,7 @@ class StatusTree:
         Editing a pin is ``MAINTENANCE -> MAINTENANCE``, so the code test is silent
         and an extended window or a rewritten reason would leave no trace anywhere.
         A changed reason or expiry therefore emits too; a re-submit that changes
-        neither does not, so a double-click is not history (ADR-0014 amendment).
+        neither does not, so a double-click is not history (ADR-0014).
         """
         node = self._ensure_node(path)
         previous = self._maintenance.get(node.path)
@@ -846,7 +959,7 @@ class StatusTree:
             for child in sorted(node.get_children(), key=_sibling_key)
         )
         children = tuple(result[0] for result in results)
-        # Count the *checks* below (per mount path — the ADR-0044 amendment of
+        # Count the *checks* below (per mount path — ADR-0044, which amends
         # ADR-0027) and keep the candidate stamp of the mount that is alone in its
         # own subtree; a second check anywhere — a second mount, or a second check
         # on one shared mount — makes any single value an attribution of one
@@ -931,7 +1044,7 @@ def _own_code(reported: StatusCode, lines: tuple[ReasonLine, ...],
     and it covers the node whole, so nothing below the pin can change the answer.
 
     Otherwise the node's entries are its **virtual children** (ADR-0036 decision 7;
-    the ADR-0032 amendment), and the walk over them is the roll-up one level down
+    the ADR-0032), and the walk over them is the roll-up one level down
     (ADR-0039, made literal by ADR-0042): each unsuppressed entry contributes its
     **own** code where the check declared one, and the node's reported status where
     it did not; ``UNDEFINED`` contributions are ignored; the worst of what is

@@ -310,7 +310,7 @@ def allocate_spans(profiles: Sequence[FlowProfile],
     earlier card.  (A pure gain-per-track rule measurably misallocates: two
     equal thirty-node roots on a fourteen-track grid gave one root twelve
     tracks and the other two, because every one of the twelve paid a row —
-    while the row's height was owned by the starved neighbour the whole time.)
+    while the row's height was owned by the starved neighbor the whole time.)
     Unusable spare tracks remain empty rather than padding a card with width
     its descendants cannot exploit.
     """

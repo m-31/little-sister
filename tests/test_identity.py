@@ -28,12 +28,13 @@ from little_sister import identity, local_login
 #: said which of the three sets it belongs in.
 GATED_ENDPOINTS = frozenset({
     "about", "copy", "events", "extension_asset", "history", "link_icon", "links",
-    "links_check", "maintenance", "maintenance_overview", "preferences", "system",
-    "user_avatar",
+    "links_check", "maintenance", "maintenance_overview", "preferences",
+    "self_report_action", "system", "user_avatar",
 })
 
 #: The one method each endpoint is exercised with, where GET is not it.
-POST_ENDPOINTS = frozenset({"preferences", "maintenance", "links_check", "csp_report"})
+POST_ENDPOINTS = frozenset({"preferences", "maintenance", "links_check", "csp_report",
+                            "self_report_action"})
 
 
 def endpoints():
@@ -105,6 +106,9 @@ class GateTests(TestCase):
                 self.assertFalse(identity.needs_identity(endpoint))
         self.assertEqual(self.client.get("/login").status_code, 200)
         self.assertEqual(self.client.get("/health").status_code, 200)
+        # `/ready` answers 200 or 503 depending on this instance's state, and the
+        # claim here is only that neither is the gate's redirect.
+        self.assertIn(self.client.get("/ready").status_code, (200, 503))
         self.assertEqual(self.client.get("/").headers["Location"], "/status")
 
     def test_status_refuses_a_stranger_both_ways(self):

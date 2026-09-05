@@ -52,7 +52,9 @@ from flask import render_template
 from jinja2 import BaseLoader, Environment, PackageLoader, TemplateNotFound
 from markupsafe import Markup
 
+from little_sister import self_report
 from little_sister.logger import logger
+from little_sister.reasons import plain, slug
 
 #: The directory an extension keeps its slot templates in, inside its own package.
 TEMPLATE_DIR = "templates"
@@ -215,14 +217,18 @@ def register(slot: str, package: str, template: str,
     """
     known = SLOTS.get(slot)
     if known is None:
-        logger.warning(
-            "slots: %s registers %r for the unknown slot %r — known slots: %s "
-            "(ADR-0034)", package, template, slot, ", ".join(sorted(SLOTS)))
+        self_report.startup.note(
+            slug("slot", package, slot, template),
+            plain(f"{package} registers {template!r} for the unknown slot {slot!r} "
+                  f"— known slots: {', '.join(sorted(SLOTS))} (ADR-0034); nothing "
+                  f"of it is shown"))
         return
     if not _template_exists(package, template):
-        logger.warning(
-            "slots: %s names %r for slot %r, which is not in its %s/ directory "
-            "(ADR-0034)", package, template, known.name, TEMPLATE_DIR)
+        self_report.startup.note(
+            slug("slot", package, slot, template),
+            plain(f"{package} names {template!r} for slot {known.name!r}, which is "
+                  f"not in its {TEMPLATE_DIR}/ directory (ADR-0034); nothing of it "
+                  f"is shown"))
         return
     filler = Filler(slot=known.name, package=package, template=template,
                     context=context, builtin=builtin)
@@ -348,27 +354,34 @@ def forget_fillers() -> None:
 def _accept_asset(package: str, member: str) -> Asset | None:
     """Validate one declared asset and hash it, or warn and return ``None``."""
     if not _ASSET_NAME.fullmatch(member):
-        logger.warning(
-            "slots: %s names %r, which is not a bare file name — an asset is one "
-            "file inside the package's %s/ directory (ADR-0037)",
-            package, member, STATIC_DIR)
+        self_report.startup.note(
+            slug("asset", package, member),
+            plain(f"{package} names {member!r}, which is not a bare file name — an "
+                  f"asset is one file inside the package's {STATIC_DIR}/ directory "
+                  f"(ADR-0037); it is not served"))
         return None
     suffix = "." + member.rsplit(".", 1)[-1].lower() if "." in member else ""
     if suffix not in ASSET_TYPES:
-        logger.warning(
-            "slots: %s names %r, which is not a type we serve (%s) (ADR-0037)",
-            package, member, ", ".join(sorted(ASSET_TYPES)))
+        self_report.startup.note(
+            slug("asset", package, member),
+            plain(f"{package} names {member!r}, which is not a type we serve "
+                  f"({', '.join(sorted(ASSET_TYPES))}) (ADR-0037); it is not "
+                  f"served"))
         return None
     try:
         source = resources.files(package).joinpath(STATIC_DIR, member)
         payload = source.read_bytes()
     except (ModuleNotFoundError, TypeError):
-        logger.warning("slots: %s is not an importable package (ADR-0037)", package)
+        self_report.startup.note(
+            slug("asset", package, member),
+            plain(f"{package} is not an importable package, so {member!r} is not "
+                  f"served (ADR-0037)"))
         return None
     except (OSError, ValueError):
-        logger.warning(
-            "slots: %s names %r, which is not in its %s/ directory (ADR-0037)",
-            package, member, STATIC_DIR)
+        self_report.startup.note(
+            slug("asset", package, member),
+            plain(f"{package} names {member!r}, which is not in its {STATIC_DIR}/ "
+                  f"directory (ADR-0037); it is not served"))
         return None
     digest = hashlib.sha256(payload).hexdigest()[:8]
     return Asset(package=package, member=member, digest=digest)
@@ -440,7 +453,7 @@ def _accepted(provider: ContextProvider,
     and otherwise the named parameters it has.
 
     This is the check-authoring surface's rule
-    ([ADR-0049](../docs/adr/0049-the-check-authoring-surface.md), amended) reached
+    ([ADR-0049](../docs/adr/0049-the-check-authoring-surface.md)) reached
     by the other route. A check type must take ``**kwargs`` because the loader
     cannot know what a constructor wants; here the caller *can* look, so the
     burden is ours rather than the extension author's. A provider that wants the
@@ -463,20 +476,30 @@ def _render_one(filler: Filler, context: Mapping[str, object]) -> str:
     if filler.context is not None:
         try:
             extra = filler.context(**_accepted(filler.context, context))
-        except Exception:
-            logger.exception(
-                "slots: the context provider of %s for %r failed — that filler "
-                "renders nothing (ADR-0034)", filler.package, filler.slot)
+        except Exception as error:
+            # Held, not standing: it happens per request and stops when the
+            # package is fixed, so the line stands for the window and counts.
+            logger.exception("slots: the context provider of %s for %r failed",
+                             filler.package, filler.slot)
+            self_report.runtime.see(
+                slug("slot", filler.package, filler.slot),
+                plain(f"the context provider of {filler.package} for "
+                      f"{filler.slot!r} raised ({error!r}) — that filler renders "
+                      f"nothing (ADR-0034)"), log=False)
             return ""
         if extra is None:
             return ""
         values.update(extra)
     try:
         return render_template(filler.source, **values)
-    except Exception:
-        logger.exception(
-            "slots: %s failed to render %r for %r — that filler renders nothing "
-            "(ADR-0034)", filler.package, filler.template, filler.slot)
+    except Exception as error:
+        logger.exception("slots: %s failed to render %r for %r", filler.package,
+                         filler.template, filler.slot)
+        self_report.runtime.see(
+            slug("slot", filler.package, filler.slot),
+            plain(f"{filler.package} failed to render {filler.template!r} for "
+                  f"{filler.slot!r} ({error!r}) — that filler renders nothing "
+                  f"(ADR-0034)"), log=False)
         return ""
 
 
@@ -490,7 +513,10 @@ def _template_exists(package: str, template: str) -> bool:
     try:
         root = resources.files(package)
     except (ModuleNotFoundError, TypeError):
-        logger.warning("slots: %s is not an importable package (ADR-0034)", package)
+        self_report.startup.note(
+            slug("slot", package),
+            plain(f"{package} is not an importable package, so nothing it "
+                  f"registers for a slot is shown (ADR-0034)"))
         return False
     try:
         return root.joinpath(TEMPLATE_DIR, template).is_file()

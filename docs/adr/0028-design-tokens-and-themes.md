@@ -1,7 +1,7 @@
 # ADR-0028 — Design tokens: one named palette, and a theme is an override of it
 
 - **Status:** Accepted
-- **Date:** 2026-07-31
+- **Date:** 2026-08-01
 - **Related:** [ADR-0024](0024-dashboard-layout.md) (the dim/vivid status model this
   paints), [ADR-0005](0005-dashboard-freshness-and-self-monitoring.md) (the freshness
   signals a theme must not weaken),

@@ -16,7 +16,7 @@ startup naming both — because a scheme says where a credential is read from, a
 import order must not be what decides that. Replacing somebody else's scheme stays
 available to whoever means it, by saying ``replace=True`` at the call site.
 
-There is deliberately **no bare-name form** (ADR-0023's 2026-07-27 update):
+There is deliberately **no bare-name form** (ADR-0023):
 requiring the scheme is what makes a secret *value* pasted where a reference
 belongs a structural config error, caught by the grammar rather than by guessing
 from the shape of the string — and it keeps one syntax to learn instead of a
@@ -315,8 +315,8 @@ def resolve_setting(value: str) -> str:
     here already **is** the value (it came from the environment): only a
     ``scheme://address`` shape is treated as a reference and resolved; anything
     else is returned as the literal setting. Used for
-    ``SECRET_KEY`` and ``LITTLE_SISTER_API_TOKENS`` (see the ADR-0023 update
-    note). The reference case raises exactly like :func:`resolve`.
+    ``SECRET_KEY`` and ``LITTLE_SISTER_API_TOKENS`` (ADR-0023). The reference case
+    raises exactly like :func:`resolve`.
     """
     value = value.strip()
     if looks_like_reference(value):

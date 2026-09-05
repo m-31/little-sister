@@ -20,7 +20,9 @@ import yaml
 
 from little_sister import values
 from little_sister.config_dir import aspect_files
+from little_sister.limits import DEFAULT_MAX_WORKERS, ENTRY_LIMIT, MEMORY_SHARE
 from little_sister.logger import logger
+from little_sister.state import DEFAULT_STATE_INTERVAL
 
 DEFAULT_TIMEZONE = "Europe/Berlin"
 DEFAULT_TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
@@ -34,6 +36,9 @@ CARD_STATUS_LINES = ("beside", "below")
 DEFAULT_DASHBOARD_COLUMNS = "flow"
 DASHBOARD_COLUMNS = ("flow", "plain")
 SETTINGS_ASPECT = "settings"
+# The engine's three sizing numbers keep their defaults in `limits.py`, where the
+# measurement that reads each of them lives; this module only lets a deployment
+# state one of its own.
 # An explicit single-file override, read at import so a wrapper can set it before
 # importing the app. Empty (the normal case) means "use the aspect and its layering".
 CONFIG_PATH_OVERRIDE = os.environ.get("LITTLE_SISTER_CONFIG", "")
@@ -55,6 +60,13 @@ class Config:
     # A non-negative int (0 shows none up front); the _status_grid.html reason macro
     # passes it through as the block's --reason-lines. Not reasons.js's CLIP_SLOP.
     reason_cap: int = DEFAULT_REASON_CAP
+    # What this instance is called, on `/system` and in whatever a package writes
+    # down about the process it is running in (ADR-0074). Empty means the
+    # hostname, which in a container is already the task or pod name. Validated
+    # in `little_sister.instance`, not here, because what a name may contain is a
+    # fact about the *mark* it becomes and not about this file — and because this
+    # module may not import that one, which reads this.
+    instance: str = ""
     # Quiet (non-warn/error) child *boxes* a branch shows in dense mode before a
     # "+N more" control reveals the rest (extends ADR-0024): the count-cap sibling
     # of reason_cap. A non-negative int (0 collapses every quiet box behind
@@ -99,6 +111,29 @@ class Config:
     # and a possible ``packed`` mode are later steps of the same control,
     # never a second switch.
     dashboard_columns: str = DEFAULT_DASHBOARD_COLUMNS
+    # How often the kept state files — the event log, and what joins it — are
+    # written under `var/state/` (ADR-0071), in seconds: at most once per
+    # interval on the scheduler tick, and once more at graceful shutdown, so an
+    # unclean shutdown loses at most this much. Maintenance pins are written
+    # through as they change and never wait on it. A positive integer; default 60.
+    state_interval: int = DEFAULT_STATE_INTERVAL
+    # Worker threads the engine's pool is built with (ADR-0075): the ceiling, not
+    # the size — a pool is never larger than the number of checks configured. It
+    # is also the number startup measures the checks' *declared* cost against, so
+    # raising it is how a deployment answers a refusal it disagrees with. A
+    # positive integer; default 8.
+    max_workers: int = DEFAULT_MAX_WORKERS
+    # How many reason entries the tree may hold, over every node (ADR-0072): the
+    # number the engine's `entries` line watches, and the one the declared entry
+    # sums are refused against at startup. A positive integer; default 100,000,
+    # which at the measured half kilobyte an entry is about fifty megabytes held.
+    entry_limit: int = ENTRY_LIMIT
+    # The share of what the machine gives this process that the process may be
+    # resident at before the engine's `memory` line turns red — amber at 80 % of
+    # that. A fraction above 0 and at most 1; default 0.5, one gunicorn worker
+    # beside the OS. There is no line at all where the machine cannot say what it
+    # gives the process.
+    memory_share: float = MEMORY_SHARE
 
     @property
     def tzinfo(self) -> ZoneInfo:
@@ -201,6 +236,75 @@ def _valid_retry_attempts(value: object) -> int:
     return attempts
 
 
+def _valid_state_interval(value: object) -> int:
+    """Coerce the kept-file write interval (ADR-0071) to a positive int; a bad or
+    non-positive value falls back to the default with a warning — a typo must not
+    make the writer spin, or stop."""
+    try:
+        seconds = int(str(value).strip())
+    except ValueError:
+        logger.warning("config: state_interval %r is not an integer; using %d",
+                       value, DEFAULT_STATE_INTERVAL)
+        return DEFAULT_STATE_INTERVAL
+    if seconds < 1:
+        logger.warning("config: state_interval %d is not positive; using %d",
+                       seconds, DEFAULT_STATE_INTERVAL)
+        return DEFAULT_STATE_INTERVAL
+    return seconds
+
+
+def _valid_max_workers(value: object) -> int:
+    """Coerce the worker ceiling (ADR-0075) to a positive int; a bad or
+    non-positive value falls back to the default with a warning — a typo must not
+    leave the engine with no thread to run a check on."""
+    try:
+        workers = int(str(value).strip())
+    except ValueError:
+        logger.warning("config: max_workers %r is not an integer; using %d",
+                       value, DEFAULT_MAX_WORKERS)
+        return DEFAULT_MAX_WORKERS
+    if workers < 1:
+        logger.warning("config: max_workers %d is not positive; using %d",
+                       workers, DEFAULT_MAX_WORKERS)
+        return DEFAULT_MAX_WORKERS
+    return workers
+
+
+def _valid_entry_limit(value: object) -> int:
+    """Coerce the tree's entry limit (ADR-0072) to a positive int; a bad or
+    non-positive value falls back to the default with a warning — a limit of zero
+    would put the engine's own line past it before a check has run."""
+    try:
+        entries = int(str(value).strip())
+    except ValueError:
+        logger.warning("config: entry_limit %r is not an integer; using %d",
+                       value, ENTRY_LIMIT)
+        return ENTRY_LIMIT
+    if entries < 1:
+        logger.warning("config: entry_limit %d is not positive; using %d",
+                       entries, ENTRY_LIMIT)
+        return ENTRY_LIMIT
+    return entries
+
+
+def _valid_memory_share(value: object) -> float:
+    """Coerce the resident-memory share to a fraction in ``(0, 1]``; anything
+    else falls back to the default with a warning. A share above one would be a
+    limit the process cannot reach without being killed first, which is a limit
+    that says nothing."""
+    try:
+        share = float(str(value).strip())
+    except ValueError:
+        logger.warning("config: memory_share %r is not a number; using %s",
+                       value, MEMORY_SHARE)
+        return MEMORY_SHARE
+    if not 0 < share <= 1:
+        logger.warning("config: memory_share %s is not in (0, 1]; using %s",
+                       share, MEMORY_SHARE)
+        return MEMORY_SHARE
+    return share
+
+
 def settings_files(config_dir: str | Path | None = None) -> list[Path]:
     """The settings layers, in path-list order.
 
@@ -260,6 +364,7 @@ def load_config(path: str | Path | None = None, *,
         maintenance_default_expiry=values.text(
             data, "maintenance_default_expiry",
             default=DEFAULT_MAINTENANCE_EXPIRY),
+        instance=values.text(data, "instance", default=""),
         reason_cap=_valid_reason_cap(data.get("reason_cap", DEFAULT_REASON_CAP)),
         branch_cap=_valid_branch_cap(data.get("branch_cap", DEFAULT_BRANCH_CAP)),
         maintenance_cap=_valid_maintenance_cap(
@@ -272,18 +377,27 @@ def load_config(path: str | Path | None = None, *,
             data.get("card_status_line", DEFAULT_CARD_STATUS_LINE)),
         dashboard_columns=_valid_dashboard_columns(
             data.get("dashboard_columns", DEFAULT_DASHBOARD_COLUMNS)),
+        state_interval=_valid_state_interval(
+            data.get("state_interval", DEFAULT_STATE_INTERVAL)),
+        max_workers=_valid_max_workers(
+            data.get("max_workers", DEFAULT_MAX_WORKERS)),
+        entry_limit=_valid_entry_limit(data.get("entry_limit", ENTRY_LIMIT)),
+        memory_share=_valid_memory_share(
+            data.get("memory_share", MEMORY_SHARE)),
     )
     if sources:
         logger.info(
             "config: loaded %s — timezone=%s, time_format=%r, reason_cap=%d, "
             "branch_cap=%d, maintenance_cap=%d, maintenance_default_expiry=%s, "
             "retry_interval=%s, retry_attempts=%d, card_status_line=%s, "
-            "dashboard_columns=%s",
+            "dashboard_columns=%s, state_interval=%d, max_workers=%d, "
+            "entry_limit=%d, memory_share=%s",
             ", ".join(str(source.resolve()) for source in sources),
             cfg.timezone, cfg.time_format, cfg.reason_cap, cfg.branch_cap,
             cfg.maintenance_cap, cfg.maintenance_default_expiry,
             cfg.retry_interval or "off", cfg.retry_attempts,
-            cfg.card_status_line, cfg.dashboard_columns)
+            cfg.card_status_line, cfg.dashboard_columns, cfg.state_interval,
+            cfg.max_workers, cfg.entry_limit, cfg.memory_share)
     return cfg
 
 
