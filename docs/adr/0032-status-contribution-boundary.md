@@ -12,6 +12,12 @@
   other per-node value resolved in the same snapshot pass).
 - **Register:** [`../decisions.md`](../decisions.md)
 
+> **Update (2026-09-06):** the field the consequences hold back arrived:
+> [ADR-0080](0080-the-envelope-is-the-snapshot-published.md) publishes `reported`,
+> `own` and `code` under their own names and adds `contribution` — what the parent
+> counted, null where that was simply `code`, and otherwise naming the rule. Rule 5
+> reaches the API with it.
+
 ## Context
 
 [ADR-0004](0004-status-aggregation-semantics.md) says how a status is **derived**:

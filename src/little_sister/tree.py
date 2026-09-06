@@ -91,7 +91,7 @@ class RunFacts:
     budgeted retry (ADR-0033) a failing check's slot is pulled in, which is why
     it is never computed from ``timestamp + frequency``; it is ``None`` for a
     one-shot run, which has no live schedule. Web-only until the client contract
-    round (ADR-0008's batched revision), like ``reported_code`` before it.
+    round (ADR-0008), like ``reported_code`` before it.
     """
     wall_seconds: float | None
     next_run_at: str | None
@@ -164,6 +164,13 @@ class StatusSnapshot:
     maintenance: bool = False
     maintenance_entry: MaintenanceEntry | None = None
     stale: bool = False
+    #: How old this node's own reading may get before ``stale`` turns true — the
+    #: tolerance the rule actually applied, in seconds, and ``None`` where the node
+    #: reports on no schedule and can therefore never be stale by its own stamp
+    #: (ADR-0079). Carried rather than left to be re-derived: a reader that computes
+    #: freshness from a frequency has a second copy of the rule, and the rule is
+    #: about to have two branches.
+    stale_after_seconds: float | None = None
     age_seconds: float = 0.0
     children: tuple[StatusSnapshot, ...] = ()
     reasons: tuple[ReasonLine, ...] = ()
@@ -1029,6 +1036,7 @@ class StatusTree:
             show_when_quiet=node.show_when_quiet,
             maintenance=node.maintenance,
             maintenance_entry=self._maintenance.get(node.path), stale=stale,
+            stale_after_seconds=stale_after_seconds(node.frequency_seconds),
             age_seconds=age, children=children,
             reasons=lines, members=node.members, run=mount_run)
         return snapshot, mounts, mount_stamp, mount_run
@@ -1143,10 +1151,26 @@ def _is_stale(node: Status, age: float) -> bool:
     and one whose *check* reported ``MAINTENANCE`` carries no severity to degrade.
     That second case was never guarded before and could raise the same way.
     """
-    frequency = node.frequency_seconds
-    if not frequency or node.code in (StatusCode.UNDEFINED, StatusCode.MAINTENANCE):
+    tolerance = stale_after_seconds(node.frequency_seconds)
+    if tolerance is None or node.code in (StatusCode.UNDEFINED,
+                                          StatusCode.MAINTENANCE):
         return False
-    return age > frequency + max(float(frequency), STALE_MIN_GRACE_SECONDS)
+    return age > tolerance
+
+
+def stale_after_seconds(frequency: int | None) -> float | None:
+    """How old a reading may get before it is stale: ``frequency + max(frequency,
+    30s)``, roughly two intervals (ADR-0005 decision 1).
+
+    One function so that the rule has one copy. :func:`_is_stale` decides with it and
+    the snapshot carries the number it used, which is what lets a client show *how
+    fresh this is meant to be* without holding a second copy of the arithmetic
+    (ADR-0079 decision 5). ``None`` where there is no schedule to measure against,
+    which is the only case a node cannot go stale by its own stamp in.
+    """
+    if not frequency:
+        return None
+    return frequency + max(float(frequency), STALE_MIN_GRACE_SECONDS)
 
 
 # The single shared status tree for this process (ADR-0001).

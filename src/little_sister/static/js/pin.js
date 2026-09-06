@@ -12,7 +12,7 @@
  * starts on Edit, edit mode starts in the reason field, and an explicit close
  * returns to the trigger.
  *
- * A pinned card opens in rendered read mode (ADR-0014 / ADR-0018 amendments),
+ * A pinned card opens in rendered read mode (ADR-0014 / ADR-0018),
  * with Edit and Clear actions. Edit reveals the same guarded form, prefilled
  * from the raw source on the trigger; an unpinned card opens that form directly.
  * Both writes carry the control's `data-pin-token` (the entry's `set_at`) as the

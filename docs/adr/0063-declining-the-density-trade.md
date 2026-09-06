@@ -17,6 +17,11 @@
   here), [ADR-0061](0061-decoration-is-not-a-label.md) (a client draws its own chips).
 - **Register:** [`../decisions.md`](../decisions.md)
 
+> **Update (2026-09-06):** the envelope half landed in
+> [ADR-0080](0080-the-envelope-is-the-snapshot-published.md): `show_when_quiet` ships
+> as the tri-state it is, null where nobody said, so a client drawing its own chips
+> reads the declaration instead of guessing at it.
+
 ## Context
 
 The dense dashboard view buys height with two compactions (ADR-0056): a quiet leaf is

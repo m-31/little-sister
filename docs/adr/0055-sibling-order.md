@@ -14,6 +14,11 @@
   and keep the check's own order — untouched here)
 - **Register:** [`../decisions.md`](../decisions.md)
 
+> **Update (2026-09-06):** the rank is a field now:
+> [ADR-0080](0080-the-envelope-is-the-snapshot-published.md) publishes `order`
+> beside `reported`, `report` and the run facts, in the single decision this record
+> was waiting for.
+
 ## Context
 
 Sibling nodes arrive in **insertion order** — check and discovery order — which is

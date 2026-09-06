@@ -45,7 +45,7 @@ little-sister/
 │   └── users.yaml       # login list, or users/{users.yaml, avatars/} (gitignored)
 ├── src/little_sister/
 │   ├── app.py           # Flask app: routing, login, .env load, engine start
-│   ├── api.py           # JSON serialization for backend mode (ADR-0008)
+│   ├── api.py           # JSON serialization for backend mode (ADR-0080)
 │   ├── status.py        # Status / StatusCode domain model + roll-up
 │   ├── codes.py         # the status vocabulary, a leaf module nothing imports from
 │   ├── reasons.py       # addressable reasons: a node's reason list as keyed entries (ADR-0036)
@@ -1479,7 +1479,10 @@ filter logic is `_filter_snapshot` (drops nodes whose effective code is hidden).
   compared with `secrets.compare_digest`); the session
   cookie isn't accepted there. Errors are **Problem JSON** (RFC 9457), and an inbound
   `X-Flow-Id` is echoed. Read-only; the contract is
-  [`api/openapi.yaml`](api/openapi.yaml) ([ADR-0008](adr/0008-json-output-api.md)).
+  [`api/openapi.yaml`](api/openapi.yaml)
+  ([ADR-0080](adr/0080-the-envelope-is-the-snapshot-published.md)), and what it
+  publishes is the snapshot the dashboard renders — a field added to one is added to
+  the other in the same change.
 
 ### 5.3 Presentation preferences
 How a viewer sees the surface — the **theme** and the **layout** — is theirs to

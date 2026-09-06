@@ -6,6 +6,16 @@
   [ADR-0004](0004-status-aggregation-semantics.md) (roll-up).
 - **Register:** [`../decisions.md`](../decisions.md)
 
+> **Update (2026-09-06):** decision 1 measures against the check's **period**, and a
+> paced check has none ([ADR-0078](0078-the-unit-is-what-the-engine-releases.md)).
+> Its scope is therefore *where there is a `frequency`* — which is every check that
+> exists, so nothing about it changes — and the general rule is
+> [ADR-0079](0079-freshness-is-a-stated-tolerance.md): freshness is judged against a
+> tolerance the deployment **stated**, this one where there is a period and a
+> declared cycle ceiling where there is not. Everything else here stands, including
+> the reason: a derived tolerance would grow with the estate, and green would stop
+> meaning freshly verified at exactly the moment the estate outgrew what it can read.
+
 ## Context
 State lives in memory and the dashboard is server-rendered, so two things can go
 silently stale: the **page** (loaded minutes ago) and the **data** (a check that

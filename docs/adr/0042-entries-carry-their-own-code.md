@@ -20,6 +20,10 @@
   [ADR-0008](0008-json-output-api.md) (the envelope, deliberately untouched here)
 - **Register:** [`../decisions.md`](../decisions.md)
 
+> **Update (2026-09-06):** decision 11 is spent:
+> [ADR-0080](0080-the-envelope-is-the-snapshot-published.md) carries the per-entry
+> object, and an entry's `code` is null there exactly where it takes the node's.
+
 ## Context
 
 Several kinds of information arrive at one node and the status code cannot carry

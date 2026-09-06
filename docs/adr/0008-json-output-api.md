@@ -1,6 +1,6 @@
 # ADR-0008 — JSON output (backend mode): endpoint, schema & token auth
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR-0080](0080-the-envelope-is-the-snapshot-published.md)
 - **Date:** 2026-08-23 (accepted 2026-06-27)
 - **Related:** [ADR-0002](0002-rlock-snapshot-synchronization.md) (snapshots are the
   serializable copy), [ADR-0003](0003-config-and-secrets-via-env-file.md) (`.env`

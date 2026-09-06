@@ -153,7 +153,7 @@
     says when the pin ends, who pinned it, its stored reason and its `set_at` —
     the reason so the dialog can prefill an edit rather than make the admin
     retype it, and the `set_at` because it is the compare-and-set token the
-    write has to carry (ADR-0014 amendment). -#}
+    write has to carry (ADR-0014). -#}
 {% macro pin_control(node) -%}
 <a class="pin-control" href="{{ url_for('status', branch=node.path | url_branch) }}"
    role="button" aria-haspopup="dialog" aria-expanded="false"

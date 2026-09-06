@@ -503,8 +503,8 @@ class EngineTests(TestCase):
         self.assertIs(tree.snapshot("/fleet/host-b/disk").show_when_quiet, True)
 
     def test_a_resolved_label_lands_on_the_child_node(self):
-        # The labels ride the flag's mechanism since ADR-0025's 2026-08-19
-        # update: keyed by subnode name, applied by the engine, stamped by
+        # The labels ride the flag's mechanism under ADR-0025: keyed by subnode
+        # name, applied by the engine, stamped by
         # nobody. The check here hands over no label at all.
         tree = StatusTree()
         result = CheckResult(StatusCode.OK, children=(

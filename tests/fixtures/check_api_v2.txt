@@ -4,7 +4,7 @@
 # Epoch 2 opened by *removing* three names: `parse_subnodes`, `resolve_text` and
 # `expand_tokens`. They were how a branch check read and layered its own
 # `subnodes:` block; the library reads that block itself now and a type only
-# declares its defaults and tokens (ADR-0025's 2026-08-19 update), so the helpers
+# declares its defaults and tokens (ADR-0025), so the helpers
 # have no caller outside this repository left to serve. That is exactly the
 # decision this mechanism exists to force into the open.
 #

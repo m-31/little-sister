@@ -8,6 +8,50 @@ contract versions **separately** — see `docs/api/openapi.yaml` `info.version`.
 
 ## [Unreleased]
 
+## [0.3.16] - 2026-09-06
+
+**Breaking — the JSON API is `schema_version` 2, and nothing about a node is
+compatible with version 1.** The envelope is now the snapshot the dashboard renders,
+rather than an older and smaller projection of it: `own_code` is `own` and `reported`
+joins it, `contribution` says what a node's parent counted and which rule made it so,
+the string array `reasons` is the `entries` object, the `maintenance` bool and
+`maintenance_details` are one nullable `maintenance` object whose text is `note`, and
+the nullable `timestamp` with `frequency_seconds` beside it is a `run` object that is
+**absent** where nothing answers for a node. `report`, `order`, `show_when_quiet` and
+an envelope-level `instance` block are new. Nothing else in this application changed:
+the pages read the same snapshot they always did. Update a client in the same step —
+the macOS app is released with this version — and read
+[`docs/api/openapi.yaml`](docs/api/openapi.yaml), which is normative and now 2.0.0
+([ADR-0080](docs/adr/0080-the-envelope-is-the-snapshot-published.md)).
+
+### Added
+
+- **`run.stale_after_seconds`, the freshness tolerance the server applied.** The
+  snapshot now carries the number the staleness rule measured against — roughly two
+  intervals — and the API publishes it, so a client can say how fresh a reading is
+  meant to be without holding a second copy of a rule that is about to grow a branch
+  ([ADR-0079](docs/adr/0079-freshness-is-a-stated-tolerance.md)).
+
+- **Two records that decide how a check with more than one thing to read will
+  behave**, taken before the JSON contract is rewritten because each turned out to be
+  a field of it. **Nothing in this release behaves differently**: both describe a
+  scheduler that is not built yet, and both are written so that a check type which
+  says nothing keeps working exactly as it does today.
+  [ADR-0078](docs/adr/0078-the-unit-is-what-the-engine-releases.md) makes the **unit**
+  what the engine releases — a type may say what it reads, one key at a time, and a
+  check that says nothing is a one-unit check. It is additive, so the check API epoch
+  does not move and no installed package has to be re-released.
+  [ADR-0079](docs/adr/0079-freshness-is-a-stated-tolerance.md) settles what *stale*
+  means for a check with no interval: the tolerance a deployment **states**, never one
+  the engine derives from how much there is to read — a derived tolerance grows with
+  the estate, and green would stop meaning freshly verified exactly when the estate
+  outgrew what can be read.
+  [ADR-0005](docs/adr/0005-dashboard-freshness-and-self-monitoring.md) carries an
+  update saying its rule is the one for a check that has an interval, which is every
+  check that exists.
+
+### Changed
+
 ## [0.3.15] - 2026-09-05
 
 **Breaking, before the first release with a self-report:** every maintenance pin set

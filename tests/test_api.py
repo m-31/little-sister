@@ -2,6 +2,8 @@ import json
 import os
 import unittest
 from datetime import UTC, datetime
+from pathlib import Path
+from typing import ClassVar
 from unittest import TestCase
 
 # Import the app with the background engine disabled (no threads/network).
@@ -10,6 +12,7 @@ os.environ.setdefault("SECRET_KEY", "test-key")
 
 from little_sister import api
 from little_sister import app as app_module
+from little_sister.reasons import Entry
 from little_sister.status import StatusCode
 from little_sister.tree import StatusTree
 
@@ -33,11 +36,11 @@ class JsonApiTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.mimetype, "application/json")
         body = resp.get_json()
-        self.assertEqual(body["schema_version"], 1)
+        self.assertEqual(body["schema_version"], 2)
         self.assertTrue(body["generated_at"].endswith("Z"))
         root = body["status"]
-        self.assertEqual(root["code"], "ERROR")        # rolled up from db
-        self.assertEqual(root["own_code"], "UNDEFINED")  # the root reports nothing
+        self.assertEqual(root["code"], "ERROR")      # rolled up from db
+        self.assertEqual(root["own"], "UNDEFINED")   # the root reports nothing
         names = {child["name"] for child in root["children"]}
         self.assertEqual(names, {"services", "db"})
 
@@ -49,12 +52,65 @@ class JsonApiTests(TestCase):
         self.assertEqual(body["status"]["name"], "services")
         self.assertEqual(body["status"]["children"][0]["name"], "web")
 
-    def test_codes_are_names_and_reasons_plural(self):
+    def test_three_codes_under_their_own_names(self):
+        """ADR-0032's three statuses, published as `reported` / `own` / `code`
+        (ADR-0080 decision 2). All three agree on an unpinned node that reports for
+        itself — which is why the pinned case below is the one that proves them
+        apart."""
         self.tree.upsert("/db", StatusCode.ERROR, "boom")
         node = self.client.get("/status/db", headers=JSON).get_json()["status"]
-        self.assertEqual(node["own_code"], "ERROR")
+        self.assertEqual(node["reported"], "ERROR")
+        self.assertEqual(node["own"], "ERROR")
         self.assertEqual(node["code"], "ERROR")
-        self.assertEqual(node["reasons"], ["boom"])
+        self.assertNotIn("own_code", node)
+
+    def test_a_pin_moves_own_and_leaves_reported_saying_what_the_check_said(self):
+        """The whole reason `reported` is published: a silenced node still says what
+        it is doing, and *we are silencing an error* is what a surface must be able to
+        show (ADR-0032 rule 5)."""
+        self.tree.upsert("/db", StatusCode.ERROR, "connection refused")
+        self.tree.set_maintenance("/db", "planned", set_by="ada",
+                                  expires_at=datetime(2999, 1, 1))
+        node = self.client.get("/status/db", headers=JSON).get_json()["status"]
+        self.assertEqual(node["reported"], "ERROR")
+        self.assertEqual(node["own"], "MAINTENANCE")
+        self.assertEqual(node["code"], "MAINTENANCE")
+        self.assertEqual([item["text"] for item in node["entries"]["items"]],
+                         ["connection refused"])
+
+    def test_entries_replace_the_string_reasons(self):
+        """An object, not an array of strings: prose and members are different things
+        and the old shape could say which only by convention (ADR-0036)."""
+        self.tree.upsert("/db", StatusCode.ERROR, "boom")
+        node = self.client.get("/status/db", headers=JSON).get_json()["status"]
+        self.assertNotIn("reasons", node)
+        self.assertFalse(node["entries"]["addressable"])
+        item, = node["entries"]["items"]
+        self.assertEqual(item["text"], "boom")
+        self.assertFalse(item["running"])
+        self.assertIsNone(item["maintenance"])
+        self.assertIsNone(item["code"], "carries the node's, not one of its own")
+
+    def test_addressable_entries_carry_their_key_their_code_and_their_pin(self):
+        """`addressable` is the snapshot's `members`: whether these may be pinned one
+        by one (ADR-0036), and an entry's own code is its own (ADR-0042)."""
+        self.tree.upsert("/ci", StatusCode.ERROR, [
+            Entry("build", "build #4215 failed", code=StatusCode.ERROR,
+                  running=True),
+            Entry("lint", "lint #4215 passed", code=StatusCode.OK),
+        ], members=True)
+        self.tree.set_entry_maintenance("/ci", "build", "known",
+                                        expires_at=datetime(2999, 1, 1),
+                                        set_by="ada")
+        node = self.client.get("/status/ci", headers=JSON).get_json()["status"]
+        self.assertTrue(node["entries"]["addressable"])
+        build, lint = node["entries"]["items"]
+        self.assertEqual([build["slug"], lint["slug"]], ["build", "lint"])
+        self.assertEqual([build["code"], lint["code"]], ["ERROR", "OK"])
+        self.assertTrue(build["running"])
+        self.assertEqual(build["maintenance"]["note"], "known")
+        self.assertIsNone(lint["maintenance"])
+        self.assertEqual(node["own"], "OK", "what the unpinned entries leave")
 
     def test_metadata_fields_in_json_envelope(self):
         # the envelope carries the node-metadata fields as raw Markdown (ADR-0008)
@@ -77,64 +133,134 @@ class JsonApiTests(TestCase):
                                headers=JSON).get_json()["status"]
         self.assertEqual(node["title"], "Critical")
 
-    def test_a_declared_rank_moves_children_but_ships_no_field(self):
-        # The envelope reads the same snapshot, so a ranked node's `children` order
-        # moves here too — accepted (ADR-0055): order is not part of the contract.
-        # The rank *field* is not emitted yet; it rides the client contract round
-        # with `reported_code`, `report` and the run facts, in one schema_version
-        # decision, rather than arriving piecemeal.
+    def test_a_declared_rank_moves_children_and_now_ships_as_a_field(self):
+        """The rank the children were sorted by, so a client can *see* the order it
+        was handed rather than infer it from the sequence (ADR-0055, ADR-0080
+        decision 6)."""
         for band in ("critical", "high", "informational", "low", "medium"):
             self.tree.upsert(f"/wiz/{band}", StatusCode.OK,
                              order=1 if band == "informational" else 0)
         node = self.client.get("/status/wiz", headers=JSON).get_json()["status"]
         self.assertEqual([child["name"] for child in node["children"]],
                          ["critical", "high", "low", "medium", "informational"])
-        self.assertNotIn("order", node)
-        self.assertNotIn("order", node["children"][0])
+        self.assertEqual([child["order"] for child in node["children"]],
+                         [0, 0, 0, 0, 1])
 
-    def test_report_stays_off_the_envelope(self):
-        # Web-only until the client contract round (ADR-0044, riding ADR-0008's
-        # batched revision), like `reported_code` and the run facts before it: a
-        # client must not be shown a field one release and a rename the next.
-        self.tree.upsert("/db", StatusCode.OK, report="- 14 repositories")
+    def test_report_ships_beside_config(self):
+        """What the run *found*, beside what it ran *with* — the pair ADR-0044 keeps
+        under one ownership rule, and the half the envelope never carried."""
+        self.tree.upsert("/db", StatusCode.OK, report="- 14 repositories",
+                         config="- **url:** http://x")
         node = self.client.get("/status/db", headers=JSON).get_json()["status"]
-        self.assertNotIn("report", node)
-        self.assertNotIn("run", node)
+        self.assertEqual(node["report"], "- 14 repositories")
+        self.assertEqual(node["config"], "- **url:** http://x")
+
+    def test_show_when_quiet_is_published_as_the_tri_state_it_is(self):
+        """Null where nobody said, and a stated `false` is a declaration rather than
+        a silence (ADR-0063) — flattening the two would throw away the difference the
+        fill rule turns on."""
+        self.tree.upsert("/loud", StatusCode.OK, show_when_quiet=True)
+        self.tree.upsert("/hushed", StatusCode.OK, show_when_quiet=False)
+        self.tree.upsert("/silent", StatusCode.OK)
+        said = {child["name"]: child["show_when_quiet"] for child
+                in self.client.get("/status", headers=JSON).get_json()
+                ["status"]["children"]}
+        self.assertEqual(said, {"loud": True, "hushed": False, "silent": None})
 
     def test_timestamps_are_utc_z(self):
         self.tree.upsert("/db", StatusCode.OK)
         body = self.client.get("/status/db", headers=JSON).get_json()
-        self.assertTrue(body["status"]["timestamp"].endswith("Z"))
+        self.assertTrue(body["status"]["run"]["observed_at"].endswith("Z"))
         self.assertTrue(body["generated_at"].endswith("Z"))
+        self.assertNotIn("timestamp", body["status"])
 
-    def test_unwritten_node_serializes_a_null_timestamp(self):
-        # ADR-0027: no check has written the container, so the wire carries `null`
-        # rather than an invented instant. The field stays present (required, but
-        # nullable) — only its value is gone.
+    def test_a_node_nothing_answers_for_has_no_run_block_at_all(self):
+        """Absent, not null. *Nothing answers for this node* and *a check answers and
+        has never written* were the same null before this version, and a client that
+        guessed read a container's inherited stamp as its own data age (ADR-0027's
+        defect, ADR-0080 decision 5)."""
         self.tree.upsert("/svc/api", StatusCode.OK)
         node = self.client.get("/status/svc", headers=JSON).get_json()["status"]
-        self.assertIn("timestamp", node)
-        self.assertIsNone(node["timestamp"])
-        self.assertIsNotNone(node["children"][0]["timestamp"])
+        self.assertNotIn("run", node)
+        self.assertIn("run", node["children"][0])
+        self.assertIsNotNone(node["children"][0]["run"]["observed_at"])
 
-    def test_maintenance_serialized(self):
+    def test_the_run_block_carries_the_tolerance_freshness_applied(self):
+        """The number, not the rule (ADR-0079 decision 5): roughly two intervals
+        today, and a client that computed it from `frequency_seconds` would hold a
+        second copy of a rule that is about to grow a branch."""
+        self.tree.upsert("/db", StatusCode.OK, frequency_seconds=60)
+        run = self.client.get("/status/db",
+                              headers=JSON).get_json()["status"]["run"]
+        self.assertEqual(run["frequency_seconds"], 60)
+        self.assertEqual(run["stale_after_seconds"], 120.0)
+        self.assertIsNone(run["wall_seconds"], "no engine ran this check")
+
+    def test_a_node_with_no_schedule_names_no_tolerance(self):
+        """It can never be stale by its own stamp, so there is no number to name."""
+        self.tree.upsert("/db", StatusCode.OK)
+        run = self.client.get("/status/db",
+                              headers=JSON).get_json()["status"]["run"]
+        self.assertNotIn("stale_after_seconds", run)
+        self.assertNotIn("frequency_seconds", run)
+
+    def test_maintenance_is_one_object_and_carries_both_dates(self):
+        """The bool and the details object were one fact in two fields, and the bool
+        is the half that cannot say anything: *pinned* is this being non-null
+        (ADR-0080 decision 4). Both dates ship, because an entry whose creation was
+        never recorded reads its set (ADR-0014)."""
         self.tree.upsert("/db", StatusCode.OK)
         self.tree.set_maintenance("/db", "planned", set_by="ada",
                                   expires_at=datetime(2999, 1, 1))
         node = self.client.get("/status/db", headers=JSON).get_json()["status"]
-        self.assertTrue(node["maintenance"])
-        self.assertEqual(node["own_code"], "MAINTENANCE")
-        # the override's details ride along as a nested object (ADR-0014)
-        details = node["maintenance_details"]
-        self.assertEqual(details["reason"], "planned")
-        self.assertEqual(details["set_by"], "ada")
-        self.assertTrue(details["expires_at"].endswith("Z"))     # RFC 3339 UTC
+        self.assertNotIn("maintenance_details", node)
+        pin = node["maintenance"]
+        self.assertEqual(pin["note"], "planned",
+                         "the name ADR-0047 will use, taken in the one release where "
+                         "changing it is free")
+        self.assertEqual(pin["set_by"], "ada")
+        self.assertEqual(pin["created_by"], "ada")
+        self.assertTrue(pin["expires_at"].endswith("Z"))     # RFC 3339 UTC
+        self.assertTrue(pin["created_at"].endswith("Z"))
 
-    def test_maintenance_details_null_when_not_in_maintenance(self):
+    def test_maintenance_is_null_when_nothing_is_pinned(self):
         self.tree.upsert("/db", StatusCode.OK)
         node = self.client.get("/status/db", headers=JSON).get_json()["status"]
-        self.assertFalse(node["maintenance"])
-        self.assertIsNone(node["maintenance_details"])
+        self.assertIsNone(node["maintenance"])
+
+    def test_a_contribution_names_the_rule_that_withheld_the_node(self):
+        """What the parent counted, and why it was not the node's `code` — ADR-0032
+        rule 5 reaching the API. Null on the ordinary case, so the interesting one is
+        the only one present."""
+        self.tree.upsert("/ok", StatusCode.OK)
+        self.tree.upsert("/pinned", StatusCode.ERROR, "boom")
+        self.tree.upsert("/quiet/leaf", StatusCode.OK)
+        self.tree.set_maintenance("/pinned", "planned", set_by="ada",
+                                  expires_at=datetime(2999, 1, 1))
+        children = {child["name"]: child for child in self.client.get(
+            "/status", headers=JSON).get_json()["status"]["children"]}
+        self.assertIsNone(children["ok"]["contribution"])
+        self.assertEqual(children["pinned"]["contribution"],
+                         {"code": None, "by": "maintenance"})
+        self.assertEqual(children["quiet"]["children"][0]["contribution"], None)
+        root = self.client.get("/status", headers=JSON).get_json()["status"]
+        self.assertEqual(root["code"], "OK", "the pinned error is not counted")
+
+    def test_a_node_that_never_reported_says_so_the_same_way(self):
+        """`UNDEFINED` contributes nothing for a different reason than a pin does,
+        and the field names which (ADR-0004 §2/§3 from the node's side)."""
+        self.tree.upsert("/svc/api", StatusCode.UNDEFINED)
+        node = self.client.get("/status/svc", headers=JSON).get_json()["status"]
+        self.assertEqual(node["contribution"], {"code": None, "by": "undefined"})
+
+    def test_the_instance_block_says_who_answered(self):
+        """The two facts `/health` withholds from an ungated caller (ADR-0066), fine
+        behind the token. Per envelope, never per node."""
+        self.tree.upsert("/db", StatusCode.OK)
+        body = self.client.get("/status/db", headers=JSON).get_json()
+        self.assertEqual(set(body["instance"]), {"version", "engine"})
+        self.assertEqual(body["instance"]["engine"], "disabled")
+        self.assertNotIn("instance", body["status"])
 
     def test_missing_token_is_401_problem(self):
         resp = self.client.get("/status", headers={"Accept": "application/json"})
@@ -176,6 +302,157 @@ class JsonApiTests(TestCase):
         self.assertEqual(resp.status_code, 200)
 
 
+class TheSpecIsTheContract(TestCase):
+    """`docs/api/openapi.yaml` is normative (ADR-0080), and this holds the served
+    bytes to it in **both** directions: every property the envelope carries is one the
+    spec declares, and every property the spec requires is served.
+
+    The second direction is the one that pays. A field added to the serializer and not
+    to the spec is exactly the drift the round exists to end, and it is invisible to
+    every test that asserts what it already knows to look for.
+    """
+
+    TYPES: ClassVar[dict[str, object]] = {
+        "string": str, "integer": int, "number": (int, float),
+        "boolean": bool, "array": list, "object": dict, "null": type(None)}
+
+    #: The only properties the spec may declare and a response not carry: the ones
+    #: whose absence is itself the fact (ADR-0080 decision 5). Everything else must
+    #: turn up in the fixture below, or the spec is promising something no run emits.
+    CONDITIONAL: ClassVar[dict[str, set[str]]] = {
+        "Status": {"run"},
+        "Run": {"frequency_seconds", "stale_after_seconds"}}
+
+    def setUp(self):
+        import yaml
+        spec = Path(__file__).resolve().parents[1] / "docs/api/openapi.yaml"
+        self.schemas = yaml.safe_load(
+            spec.read_text(encoding="utf-8"))["components"]["schemas"]
+        self.served: dict[str, set[str]] = {}
+        app_module.app.config["TESTING"] = True
+        self.tree = StatusTree()
+        app_module.status_tree = self.tree
+        app_module.api_tokens = {"tester": TOKEN}
+        self.client = app_module.app.test_client()
+
+    def _named(self, ref: str) -> dict:
+        return self.schemas[ref.rsplit("/", 1)[-1]]
+
+    def _check(self, value, schema, where, name=None):
+        """One value against one schema node. Only what this contract uses: a `$ref`,
+        a `oneOf` of a ref and null, an array of refs, an object, and scalar types."""
+        if "$ref" in schema:
+            ref = schema["$ref"].rsplit("/", 1)[-1]
+            return self._check(value, self._named(schema["$ref"]), where, ref)
+        if "oneOf" in schema:
+            self.assertTrue(
+                any(self._matches(value, option) for option in schema["oneOf"]),
+                f"{where}: {value!r} matches none of the alternatives")
+            if isinstance(value, dict):
+                for option in schema["oneOf"]:
+                    if "$ref" in option:
+                        self._check(value, self._named(option["$ref"]), where)
+            return None
+        declared = schema.get("type")
+        if declared is not None:
+            allowed = declared if isinstance(declared, list) else [declared]
+            types = tuple(self.TYPES[name] for name in allowed)
+            if bool not in types:
+                self.assertNotIsInstance(value, bool, f"{where}: a bool for {allowed}")
+            self.assertIsInstance(value, types, f"{where}: expected {allowed}")
+        if schema.get("type") == "array":
+            for index, item in enumerate(value):
+                self._check(item, schema["items"], f"{where}[{index}]")
+            return None
+        if (allowed := schema.get("enum")) is not None:
+            self.assertIn(value, allowed, f"{where}: outside the declared vocabulary")
+        if "properties" not in schema:
+            return None
+        properties = schema["properties"]
+        if name is not None:
+            self.served.setdefault(name, set()).update(value)
+        self.assertLessEqual(
+            set(value), set(properties),
+            f"{where}: served properties the spec does not declare")
+        self.assertLessEqual(
+            set(schema.get("required", ())), set(value),
+            f"{where}: the spec requires properties the envelope does not carry")
+        for name, sub in properties.items():
+            if name in value:
+                self._check(value[name], sub, f"{where}.{name}")
+        return None
+
+    def _matches(self, value, option) -> bool:
+        if "$ref" in option:
+            option = self._named(option["$ref"])
+        declared = option.get("type", "object")
+        allowed = declared if isinstance(declared, list) else [declared]
+        types = tuple(self.TYPES[name] for name in allowed)
+        if bool not in types and isinstance(value, bool):
+            return False
+        return isinstance(value, types)
+
+    def _a_tree_that_uses_every_shape(self):
+        """One tree exercising every branch of the schema that has one: a pinned
+        node, a pinned entry, a coded entry, a rank, a schedule, a container nothing
+        answers for, and a node that has never reported."""
+        self.tree.upsert("/ci", StatusCode.ERROR, [
+            Entry("build", "build #4215 failed", code=StatusCode.ERROR, running=True),
+            Entry("lint", "lint #4215 passed", code=StatusCode.OK),
+        ], members=True, frequency_seconds=300, order=2,
+            config="- **repo:** example", report="- 14 workflows",
+            about="the build", title="CI", show_when_quiet=False)
+        self.tree.upsert("/db", StatusCode.WARN, "slow", frequency_seconds=60)
+        self.tree.upsert("/svc/api", StatusCode.UNDEFINED)
+        self.tree.set_maintenance("/db", "planned", set_by="ada",
+                                  expires_at=datetime(2999, 1, 1))
+        self.tree.set_entry_maintenance("/ci", "build", "known", set_by="ada",
+                                        expires_at=datetime(2999, 1, 1))
+
+    def test_the_served_envelope_and_the_spec_agree_in_both_directions(self):
+        self._a_tree_that_uses_every_shape()
+        body = self.client.get("/status", headers=JSON).get_json()
+        self._check(body, self.schemas["StatusResponse"], "status_response")
+
+    def test_the_spec_would_notice_a_field_nobody_documented(self):
+        """The check above is worth only what it refuses. A property the serializer
+        invents and the spec does not declare is a failure, not a shrug."""
+        self._a_tree_that_uses_every_shape()
+        body = self.client.get("/status", headers=JSON).get_json()
+        body["status"]["undocumented"] = "surprise"
+        with self.assertRaises(AssertionError):
+            self._check(body, self.schemas["StatusResponse"], "status_response")
+
+    def test_the_spec_would_notice_a_required_field_that_went_missing(self):
+        self._a_tree_that_uses_every_shape()
+        body = self.client.get("/status", headers=JSON).get_json()
+        del body["status"]["contribution"]
+        with self.assertRaises(AssertionError):
+            self._check(body, self.schemas["StatusResponse"], "status_response")
+
+    def test_the_spec_declares_nothing_the_envelope_never_carries(self):
+        """The other edge of ADR-0080 decision 1: a field the schema promises and no
+        run fills is a promise no test can check and no reader can trust. So a
+        property declared here has to turn up in a response — the fixture is one tree
+        that uses every shape — unless its absence is the fact it carries."""
+        self._a_tree_that_uses_every_shape()
+        body = self.client.get("/status", headers=JSON).get_json()
+        self._check(body, self.schemas["StatusResponse"], "status_response",
+                    "StatusResponse")
+        for name, served in sorted(self.served.items()):
+            declared = set(self.schemas[name]["properties"])
+            self.assertEqual(declared - served - self.CONDITIONAL.get(name, set()),
+                             set(), f"{name}: declared and never served")
+
+    def test_the_version_in_the_spec_is_the_version_on_the_wire(self):
+        """`schema_version` and the spec's major are one decision (ADR-0080 decision
+        1), and nothing else keeps them together."""
+        import yaml
+        spec = Path(__file__).resolve().parents[1] / "docs/api/openapi.yaml"
+        version = yaml.safe_load(spec.read_text(encoding="utf-8"))["info"]["version"]
+        self.assertEqual(version.split(".")[0], str(api.SCHEMA_VERSION))
+
+
 class SerializerUnitTests(TestCase):
     def test_parse_api_tokens(self):
         self.assertEqual(
@@ -204,9 +481,12 @@ class SerializerUnitTests(TestCase):
         tree.upsert("/db", StatusCode.OK)
         snap = tree.snapshot("/db")
         env = api.status_envelope(
-            snap, now=datetime(2026, 6, 25, 12, 0, tzinfo=UTC))
+            snap, version="0.3.16", engine="running",
+            now=datetime(2026, 6, 25, 12, 0, tzinfo=UTC))
         self.assertEqual(env["generated_at"], "2026-06-25T12:00:00Z")
-        self.assertEqual(env["schema_version"], 1)
+        self.assertEqual(env["schema_version"], 2)
+        self.assertEqual(env["instance"],
+                         {"version": "0.3.16", "engine": "running"})
 
 
 if __name__ == "__main__":

@@ -91,8 +91,8 @@ class HostMetricsCheckTests(TestCase):
 
     # --- the labels (ADR-0025) ---
     #
-    # They are read off the **tree**, not off the result, because since ADR-0025's
-    # 2026-08-19 update this check declares them and the library resolves them:
+    # They are read off the **tree**, not off the result, because under ADR-0025
+    # this check declares them and the library resolves them:
     # the child `CheckResult` carries nothing for a name the type knows, and a
     # test asserting on the result would now be testing the wrong layer — and
     # would have gone on passing, vacuously, when the labels stopped arriving.

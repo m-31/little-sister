@@ -44,6 +44,10 @@ failed refresh; the engine heartbeats a `little-sister` node each tick, so a sta
 scheduler goes red through staleness, and an external supervisor handles whole-process
 death. → [record](adr/0005-dashboard-freshness-and-self-monitoring.md)
 
+*Amended by [ADR-0079](adr/0079-freshness-is-a-stated-tolerance.md) (2026-09-06):
+the staleness rule above is the one for a check with a `frequency`; a paced check is
+judged against the cycle ceiling it declares.*
+
 ### ADR-0006 — General config file & display timezones
 
 General options live in `config/settings.yaml` (since
@@ -60,7 +64,7 @@ engine upserts the root at `check.full_path` and each child beneath it, while id
 observation time, maintenance and events stay the tree's concern. A leaf result is
 unchanged. → [record](adr/0007-check-result-branches.md)
 
-### ADR-0008 — JSON output (backend mode)
+### ADR-0008 — JSON output (backend mode) — **superseded**
 
 JSON by content negotiation on the unversioned `GET /status[/<node_path>]`
 (`Accept: application/json`): an envelope (`schema_version`, `generated_at`, `status`)
@@ -68,6 +72,9 @@ around a recursive snapshot with `snake_case` properties, `UPPER_SNAKE` codes, p
 `reasons`, UTC `date-time`, both `own_code` and rolled-up `code`. Errors are Problem
 JSON (RFC 9457); auth is a named per-client bearer token from `.env`; the contract is
 `api/openapi.yaml`. → [record](adr/0008-json-output-api.md)
+
+Superseded by [ADR-0080](adr/0080-the-envelope-is-the-snapshot-published.md), which
+keeps the routes, the envelope, Problem JSON and the token and rewrites the node.
 
 ### ADR-0009 — Per-profile remote metrics scripts
 
@@ -674,3 +681,36 @@ process first, then the live file set aside as `.bak` and the store's copy in it
 place. The `.bak` never leaves the machine; the `state` child lists it beside the live
 copy, and *take the backups* swaps them back through the same adoption.
 → [record](adr/0077-authority-follows-the-lease.md)
+
+### ADR-0078 — The unit is what the engine releases, and a check declares its own
+
+The engine releases **units**, never checks: a type may answer `units()` with the keys
+it reads and `run_unit(key)` with one of them, and a check that says nothing is a
+one-unit check — today's behavior as the degenerate case. Additive, so the check API
+epoch does not move and no package has to release. A unit answers for the nodes it
+writes, so [ADR-0044](adr/0044-run-facts-on-the-node.md)'s ownership rule counts units
+rather than checks, and failure, retry and coverage are per unit rather than per check.
+The envelope carries `run` wherever a unit answered and an optional `unit` naming
+which. → [record](adr/0078-the-unit-is-what-the-engine-releases.md)
+
+### ADR-0079 — Freshness is judged against a stated tolerance, never a derived one
+
+`frequency + max(frequency, 30s)` where there is a period
+([ADR-0005](adr/0005-dashboard-freshness-and-self-monitoring.md), unchanged); the
+**cycle ceiling** the check declares (`stale_after:`, required of a paced check and
+refused at startup when absent) where there is none. A derived expected cycle is never
+a status input — it is a line on `/little-sister` beside `late.<path>`, since a
+collapsed pace is a fact about the engine, not about somebody's repository. The
+envelope publishes the verdict and the tolerance applied (`run.stale_after_seconds`),
+never the rule. → [record](adr/0079-freshness-is-a-stated-tolerance.md)
+
+### ADR-0080 — The envelope is the snapshot, published: `schema_version` 2
+
+What the JSON publishes is what the dashboard renders, and **a field added to the
+snapshot is added to the envelope in the same change**, additively. `reported` / `own`
+/ `code` with a `contribution` naming the rule the parent's count came from; `entries`
+(addressable or prose) for the string `reasons`; `maintenance` one object or null;
+`run` — present where a **unit** answered, absent elsewhere — for the nullable
+`timestamp`; `report`, `order`, `show_when_quiet`; an `instance` block. No versioned
+media type: the client ships with the server. Supersedes
+[ADR-0008](adr/0008-json-output-api.md). → [record](adr/0080-the-envelope-is-the-snapshot-published.md)

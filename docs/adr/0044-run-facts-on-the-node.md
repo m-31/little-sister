@@ -20,6 +20,13 @@
   round)
 - **Register:** [`../decisions.md`](../decisions.md)
 
+> **Update (2026-09-06):** the envelope carries them now.
+> [ADR-0080](0080-the-envelope-is-the-snapshot-published.md) publishes `run` and
+> `report`, and generalizes decision 1's ownership rule from *one check answers for
+> this node* to *one **unit** answers* ([ADR-0078](0078-the-unit-is-what-the-engine-releases.md)),
+> which is the same statement for every check that exists today. The block is absent
+> where nothing answers, never null.
+
 ## Context
 
 Three observations about one node, from the dashboard of a branch check (a CI/repo

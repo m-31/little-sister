@@ -1,4 +1,4 @@
-/* Read-to-edit maintenance disclosures (ADR-0014 amendment).
+/* Read-to-edit maintenance disclosures (ADR-0014).
  *
  * The disclosure itself is native <details>, so every node/entry form remains
  * usable without JavaScript.  This small enhancement gives the explicit Cancel

@@ -238,9 +238,9 @@ CHECK_TYPES: dict[str, type[Check]] = {}
 #: follow the library's version, only the part of it that is its own contract.
 #:
 #: **v2** opened when the subnode-metadata helpers left the surface — the library
-#: reads the whole ``subnodes:`` block now and a type only declares (ADR-0025's
-#: 2026-08-19 update), so ``parse_subnodes`` / ``resolve_text`` / ``expand_tokens``
-#: have no external caller left. Every plugin says ``require_api(2)``.
+#: reads the whole ``subnodes:`` block now and a type only declares (ADR-0025), so
+#: ``parse_subnodes`` / ``resolve_text`` / ``expand_tokens`` have no external
+#: caller left. Every plugin says ``require_api(2)``.
 API_VERSION = 2
 
 

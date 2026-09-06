@@ -15,6 +15,10 @@
   this may not switch off)
 - **Register:** [`../decisions.md`](../decisions.md)
 
+> **Update (2026-09-06):** decision 3's raw answer is no longer server-side:
+> [ADR-0080](0080-the-envelope-is-the-snapshot-published.md) publishes it as
+> `reported`, so a client can say *maintenance · error* the way a card does.
+
 ## Context
 
 Pinning a node **wrote** `MAINTENANCE` into it and discarded the check's next reading:

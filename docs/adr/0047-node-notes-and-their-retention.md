@@ -21,6 +21,13 @@
   [ADR-0008](0008-json-output-api.md) (the envelope, deliberately untouched here)
 - **Register:** [`../decisions.md`](../decisions.md)
 
+> **Update (2026-09-06):** half of decision 15 is spent early.
+> [ADR-0080](0080-the-envelope-is-the-snapshot-published.md) publishes the pin as one
+> object and calls its text **`note`** — this record's word — because renaming a
+> published field later would be a second breaking change for one word, and that
+> round was the release in which it was free. The model still calls it `reason` until
+> the history here is built; nothing else of this record ships yet.
+
 ## Context
 
 A maintenance pin carries a line of text saying why. Since Markdown arrived

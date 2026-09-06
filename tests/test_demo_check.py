@@ -106,8 +106,8 @@ class DemoScenarioTests(TestCase):
         # Alphabetical is genuinely different, or the fixture proves nothing.
         self.assertNotEqual([c.name for c in by_rank],
                             sorted(c.name for c in result.children))
-        # The titles are declared now, not stamped (ADR-0025's 2026-08-19
-        # update), so read them where they live — on the check, resolved. Reading
+        # The titles are declared now, not stamped (ADR-0025), so read them where
+        # they live — on the check, resolved. Reading
         # the result's empty `title` would still pass and prove nothing.
         check = DemoCheck.from_config(
             {"type": "demo", "path": "/security/posture", "scenario": "severity"},

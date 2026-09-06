@@ -177,7 +177,8 @@ orchestrator) works the same. Each piece is optional:
   ```
 
 - **API tokens** for the read-only JSON API
-  ([ADR-0008](docs/adr/0008-json-output-api.md)) — named per-client bearer
+  ([ADR-0080](docs/adr/0080-the-envelope-is-the-snapshot-published.md)) — named
+  per-client bearer
   tokens; clients send them as `Authorization: Bearer <token>` with
   `Accept: application/json`. Without them the JSON API rejects all requests:
 

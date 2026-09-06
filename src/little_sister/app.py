@@ -1500,7 +1500,7 @@ def _split_heartbeat(
 @app.route('/status')
 @app.route('/status/<path:branch>')
 def status(branch: str = "") -> ResponseReturnValue:
-    # JSON backend mode (ADR-0008): content-negotiated, token-gated, read-only.
+    # JSON backend mode (ADR-0080): content-negotiated, token-gated, read-only.
     if request.accept_mimetypes.best_match(
             ("text/html", "application/json")) == "application/json":
         if authenticate(request.headers.get("Authorization"), api_tokens) is None:
@@ -1510,7 +1510,10 @@ def status(branch: str = "") -> ResponseReturnValue:
         if node is None:
             return _api_problem(404, "Not Found",
                                 f"No status node at path {branch!r}.")
-        return _api_json(status_envelope(node))
+        # The two facts `/health` withholds from an ungated caller are fine
+        # here, where the reader has already presented a token (ADR-0080).
+        return _api_json(status_envelope(node, version=__version__,
+                                         engine=_engine_state()))
     # This route is not behind the gate (`identity.SELF_AUTHENTICATING_ENDPOINTS`):
     # the JSON branch above answers a bearer token, and a gate in front of the whole
     # view would redirect an API client to a login form. So the session half is

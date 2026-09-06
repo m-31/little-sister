@@ -17,6 +17,12 @@
   subnodes — and why it is not this one)
 - **Register:** [`../decisions.md`](../decisions.md)
 
+> **Update (2026-09-06):** decision 13's object per entry shipped, in
+> [ADR-0080](0080-the-envelope-is-the-snapshot-published.md): `entries` — an object
+> whose `addressable` flag is this record's `members`, and whose items carry `slug`,
+> `text`, `code`, `running` and `maintenance` — in place of the string `reasons`.
+> The name this record could not spend twice was spent there.
+
 ## Context
 
 A check that discovers **dynamic entries** puts many of them into one node's reasons:

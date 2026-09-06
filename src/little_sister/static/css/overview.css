@@ -749,7 +749,7 @@ body[data-ls-card-state="below"] .status-card__state {
     text-overflow: ellipsis;
     white-space: nowrap;
 }
-/* Who set the pin (ADR-0014 amendment): the popover has room for one name, so
+/* Who set the pin (ADR-0014): the popover has room for one name, so
    it names the *last writer* — whose words the reason above it is. Quieter than
    the reason and on its own line, so it never competes with the path. */
 .maintenance-pop__by {
@@ -1082,7 +1082,7 @@ body[data-ls-card-state="below"] .status-card__state {
     scroll-margin-top: calc(var(--ls-bar-height) + 1rem);
 }
 
-/* Maintenance is read first and edited on intent (ADR-0014 amendment). Native
+/* Maintenance is read first and edited on intent (ADR-0014). Native
    details keeps the node form usable without JS. Once JS supplies Cancel/Escape,
    the open trigger yields to those form actions; without JS it remains the native
    close control. Bootstrap styles the summary as a button, so remove the disclosure
@@ -2252,8 +2252,8 @@ body[data-ls-theme="cyberpunk"] .ls-brand__wordmark { text-shadow: 0 0 9px var(-
 .ls-links__tick {
     vertical-align: -0.125em;
 }
-/* A pass that gave up on a host still holding the connection open (ADR-0030,
-   amended). It takes **weight and not color**: the rule two comments up — nothing
+/* A pass that gave up on a host still holding the connection open (ADR-0030).
+   It takes **weight and not color**: the rule two comments up — nothing
    turns this line red — is about not competing with the failures drawn on the rows
    themselves, and a stalled pass is a fact about the page's own machinery rather
    than about any entry on it. Inheriting the muted ink also means it needs no

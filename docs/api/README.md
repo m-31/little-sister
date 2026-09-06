@@ -3,7 +3,7 @@
 A small, **read-only JSON** view of the aggregated status tree. The same routes serve
 the HTML dashboard; the representation is chosen by the `Accept` header. This page is
 the practical guide; the normative reference is the [`openapi.yaml`](openapi.yaml)
-beside it (design rationale lives in little-sister's ADR-0008 — every record this
+beside it (design rationale lives in little-sister's ADR-0080 — every record this
 page and the spec name is little-sister's, also in the copy a client keeps).
 
 ## At a glance
@@ -12,7 +12,7 @@ page and the spec name is little-sister's, also in the copy a client keeps).
 - **Auth** — a bearer token (below). Required for JSON; the browser/session path is
   separate and not part of this contract.
 - **Format** — request `Accept: application/json`. Responses are a versioned envelope
-  (`schema_version`, `generated_at`, `status`).
+  (`schema_version`, `generated_at`, `instance`, `status`).
 - **Endpoints**
   - `GET /status` — the whole tree.
   - `GET /status/{node_path}` — the subtree at an absolute, slash-separated path, e.g.
@@ -51,13 +51,22 @@ curl -si -H "Accept: application/json" -H "Authorization: Bearer $TOKEN" \
   -H "X-Flow-Id: abc-123" "$BASE/status" | grep -i '^x-flow-id'
 ```
 
-A node in the response carries its status (`own_code` / `code` / `reasons` / `stale`),
-timing (`timestamp`, `frequency_seconds`), Markdown metadata (`about`, `title`,
-`description`, `config` — **raw Markdown**, render it client-side), `maintenance` plus
-`maintenance_details` when pinned (its `reason` is raw Markdown too), and `children`
-in a deterministic order — a declared rank first, then case-insensitive name order,
-which is plain name order for the many trees that declare no rank. Full field docs
-are in [`openapi.yaml`](openapi.yaml).
+**What a node carries is what the dashboard shows.** Three statuses — `reported`
+(what the check said), `own` (what the node shows once its own pins apply) and `code`
+(rolled up, degraded when stale) — plus `contribution`, which is non-null only when
+something kept this node out of its parent's count and names the rule that did.
+`entries` holds the node's reasons: `addressable` says whether they are members with
+stable slugs that can be pinned one by one, and each item carries its `text`, its own
+`code` where the check declared one, and its own `maintenance`. `run` holds the timing
+— `observed_at`, `wall_seconds`, `next_at`, and where there is a schedule
+`frequency_seconds` and the `stale_after_seconds` the server measured freshness by —
+and is **absent entirely** where nothing answers for the node, which is not the same
+as present with a null `observed_at`. `maintenance` is one object or null, and the text on it is `note`. The
+Markdown metadata is `about`, `title`, `description`, `config` (what the check ran
+with) and `report` (what its last run found) — **raw Markdown**, render it
+client-side. `order` is the declared rank, `show_when_quiet` a tri-state, and
+`children` are in rank-then-name order. Full field docs are in
+[`openapi.yaml`](openapi.yaml).
 
 ## Errors
 
@@ -72,14 +81,23 @@ Failures are **Problem JSON** (RFC 9457), media type `application/problem+json`:
 
 ## Versioning
 
-Compatible changes are **additive** and bump the spec's minor `info.version`;
-`schema_version` (in the envelope) bumps only on a **breaking** change, which is offered
-through a versioned media type — never a versioned URL. Two changes shipped under
-`schema_version` 1 that a strict reading calls incompatible — `timestamp` became
-nullable in v1.2, and `children` order became rank-then-name in v1.3 — and the spec's
-own history says why the bump is deferred to one client-facing revision. Decode
-defensively: tolerate unknown fields, a `null` timestamp and any child order, and
-refuse an unknown `schema_version` major.
+A field added to the served snapshot is added to this contract in the same change,
+and such an addition is **compatible**: `schema_version` stays and the spec's minor
+`info.version` moves. `schema_version` and the major move only when a field changes
+meaning or goes. There is no versioned media type and no compatibility window — the
+clients of this API are released with the server, and a client that meets a
+`schema_version` it does not know should say so and stop rather than guess.
+
+**2.0.0 is the first version in which the envelope is the snapshot** rather than an
+older projection of it, so nothing in it is compatible with 1.3.0: `own_code` became
+`own` and `reported` joined it, `contribution` is new, the string array `reasons`
+became `entries`, the `maintenance` bool and `maintenance_details` became one nullable
+object, the nullable `timestamp` and `frequency_seconds` became `run` — absent where
+nothing answers for a node — and `report`, `order`, `show_when_quiet` and the
+envelope's `instance` are new.
+
+Decode defensively all the same: tolerate unknown fields and any child order, and
+treat an absent `run` as *nothing answers for this node* rather than as an error.
 
 ## Rendering the spec
 

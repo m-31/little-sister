@@ -1,29 +1,34 @@
 openapi: 3.1.0
 
 # Little Sister — JSON output (backend mode).
-# Normative contract for ADR-0008. Aligned with the Zalando RESTful API Guidelines
+# Normative contract for ADR-0080. Aligned with the Zalando RESTful API Guidelines
 # (https://opensource.zalando.com/restful-api-guidelines/): content negotiation, no
 # URL versioning (#115), Problem JSON errors (#176), snake_case properties (#118),
 # UPPER_SNAKE_CASE enums (#240), RFC 3339 UTC date-times (#238), required meta (#218).
 #
 # Field provenance (maintainers — little-sister's ADRs, in its docs/adr/, also where a
-# client keeps a copy of this file): node addressing ADR-0016;
-# about + leaf description ADR-0012; title ADR-0017; config ADR-0013; Markdown text
-# fields ADR-0018; maintenance + maintenance_details ADR-0014; roll-up & staleness
-# ADR-0039 / ADR-0005; observation timestamp ADR-0027; bearer token ADR-0003. Consumer-facing `description:` text is
-# kept self-contained; rationale lives in those ADRs and docs/api/README.md.
+# client keeps a copy of this file): the envelope is the snapshot published ADR-0080;
+# node addressing ADR-0016; the three statuses and the contribution ADR-0032; entries
+# ADR-0036 / ADR-0042; about + leaf description ADR-0012; title ADR-0017; config +
+# report ADR-0013 / ADR-0044; Markdown text fields ADR-0018; maintenance ADR-0014;
+# roll-up & staleness ADR-0039 / ADR-0005 / ADR-0079; the run facts ADR-0044 and the
+# unit that answers for a node ADR-0078; sibling rank ADR-0055; show_when_quiet
+# ADR-0063; instance facts ADR-0066; bearer token ADR-0003. Consumer-facing
+# `description:` text is kept self-contained; rationale lives in those ADRs and
+# docs/api/README.md.
 
 info:
   title: Little Sister Status API
   description: |-
     Read-only JSON view of the aggregated status tree.
 
-    Each node carries its rolled-up status plus metadata the client renders as
-    Markdown — `about` (what it is), `title`, a leaf `description` (what its check
-    does), and the check's `config` — together with maintenance details when pinned.
-    Children are returned in a deterministic order: a declared rank first, then
-    natural, case-insensitive name order. Most trees declare no rank and are
-    therefore plain name order.
+    **What this publishes is what the dashboard renders.** A node carries the three
+    statuses it has — what its check `reported`, its `own` status once its own
+    suppressions apply, and the rolled-up effective `code` — plus what its parent
+    counted (`contribution`), its entries, its maintenance pin, its last run, and the
+    text and display metadata the client renders as Markdown. Children are returned in
+    a deterministic order: a declared rank first (`order`), then natural,
+    case-insensitive name order.
 
     The same resources back the HTML dashboard; the representation is chosen by
     `Accept` (content negotiation). `Accept: application/json` returns the JSON
@@ -34,21 +39,24 @@ info:
     An optional `X-Flow-Id` request header is echoed in the response, to correlate a
     request across logs.
 
-    Versioning: compatible changes are additive (minor `info.version`); a breaking
-    change bumps `info.version` (major) and `schema_version`, and is offered through a
-    versioned media type — never a versioned URL. v1.1 added the node-metadata fields
-    (`about`, `title`, `config`) and `maintenance_details`, additively
-    (`schema_version` unchanged). v1.2 made `timestamp` nullable — strictly an
-    incompatible change; `schema_version` stays **1** and the formal bump is
-    consolidated into a later, client-facing enrichment of this contract (ADR-0027).
-    v1.3 replaced the flat promise of name order on `children` with `(rank, name)`
-    (ADR-0055): a client that renders in received order may see a ranked node's
-    children move. The rank itself is **not** a field here; it joins the same
-    consolidated revision. `schema_version` stays **1** for the same reason as v1.2.
+    **Versioning.** A field added to the served snapshot is added here in the same
+    change, and such an addition is compatible: `schema_version` stays and
+    `info.version` moves a minor. `schema_version` and the major move only when a
+    field changes meaning or goes. There is no versioned media type and no
+    compatibility window — the clients of this API are released with the server.
+
+    2.0.0 is the first version in which the envelope is the snapshot rather than an
+    older projection of it. Against 1.3.0: `own_code` is `own` and `reported` joins
+    it; `contribution` is new; the string array `reasons` became the `entries` object;
+    the `maintenance` bool and `maintenance_details` became one nullable `maintenance`
+    object; the nullable `timestamp` and `frequency_seconds` became the `run` object,
+    **absent** where nothing answers for a node; and `report`, `order`,
+    `show_when_quiet` and the envelope's `instance` block are new. A client that meets
+    a `schema_version` it does not know should say so and stop.
 
     See `docs/api/README.md` (linked below) for auth, `curl` examples and how tokens
     are provisioned.
-  version: 1.3.0
+  version: 2.0.0
   contact:
     name: little-sister
     url: https://github.com/m-31/little-sister
@@ -185,7 +193,7 @@ components:
 
     StatusCode:
       type: string
-      description: A node's status code.
+      description: A node's status code. The vocabulary is closed.
       enum: [OK, WARN, ERROR, MAINTENANCE, UNDEFINED]
 
     Status:
@@ -193,10 +201,13 @@ components:
       description: |-
         A node in the status tree.
 
-        `own_code` is the code the node itself reported; `code` is the serving
-        instance's rolled-up, stale-degraded effective status. A display client reads
-        `code`; a federating parent grafts `own_code` + `children` and re-rolls
-        locally to avoid double aggregation.
+        A node has three statuses. `reported` is what its check said; `own` is the
+        first derived value — what the node shows once its own suppressions apply, so
+        a pinned node, or one whose addressable entries are every one of them pinned,
+        reads `MAINTENANCE` here while `reported` still says what the check found; and
+        `code` is the effective status, rolled up from the subtree and degraded when
+        stale. A display client reads `code`. A federating parent grafts `own` plus
+        `children` and re-rolls locally, so it never aggregates twice.
       properties:
         path:
           type: string
@@ -206,41 +217,26 @@ components:
           type: string
           description: The node's own name — the last path segment.
           examples: ["db"]
-        own_code:
+        reported:
+          $ref: "#/components/schemas/StatusCode"
+        own:
           $ref: "#/components/schemas/StatusCode"
         code:
           $ref: "#/components/schemas/StatusCode"
-        reasons:
-          type: array
+        contribution:
           description: >-
-            Human-readable explanations; required when not OK. Each is raw Markdown
-            the client renders — a check may fence captured command or log output as a
-            code block.
-          items:
-            type: string
-          examples: [["HTTP 503 from /health"]]
-        timestamp:
-          type: [string, "null"]
-          format: date-time
-          description: >-
-            When the check behind this node last ran (RFC 3339, UTC). Present only
-            where that question has exactly one answer: a node a check writes carries
-            its own last write, and a container with exactly one check below it
-            inherits that check's run time. Null otherwise — a container above two or
-            more checks (notably the root of any multi-check deployment), or a node no
-            check has run yet. Observation times are never aggregated; `stale` is the
-            freshness signal, and it does roll up.
-          examples: ["2026-06-25T18:04:55Z"]
+            What this node's parent counted, and the rule that made it something
+            other than `code` — null when the parent counted `code`, which is the
+            ordinary case.
+          oneOf:
+            - $ref: "#/components/schemas/Contribution"
+            - type: "null"
         description:
           type: string
           description: >-
             What the node's check does — its purpose — kept separate from `about`
             (what the node *is*). For a branch check each leaf gets its own. Raw
             Markdown the client renders; empty when unset.
-        frequency_seconds:
-          type: [integer, "null"]
-          minimum: 1
-          description: The check's interval; null when not set by a check.
         about:
           type: string
           description: >-
@@ -252,72 +248,275 @@ components:
         config:
           type: string
           description: >-
-            The owning check's parameters, as raw Markdown; empty for container nodes
-            and nodes without a single owning check.
-        maintenance:
-          type: boolean
-          description: Whether an admin has pinned the node to MAINTENANCE.
-        maintenance_details:
+            What the owning check ran *with* — its parameters, as raw Markdown. Empty
+            for container nodes and for a node two or more checks write to, where no
+            single check answers for it.
+        report:
+          type: string
           description: >-
-            The maintenance override's details (who/why/when), or null when the node
-            is not under maintenance. The `maintenance` bool is the quick flag.
+            What the owning check's last run *found*, as raw Markdown — a roster, a
+            count, whatever the run has to say that is not a status claim. Empty under
+            the same condition as `config`.
+        order:
+          type: integer
+          description: >-
+            The declared sibling rank this node was sorted by; 0 where nobody declared
+            one, which sorts before every positive rank. Published so a client can see
+            the order it was handed rather than infer it from the sequence.
+        show_when_quiet:
+          type: [boolean, "null"]
+          description: >-
+            Whether this node's quiet lines are still worth showing. Null where nobody
+            said — a stated `false` is a declaration and not a silence, so the three
+            states are deliberately not two.
+        maintenance:
+          description: >-
+            The maintenance pin on this node — why, by whom, when, until when — or
+            null when nothing is pinned. *Pinned* is this being non-null; there is no
+            separate flag.
           oneOf:
-            - $ref: "#/components/schemas/MaintenanceDetails"
+            - $ref: "#/components/schemas/Maintenance"
             - type: "null"
         stale:
           type: boolean
-          description: True when the node (or a descendant) was not observed within ~2x its interval.
+          description: >-
+            True when this node or a descendant has not been observed within the
+            tolerance the server applied (see `run.stale_after_seconds`). It is the
+            server's verdict: a client shows it and does not recompute freshness from
+            a clock it does not share.
+        run:
+          $ref: "#/components/schemas/Run"
+        entries:
+          $ref: "#/components/schemas/Entries"
         children:
           type: array
           description: >-
             Child nodes, ordered by declared rank first and then by name — natural
-            and case-insensitive, so `node2` precedes `node10`. A node whose check
-            or deployment declares no rank shares the default, so an undeclared set
-            is plain name order. The rank is not exposed as a field.
+            and case-insensitive, so `node2` precedes `node10`.
           items:
             $ref: "#/components/schemas/Status"
       required:
         - path
         - name
-        - own_code
+        - reported
+        - own
         - code
-        - reasons
-        - timestamp
+        - contribution
+        - description
+        - about
+        - title
+        - config
+        - report
+        - order
+        - show_when_quiet
         - maintenance
         - stale
+        - entries
         - children
 
-    MaintenanceDetails:
+    Contribution:
       type: object
       description: >-
-        Why a node was pinned to MAINTENANCE, by whom, and when it auto-expires.
-        Present only while `maintenance` is true; bounded — every entry has an expiry.
+        What a node contributed to its parent's roll-up, when that was not its `code`.
       properties:
-        reason:
+        code:
+          description: >-
+            The status the parent counted — null when the node was not counted at all,
+            which is what both of today's rules do.
+          oneOf:
+            - $ref: "#/components/schemas/StatusCode"
+            - type: "null"
+        by:
           type: string
           description: >-
-            Why the node was put under maintenance, as raw Markdown for the client
-            to render through its own safe renderer.
+            The rule that transformed the contribution. `maintenance` — the node, or
+            every one of its addressable entries, is pinned. `undefined` — the node has
+            never reported. Further rules add further names, which is a compatible
+            change; treat an unknown name as "something withheld this node" and show
+            it.
+          examples: ["maintenance"]
+      required:
+        - code
+        - by
+
+    Entries:
+      type: object
+      description: >-
+        A node's reasons. Prose and members are different things, which is why this is
+        an object and not an array.
+      properties:
+        addressable:
+          type: boolean
+          description: >-
+            Whether these items are members that may be pinned one by one — each has a
+            stable `slug` — rather than lines of prose about the node as a whole.
+        items:
+          type: array
+          description: >-
+            The entries, in the order the check emitted them. Never sorted.
+          items:
+            $ref: "#/components/schemas/Entry"
+      required:
+        - addressable
+        - items
+
+    Entry:
+      type: object
+      description: One of a node's reasons.
+      properties:
+        slug:
+          type: string
+          description: >-
+            The entry's key, stable across runs, and what a pin on it is held against.
+          examples: ["stress-api-pr-42"]
+        text:
+          type: string
+          description: >-
+            The line itself, as raw Markdown the client renders — a check may fence
+            captured command or log output as a code block.
+          examples: ["PR #42 waiting 6d"]
+        code:
+          description: >-
+            The entry's own status, where the check declared one — null where it
+            carries the node's, which is every entry that predates coded ones.
+          oneOf:
+            - $ref: "#/components/schemas/StatusCode"
+            - type: "null"
+        running:
+          type: boolean
+          description: >-
+            Whether this line's subject has work in flight. Display only: it never
+            affects the roll-up, so a red line whose job is re-running stays red.
+        maintenance:
+          description: The pin on this entry, or null when it is not pinned.
+          oneOf:
+            - $ref: "#/components/schemas/Maintenance"
+            - type: "null"
+      required:
+        - slug
+        - text
+        - code
+        - running
+        - maintenance
+
+    Run:
+      type: object
+      description: |-
+        The last run's facts for the node.
+
+        **Absent — not null — where nothing answers for this node**: a container above
+        two or more checks, or a node below a branch check's mount whose next update
+        belongs one level up. That is a different fact from *something answers and has
+        never written*, which is this object present with a null `observed_at`.
+
+        Nulls inside it are facts of their own, not missing data.
+      properties:
+        observed_at:
+          type: [string, "null"]
+          format: date-time
+          description: >-
+            When this node was last written (RFC 3339, UTC), or null where whatever
+            answers for it has never run. Observation times are never aggregated.
+          examples: ["2026-09-06T10:11:40Z"]
+        wall_seconds:
+          type: [number, "null"]
+          minimum: 0
+          description: >-
+            How long the last run took, or null where there has been none to time.
+        next_at:
+          type: [string, "null"]
+          format: date-time
+          description: >-
+            When the next run is due (RFC 3339, UTC) — the engine's armed slot, not
+            `observed_at` plus the interval, because a failing check's next slot is
+            pulled in. Null where there is no live schedule.
+          examples: ["2026-09-06T10:18:40Z"]
+        frequency_seconds:
+          type: integer
+          minimum: 1
+          description: >-
+            The interval this node is read on. Absent where it is read on no fixed
+            interval.
+        stale_after_seconds:
+          type: number
+          minimum: 0
+          description: >-
+            How old `observed_at` may get before `stale` turns true — the tolerance
+            the server actually applied, so a client can say how fresh a reading is
+            meant to be without holding a copy of the rule. Absent where the node
+            cannot go stale by its own stamp.
+      required:
+        - observed_at
+        - wall_seconds
+        - next_at
+
+    Maintenance:
+      type: object
+      description: >-
+        Why something was pinned to MAINTENANCE, by whom, and when it auto-expires.
+        Bounded — every pin has an expiry. The same shape on a node and on one of its
+        entries.
+      properties:
+        note:
+          type: string
+          description: >-
+            Why it was pinned, as raw Markdown for the client to render through its
+            own safe renderer.
           examples: ["**Disk swap** — see [runbook](https://ops.example/runbook)"]
         set_by:
           type: string
-          description: The admin who set it.
+          description: The admin who last wrote the pin.
           examples: ["ada"]
         set_at:
           type: string
           format: date-time
-          description: When it was set (RFC 3339, UTC).
-          examples: ["2026-06-25T18:00:00Z"]
+          description: When it was last written (RFC 3339, UTC).
+          examples: ["2026-09-06T18:00:00Z"]
         expires_at:
           type: string
           format: date-time
           description: When it auto-expires (RFC 3339, UTC).
-          examples: ["2026-07-02T18:00:00Z"]
+          examples: ["2026-09-13T18:00:00Z"]
+        created_by:
+          type: string
+          description: >-
+            The admin who first set it. Equal to `set_by` for a pin nobody has edited.
+          examples: ["ada"]
+        created_at:
+          type: string
+          format: date-time
+          description: >-
+            When it was first set (RFC 3339, UTC). Equal to `set_at` for a pin nobody
+            has edited; clearing and re-pinning honestly starts a new creation.
+          examples: ["2026-09-06T18:00:00Z"]
       required:
-        - reason
+        - note
         - set_by
         - set_at
         - expires_at
+        - created_by
+        - created_at
+
+    Instance:
+      type: object
+      description: >-
+        Who answered this request. One response is one instance's answer, so these are
+        per envelope and never per node.
+      properties:
+        version:
+          type: string
+          description: The serving instance's little-sister version.
+          examples: ["0.3.16"]
+        engine:
+          type: string
+          description: >-
+            Whether this instance is running checks. `disabled` is a deployment that
+            asked for no engine; `failed` is one whose configuration would not load,
+            and its tree is whatever it holds from before.
+          enum: [running, disabled, failed]
+      required:
+        - version
+        - engine
 
     StatusResponse:
       type: object
@@ -325,18 +524,23 @@ components:
       properties:
         schema_version:
           type: integer
-          description: Major version of this JSON / federation schema.
-          examples: [1]
+          description: >-
+            Major version of this JSON / federation schema. A client that meets a
+            version it does not know should say so and stop.
+          examples: [2]
         generated_at:
           type: string
           format: date-time
           description: The serving instance's clock when the snapshot was taken (RFC 3339, UTC).
-          examples: ["2026-06-25T18:05:00Z"]
+          examples: ["2026-09-06T10:12:03Z"]
+        instance:
+          $ref: "#/components/schemas/Instance"
         status:
           $ref: "#/components/schemas/Status"
       required:
         - schema_version
         - generated_at
+        - instance
         - status
 
     Problem:

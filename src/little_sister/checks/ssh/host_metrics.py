@@ -79,8 +79,8 @@ METRIC_NODES = ("ssh", "disk", "memory", "cpu", "load")
 # (ADR-0013). This is the **declared default**, handed to the library as
 # ``subnode_defaults`` and resolved there against the deployment's ``subnodes:``
 # block (which may override it, or extend it with ``{default}``); ``nodes.yaml``
-# still wins above both. This check reads none of that itself — since ADR-0025's
-# 2026-08-19 update the declaration *is* the whole of its part in it.
+# still wins above both. This check reads none of that itself — under ADR-0025 the
+# declaration *is* the whole of its part in it.
 ABOUT: dict[str, str] = {
     "ssh": (
         "The SSH connection this check opens to collect the metrics — transport "

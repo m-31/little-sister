@@ -8,6 +8,13 @@
   [ADR-0006](0006-config-file-and-timezones.md) (timestamp storage & rendering).
 - **Register:** [`../decisions.md`](../decisions.md)
 
+> **Update (2026-09-06):** the nullable `timestamp` is gone rather than made
+> non-nullable: [ADR-0080](0080-the-envelope-is-the-snapshot-published.md) replaced
+> it with a `run` object that is **absent** where nothing answers for a node and
+> present with a null `observed_at` where something answers and has never written.
+> The two states this record could only spell as one null are now two, and the
+> deferred formal bump it named happened there.
+
 ## Context
 `Status.timestamp` is meant to be the **observation time**: `update()` re-stamps it on
 every check write, `touch()` on a maintenance-pinned refresh. But `__init__` stamped it

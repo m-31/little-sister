@@ -294,8 +294,8 @@ def _children(t: float, period: float) -> CheckResult:
 #: of its phase at once: the bands sort by rank, and none of them draws a title
 #: that only repeats the name it sits beside.
 #:
-#: The two **labels** are declared rather than stamped (ADR-0025's 2026-08-19
-#: update): `_BAND_LABELS` below goes to the library as `subnode_defaults`, which
+#: The two **labels** are declared rather than stamped (ADR-0025):
+#: `_BAND_LABELS` below goes to the library as `subnode_defaults`, which
 #: resolves it against any `subnodes:` block in `demo_config/checks/security_wiz.yaml`
 #: and lets the engine write the result per band name. Add a `subnodes:` entry
 #: there and the hover card changes with no code edit at all — that is the path

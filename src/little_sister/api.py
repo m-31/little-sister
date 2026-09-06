@@ -1,8 +1,17 @@
 """Serialization and auth helpers for the JSON output (backend mode).
 
 Pure, framework-agnostic functions shared by the web layer and — later — the
-satellite parser (ADR-0008). The Flask glue (content negotiation, building the
+satellite parser (ADR-0080). The Flask glue (content negotiation, building the
 HTTP responses) stays in :mod:`little_sister.app`.
+
+**The envelope is the snapshot, published** (ADR-0080). Everything the dashboard
+renders it renders from :class:`~little_sister.tree.StatusSnapshot`, and this module
+is that snapshot in JSON — no projection, no second vocabulary. The rule that keeps it
+so: a field added to the snapshot is added here in the same change, which is
+compatible (``schema_version`` stays 2, the spec's minor moves) and therefore cheap
+for whoever adds it. The rule's other edge is enforced here too, by simply not writing
+the code: nothing is emitted that the snapshot cannot produce, because a field the
+schema promises and no run ever fills is a promise no test can check.
 """
 from __future__ import annotations
 
@@ -12,11 +21,22 @@ from typing import Any
 
 from little_sister.maintenance import MaintenanceEntry
 from little_sister.secrets import same_secret
-from little_sister.tree import StatusSnapshot
+from little_sister.status import StatusCode
+from little_sister.tree import ReasonLine, StatusSnapshot
 
-# Major version of the JSON / federation schema (ADR-0008). Bumped only on an
-# incompatible change; additive fields keep it the same.
-SCHEMA_VERSION = 1
+#: Major version of the JSON / federation schema (ADR-0080). Bumped only when a field
+#: changes meaning or goes; an added field keeps it and moves the spec's minor.
+SCHEMA_VERSION = 2
+
+#: What a node contributes to its parent, where that is not simply its ``code``, and
+#: the rule that made it so (ADR-0032 decision 2; ADR-0080 decision 2). Both of
+#: today's rules withhold the node entirely — the value beside the name is ``None``,
+#: *not counted at all* — and a later rule that caps or delays a contribution puts a
+#: real code there instead.
+NOT_COUNTED = {
+    StatusCode.MAINTENANCE: "maintenance",
+    StatusCode.UNDEFINED: "undefined",
+}
 
 
 def _utc_z(timestamp: str) -> str:
@@ -34,80 +54,171 @@ def _utc_z(timestamp: str) -> str:
     return moment.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
 
-def _maintenance_details(entry: MaintenanceEntry | None) -> dict[str, str] | None:
-    """The maintenance override's details for the envelope — why / by whom / when,
-    timestamps as RFC 3339 UTC — or ``None`` when the node isn't under maintenance
-    (ADR-0014). The `maintenance` bool stays the quick flag beside it."""
+def _maintenance(entry: MaintenanceEntry | None) -> dict[str, str] | None:
+    """A maintenance pin — why, by whom, when, until when — or ``None`` where nothing
+    is pinned (ADR-0014).
+
+    One nullable object, in place of the bool and the details object that used to sit
+    beside each other: *pinned* is this being non-null, and two fields that must agree
+    eventually will not. Both dates ship, because both are kept: ``set_*`` is the last
+    write, ``created_*`` the first, and an entry whose creation was never recorded
+    reads its set (:class:`~little_sister.maintenance.MaintenanceEntry`), so the pair
+    is always present and never guessed at here.
+    """
     if entry is None:
         return None
+    # **`note`, not `reason`.** The model's field is `reason` and ADR-0047 renames it
+    # to `note` when the note history is built — so the envelope would break a second
+    # time over one word. This is the release in which changing it is free, so it is
+    # changed here: the value is what it always was, and the name is the one that will
+    # be true. The two disagree until that record lands, which is why this comment is
+    # here rather than in a reader's way.
     return {
-        "reason": entry.reason,
+        "note": entry.reason,
         "set_by": entry.set_by,
         "set_at": _utc_z(entry.set_at),
         "expires_at": _utc_z(entry.expires_at),
+        "created_by": entry.created_by,
+        "created_at": _utc_z(entry.created_at),
     }
 
 
-def snapshot_to_dict(snapshot: StatusSnapshot) -> dict[str, Any]:
-    """Serialize a status snapshot subtree to the ADR-0008 JSON shape.
+def _entry(line: ReasonLine) -> dict[str, Any]:
+    """One of a node's entries: its key, its text, whatever code and pin it carries.
 
-    ``own_code`` is the node's own status and ``code`` the rolled-up,
-    stale-degraded effective one — a federating parent grafts ``own_code`` +
-    ``children`` and re-rolls locally. ``own_code`` is **derived**, not the raw
-    reading (ADR-0032 rule 3): a pin or an all-pinned member set reads
-    ``MAINTENANCE`` there. Its values are unchanged by the keystone — the
-    derivation reproduces exactly what used to be written into the tree — but the
-    reading it covers is now kept, and a **pinned node's ``reasons`` therefore carry
-    what the check is actually saying** instead of a copy of the pin's own text,
-    which has always also been in ``maintenance_details``. The raw code itself does
-    not ship yet: ADR-0032 puts a field for it in the client-contract round
-    — the batched revision where the JSON surface and its clients move together —
-    rather than letting it arrive piecemeal,
-    so ``StatusSnapshot.reported_code`` stays server-side for now.
-
-    The node-metadata fields (``about``, ``title``, ``config``) ship as **raw
-    Markdown** — the client renders them (ADR-0018) — and ``maintenance_details``
-    carries the override's who/why/expiry.
-    ``timestamp`` is ``null`` where the observation time is not unambiguously
-    attributable (ADR-0027); ``_utc_z`` only ever sees a real stamp.
+    ``code`` is ``None`` where the entry carries the node's rather than one of its
+    own (ADR-0042) — the distinction a client needs to know whether it may color the
+    line by itself.
     """
+    return {
+        "slug": line.slug,
+        "text": line.text,
+        "code": None if line.code is None else line.code.name,
+        "running": line.running,
+        "maintenance": _maintenance(line.maintenance),
+    }
+
+
+def _entries(snapshot: StatusSnapshot) -> dict[str, Any]:
+    """A node's entries, as an object rather than an array of strings.
+
+    ``addressable`` is the snapshot's ``members``: whether these items may be pinned
+    one by one (ADR-0036). Prose and members are different things, and the array of
+    bare strings could say which only by convention. Order is the check's own and is
+    never sorted.
+    """
+    return {
+        "addressable": snapshot.members,
+        "items": [_entry(line) for line in snapshot.reasons],
+    }
+
+
+def _run(snapshot: StatusSnapshot) -> dict[str, Any] | None:
+    """The run facts for the node, or ``None`` where the block is **absent**.
+
+    Absent means *nothing answers for this node* — a container above two or more
+    checks, or a node below a branch check's mount whose next update belongs one level
+    up (ADR-0044). That is a different fact from *a check answers and has never
+    written*, which is the block present with a null ``observed_at``, and the two were
+    the same null before this version (ADR-0027's defect).
+
+    Inside it, a null is a fact of its own: ``wall_seconds`` is null for a
+    secret-pinned check, which never runs, and ``next_at`` for a one-shot, which has
+    no live schedule. ``next_at`` is the engine's armed slot and never
+    ``observed_at + frequency`` — a failing check's slot is pulled in (ADR-0033), so
+    the arithmetic answer is wrong exactly when somebody is watching a failure.
+    """
+    facts = snapshot.run
+    if snapshot.timestamp is None and facts is None:
+        return None
     stamp = snapshot.timestamp
+    run: dict[str, Any] = {
+        "observed_at": None if stamp is None else _utc_z(stamp),
+        "wall_seconds": None if facts is None else facts.wall_seconds,
+        "next_at": (None if facts is None or facts.next_run_at is None
+                    else _utc_z(facts.next_run_at)),
+    }
+    if snapshot.frequency_seconds is not None:
+        run["frequency_seconds"] = snapshot.frequency_seconds
+    if snapshot.stale_after_seconds is not None:
+        run["stale_after_seconds"] = snapshot.stale_after_seconds
+    return run
+
+
+def _contribution(snapshot: StatusSnapshot) -> dict[str, Any] | None:
+    """What this node's parent counted, and the rule that made it so — or ``None``
+    where the parent counted the node's ``code``, which is the ordinary case.
+
+    ADR-0032 rule 5 reaching the API: a transformed contribution is visible and
+    attributable, so a client can explain a red root by walking down it rather than
+    guessing. Null on the ordinary case keeps the interesting one easy to find and
+    keeps a healthy tree's response the size it was.
+    """
+    rule = NOT_COUNTED.get(snapshot.code)
+    if rule is None:
+        return None
+    return {"code": None, "by": rule}
+
+
+def snapshot_to_dict(snapshot: StatusSnapshot) -> dict[str, Any]:
+    """Serialize a status snapshot subtree to the ADR-0080 JSON shape.
+
+    The three statuses are ADR-0032's, under their own names: ``reported`` is what the
+    check said, ``own`` the first derived value — a pin, or a member set every one of
+    whose entries is pinned — and ``code`` the effective, rolled-up, stale-degraded
+    one. A display client reads ``code``; a federating parent grafts ``own`` plus
+    ``children`` and re-rolls locally rather than aggregating twice.
+
+    ``description``, ``about``, ``title``, ``config`` and ``report`` are raw Markdown
+    the client renders (ADR-0018); ``config`` and ``report`` are the owning check's own
+    text and are empty on a node two checks share (ADR-0044 decision 1). ``stale`` is
+    the server's verdict and never something a client recomputes from a clock it does
+    not share (ADR-0005).
+    """
     return {
         "path": snapshot.path,
         "name": snapshot.name,
-        "own_code": snapshot.own_code.name,
+        "reported": snapshot.reported_code.name,
+        "own": snapshot.own_code.name,
         "code": snapshot.code.name,
-        "reasons": list(snapshot.reason),
-        "timestamp": None if stamp is None else _utc_z(stamp),
+        "contribution": _contribution(snapshot),
         "description": snapshot.description,
-        "frequency_seconds": snapshot.frequency_seconds,
         "about": snapshot.about,
         "title": snapshot.title,
         "config": snapshot.config,
-        "maintenance": snapshot.maintenance,
-        "maintenance_details": _maintenance_details(snapshot.maintenance_entry),
+        "report": snapshot.report,
+        "order": snapshot.order,
+        "show_when_quiet": snapshot.show_when_quiet,
+        "maintenance": _maintenance(snapshot.maintenance_entry),
         "stale": snapshot.stale,
+        **({} if (run := _run(snapshot)) is None else {"run": run}),
+        "entries": _entries(snapshot),
         "children": [snapshot_to_dict(child) for child in snapshot.children],
     }
 
 
-def status_envelope(snapshot: StatusSnapshot,
-                    now: datetime | None = None) -> dict[str, Any]:
+def status_envelope(snapshot: StatusSnapshot, *, version: str = "",
+                    engine: str = "", now: datetime | None = None) -> dict[str, Any]:
     """Wrap a serialized snapshot in the versioned response envelope.
 
-    ``generated_at`` is the serving instance's clock (UTC) at snapshot time.
+    ``generated_at`` is the serving instance's clock (UTC) at snapshot time, and
+    ``instance`` says who answered — the version and the engine's state, the two facts
+    ``/health`` withholds from an ungated caller (ADR-0066) and which are fine behind
+    the bearer token. Per envelope and never per node: one response is one instance's
+    answer.
     """
     moment = now or datetime.now(UTC)
     generated = moment.astimezone(UTC).isoformat().replace("+00:00", "Z")
     return {
         "schema_version": SCHEMA_VERSION,
         "generated_at": generated,
+        "instance": {"version": version, "engine": engine},
         "status": snapshot_to_dict(snapshot),
     }
 
 
 def problem(status: int, title: str, detail: str | None = None) -> dict[str, Any]:
-    """Build an RFC 9457 problem object (ADR-0008 / Zalando #176)."""
+    """Build an RFC 9457 problem object (ADR-0080 / Zalando #176)."""
     body: dict[str, Any] = {"type": "about:blank", "title": title, "status": status}
     if detail is not None:
         body["detail"] = detail
