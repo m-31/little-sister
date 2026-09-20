@@ -262,10 +262,11 @@ the card-head placement (`card_status_line`: compact `beside` by default, or the
 standing second line `below`), how cards spend a wide grid's columns
 (`dashboard_columns`: `flow` by default, or `plain` for the fixed one-track
 grid), the failure-retry budget (`retry_interval`, `retry_attempts`), how often
-the kept state files are written (`state_interval`), and the engine's three sizing
-numbers — `max_workers`, `entry_limit` and `memory_share`, which are both what the
-instance measures itself against while it runs and what a check type's declared costs
-are summed against at startup.
+the kept state files are written (`state_interval`), how many consecutive worse
+readings a node needs before the level above counts it (`escalate_after`), and the
+engine's four sizing numbers — `max_workers`, `entry_limit`, `memory_share` and
+`record_limit`, which are both what the instance measures itself against while it runs
+and what a check type's declarations are measured against at startup.
 
 #### Curated links (`config/links.yaml`)
 

@@ -1,7 +1,8 @@
 # ADR-0042 — A reason entry carries its own code
 
 - **Status:** Accepted
-- **Date:** 2026-08-08 (in the design round on information a status code cannot carry)
+- **Date:** 2026-09-20 (accepted 2026-08-08, in the design round on information a
+  status code cannot carry)
 - **Related:** [ADR-0036](0036-addressable-reasons.md) (keyed entries — amended by
   this record: its decision 8's "an entry has no severity of its own" narrows to
   entries that declare none),
@@ -19,10 +20,6 @@
   status color joins),
   [ADR-0008](0008-json-output-api.md) (the envelope, deliberately untouched here)
 - **Register:** [`../decisions.md`](../decisions.md)
-
-> **Update (2026-09-06):** decision 11 is spent:
-> [ADR-0080](0080-the-envelope-is-the-snapshot-published.md) carries the per-entry
-> object, and an entry's `code` is null there exactly where it takes the node's.
 
 ## Context
 
@@ -102,7 +99,12 @@ showing a running one, both need.
    exactly as they are, so no existing check moves. Two optional attributes is
    where positional pairs run out; a third field must argue for itself harder than
    the second — ADR-0036 deliberately kept an entry from becoming a node, and a
-   value object makes creep cheap.
+   value object makes creep cheap. The shape has since grown to `Entry(slug, text,
+   code=None, running=False, subject="", data=None)` and the rule beside it held: the
+   two added attributes are data *about* the line rather than a claim it makes, so
+   they declare no members, and the argument a third field owed is
+   [ADR-0082](0082-a-line-carries-what-it-is-about-and-what-it-read.md). An entry is
+   still not a node.
 8. **Healthy entries are opt-in, per aspect, off by default** — an alarm surface
    stays an alarm surface unless a deployment asks otherwise, and one check's
    aspects do not all want the same answer. **A run in flight always produces a
@@ -124,6 +126,8 @@ showing a running one, both need.
     per-entry object — text, maintenance, `code`, `running` — is the client
     contract round's one `schema_version` decision, and nothing ships piecemeal
     before it ([ADR-0008](0008-json-output-api.md)).
+    [ADR-0080](0080-the-envelope-is-the-snapshot-published.md) is where that object
+    lands, and an entry's `code` is null there exactly where it takes the node's.
 
 ## Consequences
 

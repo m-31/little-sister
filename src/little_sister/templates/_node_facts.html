@@ -60,15 +60,83 @@
         {% if node.run and node.run.wall_seconds is not none %}
             <p class="mb-1 text-muted">Last run took {{ node.run.wall_seconds | elapsed }}</p>
         {% endif %}
+        {#- The period where there is one, and the **tolerance** where there is
+            not (ADR-0081). "Checked every" is a claim that a subject was read on
+            that interval, and it is only true of a check: the instance's own
+            nodes are recorded state re-asserted on the scheduler tick and readiness
+            measured its trust store once, at startup, so the line used to say
+            "Checked every 1s" about something nothing checks. Such a
+            node carries no period at all now — nor does a paced unit, which has
+            none to carry — and what both do carry is the freshness they promise,
+            which is the fact a reader of either wants and the one the server
+            actually applied. One rule, both kinds, no discriminator: a node with a
+            period shows it, a node without shows what it promises instead. -#}
         {% if node.frequency_seconds %}
             <p class="mb-2 text-muted">Checked every {{ node.frequency_seconds | duration }}</p>
+        {% elif node.stale_after_seconds %}
+            <p class="mb-2 text-muted">Goes stale after {{ node.stale_after_seconds | tolerance }}</p>
         {% endif %}
+        {#- How often this node changed its mind lately. It sits next to the
+            History button because it is the same question asked in one number, and
+            it is **not** on a card: a card says what a node is now, and churn is
+            history. A subject that flaps is the case the escalation counter
+            deliberately does not catch — every recovery clears that counter — so
+            without this there is no number anywhere that says *this thing is
+            flapping*, only a list of events to count by eye. Suppressed transitions
+            are in it: a check flapping underneath a pin is exactly what is worth
+            seeing, which is the opposite of what the History list wants. -#}
+        {% if node.changes %}
+            <p class="mb-2 text-muted">{{ node.changes }} status
+                {{ "change" if node.changes == 1 else "changes" }} in the last hour</p>
+        {% endif %}
+        {#- The dependency graph, from whichever end this node stands at. Both
+            sentences are about **reachability**, which is why they sit here with
+            the freshness facts rather than on a status card: neither is a claim
+            about how the subject is doing.
+
+            Being shielded is the more urgent of the two — the node is not reaching
+            the level above, and an operator who does not know that will read a
+            quiet parent as good news — so it is said in the node's own words and
+            links to the thing to go and look at. The other direction is the risk
+            the feature carries: one dependency can quiet dozens, and a number that
+            says how many is the only thing standing between that and a silence
+            nobody can account for. -#}
+        {%- if node.shielded_by %}
+        <p class="mb-2 text-muted">Reached through <a href="{{ url_for('status', branch=node.shielded_by | url_branch) }}">{{ node.shielded_by }}</a>, which is failing — nothing from here reaches the level above until it answers.</p>
+        {%- endif %}
+        {%- if dependents %}
+        {%- set reached = dependents | length %}
+        <p class="mb-2 text-muted">{{ reached }} {{ "check is" if reached == 1 else "checks are" }} reached through this{% if node.code.name == 'ERROR' %}, and not reaching the level above while it is failing{% endif %}.</p>
+        {%- endif %}
         {# Secondary, like the maintenance buttons below it, rather than the
            off-palette `btn-info` cyan it used to wear — the one color on this
            page that belonged to no theme and followed none of them. #}
         <a class="btn btn-outline-secondary" href="{{ url_for('history', path=branch) }}">History</a>
     </div>
 </div>
+
+{% if node.record %}
+{#- **What this run measured** (ADR-0085): the reading the node's code, lines and
+    children are derived from, and the object it was taken on. Untyped rendering, the
+    same `record_fields` the entry records use — nothing here reads what a name means,
+    so one place decides what a field is.
+
+    A card above says what the node *is now*; this says what was *read*. It is data and
+    never a claim: anything that should alarm is a reason. -#}
+<div class="card mb-3">
+    <div class="card-body">
+        <h3 class="h6 text-muted text-uppercase">Measured</h3>
+        {%- if node.subject %}
+        <p class="mb-2 text-muted">On <code>{{ node.subject }}</code></p>
+        {%- endif %}
+        <dl class="reason-record small text-muted mb-0">
+            {%- for name, value in node.record | record_fields %}
+            <dt>{{ name }}</dt><dd>{{ value }}</dd>
+            {%- endfor %}
+        </dl>
+    </div>
+</div>
+{% endif %}
 
 {% if node.report %}
 {#- What the run **found** (ADR-0044 decision 6) — the roster, the scope, the

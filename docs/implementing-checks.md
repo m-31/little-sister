@@ -120,7 +120,15 @@ What the base class gives you and expects:
   `order` ([ADR-0055](adr/0055-sibling-order.md)), `frequency_seconds`,
   `timeout_seconds`, and `retry_interval_seconds` / `retry_attempts`
   ([ADR-0033](adr/0033-budgeted-failure-retry.md) — `None` inherits the deployment
-  default, `0` switches the fast retry off for this check). Durations accept `30s` /
+  default, `0` switches the fast retry off for this check), `escalate_after`
+  ([ADR-0083](adr/0083-a-node-may-wait-before-it-escalates.md) — consecutive readings
+  of a worse code before the level above counts it; `None` inherits the deployment
+  default, `1` publishes at once, `0` is refused) and `depends_on`
+  ([ADR-0084](adr/0084-a-check-may-be-reached-through-another.md) — the **path** of
+  one other check this one is reached *through*; while that check reports `ERROR`
+  this node keeps its own reading and contributes nothing upward. An unknown target
+  and any cycle are refused at load, and a `tag:` value is refused by name rather
+  than read as a path). Durations accept `30s` /
   `15m` / `2h` / `1d` / `1w` or a bare number, the units lowercase. **`name:` in YAML
   is rejected** — it was merged into `path` (ADR-0016).
 - **Take `**kwargs` and forward them**, as the sketch above does — do not spell the
@@ -131,6 +139,36 @@ What the base class gives you and expects:
   decision 6). If yours does refuse a keyword, the loader says so with the file, the
   type and every refused keyword named, rather than raising a bare `TypeError` from
   inside itself.
+- **`subject` and `record` on the result** — **what your run measured, and the object
+  it measured** ([ADR-0085](adr/0085-a-measure-is-read-out-of-a-record.md)). A run reads
+  one object and produces one record; the node, the children and the lines you write are
+  *derived* from that reading, so the reading goes on the `CheckResult` and not on a
+  line. Which of the two cases you have:
+  - **Your object has a node** — one URL, one host, one file. Put `subject` and
+    `record` on the result (or on the child that stands for each object, if your run
+    reads several). `subject` is the identifier **you reached** — `web01.example`,
+    `http://web01.example`, an account id — and deliberately not the node's path: the
+    path is the deployment's label for where your node hangs, and it may be renamed or
+    moved, while the history is about the thing in the world.
+  - **Your object has no node** — a repository, a job run, a finding. Then it is a
+    line, and the line carries it: `Entry(slug, text, subject=…, data=…)`.
+
+  A `record` is validated at the seam like a line's: JSON-serializable, bounded by
+  `record_limit`, and `at` / `started` / `ended` at any depth must be times with an
+  offset. It is **data and never a claim** — anything that should alarm is a reason.
+  A run that **failed** to read its object should still record the attempt — the reason
+  beside the values it could not get, as nulls — because a history of failures answers
+  *how often did this answer at all*, and a history with holes in it cannot: a hole
+  looks the same as a restart or a poll that never happened. A run that records nothing
+  at all clears what the last run recorded, since the node's observation time moves with
+  every run and a kept reading would be wrongly dated, not merely old.
+
+  What this decides later is **history**. A reading you record becomes a *series* when
+  the deployment asks for one, and what a series is keyed by is your object — so a line
+  gets a history only where you **declare** its slug. A derived slug is a hash of the
+  sentence, so it moves whenever a number in the text moves and would mint a new object
+  every poll; where you have a real object, mint the slug with `slug(*parts)` from the
+  provider's own identifiers. A measurement taken at the run needs no slug at all.
 - **`config_summary(self) -> str`** *(optional)* — Markdown display metadata for the
   detail page ([ADR-0013](adr/0013-check-config-on-node.md)). Build it with
   `config_markdown({"label": value, ...})`; **never** put a secret in here. Default
@@ -146,17 +184,21 @@ What the base class gives you and expects:
   with `join_path` rather than by hand, or every plugin re-derives ADR-0016's
   normalization by guesswork.
 
-- **`expected_cost(self) -> float | None`** and
-  **`expected_entries(self) -> int | None`** *(optional)* — what one run of *this*
-  configuration is expected to occupy in worker seconds, and how many reason entries
-  it expects to hold ([ADR-0075](adr/0075-a-check-declares-what-it-costs.md)). Compute
-  them from your own parsed fields, in the constructor's arithmetic rather than from a
-  measurement: fifty repositories at two requests each is a different answer from one,
-  and only your type knows which it has. Startup sums what every declaring check
-  answers — each cost over its own `frequency_seconds` against the deployment's
-  `max_workers`, the entries against its `entry_limit` — and **refuses** a
-  configuration whose declared part alone cannot fit, naming the checks; 80 % of
-  either is a warning in the log and an uncoded line on `/little-sister`.
+- **`expected_cost(self) -> float | None`**,
+  **`expected_entries(self) -> int | None`** and
+  **`expected_record(self) -> int | None`** *(optional)* — what one run of *this*
+  configuration is expected to occupy in worker seconds, how many reason entries it
+  expects to hold, and how many bytes one of its records is expected to need
+  ([ADR-0075](adr/0075-a-check-declares-what-it-costs.md)). Compute them from your own
+  parsed fields, in the constructor's arithmetic rather than from a measurement: fifty
+  repositories at two requests each is a different answer from one, and only your type
+  knows which it has. Startup **sums** the first two over every declaring check — each
+  cost over its own `frequency_seconds` against the deployment's `max_workers`, the
+  entries against its `entry_limit` — and **compares the third per check** against
+  `record_limit`, which bounds one record rather than a ceiling every check shares. It
+  **refuses** a configuration whose declared part alone cannot fit, naming the checks;
+  at 80 % of a limit it is a warning in the log and a fact in the `report` of
+  `/little-sister/engine`.
 
   Declare an **estimate of a normal run**, never a bound: `timeout_seconds` is the
   bound, and a type that declares it refuses deployments that work. Declare nothing —
@@ -164,8 +206,9 @@ What the base class gives you and expects:
   is for types that read an estate. A declaration that raises or answers something
   that is not a non-negative number is logged against your check's path and treated as
   absent, so a broken estimate never stops a deployment starting. What you declare
-  shows on `/system` beside the wall time of the last run, which is where an estimate
-  that has drifted becomes visible.
+  shows on `/system` beside what was measured — the wall time of the last run, and the
+  largest record it carried — which is where an estimate that has drifted becomes
+  visible.
 
 Raise **`CheckError`** for any bad configuration; the loader names the offending file.
 
@@ -286,6 +329,38 @@ constructor, but it is wrong: say why.
   `derived_slug(text)` is the fallback where you have nothing better than your own
   wording. Name the **subject first** by convention (`slug(repository, "pr", 42)`);
   see `architecture.md` §4.3 for what a subject is and why it is not a child.
+- **A line may carry what it is about, and what you read**
+  ([ADR-0082](adr/0082-a-line-carries-what-it-is-about-and-what-it-read.md)). Two
+  more optional attributes on `Entry`, both invisible until something renders them:
+
+  ```python
+  Entry(slug(repo.id, "workflow", workflow_id, branch),
+        f"{plain(repo.name)} ({plain(branch)}) / {plain(workflow)}: failed (#41)",
+        StatusCode.ERROR,
+        subject=str(repo.id),                       # what this line is ABOUT
+        data={"repository": repo.full_name,         # what you READ about it
+              "workflow": workflow, "branch": branch,
+              "run_number": 41,
+              "completed": {"at": "2026-09-19T09:12:00Z"}})
+  ```
+
+  `subject` is the **source's own identifier** — the one a rename cannot change, the
+  same value the slug's first part is built from — because a view that groups
+  ("everything about this repository") cannot recover it from the slug. Put what a
+  human reads in the record, not here. Nothing is ever pinned by subject.
+
+  `data` is the **record**: the material you would otherwise throw away once the
+  sentence is written. Keep what a reader, a template or a curve would want — not the
+  API response. Three names are typed and read at **any depth** — `at`, `started`,
+  `ended` — and each must be an ISO-8601 string **with an offset** (or null), which
+  the seam converts to UTC; everything else is yours and renders as a name and a
+  value. Neither attribute declares members, so prose carrying a record stays prose.
+
+  The seam refuses the **whole result** if the record is not a JSON mapping, carries
+  a non-time under a timed name, or weighs more than `record_limit` bytes of JSON
+  (2 KB by default). Aim at the default rather than at a deployment's setting: your
+  package cannot see which one it is installed into. Values are escaped when they are
+  rendered, so a record field needs no `plain()`.
 - **Reasons are Markdown** — fold untrusted text in safely: `plain(text)` escapes an
   inline value (a path, an error, an API message); `code(text)` fences multi-line /
   log output as a verbatim block ([ADR-0018](adr/0018-markdown-rendering.md)). Never

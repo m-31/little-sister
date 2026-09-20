@@ -7,11 +7,20 @@ serving instance; the words it publishes come from a **closed vocabulary**; and 
 ``all-erroring`` line makes a claim about a *pattern*, so it waits for a complete
 first pass and stays silent where there is only one check to have a pattern about.
 
+The trust store is measured against **real** verification paths, steered through
+the two variables OpenSSL reads, never through a stubbed count: a stub returning
+``{"x509_ca": 0}`` is what encoded the assumption a populated hash directory reads
+as an empty store (ADR-0073), and a test built on it could not fail.
+
 The route's own behavior is ``test_web_ready.py``; what the engine records for it
 is ``test_engine.py``.
 """
 from __future__ import annotations
 
+import os
+import ssl
+import tempfile
+from pathlib import Path
 from unittest import TestCase
 from unittest.mock import patch
 
@@ -30,9 +39,30 @@ from little_sister.readiness import (
     measure_trust_store,
 )
 
-FULL = TrustStore(certificates=142)
-EMPTY = TrustStore(certificates=0)
-UNMEASURED = TrustStore(certificates=None)
+FULL = TrustStore(usable=True)
+EMPTY = TrustStore(usable=False)
+UNMEASURED = TrustStore(usable=None)
+
+#: A real CA certificate, minted once for these tests and its key discarded:
+#: ``openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days
+#: 36500 -subj "/CN=little-sister test CA" -addext
+#: "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign"``.
+#: What matters about it is that it is one OpenSSL would find in a hash directory
+#: under the name ``openssl x509 -noout -subject_hash`` gives it.
+TEST_CA = """\
+-----BEGIN CERTIFICATE-----
+MIIBpzCCAU2gAwIBAgIUeT+djioZA3pMal1M3o83aXZnhnQwCgYIKoZIzj0EAwIw
+IDEeMBwGA1UEAwwVbGl0dGxlLXNpc3RlciB0ZXN0IENBMCAXDTI2MDkxNjEwNDcx
+OFoYDzIxMjYwODIzMTA0NzE4WjAgMR4wHAYDVQQDDBVsaXR0bGUtc2lzdGVyIHRl
+c3QgQ0EwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAS0xoD5A2GUL2ef6Z5LV/4d
+YrXLi2lk22DBpiRdgWSuPQyAXHdBNDWtJ0FycACYvN4rXKkVtQK0kzAEhHPjc0mq
+o2MwYTAdBgNVHQ4EFgQUu17GP4G7uspO+g1D5cRlRAEhH1IwHwYDVR0jBBgwFoAU
+u17GP4G7uspO+g1D5cRlRAEhH1IwDwYDVR0TAQH/BAUwAwEB/zAOBgNVHQ8BAf8E
+BAMCAgQwCgYIKoZIzj0EAwIDSAAwRQIhANVZC86+nd5RhxQ+apF4695Y5XlXW8gy
+Pv6+n9OSVE/5AiBakXegNe+KTGMap5utgb47mcgq6IBLKXSk17haFIA2BQ==
+-----END CERTIFICATE-----
+"""
+TEST_CA_SUBJECT_HASH = "56f8c844"
 
 
 def _readiness(*, doors: bool = True, trust: TrustStore = FULL,
@@ -87,7 +117,7 @@ class AnswerTests(TestCase):
         for doors in (True, False):
             for trust in (FULL, EMPTY):
                 for first_pass in (True, False):
-                    with self.subTest(doors=doors, trust=trust.certificates,
+                    with self.subTest(doors=doors, trust=trust.usable,
                                       first_pass=first_pass):
                         answer = _readiness(doors=doors, trust=trust,
                                             first_pass=first_pass).answer()
@@ -165,42 +195,110 @@ class OutcomesTests(TestCase):
 
 
 class TrustStoreTests(TestCase):
-    def test_a_store_with_certificates_is_not_empty(self):
+    def test_a_store_with_a_usable_source_is_not_empty(self):
         self.assertFalse(FULL.empty)
 
-    def test_a_store_with_none_is_empty(self):
+    def test_a_store_with_no_usable_source_is_empty(self):
         self.assertTrue(EMPTY.empty)
 
-    def test_a_store_that_could_not_be_counted_is_not_empty(self):
+    def test_a_store_that_could_not_be_measured_is_not_empty(self):
         self.assertFalse(UNMEASURED.empty)
 
-    def test_it_counts_the_ca_certificates_the_default_context_loaded(self):
-        class Context:
-            @staticmethod
-            def cert_store_stats():
-                return {"x509": 9, "x509_ca": 7, "crl": 0}
 
-        with patch.object(readiness_module.ssl, "create_default_context",
-                          lambda: Context()):
-            self.assertEqual(measure_trust_store(), TrustStore(7))
+class MeasurementTests(TestCase):
+    """``measure_trust_store()`` against real verification paths.
 
-    def test_a_container_without_ca_certificates_measures_zero(self):
-        class Context:
-            @staticmethod
-            def cert_store_stats():
-                return {"x509": 0, "x509_ca": 0, "crl": 0}
+    Each case points ``SSL_CERT_FILE`` and ``SSL_CERT_DIR`` — the two variables
+    OpenSSL reads, and the interpreter with it — at exactly the sources it is
+    about, an absent one at a name that does not exist: a variable left unset
+    would fall back to the interpreter's compiled-in defaults, and whatever this
+    machine holds there would answer instead of the test.
+    """
 
-        with patch.object(readiness_module.ssl, "create_default_context",
-                          lambda: Context()):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+
+    def _paths(self, *, cafile: Path | None = None, capath: Path | None = None):
+        return patch.dict(os.environ, {
+            "SSL_CERT_FILE": str(cafile or self.root / "no-such-file.pem"),
+            "SSL_CERT_DIR": str(capath or self.root / "no-such-directory"),
+        })
+
+    def _hash_directory(self) -> Path:
+        """A hash directory as ``c_rehash`` lays one out: the certificate under
+        its own name, and a link named by its subject hash pointing at it."""
+        capath = self.root / "certs"
+        capath.mkdir()
+        (capath / "test-ca.pem").write_text(TEST_CA)
+        (capath / f"{TEST_CA_SUBJECT_HASH}.0").symlink_to("test-ca.pem")
+        return capath
+
+    def test_a_hash_directory_alone_is_a_usable_trust_source(self):
+        # The defect. OpenSSL consults a capath by subject hash when it verifies a
+        # chain and never loads it, so `cert_store_stats()` counted zero here on an
+        # instance that verified every connection — a Debian base with a
+        # uv-installed interpreter is exactly this layout, a populated
+        # /etc/ssl/certs beside a compiled-in cafile the distribution never creates.
+        # Failed against the counting measurement before it was replaced.
+        with self._paths(capath=self._hash_directory()):
+            paths = ssl.get_default_verify_paths()
+            self.assertIsNone(paths.cafile)
+            self.assertEqual(paths.capath, str(self.root / "certs"))
+            measured = measure_trust_store()
+        self.assertFalse(measured.empty)
+
+    def test_a_cafile_alone_is_a_usable_trust_source(self):
+        cafile = self.root / "ca-certificates.crt"
+        cafile.write_text(TEST_CA)
+        with self._paths(cafile=cafile):
+            self.assertFalse(measure_trust_store().empty)
+
+    def test_no_source_at_all_is_an_empty_store(self):
+        # The rollout failure the record was written for: an image built without
+        # its distribution's CA certificates, still reported.
+        with self._paths():
+            self.assertTrue(measure_trust_store().empty)
+
+    def test_an_empty_cafile_is_not_a_source(self):
+        cafile = self.root / "ca-certificates.crt"
+        cafile.touch()
+        with self._paths(cafile=cafile):
+            self.assertTrue(measure_trust_store().empty)
+
+    def test_a_directory_without_a_hashed_entry_is_not_a_source(self):
+        # The certificate is there under its own name, and OpenSSL, which looks a
+        # directory up by hash, would never find it.
+        capath = self.root / "certs"
+        capath.mkdir()
+        (capath / "test-ca.pem").write_text(TEST_CA)
+        with self._paths(capath=capath):
+            self.assertTrue(measure_trust_store().empty)
+
+    def test_a_dangling_hashed_link_is_not_a_source(self):
+        capath = self.root / "certs"
+        capath.mkdir()
+        (capath / f"{TEST_CA_SUBJECT_HASH}.0").symlink_to("gone.pem")
+        with self._paths(capath=capath):
+            self.assertTrue(measure_trust_store().empty)
+
+    def test_a_revocation_list_entry_is_not_a_source(self):
+        # `<hash>.r0` is how a hash directory names a CRL; it revokes and anchors
+        # nothing.
+        capath = self.root / "certs"
+        capath.mkdir()
+        (capath / f"{TEST_CA_SUBJECT_HASH}.r0").write_text(TEST_CA)
+        with self._paths(capath=capath):
             self.assertTrue(measure_trust_store().empty)
 
     def test_a_measurement_that_raises_answers_unknown_rather_than_empty(self):
         def boom():
             raise OSError("no such file")
 
-        with patch.object(readiness_module.ssl, "create_default_context", boom):
+        with patch.object(readiness_module.ssl, "get_default_verify_paths", boom):
             measured = measure_trust_store()
-        self.assertIsNone(measured.certificates)
+        self.assertIsNone(measured.usable)
         self.assertFalse(measured.empty)
 
 

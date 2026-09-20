@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from little_sister.codes import RANKED, escalates
 from little_sister.maintenance import (
     MaintenanceEntry,
     MaintenanceStore,
@@ -51,6 +52,41 @@ STALE_DEGRADE = StatusCode.WARN
 #: transition from alarming. The first member of a vocabulary ADR-0032 rule 2
 #: anticipates: `aggregation`, `dependency` and `damping` join it as those land.
 MAINTENANCE_RULE = "maintenance"
+
+#: The rule a **damping counter** is, when it holds an escalation back (backlog
+#: #38 B). The second member of the vocabulary above; `aggregation` joins it when
+#: that lands.
+DAMPING_RULE = "damping"
+
+#: The rule a **dependency shield** is: this node is reached through a check that is
+#: failing, so its reading is not believed and its parent counts nothing of it
+#: (backlog #38 A). *We could not get there* rather than *it is broken*.
+DEPENDENCY_RULE = "dependency"
+
+#: What a node contributes when its parent counted **nothing** of it because it had
+#: not reported. Named for the envelope, where the rule has to have a word
+#: (ADR-0080 decision 2).
+UNDEFINED_RULE = "undefined"
+
+#: The rules that change what a node **showed**, as against what it published.
+#:
+#: The distinction earns its own name because :meth:`StatusTree.history` turns on it,
+#: and getting it wrong is silent. A pinned node showed `MAINTENANCE` throughout, so a
+#: check that went red underneath it did not change what anybody saw and must not chop
+#: one maintenance window into phantom periods. A **damped** node is the opposite case:
+#: it went red at once, on its card, on its page and in the log — only the escalation
+#: waited — so its transition is exactly a period of its own history, and dropping it
+#: would break the one claim damping makes. A dependency shield will belong on this
+#: side too, for the same reason: it keeps the node's own state and marks it.
+HIDES_THE_READING = frozenset({MAINTENANCE_RULE})
+
+#: How far back a node's **status changes** are counted, for the number its own page
+#: shows. An hour, because that is the span an operator asking *is this thing
+#: flapping?* has in mind, and because the event log is bounded: a window long enough
+#: to outrun the log would report *what is still in the deque* rather than what
+#: happened, and the number would quietly mean something different on a busy estate
+#: than on a quiet one.
+CHANGE_WINDOW_SECONDS = 3600.0
 STALE_MIN_GRACE_SECONDS = 30.0
 
 
@@ -72,12 +108,60 @@ class ReasonLine:
     maintenance: MaintenanceEntry | None = None
     code: StatusCode | None = None
     running: bool = False
+    #: What this line is about, as the provider's own identifier, or empty where
+    #: the check did not say. Carried for the views that **group** by it; never an
+    #: address, because a pin holds an identifier and only a line has one.
+    subject: str = ""
+    #: The **record** — what the check read about that subject, beside the sentence
+    #: it wrote. Plain JSON types, validated and bounded at the ``CheckResult``
+    #: seam, and ``None`` where the check carried none. Nothing on a card reads it;
+    #: the node's own page renders it, and the line template, the grading seam and
+    #: the series are each built on it later.
+    data: dict[str, Any] | None = None
 
     @property
     def quiet(self) -> bool:
         """Whether this entry is suppressed. Quiet is **shown**, not hidden
         (ADR-0032 rule 5) — the surfaces render it in the maintenance color."""
         return self.maintenance is not None
+
+
+@dataclass(frozen=True)
+class Contribution:
+    """What a node's parent actually counted, where that is not the node's own
+    effective code, and the rule that made it so (ADR-0032 rule 5, ADR-0080
+    decision 2).
+
+    ``code`` is **None** when the node was not counted at all, which is what
+    *contributes nothing* has always meant for a pinned or unreported node. A rule
+    that **delays** or **caps** a contribution puts a real code here instead: a
+    damped node is counted, at the code it was publishing before the escalation it
+    is holding back.
+
+    ``by`` names the rule, so a surface can say which one acted rather than leaving
+    a reader to infer it from a number that does not add up.
+    """
+    code: StatusCode | None
+    by: str
+
+
+@dataclass(frozen=True)
+class Damping:
+    """A node's confidence counter, while it is holding an escalation back.
+
+    ``pending`` is the code the node is showing and not yet publishing, ``seen`` how
+    many consecutive readings have said so, and ``needed`` how many this node was
+    configured to want. Present on the snapshot **only while a hold is in force** —
+    a node counting toward an escalation it has already made, or one whose
+    ``escalate_after`` is 1, has nothing to show.
+
+    It exists because a red leaf under a green parent is what a broken roll-up looks
+    like: the node has to be able to say *2 of 3* on its card and its page, or the
+    mechanism reads as the defect it is there to prevent.
+    """
+    pending: StatusCode
+    seen: int
+    needed: int
 
 
 @dataclass(frozen=True)
@@ -165,17 +249,70 @@ class StatusSnapshot:
     maintenance_entry: MaintenanceEntry | None = None
     stale: bool = False
     #: How old this node's own reading may get before ``stale`` turns true — the
-    #: tolerance the rule actually applied, in seconds, and ``None`` where the node
-    #: reports on no schedule and can therefore never be stale by its own stamp
-    #: (ADR-0079). Carried rather than left to be re-derived: a reader that computes
-    #: freshness from a frequency has a second copy of the rule, and the rule is
-    #: about to have two branches.
+    #: tolerance :func:`node_stale_after` actually applied, in seconds, and ``None``
+    #: where the node has neither a stated tolerance nor a period to imply one and
+    #: can therefore never be stale by its own stamp (ADR-0079, ADR-0081). Carried
+    #: rather than left to be re-derived: the rule has two branches now, and a reader
+    #: that computes freshness from a frequency would hold a copy of neither.
     stale_after_seconds: float | None = None
     age_seconds: float = 0.0
     children: tuple[StatusSnapshot, ...] = ()
     reasons: tuple[ReasonLine, ...] = ()
     members: bool = False
     run: RunFacts | None = None
+    #: What this node's **parent counted**, where that is not this node's ``code``,
+    #: and the rule that made it so — ``None`` in the ordinary case, which is most
+    #: nodes of a healthy tree. It is the one value a parent accumulates, so the
+    #: roll-up reads it rather than ``code``.
+    contribution: Contribution | None = None
+    #: The hold a damping counter has on this node right now, or ``None``. Display
+    #: only: what it holds back is already in ``contribution``.
+    damping: Damping | None = None
+    #: **What this node's check measured, and the object it measured** (ADR-0085):
+    #: the run's own record, and the object's own identifier rather than this
+    #: node's path. Empty and ``None`` on a node no check measures.
+    subject: str = ""
+    record: dict[str, Any] | None = None
+
+    #: The path of the dependency shielding this node, or ``None``. ``contribution``
+    #: already says *a dependency withheld this*; this says **which**, because one
+    #: dependency shields dozens of dependents and a reader who cannot see which is
+    #: left to guess what to go and look at.
+    shielded_by: str | None = None
+
+    #: How many times this node's own status **changed** within the last
+    #: :data:`CHANGE_WINDOW_SECONDS`, counting only moves between `OK`, `WARN` and
+    #: `ERROR`. Derived from the event log at snapshot time and stored nowhere: the
+    #: transitions are already kept, and a second record of them would be a second
+    #: thing to keep true.
+    changes: int = 0
+
+    @property
+    def counted(self) -> StatusCode:
+        """The code this node's parent accumulates.
+
+        A rule that **transforms** the contribution — a damping counter holding an
+        escalation — puts its value here. A rule that **withholds** the node names
+        itself and carries no code, and then this is where the withholding actually
+        happens: the parent accumulates `UNDEFINED`, which the roll-up skips
+        (ADR-0039), because *nothing was counted* has no other spelling in a closed
+        vocabulary (ADR-0032 decision 4).
+
+        The two oldest withholding rules need no help from that: a pin and an
+        unreported node already **are** `MAINTENANCE` and `UNDEFINED`, and the
+        roll-up reads the difference between them (children that are all pinned make
+        their parent `MAINTENANCE`, not `UNDEFINED`), so those two must pass their
+        own code through untouched. Shielding is the first rule that withholds a node
+        still holding a ranked reading of its own — which is precisely why it cannot
+        be left to the roll-up.
+        """
+        if self.contribution is None:
+            return self.code
+        if self.contribution.code is not None:
+            return self.contribution.code
+        if self.code in (StatusCode.MAINTENANCE, StatusCode.UNDEFINED):
+            return self.code
+        return StatusCode.UNDEFINED
 
     @property
     def quiet_reasons(self) -> int:
@@ -259,6 +396,16 @@ def events_from_payload(payload: object) -> list[Event]:
 
 
 @dataclass(frozen=True)
+class _Damped:
+    """One node's damping state: what it published upward, the worse code it is
+    holding back (``None`` when it is holding nothing), and how many consecutive
+    readings have said so."""
+    published: StatusCode
+    pending: StatusCode | None
+    seen: int
+
+
+@dataclass(frozen=True)
 class StatusPeriod:
     """One stretch of time a node held a given status (status history).
 
@@ -304,6 +451,19 @@ class StatusTree:
         # unwritten ancestor may inherit, from a shared one, whose two run times
         # must not be attributed upward as if they were one.
         self._check_mounts: dict[str, int] = {}
+        # The damping counter per path (backlog #38 B): what this node last
+        # published upward, the worse code it is holding back, and how many
+        # consecutive readings have said so. Side-table for the same reason the
+        # pins are one — nothing derived is written into the tree (ADR-0032 rule 3)
+        # — and advanced on the **reading**, in `upsert`, because a poll is not a
+        # reading and a counter that advanced per snapshot would escalate a node
+        # nobody had asked about again.
+        self._damping: dict[str, _Damped] = {}
+        # What each check is reached **through** (backlog #38 A): the mount path of
+        # a check, against the mount path of the check it depends on. Seeded at
+        # startup by the engine, which knows its checks, exactly as the mounts are
+        # — the tree stays check-agnostic and derives the shield in the snapshot.
+        self._dependencies: dict[str, str] = {}
         # The owning check's last-run facts per mount path (ADR-0044), written by
         # the engine after each run and resolved by the snapshot under the same
         # sole-check condition as the inherited stamp. Registry, not node state:
@@ -324,12 +484,16 @@ class StatusTree:
                members: bool = False,
                description: str | None = None,
                frequency_seconds: int | None = None,
+               stale_after: float | None = None,
                config: str | None = None,
                report: str | None = None,
                about: str | None = None,
                title: str | None = None,
                order: int | None = None,
-               show_when_quiet: bool | None = None) -> bool:
+               show_when_quiet: bool | None = None,
+               escalate_after: int | None = None,
+               subject: str | None = None,
+               record: dict[str, Any] | None = None) -> bool:
         """Create-or-update the node at ``path`` and record a transition event if
         its own code changed. ``description`` / ``frequency_seconds`` / ``config``
         / ``report`` (inherited from the check) are stored when given — ``config``
@@ -373,6 +537,12 @@ class StatusTree:
         ships is to write ``show_when_quiet: false`` in ``nodes.yaml``, and a
         falsy-means-empty fill would let the next tick overwrite it.
 
+        ``escalate_after`` is how many consecutive readings of a **worse** code this
+        node needs before it publishes that code upward (backlog #38 B). It is
+        resolved by the engine — the check's own value, or the deployment's default
+        — because the tree reads no configuration; it writes through like
+        ``frequency_seconds``, and ``1`` is today's behavior.
+
         A node under **maintenance** is written like any other: the pin is a
         contribution rule evaluated in the snapshot (ADR-0032 rule 3), not a value
         stamped into the tree, so the check keeps reporting and the tree keeps
@@ -384,6 +554,8 @@ class StatusTree:
                 node.description = description
             if frequency_seconds is not None:
                 node.frequency_seconds = frequency_seconds
+            if stale_after is not None:
+                node.stale_after = stale_after
             if config is not None:
                 node.config = config
             if report is not None:
@@ -396,10 +568,24 @@ class StatusTree:
                 node.order = order
             if show_when_quiet is not None and node.show_when_quiet is None:
                 node.show_when_quiet = show_when_quiet
+            if escalate_after is not None:
+                node.escalate_after = escalate_after
+            # The run's measurement, written through on every reading like the
+            # report: what was read last is what this node holds, and a run that
+            # read nothing clears it rather than leaving yesterday's numbers to be
+            # mistaken for today's (ADR-0085).
+            if subject is not None:
+                node.subject = subject
+            if record is not None or subject is not None:
+                node.record = record
             old = node.code
             held = len(node.reason_entries)
             node.update(code, reason, members)
             self._entry_count += len(node.reason_entries) - held
+            # Every reading advances the counter, including one that changed
+            # nothing: *three consecutive readings of ERROR* is three readings, and
+            # only the first of them is a transition.
+            self._damp(node)
             if node.code == old:
                 return False
             self._emit(node, old)
@@ -476,6 +662,29 @@ class StatusTree:
         with self._lock:
             key = join_path(path)
             self._check_mounts[key] = self._check_mounts.get(key, 0) + 1
+
+    def set_dependency(self, path: str, on_path: str) -> None:
+        """Register that the check mounted at ``path`` is reached **through** the
+        check mounted at ``on_path`` (backlog #38 A).
+
+        Registry-only, like :meth:`set_check_mount`: no node is created and nothing
+        is written onto one. Whether the shield is *in force* is derived in the
+        snapshot, because it depends on what the dependency is reporting right now
+        — which is the same rule every other contribution rule here follows
+        (ADR-0032 rule 3). Thread-safe."""
+        with self._lock:
+            self._dependencies[join_path(path)] = join_path(on_path)
+
+    def dependents(self, path: str) -> tuple[str, ...]:
+        """The mount paths reached through the check at ``path``, in path order.
+
+        One dependency shields dozens of dependents — that is its payoff and equally
+        its risk, so the graph has to be **visible**: a node's page says how many
+        checks are reached through it. Thread-safe."""
+        with self._lock:
+            key = join_path(path)
+            return tuple(sorted(dependent for dependent, on
+                                in self._dependencies.items() if on == key))
 
     def set_run_facts(self, path: str, *, wall_seconds: float | None,
                       next_run_at: str | None) -> None:
@@ -788,19 +997,24 @@ class StatusTree:
         has held, oldest first — derived from the event log. The current period's
         ``until`` is the last check time and its reason is the current one.
 
-        **Suppressed transitions do not start a period.** History answers *what did
-        this node show over time*, and a check that went red underneath a pin did not
-        change what the node showed — it stayed in maintenance. Counting those would
-        chop one maintenance window into a dozen phantom ERROR periods that no
-        surface ever displayed. They stay in the event log, where they are exactly
-        the answer to the other question: *did it break during the window?*
+        **A transition that was hidden does not start a period** — but only one that
+        was hidden from the *display*. History answers *what did this node show over
+        time*, and a check that went red underneath a pin did not change what the node
+        showed: it stayed in maintenance, and counting those would chop one window into
+        a dozen phantom ERROR periods no surface ever displayed. A **damped**
+        transition is not that case and is kept: the node went red immediately and
+        everything but its parent's count said so, which is the whole claim damping
+        makes (:data:`HIDES_THE_READING`). Every transition stays in the event log
+        either way, where it answers the other question: *did it break during the
+        window?*
         """
         with self._lock:
             node = self._find_node(path)
             if node is None:
                 return []
             events = [event for event in self._events
-                      if event.path == node.path and not event.suppressed_by]
+                      if event.path == node.path
+                      and event.suppressed_by not in HIDES_THE_READING]
             if not events:
                 return []
             # A check's transition only ever lands on a node it wrote, so a
@@ -848,6 +1062,39 @@ class StatusTree:
             # clearing a pin *is* the change, and it is what everyone sees.
             suppressed_by="" if new is not None else self._suppressing_rule(node)))
 
+    def _damp(self, node: Status) -> None:
+        """Advance this node's confidence counter for the reading just stored.
+
+        The counter compares the reading with what this node **last published**, not
+        with what it last read: while a hold is in force the published value is the
+        older, quieter one, and each further worse reading is another vote for the
+        escalation being real.
+
+        Four cases, and three of them clear the counter. A reading that is equal to
+        or better than what is published is published at once — recovery is
+        immediate, which is the convention and what was settled. A reading that is
+        not an *escalation* of a ranked code publishes at once too, so a node's very
+        first reading, and any move through `UNDEFINED`, is never delayed. A
+        **different** worse code restarts the count, because it is a different claim
+        and two readings that disagree are not two votes for either. Only the same
+        worse code, again, advances it — and at ``escalate_after`` it is published
+        and the counter is done.
+
+        The counter is memory and is lost on a restart, which re-arms the whole
+        delay for a node that was mid-escalation. That is accepted and written down
+        rather than discovered: the alternative is a state file for a value whose
+        whole purpose is to be forgotten within a few minutes.
+        """
+        state = self._damping.get(node.path)
+        if state is None or not escalates(state.published, node.code):
+            self._damping[node.path] = _Damped(node.code, None, 0)
+            return
+        seen = state.seen + 1 if node.code is state.pending else 1
+        if seen >= max(1, node.escalate_after):
+            self._damping[node.path] = _Damped(node.code, None, 0)
+        else:
+            self._damping[node.path] = _Damped(state.published, node.code, seen)
+
     def _suppressing_rule(self, node: Status) -> str:
         """Which contribution rule, if any, keeps this node's reading from reaching
         anybody right now — the value :attr:`Event.suppressed_by` carries.
@@ -865,6 +1112,11 @@ class StatusTree:
                 (node.path, entry.slug) in self._entry_maintenance
                 for entry in node.reason_entries):
             return MAINTENANCE_RULE
+        if self._shields(datetime.now()).get(node.path) is not None:
+            return DEPENDENCY_RULE
+        state = self._damping.get(node.path)
+        if state is not None and state.pending is not None:
+            return DAMPING_RULE
         return ""
 
     def _apply_maintenance(self, path: str, entry: MaintenanceEntry) -> None:
@@ -940,10 +1192,100 @@ class StatusTree:
 
     def _snapshot(self, node: Status, now: datetime) -> StatusSnapshot:
         snapshot, _mounts, _mount_stamp, _mount_run = (
-            self._snapshot_subtree(node, now))
+            self._snapshot_subtree(node, now, self._change_counts(now),
+                                   self._shields(now)))
         return snapshot
 
-    def _snapshot_subtree(self, node: Status, now: datetime
+    def _shields(self, now: datetime) -> dict[str, str]:
+        """Which nodes are **shielded** right now, and by which dependency.
+
+        Resolved once for the whole tree, before the recursion, because a
+        dependency may sit outside the subtree being rendered — a service inside
+        the VPN is snapshotted on its own page while the check that reaches it
+        lives somewhere else entirely.
+
+        A dependency shields only when it is **failing** — `ERROR` and nothing
+        less. The shape this rule exists for is *a unit that cannot be reached*,
+        and a gateway reporting `WARN` has not stopped anybody reaching anything;
+        shielding on it would silence a subtree because something was amber, which
+        is the direction *fail toward alarming* refuses.
+
+        It applies **whatever the dependent itself is reporting**, its `OK` included.
+        The shield is a statement about evidence, not a filter on bad news: letting
+        an `OK` through because it alarms nobody would put green on the dashboard for
+        a unit nobody could reach, on the strength of a reading taken through a
+        broken path. *Nothing here is reporting* is the true sentence, and the
+        dependency's own `ERROR` is what the operator is meant to be looking at.
+
+        Three ways a shield does **not** apply, and each is that same invariant:
+        a dependency that has never reported or is **stale** does not shield, since
+        silence is exactly the state a naive implementation would treat as
+        permission; a dependency that is **itself shielded** does not shield on,
+        so one red root cannot quiet half a tree through two hops with nothing
+        saying why; and a **stale dependent** is not shielded, because a check that
+        stopped running must escalate whatever else is true of it (ADR-0032 rule 6).
+        """
+        resolved: dict[str, str | None] = {}
+
+        def shield_for(path: str) -> str | None:
+            if path in resolved:
+                return resolved[path]
+            # Cycles are refused at startup; this guard is what makes the
+            # recursion safe to read rather than safe by argument alone.
+            resolved[path] = None
+            on = self._dependencies.get(path)
+            if on is None:
+                return None
+            node, gate = self._find_node(path), self._find_node(on)
+            if node is None or gate is None:
+                return None
+            if gate.code is not StatusCode.ERROR:
+                return None
+            if _is_stale(gate, _age_seconds(gate.timestamp, now)):
+                return None
+            if _is_stale(node, _age_seconds(node.timestamp, now)):
+                return None
+            if shield_for(on) is not None:
+                return None
+            resolved[path] = on
+            return on
+
+        shields: dict[str, str] = {}
+        for path in self._dependencies:
+            on = shield_for(path)
+            if on is not None:
+                shields[path] = on
+        return shields
+
+    def _change_counts(self, now: datetime) -> dict[str, int]:
+        """How often each node's own status changed inside the window, from the log
+        that already holds every transition.
+
+        One pass for the whole snapshot rather than a walk per node: the deque is
+        bounded and the recursion is not, so counting per node would make the cost
+        of a poll the product of the two.
+
+        **Only moves between ranked codes count.** A node's first reading is
+        `UNDEFINED` to something, which every node does once at startup and which is
+        not a change of mind; counting it would put a 1 beside every node on the
+        dashboard for an hour after a restart and teach the reader to ignore the
+        number. **Suppressed transitions do count**, and that is the difference from
+        the history: this number is about the subject's behavior, not about what the
+        surface showed, so a check flapping underneath a pin is exactly the thing
+        worth seeing.
+        """
+        counts: dict[str, int] = {}
+        for event in self._events:
+            if event.old not in RANKED or event.new not in RANKED:
+                continue
+            age = _age_seconds(event.timestamp, now)
+            if age > CHANGE_WINDOW_SECONDS:
+                continue
+            counts[event.path] = counts.get(event.path, 0) + 1
+        return counts
+
+    def _snapshot_subtree(self, node: Status, now: datetime,
+                          changes: dict[str, int], shields: dict[str, str]
                           ) -> tuple[StatusSnapshot, int, str | None,
                                      RunFacts | None]:
         """``node``'s snapshot, plus the values its parent needs to resolve its
@@ -962,7 +1304,7 @@ class StatusTree:
         # alphabetical, exactly as before; the live tree keeps insertion order and
         # only the snapshot is sorted.
         results = tuple(
-            self._snapshot_subtree(child, now)
+            self._snapshot_subtree(child, now, changes, shields)
             for child in sorted(node.get_children(), key=_sibling_key)
         )
         children = tuple(result[0] for result in results)
@@ -1009,7 +1351,8 @@ class StatusTree:
         lines = tuple(
             ReasonLine(entry.slug, entry.text,
                        pins.get((node.path, entry.slug)) if node.members else None,
-                       code=entry.code, running=entry.running)
+                       code=entry.code, running=entry.running,
+                       subject=entry.subject, data=entry.data)
             for entry in node.reason_entries)
         # Own status is now a **derived** value: the entries are virtual children,
         # and a node whose members are all pinned has nothing left reporting.
@@ -1019,8 +1362,43 @@ class StatusTree:
         # back (ADR-0032 rule 6, ADR-0036 decision 9), so what a stale node gives
         # its parent is its degraded raw code, not its quieted own status.
         rollup = worst_of((node.code, STALE_DEGRADE)) if stale_self else own
-        code = effective_code(rollup, (child.code for child in children))
+        counted = tuple(child.counted for child in children)
+        code = effective_code(rollup, counted)
         stale = stale_self or any(child.stale for child in children)
+        # What the **parent** counts, and the rule that made it something other than
+        # `code` (ADR-0032 rule 5). A damping counter transforms the value; a pin and
+        # an unreported node withhold it, which the roll-up already expresses by
+        # skipping those codes — so those two name the rule and put no code here.
+        damped = self._damping.get(node.path)
+        damping: Damping | None = None
+        contribution: Contribution | None = None
+        shielded_by = shields.get(node.path)
+        # **One rule names each node, and the order is the order of specificity.**
+        # An admin's pin is the most specific thing anybody said about this node, so
+        # it is named first even when something else would also have withheld it.
+        # A node that has never reported has nothing to believe or disbelieve, so no
+        # shield and no counter can be about it. Only then the two rules that are
+        # about a reading: the shield, which withholds it, and the counter, which
+        # delays it.
+        if code is StatusCode.MAINTENANCE:
+            contribution = Contribution(None, MAINTENANCE_RULE)
+        elif code is StatusCode.UNDEFINED:
+            contribution = Contribution(None, UNDEFINED_RULE)
+        elif shielded_by is not None:
+            # The node keeps its own state and says what shielded it; what it does
+            # not do is reach its parent, because *we could not get there* is not a
+            # reading anybody should accumulate (ADR-0039 has no code for it, and
+            # ADR-0032 decision 4 closed the vocabulary against inventing one).
+            contribution = Contribution(None, DEPENDENCY_RULE)
+        elif damped is not None and damped.pending is not None and not stale_self:
+            # Staleness bypasses the counter (ADR-0032 rule 6): a check that stopped
+            # running produces no new readings, so the count would never advance and
+            # the hold would never end. The degraded raw code goes up instead.
+            damping = Damping(pending=damped.pending, seen=damped.seen,
+                              needed=node.escalate_after)
+            publishes = effective_code(damped.published, counted)
+            if publishes is not code:
+                contribution = Contribution(publishes, DAMPING_RULE)
         snapshot = StatusSnapshot(
             path=node.path, name=node.name, own_code=own, code=code,
             reported_code=node.code,
@@ -1036,9 +1414,17 @@ class StatusTree:
             show_when_quiet=node.show_when_quiet,
             maintenance=node.maintenance,
             maintenance_entry=self._maintenance.get(node.path), stale=stale,
-            stale_after_seconds=stale_after_seconds(node.frequency_seconds),
+            stale_after_seconds=node_stale_after(node),
             age_seconds=age, children=children,
-            reasons=lines, members=node.members, run=mount_run)
+            reasons=lines, members=node.members, run=mount_run,
+            contribution=contribution, damping=damping,
+            # The measurement, withheld on a shared mount for the same reason the
+            # text and the run facts are: two checks write that node and the last
+            # writer cannot be believed there (ADR-0044 decision 1).
+            subject="" if shared else node.subject,
+            record=None if shared else node.record,
+            shielded_by=shielded_by,
+            changes=changes.get(node.path, 0))
         return snapshot, mounts, mount_stamp, mount_run
 
 
@@ -1151,7 +1537,7 @@ def _is_stale(node: Status, age: float) -> bool:
     and one whose *check* reported ``MAINTENANCE`` carries no severity to degrade.
     That second case was never guarded before and could raise the same way.
     """
-    tolerance = stale_after_seconds(node.frequency_seconds)
+    tolerance = node_stale_after(node)
     if tolerance is None or node.code in (StatusCode.UNDEFINED,
                                           StatusCode.MAINTENANCE):
         return False
@@ -1159,18 +1545,40 @@ def _is_stale(node: Status, age: float) -> bool:
 
 
 def stale_after_seconds(frequency: int | None) -> float | None:
-    """How old a reading may get before it is stale: ``frequency + max(frequency,
-    30s)``, roughly two intervals (ADR-0005 decision 1).
+    """The tolerance a **period** implies: ``frequency + max(frequency, 30s)``,
+    roughly two intervals (ADR-0005 decision 1).
 
-    One function so that the rule has one copy. :func:`_is_stale` decides with it and
-    the snapshot carries the number it used, which is what lets a client show *how
-    fresh this is meant to be* without holding a second copy of the arithmetic
-    (ADR-0079 decision 5). ``None`` where there is no schedule to measure against,
-    which is the only case a node cannot go stale by its own stamp in.
+    One function so that the arithmetic has one copy — the engine reads it too, to
+    state the tolerance its own tick implies (ADR-0081). It is not the whole rule:
+    :func:`node_stale_after` is, and is what :func:`_is_stale` and the snapshot both
+    go through, so the verdict and the number a client is shown cannot disagree
+    (ADR-0079 decision 5). ``None`` where there is no period to measure against —
+    which is not by itself a node that cannot go stale, since it may have stated a
+    tolerance instead.
     """
     if not frequency:
         return None
     return frequency + max(float(frequency), STALE_MIN_GRACE_SECONDS)
+
+
+def node_stale_after(node: Status) -> float | None:
+    """The tolerance this node's freshness is actually judged against — the
+    **stated** one where somebody stated it, and otherwise the one its period
+    implies (ADR-0079 decision 1, both branches in one place).
+
+    One resolution, two callers — :func:`_is_stale` decides with it and the
+    snapshot carries the number it used — so *what the tolerance is* and *what the
+    client is told it is* cannot disagree.
+
+    The stated branch is what lets a node be read on no check's schedule and still
+    go stale (ADR-0081): the engine re-asserts its own branch every tick and states
+    the tick's tolerance, rather than stamping the tick as a period and having a
+    surface report it as a check's. The cycle ceiling a paced check
+    declares arrives on the same field.
+    """
+    if node.stale_after is not None:
+        return node.stale_after
+    return stale_after_seconds(node.frequency_seconds)
 
 
 # The single shared status tree for this process (ADR-0001).

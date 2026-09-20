@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 
 from little_sister.checks.base import (
@@ -13,8 +14,21 @@ from little_sister.checks.base import (
     register,
 )
 from little_sister.fetch import fetch
+from little_sister.reasons import Entry
 from little_sister.status import StatusCode
 from little_sister.transport import RemoteError
+
+#: This check reads one thing, so its line needs no identity of its own to be told
+#: apart from a sibling — the addressing a slug exists for (ADR-0036) has nothing to
+#: disambiguate here. What it does need is to be the **same slug across readings**,
+#: because a pin holds one: a derived slug would hash the sentence and mint a new
+#: one every poll, as the number in it moves.
+RESPONSE_SLUG = "response"
+
+#: What one record of this check costs, declared for the startup sum (ADR-0075): a
+#: status and a duration, with room. Measured at 36 bytes for a three-digit status
+#: and a four-digit time; the declaration is the ceiling, not the average.
+RECORD_BYTES = 64
 
 
 def _flag(value: object, field: str) -> bool:
@@ -111,14 +125,69 @@ class HttpCheck(Check):
             # help with that either. Closing it means owning the header parse or
             # running the request on a thread — the shape the link prober already has,
             # for the same reason, in its pass abandonment (ADR-0030).
+            #
+            # **The timer wraps the call and nothing else** (backlog #76). What is
+            # measured is the subject — the time until this endpoint answered — and
+            # not our run, which the engine already times as `run.wall_seconds`
+            # (ADR-0044). Keeping the two apart is the whole distinction: one says
+            # how the world is, the other how we are.
+            started = perf_counter()
             status = fetch(self.url, timeout=self.timeout_seconds,
                            follow_redirects=self.follow_redirects,
                            read_body=False).status
+            elapsed_ms = round((perf_counter() - started) * 1000)
         except RemoteError as error:
-            return CheckResult(StatusCode.ERROR,
-                               [f"request failed: {plain(str(error))}"])
+            # **A failed reading is a reading**, and it is recorded as one. The check
+            # did learn something — that it could not get there, and why — and that is
+            # data about this attempt rather than nothing at all. Left out, the series
+            # would carry a *hole*, and a hole cannot be told apart from a restart, a
+            # pause or a poll that never happened; with it, availability is in the
+            # data itself: how many readings answered, over how many there were.
+            #
+            # `status` and `response_ms` stand as `None` rather than being omitted, so
+            # every reading of this check has the same shape and a curve draws a real
+            # gap from a null. What they must *not* hold is how long we waited before
+            # giving up: that is the timeout's number, not the endpoint's, and under
+            # `response_ms` it would seed a series with values that are not the thing
+            # it measures.
+            return CheckResult(
+                StatusCode.ERROR,
+                [Entry(RESPONSE_SLUG, f"request failed: {plain(str(error))}")],
+                subject=self.url,
+                record={"status": None, "response_ms": None,
+                        "error": plain(str(error))})
         if status in self.expected_status:
-            return CheckResult(StatusCode.OK)
+            return self._read(StatusCode.OK, status, elapsed_ms)
         expected = ", ".join(str(s) for s in sorted(self.expected_status))
+        return self._read(StatusCode.ERROR, status, elapsed_ms,
+                          note=f" (expected {expected})")
+
+    def _read(self, code: StatusCode, status: int, elapsed_ms: int,
+              note: str = "") -> CheckResult:
+        """One reading of this endpoint: the measurement at the **run**, and the
+        sentence that retells it.
+
+        The record hangs on the result rather than on the line, because this check
+        reads **one object and its node stands for it** — the line is a rendering,
+        not the thing measured (ADR-0085). `subject` is the URL rather than the node
+        path, since the path is the deployment's label and may be moved or renamed.
+
+        The line carries **no code of its own**: with a single line the node's own
+        reading is already the verdict, and a coded entry beside a declared result
+        code is the shape `CheckResult` refuses (ADR-0042).
+
+        `response_ms` names its unit because a record renders as its keys (ADR-0082's
+        untyped rendering), so the name is what a reader sees; a **curve's** unit
+        belongs to the projection that draws it, not here.
+        """
         return CheckResult(
-            StatusCode.ERROR, [f"HTTP {status} (expected {expected})"])
+            code, [Entry(RESPONSE_SLUG, f"HTTP {status}{note} in {elapsed_ms} ms")],
+            subject=self.url,
+            record={"status": status, "response_ms": elapsed_ms})
+
+    def expected_entries(self) -> int:
+        """One line, always: this check reads one endpoint (ADR-0075)."""
+        return 1
+
+    def expected_record(self) -> int:
+        return RECORD_BYTES

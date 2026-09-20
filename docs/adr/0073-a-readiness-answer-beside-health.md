@@ -1,7 +1,7 @@
 # ADR-0073 — A readiness answer beside `/health`, and it latches
 
 - **Status:** Accepted
-- **Date:** 2026-09-05
+- **Date:** 2026-09-20 (accepted 2026-09-05)
 - **Related:** [ADR-0066](0066-health-answers-liveness-and-says-almost-nothing.md)
   (the liveness route this one stands beside, and whose bound on an ungated route it
   inherits), [ADR-0067](0067-the-run-scripts-can-serve-tls.md) §6 (the probe path,
@@ -95,10 +95,18 @@ rolling onto it, and the instances already serving go on serving.
   deliberately **not** a condition: that instance is usable by anybody who knows the
   address of a door ([ADR-0069](0069-identity-comes-from-outside-and-one-account-does-not.md)),
   and `announce_doors()`'s warning stays the only word on it.
-- **`trust`** — the machine's trust store holds CA certificates, counted **once**, at
-  startup, from a default TLS context. A store that could not be counted at all is
-  **not** reported as empty and does not hold readiness back: refusing to serve over
-  a measurement that failed is a guess with a load balancer behind it.
+- **`trust`** — the machine holds a usable trust source, asked **once**, at startup,
+  of the default verification paths. Asked of the paths, never of a context:
+  `cert_store_stats()` counts what a context has **loaded**, and OpenSSL never loads a
+  hash directory — a `capath` is consulted by subject hash when a chain is verified —
+  so a populated `/etc/ssl/certs` beside a `cafile` the distribution does not create
+  counts zero on an instance that verifies every connection, and the latch would keep
+  it there. A source is usable when OpenSSL would read something from it: a `cafile`
+  that exists and is not empty, or a `capath` holding at least one hashed entry that
+  resolves to a file. What the condition asks is whether this instance can verify a
+  certificate, not how many it has counted. A store that could not be measured at all
+  is **not** reported as empty and does not hold readiness back: refusing to serve
+  over a measurement that failed is a guess with a load balancer behind it.
 - **`first-pass`** — the engine has run every configured check once. A secret-pinned
   check counts: it stores its `ERROR` without ever calling `run()`
   ([ADR-0023](0023-secret-references.md)), and a pass that waited for it would never

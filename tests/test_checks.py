@@ -110,7 +110,98 @@ class HttpCheckTests(TestCase):
         with self._answering(503):
             result = self._check().run()
         self.assertEqual(result.code, StatusCode.ERROR)
-        self.assertIn("503", result.reason[0])
+        self.assertIn("503", result.reason_texts[0])
+
+    # --- The measurement (backlog #76) ---------------------------------------
+
+    def test_the_healthy_path_measures_and_says_what_it_read(self):
+        """The whole point: the family's most common check produced **no number at
+        all**, because on the healthy path it returned a bare `OK`. Now the run
+        carries the measurement, and the line retells it."""
+        with self._answering(200):
+            result = self._check().run()
+        self.assertEqual(result.code, StatusCode.OK)
+        self.assertEqual(result.record["status"], 200)
+        self.assertIsInstance(result.record["response_ms"], int)
+        self.assertGreaterEqual(result.record["response_ms"], 0)
+        entry, = result.reason_entries
+        self.assertIn("HTTP 200", entry.text)
+
+    def test_the_measurement_says_which_thing_in_the_world_it_read(self):
+        """A node is a place in the tree; an object is a thing in the world. The
+        path is the deployment's label and may be moved or renamed, so the reading
+        names the URL itself — on the **run**, because this check's node stands for
+        its object and the line is only a rendering (ADR-0085)."""
+        with self._answering(200):
+            result = self._check().run()
+        self.assertEqual(result.subject, "http://x")
+        entry, = result.reason_entries
+        self.assertEqual(entry.subject, "", "the line is not where the object lives")
+        self.assertIsNone(entry.data)
+
+    def test_the_line_carries_no_code_of_its_own(self):
+        """With one line the node's reading is already the verdict, and a coded entry
+        beside a declared result code is the shape `CheckResult` refuses (ADR-0042).
+        This is what lets the result keep declaring `OK` and `ERROR` itself."""
+        with self._answering(503):
+            entry, = self._check().run().reason_entries
+        self.assertIsNone(entry.code)
+
+    def test_a_status_nobody_expected_is_still_a_measurement(self):
+        """A 503 answered, and how fast it answered is a reading about the object.
+        Only a request that got *no* answer has nothing to measure."""
+        result = None
+        with self._answering(503):
+            result = self._check().run()
+        self.assertEqual(result.record["status"], 503)
+        self.assertIn("response_ms", result.record)
+
+    def test_a_failed_reading_is_recorded_as_a_reading(self):
+        """It is not nothing: the check learned that it could not get there, and why.
+        Left out, the series would carry a hole — and a hole cannot be told apart from
+        a restart, a pause or a poll that never happened, while a recorded failure
+        puts availability in the data itself."""
+        with mock.patch("little_sister.checks.http.fetch",
+                        side_effect=RemoteError("request failed for GET http://x: "
+                                                "boom", fault=Fault.TRANSIENT)):
+            result = self._check().run()
+        self.assertEqual(result.subject, "http://x")
+        self.assertIn("boom", result.record["error"])
+
+    def test_a_failed_reading_measures_nothing_but_keeps_the_shape(self):
+        """`status` and `response_ms` are present and null rather than missing, so
+        every reading of this check has one shape and a curve draws a real gap. What
+        they must never hold is how long we waited before giving up: that is the
+        timeout's number, not the endpoint's."""
+        with mock.patch("little_sister.checks.http.fetch",
+                        side_effect=RemoteError("boom", fault=Fault.TRANSIENT)):
+            record = self._check().run().record
+        self.assertIn("status", record)
+        self.assertIsNone(record["status"])
+        self.assertIn("response_ms", record)
+        self.assertIsNone(record["response_ms"])
+
+    def test_a_reading_that_answered_carries_no_error(self):
+        # not dragged along as a null on every successful reading: a projection
+        # treats a missing key as an empty one, and every record would be longer
+        with self._answering(200):
+            self.assertNotIn("error", self._check().run().record)
+
+    def test_the_line_is_the_same_one_across_readings(self):
+        """A pin holds a slug (ADR-0036), so the line an operator silenced must be the
+        line the next run reports — and this check has one line, every time."""
+        with self._answering(200):
+            healthy, = self._check().run().reason_entries
+        with self._answering(503):
+            failing, = self._check().run().reason_entries
+        self.assertEqual(healthy.slug, failing.slug)
+
+    def test_it_declares_what_one_run_holds(self):
+        # the startup sum (ADR-0075): a line that every deployment's most common
+        # check now emits is a cost somebody has to be able to see coming
+        check = self._check()
+        self.assertEqual(check.expected_entries(), 1)
+        self.assertGreaterEqual(check.expected_record(), 36)
 
     # --- `follow_redirects:`, and the two readings it chooses between ---------
 
@@ -144,7 +235,7 @@ class HttpCheckTests(TestCase):
         with self._answering(301):
             moved = self._check(follow_redirects=False).run()
         self.assertEqual(moved.code, StatusCode.ERROR)
-        self.assertIn("301", moved.reason[0])
+        self.assertIn("301", moved.reason_texts[0])
         with self._answering(301):
             allowed = self._check(follow_redirects=False,
                                   expected_status=[200, 301]).run()
@@ -198,7 +289,7 @@ class HttpCheckTests(TestCase):
                                                 "boom", fault=Fault.TRANSIENT)):
             result = self._check().run()
         self.assertEqual(result.code, StatusCode.ERROR)
-        self.assertIn("request failed", result.reason[0])
+        self.assertIn("request failed", result.reason_texts[0])
 
     def test_expected_status_list(self):
         with self._answering(204):
@@ -343,6 +434,71 @@ class LoaderTests(TestCase):
             self.assertIsInstance(by_name["web"], HttpCheck)
             self.assertEqual(by_name["web"].frequency_seconds, 300)
             self.assertIsInstance(by_name["c"], CommandCheck)
+
+    def test_a_dependency_is_read_and_made_absolute(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = _root(
+                directory,
+                gate__yaml="type: command\npath: /net/uplink\ncommand: 'true'\n",
+                web__yaml=("type: http\npath: /web\nurl: http://x\n"
+                           "depends_on: net/uplink\n"))
+            by_name = {c.name: c for c in load_checks(root)}
+            self.assertEqual(by_name["web"].depends_on, "/net/uplink")
+            self.assertIsNone(by_name["uplink"].depends_on)
+
+    def test_a_dependency_on_nothing_refuses_the_load(self):
+        # a declaration that quietly does nothing would quietly *not shield*, and
+        # nobody finds out until the outage it was written for
+        with tempfile.TemporaryDirectory() as directory:
+            root = _root(directory,
+                         web__yaml=("type: http\npath: /web\nurl: http://x\n"
+                                    "depends_on: /net/uplink\n"))
+            with self.assertRaises(CheckError) as caught:
+                load_checks(root)
+            self.assertIn("/net/uplink", str(caught.exception))
+            self.assertIn("no configured check", str(caught.exception))
+
+    def test_a_dependency_cycle_refuses_the_load(self):
+        # a cycle has no evaluation order at all, so there is no fail-toward-
+        # alarming answer either — only a refusal of the configuration
+        with tempfile.TemporaryDirectory() as directory:
+            root = _root(
+                directory,
+                a__yaml=("type: command\npath: /a\ncommand: 'true'\n"
+                         "depends_on: /b\n"),
+                b__yaml=("type: command\npath: /b\ncommand: 'true'\n"
+                         "depends_on: /a\n"))
+            with self.assertRaises(CheckError) as caught:
+                load_checks(root)
+            self.assertIn("cycle", str(caught.exception))
+
+    def test_a_check_depending_on_itself_refuses_the_load(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = _root(directory,
+                         a__yaml=("type: command\npath: /a\ncommand: 'true'\n"
+                                  "depends_on: /a\n"))
+            with self.assertRaises(CheckError) as caught:
+                load_checks(root)
+            self.assertIn("cycle", str(caught.exception))
+
+    def test_a_blank_dependency_is_a_typo_and_not_a_silence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = _root(directory,
+                         web__yaml=("type: http\npath: /web\nurl: http://x\n"
+                                    'depends_on: "   "\n'))
+            with self.assertRaises(CheckError):
+                load_checks(root)
+
+    def test_a_selector_is_refused_until_it_exists(self):
+        # `tag:` is the shape the VPN case wants and it is not built; refusing it
+        # by name beats accepting it as a path nothing matches
+        with tempfile.TemporaryDirectory() as directory:
+            root = _root(directory,
+                         web__yaml=("type: http\npath: /web\nurl: http://x\n"
+                                    "depends_on: tag:behind-vpn\n"))
+            with self.assertRaises(CheckError) as caught:
+                load_checks(root)
+            self.assertIn("selector", str(caught.exception))
 
     def test_unknown_type_raises(self):
         with tempfile.TemporaryDirectory() as directory:

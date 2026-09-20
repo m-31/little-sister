@@ -23,13 +23,17 @@ from little_sister.checks.metadata import (
     resolve_text,
 )
 from little_sister.errors import CheckError as CheckError
+from little_sister.errors import ConfigError
+from little_sister.limits import RECORD_LIMIT
 from little_sister.origins import release_of
 from little_sister.reasons import (
     ReasonEntry,
     ReasonError,
     ReasonInput,
+    check_subject,
     derive_code,
     normalize,
+    normalize_record,
 )
 from little_sister.reasons import (
     plain as _plain,
@@ -91,6 +95,26 @@ class CheckResult:
     declaring ``code`` exactly as before; the engine's failure path is prose and
     is untouched (ADR-0040). ``stored_code`` is always the concrete code the
     engine upserts — declared or derived.
+
+    **An entry may also carry what it is about and what was read.**
+    ``Entry.subject`` is the provider's identifier for the entity the line stands
+    for — a repository, a host — which several lines commonly share and which no
+    slug can be split back into; ``Entry.data`` is the **record**, the material the
+    check read and would otherwise throw away once it had written its sentence.
+    Neither moves anything: ``text`` is what every surface still shows, and neither
+    declares members, because data about a claim is not a claim.
+
+    The record is validated **here**, at this seam, and refused whole: it must be a
+    mapping that serializes to JSON, its JSON must weigh no more than this
+    deployment's ``record_limit`` bytes (``settings.yaml``, defaulting to
+    :data:`~little_sister.limits.RECORD_LIMIT`), and a value under a name the
+    surfaces read as a time
+    (:data:`~little_sister.reasons.RECORD_TIMESTAMP_KEYS`) must be an ISO-8601
+    string with an offset, or null. A check hands over a record it read; shaping it
+    to fit is the check's job, and a refusal says the size and names the field.
+
+    (``subject`` here is the *entity a line is about*, which is not the node-level
+    ``about`` below — that one is prose describing what a node *is*.)
 
     ``about`` (subject metadata — what the node *is*) and ``title`` (a short
     display label) are labels for the subnodes a branch check emits (ADR-0025) —
@@ -171,6 +195,19 @@ class CheckResult:
     order: int = 0
     show_when_quiet: bool | None = None
     entries: bool = False
+    #: **What this run measured, and what it read about it** (ADR-0085). A check
+    #: run reads one object and the result is one record; the nodes, children and
+    #: lines it writes are derived from that reading. ``subject`` is the object's
+    #: own identifier — the host it reached, the URL it fetched — because the node
+    #: path is the deployment's label and is editorial, and an identity not written
+    #: down at the reading cannot be added to the history afterwards. ``record`` is
+    #: what was read, validated and bounded at this seam exactly as an entry's is.
+    #:
+    #: A check that reads **several** objects puts each one's measurement on the
+    #: child that stands for it; where an object has no node at all — a repository,
+    #: a load-test run — it is a line, and :attr:`Entry.data` carries it there.
+    subject: str = ""
+    record: Mapping[str, Any] | None = None
     #: Derived in :meth:`__post_init__` — the one internal form (ADR-0036).
     reason_entries: tuple[ReasonEntry, ...] = field(
         init=False, default=(), repr=False, compare=False)
@@ -188,11 +225,22 @@ class CheckResult:
         # forms, one internal one. A malformed slug is the check author's error and
         # surfaces as a failing check, not as a silent re-key.
         try:
-            entries, members = normalize(self.reason, self.entries)
+            entries, members = normalize(self.reason, self.entries,
+                                         record_limit=_record_limit())
         except ReasonError as error:
             raise CheckError(str(error)) from error
         object.__setattr__(self, "reason_entries", entries)
         object.__setattr__(self, "members", members)
+        # The run's own measurement, through the same seam and the same limit as a
+        # line's: a record is a record wherever it hangs, and a check author who
+        # learns one rule should not meet a second.
+        try:
+            check_subject(self.subject, "a result's subject")
+            if self.record is not None:
+                object.__setattr__(self, "record", normalize_record(
+                    self.record, limit=_record_limit()))
+        except ReasonError as error:
+            raise CheckError(str(error)) from error
         # The ADR-0042 seam: a node with coded entries declares no code of its
         # own — every claim it makes is attributable to a line — and declaring
         # both is refused rather than silently resolved, the way a check YAML
@@ -277,6 +325,46 @@ def _calling_module() -> str:
     frame = sys._getframe(2) if hasattr(sys, "_getframe") else None
     name = frame.f_globals.get("__name__", "") if frame is not None else ""
     return str(name) or "a dependent package"
+
+
+#: Whether a configuration was found the first time one was looked for. ``None``
+#: until then. It is remembered because the answer cannot change within a process
+#: — a deployment either has a configuration directory or does not — and because
+#: the lookup is a failed import, which Python does not cache.
+_CONFIGURED: bool | None = None
+
+
+def _record_limit() -> int:
+    """How heavy a record this deployment allows — ``record_limit`` in
+    ``settings.yaml``, defaulting to :data:`~little_sister.limits.RECORD_LIMIT`
+    where there is no deployment to ask.
+
+    **Imported late**, the way :func:`_library_version` is: ``little_sister.config``
+    reads the settings files when the module is imported, and this module is
+    imported by every check type — including a plugin's, at ``import`` time — so
+    binding the configuration at module scope would bind a deployment's settings at
+    a moment that has nothing to do with that deployment being ready.
+
+    **And the import may fail, which is an answer rather than an error.** Importing
+    the configuration *resolves a configuration directory*, and refuses when there
+    is none (ADR-0031). A ``CheckResult`` is built in plenty of places where there
+    is none and should be: a plugin's own test suite is the common one, and a type
+    that could not construct a result without a deployment beside it would be a
+    type nobody can unit-test. So a missing configuration reads as *no deployment
+    has an opinion*, and the default stands. A deployment cannot reach that branch
+    — ``little_sister.app`` resolves its configuration at import and refuses to come
+    up without it, long before any check runs.
+    """
+    global _CONFIGURED
+    if _CONFIGURED is False:
+        return RECORD_LIMIT
+    try:
+        from little_sister.config import config
+    except ConfigError:
+        _CONFIGURED = False
+        return RECORD_LIMIT
+    _CONFIGURED = True
+    return config.record_limit
 
 
 def _library_version() -> str:
@@ -398,7 +486,9 @@ class Check(abc.ABC):
                  frequency_seconds: int = DEFAULT_FREQUENCY_SECONDS,
                  timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
                  retry_interval_seconds: int | None = None,
-                 retry_attempts: int | None = None) -> None:
+                 retry_attempts: int | None = None,
+                 escalate_after: int | None = None,
+                 depends_on: str | None = None) -> None:
         # The check's full, absolute node path (ADR-0016); `name` is the last segment.
         self.path = join_path(path)
         self.description = description
@@ -453,6 +543,19 @@ class Check(abc.ABC):
         # the retry off for this check.
         self.retry_interval_seconds = retry_interval_seconds
         self.retry_attempts = retry_attempts
+        # How many consecutive readings of a worse code the nodes this check writes
+        # need before they publish it upward (backlog #38 B). ``None`` inherits the
+        # settings-level default; the engine resolves the two and hands the answer
+        # to the tree, which reads no configuration of its own.
+        self.escalate_after = escalate_after
+        # The check this one is reached **through** (backlog #38 A): while that
+        # check reports a failure, this check's reading is not believed and its
+        # node is shielded — *we could not get there* rather than *it is broken*.
+        # A check path, because a check is the configured unit and the declaration
+        # then covers every node this check writes; `tag:` selectors are a later
+        # shape. `None` is every check today: nothing is shielded unless somebody
+        # says what reaches it.
+        self.depends_on = None if depends_on is None else join_path(depends_on)
         # Failures from resolve-at-construction secret references (ADR-0023):
         # non-empty ⇒ the engine pins this check to ERROR and never calls run().
         self.secret_errors: list[str] = []
@@ -501,6 +604,30 @@ class Check(abc.ABC):
         Summed at startup against the tree's entry limit exactly as
         :meth:`expected_cost` is against the worker threads, with the same
         lower-bound reading and the same refusal naming the checks.
+        """
+        return None
+
+    def expected_record(self) -> int | None:
+        """Bytes **one** of this check's records is expected to need, in the JSON
+        it is measured in — again from the type's own configuration, and ``None``,
+        the default, for a type that carries no record or will not estimate.
+
+        The third declaration beside the two above, and the one that is **compared
+        rather than summed**: the worker ceiling and the entry limit are shared by
+        every check, so what matters there is the total, while ``record_limit`` is
+        a bound on a single record, so what matters here is whether this type's
+        largest fits. Startup refuses a type declaring more than the deployment
+        allows, naming it — instead of the first run doing it fifteen minutes
+        later, in a package the deployment did not write.
+
+        It does **not** raise the limit, and nothing here should be read as asking
+        for room: the limit exists against the check, and a bound its subject can
+        lift is not one. A type aims at the default, because a package cannot see
+        which deployment it is installed into.
+
+        The measured largest record of the last run stands beside it on
+        ``/system``, for the reason every declaration here has one: an estimate
+        nobody can compare against a measurement decays invisibly.
         """
         return None
 
@@ -753,7 +880,40 @@ def _parse_common(config: dict[str, Any]) -> dict[str, Any]:
             None if config.get("retry_interval") is None
             else parse_duration(config.get("retry_interval"), 0)),
         "retry_attempts": _parse_retry_attempts(config.get("retry_attempts")),
+        "escalate_after": _parse_escalate_after(config.get("escalate_after")),
+        "depends_on": _parse_depends_on(config.get("depends_on")),
     }
+
+
+def _parse_depends_on(value: object) -> str | None:
+    """The path of the check this one is reached through (backlog #38 A), or
+    ``None``. A blank string is the author's typo rather than *no dependency*, and
+    fails the load: a declaration that silently means nothing is worse than none."""
+    if value is None:
+        return None
+    path = str(value).strip()
+    if not path:
+        raise CheckError("depends_on must name a check path, not an empty value")
+    if path.startswith("tag:"):
+        raise CheckError(
+            f"depends_on does not take a selector yet, only a check path: "
+            f"{path!r}")
+    return path
+
+
+def _parse_escalate_after(value: object) -> int | None:
+    """The per-check escalation count (backlog #38 B): ``None`` (absent) inherits the
+    settings-level default; otherwise a positive int. Zero would mean *never
+    publish*, so it fails the load rather than silencing a check quietly."""
+    if value is None:
+        return None
+    try:
+        count = int(str(value).strip())
+    except ValueError as exc:
+        raise CheckError(f"invalid escalate_after: {value!r}") from exc
+    if count < 1:
+        raise CheckError(f"escalate_after must be >= 1, got {value!r}")
+    return count
 
 
 def _parse_retry_attempts(value: object) -> int | None:

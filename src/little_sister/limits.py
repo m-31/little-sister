@@ -41,6 +41,21 @@ DEFAULT_MAX_WORKERS = 8
 #: ``settings.yaml`` overrides it.
 ENTRY_LIMIT = 100_000
 
+#: How heavy one entry's **record** may be, counted in the bytes of its JSON — the
+#: form it costs in, since that is what every client is sent. A record is what a
+#: check read about one subject, so the number is drawn where a composed record
+#: ends and a payload dump begins: the first records assembled by hand come to a
+#: few hundred bytes, while a single raw row from a provider's API is already
+#: several kilobytes. Two kilobytes leaves the former room to grow and refuses the
+#: latter, which is the line the limit exists to hold.
+#:
+#: ``record_limit`` in ``settings.yaml`` overrides it. That override costs one
+#: thing worth knowing: the limit is enforced inside ``CheckResult``, which a check
+#: builds in its own ``run()``, so the seam reads the configuration **late** rather
+#: than importing it — a check module that bound the settings at import time would
+#: bind them when a *plugin* is imported.
+RECORD_LIMIT = 2_048
+
 #: The share of what the machine gives this process that the process may be
 #: resident at before the line turns red — one gunicorn worker beside the OS on
 #: the smallest instance the family runs on. ``memory_share`` in
@@ -79,6 +94,9 @@ class Limits:
     memory line — a limit that cannot be computed is not observed either."""
 
     entry_limit: int = ENTRY_LIMIT
+    #: Bytes one entry's record may weigh — what a declaration is refused against
+    #: at startup, and what the `CheckResult` seam refuses against at run time.
+    record_limit: int = RECORD_LIMIT
     #: Bytes the process may be resident at before the line is red.
     memory_limit: int | None = None
     #: What the machine gives the process, in bytes — the number the memory
@@ -91,12 +109,13 @@ class Limits:
 
     @classmethod
     def from_machine(cls, *, entry_limit: int = ENTRY_LIMIT,
-                     memory_share: float = MEMORY_SHARE) -> Limits:
+                     memory_share: float = MEMORY_SHARE,
+                     record_limit: int = RECORD_LIMIT) -> Limits:
         """The limits a deployment stated (``settings.yaml``, defaulting to the
         constants above), with the memory limit derived from this machine:
         ``memory_share`` of what it gives the process."""
         given = machine_memory()
-        return cls(entry_limit=entry_limit,
+        return cls(entry_limit=entry_limit, record_limit=record_limit,
                    memory_limit=int(given * memory_share) if given else None,
                    machine_memory=given)
 
@@ -223,6 +242,11 @@ class Declared:
     frequency_seconds: int
     cost_seconds: float | None
     entries: int | None
+    #: Bytes one of this check's records is expected to need, or ``None`` where
+    #: the type did not say. Unlike the two above it is never summed: the limit it
+    #: answers to bounds a single record, so the question is whether this type's
+    #: largest fits, not what every type wants together.
+    record_bytes: int | None = None
 
     @property
     def workers(self) -> float:
@@ -277,11 +301,13 @@ def declared_costs(checks: Iterable[object]) -> tuple[Declared, ...]:
     for check in checks:
         cost = _declaration(check, "expected_cost")
         entries = _declaration(check, "expected_entries")
-        if cost is None and entries is None:
+        record = _declaration(check, "expected_record")
+        if cost is None and entries is None and record is None:
             continue
         found.append(Declared(str(getattr(check, "path", "")),
                               int(getattr(check, "frequency_seconds", 0)),
-                              cost, None if entries is None else int(entries)))
+                              cost, None if entries is None else int(entries),
+                              None if record is None else int(record)))
     return tuple(found)
 
 
@@ -301,6 +327,10 @@ class Capacity:
     declared: tuple[Declared, ...]
     max_workers: int
     entry_limit: int
+    #: The per-record bound declarations are **compared** against, one check at a
+    #: time. There is no sum here on purpose: a record limit bounds one record, so
+    #: adding two types' declarations together would answer a question nobody asked.
+    record_limit: int = RECORD_LIMIT
     amber_share: float = AMBER_SHARE
 
     @property
@@ -315,6 +345,21 @@ class Capacity:
         """Reason entries the declared checks expect to hold, together."""
         return sum(item.entries or 0 for item in self.declared)
 
+    @property
+    def over_record(self) -> tuple[Declared, ...]:
+        """The checks declaring a record the limit cannot hold."""
+        return tuple(item for item in self.declared
+                     if item.record_bytes is not None
+                     and item.record_bytes > self.record_limit)
+
+    @property
+    def near_record(self) -> tuple[Declared, ...]:
+        """The checks declaring a record that fits but is close to not fitting."""
+        return tuple(item for item in self.declared
+                     if item.record_bytes is not None
+                     and (self.record_limit * self.amber_share
+                          <= item.record_bytes <= self.record_limit))
+
     def refusals(self) -> tuple[str, ...]:
         """What cannot be served, one sentence per limit, naming the checks.
         Empty when everything declared fits."""
@@ -328,6 +373,14 @@ class Capacity:
             said.append(
                 f"the configured checks declare {self.entries:,} reason entries, "
                 f"past the limit of {self.entry_limit:,}: {self._worst_entries()}")
+        if over := self.over_record:
+            # Named one by one rather than summed: each of these is a type whose
+            # every record would be refused at the seam on its first run, and
+            # which one it is, is the whole of what an operator can act on —
+            # by raising `record_limit`, or by not installing that type.
+            said.append(
+                f"a declared record does not fit the {self.record_limit:,}-byte "
+                f"limit this deployment allows: {self._worst_record(over)}")
         return tuple(said)
 
     def warnings(self) -> tuple[tuple[str, str], ...]:
@@ -350,6 +403,11 @@ class Capacity:
                          f"entries, {_percent(self.entries, self.entry_limit)} of "
                          f"the limit of {self.entry_limit:,}: "
                          f"{self._worst_entries()}"))
+        if near := self.near_record:
+            said.append(("record",
+                         f"a declared record is close to the "
+                         f"{self.record_limit:,}-byte limit: "
+                         f"{self._worst_record(near)}"))
         return tuple(said)
 
     def _worst_cost(self) -> str:
@@ -359,6 +417,11 @@ class Capacity:
              f"({format_span(item.cost_seconds or 0.0)} every "
              f"{format_duration(item.frequency_seconds)})")
             for item in self.declared if item.cost_seconds is not None])
+
+    def _worst_record(self, items: Sequence[Declared]) -> str:
+        return _named([(float(item.record_bytes or 0),
+                        f"{_plain(item.path)} {item.record_bytes:,} bytes")
+                       for item in items])
 
     def _worst_entries(self) -> str:
         return _named([(float(item.entries or 0),
@@ -373,6 +436,7 @@ def capacity(checks: Iterable[object], *, max_workers: int,
     against the entry limit."""
     return Capacity(declared_costs(checks), max_workers=max_workers,
                     entry_limit=limits.entry_limit,
+                    record_limit=limits.record_limit,
                     amber_share=limits.amber_share)
 
 

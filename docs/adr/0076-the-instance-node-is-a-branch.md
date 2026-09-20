@@ -1,7 +1,7 @@
 # ADR-0076 — The instance's node is a branch: a child per contributor, an action per child
 
 - **Status:** Accepted
-- **Date:** 2026-09-05
+- **Date:** 2026-09-20 (accepted 2026-09-05)
 - **Related:** [ADR-0072](0072-the-instance-reports-on-itself.md) (the self-report
   seam whose contributors become the children, and whose §7 records are what the
   children carry), [ADR-0005](0005-dashboard-freshness-and-self-monitoring.md) (the
@@ -35,13 +35,16 @@ were the package's, and the seam carried lines and nothing else.
 ## Decision
 
 1. **`/little-sister` is a branch.** The root carries the beat — the engine writes
-   it every tick with the heartbeat's description and frequency, OK, and no lines
-   of its own — and one child per speaker: `/little-sister/engine` for the engine's
-   own lines, `/little-sister/<name>` for every registered contributor. Each child
-   is written every tick with that speaker's lines as member entries, its own code
-   the worst of what they claim (ADR-0042) and OK when nothing does, its
-   description saying what such a node is. The root's code is the roll-up
-   (ADR-0039), and the stale beat stays the root's own (ADR-0005).
+   it every tick with the heartbeat's description and a stated freshness
+   **tolerance**, OK, and no lines of its own — and one child per speaker:
+   `/little-sister/engine` for the engine's own lines, `/little-sister/<name>` for
+   every registered contributor. Each child is written every tick with that speaker's
+   lines as member entries, its own code the worst of what they claim (ADR-0042) and
+   OK when nothing does, its description saying what such a node is, and a tolerance
+   of its own. Nothing on this branch carries a **frequency**: nothing here is read on
+   a check's schedule, so it publishes no interval for a surface to report as one
+   ([ADR-0081](0081-an-instance-node-states-a-tolerance-not-a-period.md)). The root's
+   code is the roll-up (ADR-0039), and the stale beat stays the root's own (ADR-0005).
 
    **Every line on a child carries a code; what carries none is the child's
    `report`.** A line is a claim about this process — a lease held by somebody

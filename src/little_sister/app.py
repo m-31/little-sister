@@ -2,6 +2,7 @@ import atexit
 import json
 import os
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from functools import partial
@@ -72,7 +73,13 @@ from little_sister.origins import PackageOrigin, package_origin
 from little_sister.paths import shown_path
 from little_sister.render import render_markdown, render_markdown_inline
 from little_sister.secrets import SecretError, registered_resolvers, resolve_setting
-from little_sister.spans import coarse_span, format_duration, format_span, local_time
+from little_sister.spans import (
+    coarse_span,
+    format_duration,
+    format_span,
+    format_tolerance,
+    local_time,
+)
 from little_sister.state import EVENTS_FILE, StateLayer
 from little_sister.status import HEARTBEAT_PATH, StatusCode, on_same_line
 from little_sister.titles import Labeled, label_parts, shown_title
@@ -566,6 +573,17 @@ def _duration(seconds: int | None) -> str:
     return format_duration(seconds)
 
 
+@app.template_filter("tolerance")
+def _tolerance(seconds: float | None) -> str:
+    """A freshness tolerance as an interval, as
+    :func:`little_sister.spans.format_tolerance` writes it.
+
+    A name for the template, not a second implementation — the relationship
+    `duration` has to `format_duration`, and for the same reason: the copy
+    document states this number too."""
+    return format_tolerance(seconds)
+
+
 @app.template_filter("elapsed")
 def _elapsed(seconds: float | None) -> str:
     """A measured span — a check runtime, a countdown, an uptime — as
@@ -598,6 +616,40 @@ def _format_local(moment: datetime, fmt: str | None = None) -> str:
     it in the page's own words; this is the name the templates know.
     """
     return local_time(moment, fmt)
+
+
+@app.template_filter("record_fields")
+def _record_fields(value: object) -> list[tuple[str, str]]:
+    """An entry's record, flattened into dotted name and value, for the plain list
+    the node's own page shows.
+
+    Deliberately **untyped rendering**: nothing here reads what a name means, so a
+    time shows as the UTC string the seam stored. Rendering a known name in the
+    viewer's own zone is the next slice's, and doing half of it here would leave
+    two places deciding what a field is.
+
+    The name is dotted because that is how a record is addressed everywhere else
+    (``completed.at``), so what a reader inspects and what they would later write
+    are spelled the same. A list is shown as its JSON rather than exploded into
+    ``field[0]``, ``field[1]``; every other value that is not text is shown as its
+    JSON too, so a boolean reads ``true`` and an absent value ``null`` instead of
+    in Python's spelling. The values are escaped by the template like any other
+    data (ADR-0018) — which is the escaping the check no longer has to get right
+    itself.
+    """
+    rows: list[tuple[str, str]] = []
+
+    def walk(item: object, path: str) -> None:
+        if isinstance(item, Mapping):
+            for key, below in item.items():
+                walk(below, f"{path}.{key}" if path else str(key))
+        elif isinstance(item, str):
+            rows.append((path, item))
+        else:
+            rows.append((path, json.dumps(item)))
+
+    walk(value, "")
+    return rows
 
 
 def _copy_style() -> TimeStyle:
@@ -1336,7 +1388,7 @@ def _restore_state(engine: Engine, state: StateLayer) -> None:
 _start_engine_once()
 
 
-#: The machine's trust store, counted **once** here and never again (ADR-0073).
+#: The machine's trust store, measured **once** here and never again (ADR-0073).
 #: It is the one thing in the readiness answer that touches the machine, and a
 #: report on the seam is recorded state rather than a probe (ADR-0072), so the
 #: measurement happens at startup and everything afterwards reads this.
@@ -1549,6 +1601,10 @@ def status(branch: str = "") -> ResponseReturnValue:
         copy_rich = render_markdown(copy_markdown)
         return render_template('check.html', username=user.name,
                                firstname=user.firstname, node=node,
+                               # Which checks are reached **through** this one: the
+                               # other end of a shield, and the only place the cost
+                               # of one is visible before it is paid.
+                               dependents=status_tree.dependents(branch),
                                branch=branch, since=since, focus=focus,
                                focus_orphan=focus_orphan,
                                is_admin=user.admin,
@@ -1596,6 +1652,12 @@ def status(branch: str = "") -> ResponseReturnValue:
     if request.args.get('fragment'):
         body = render_template('_status_grid.html', node=node, branch=branch,
                                since=since,
+                               # The poll fragment renders the same node block as
+                               # the page, so it needs the same facts — without
+                               # this the dependent count would vanish ten seconds
+                               # after every load and come back on a reload.
+                               dependents=(status_tree.dependents(branch)
+                                           if branch else ()),
                                max_depth=depth, hide_ok=hide_ok,
                                hide_idle=hide_idle, dense=dense,
                                is_admin=user.admin,
@@ -1610,6 +1672,8 @@ def status(branch: str = "") -> ResponseReturnValue:
         node_meta = _node_meta_map(node) | _node_meta_map(heartbeat)
         body = render_template('status.html', username=user.name,
                                firstname=user.firstname, node=node,
+                               dependents=(status_tree.dependents(branch)
+                                           if branch else ()),
                                branch=branch, since=since, max_depth=depth,
                                depth_limit=MAX_DEPTH, hide_ok=hide_ok,
                                hide_idle=hide_idle, dense=dense,

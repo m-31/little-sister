@@ -1,7 +1,7 @@
 # ADR-0063 — A node may decline the density trade (`show_when_quiet`)
 
 - **Status:** Accepted
-- **Date:** 2026-08-22
+- **Date:** 2026-09-20 (accepted 2026-08-22)
 - **Related:** [ADR-0056](0056-stable-useful-dashboard-flow.md) (the chip, the
   quiet-box fold, and the stability rule this must not disturb),
   [ADR-0012](0012-node-metadata.md) / [ADR-0017](0017-node-title.md) /
@@ -16,11 +16,6 @@
   chip still offers), [ADR-0008](0008-json-output-api.md) (JSON envelope, unchanged
   here), [ADR-0061](0061-decoration-is-not-a-label.md) (a client draws its own chips).
 - **Register:** [`../decisions.md`](../decisions.md)
-
-> **Update (2026-09-06):** the envelope half landed in
-> [ADR-0080](0080-the-envelope-is-the-snapshot-published.md): `show_when_quiet` ships
-> as the tri-state it is, null where nobody said, so a client drawing its own chips
-> reads the declaration instead of guessing at it.
 
 ## Context
 
@@ -170,7 +165,10 @@ declaring a node changes painting inside a card and no card's position or span.
 - **Not in the JSON envelope here.** The snapshot carries it and the web renders it;
   the envelope (ADR-0008) is unchanged, and a client drawing its own chips is
   entitled to its own decision (ADR-0061) until the field joins the contract as its
-  own deliberate change.
+  own deliberate change. That change is
+  [ADR-0080](0080-the-envelope-is-the-snapshot-published.md), where `show_when_quiet`
+  ships as the tri-state it is — null where nobody said — so the client reads the
+  declaration instead of guessing at it.
 
 ## Consequences
 

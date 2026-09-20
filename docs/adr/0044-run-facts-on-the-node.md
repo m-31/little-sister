@@ -1,7 +1,7 @@
 # ADR-0044 — The run on the node: the container stamp, run facts, and `report`
 
 - **Status:** Accepted
-- **Date:** 2026-08-23 (accepted 2026-08-08 in the design round on information a
+- **Date:** 2026-09-20 (accepted 2026-08-08 in the design round on information a
   status code cannot carry)
 - **Related:** [ADR-0027](0027-observation-timestamp-semantics.md) (amended by this
   record: the mount registry counts checks per path, and the stamp a sole-check
@@ -19,13 +19,6 @@
   [ADR-0008](0008-json-output-api.md) (the envelope, untouched until the contract
   round)
 - **Register:** [`../decisions.md`](../decisions.md)
-
-> **Update (2026-09-06):** the envelope carries them now.
-> [ADR-0080](0080-the-envelope-is-the-snapshot-published.md) publishes `run` and
-> `report`, and generalizes decision 1's ownership rule from *one check answers for
-> this node* to *one **unit** answers* ([ADR-0078](0078-the-unit-is-what-the-engine-releases.md)),
-> which is the same statement for every check that exists today. The block is absent
-> where nothing answers, never null.
 
 ## Context
 
@@ -69,7 +62,10 @@ write (ADR-0027 rule 2, untouched).
    share it. `config_summary`'s branch-check guidance becomes conditional on that
    count: own the container alone ⇒ its whole-check text goes there; share it ⇒ tag
    the owned children instead. A check with whole-check information to publish should
-   own its own node.
+   own its own node. [ADR-0080](0080-the-envelope-is-the-snapshot-published.md)
+   generalizes that rule from *one check answers for this node* to *one **unit**
+   answers* ([ADR-0078](0078-the-unit-is-what-the-engine-releases.md)) — the same
+   statement for every check that exists today.
 2. **The engine writes the run's facts onto the check's own node after each run.**
    The sole-check container carries the check's run time because that is literally
    what it is. Nothing is synthesized from below — `max(children)` stays rejected
@@ -169,7 +165,10 @@ write (ADR-0027 rule 2, untouched).
   ADR-0027 and ADR-0036 both warn about; each future field argues for itself, and
   grouping the run facts as one object is part of holding that line.
 - The JSON envelope is untouched until the client contract round; until then the
-  new material is web-only, like `reported_code` and `suppressed_by` before it.
+  new material is web-only, like `reported_code` and `suppressed_by` before it. At
+  that round [ADR-0080](0080-the-envelope-is-the-snapshot-published.md) publishes
+  `run` and `report`, with the block **absent** where nothing answers rather than
+  null.
 - A topology change keeps its ADR-0027 property: adding a second check under a
   container clears the container's run facts because the question stopped having
   one answer — the value disappears rather than silently changing meaning.

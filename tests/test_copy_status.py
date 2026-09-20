@@ -322,6 +322,18 @@ class NodeCopyTests(TestCase):
         # not the `15m 0s` a measured span would read (`spans.py`).
         self.assertIn("- **Checked every:** 15m", document)
 
+    def test_a_node_with_no_period_states_the_freshness_it_promises(self):
+        # ADR-0081: the clipboard document and the page say the same thing here,
+        # which is the whole reason the rule is one rule — "Checked every 1s" on a
+        # node nothing checks was written in both places and wrong in both.
+        self.tree.upsert("/little-sister/startup", StatusCode.OK,
+                         stale_after=31.0)
+
+        document = self._document(self._leaf(path="/little-sister/startup"))
+
+        self.assertIn("- **Goes stale after:** 31s", document)
+        self.assertNotIn("Checked every", document)
+
     def test_a_stale_node_says_how_long_ago_it_was_checked(self):
         self.tree.upsert("/services/api", StatusCode.ERROR, "down")
 

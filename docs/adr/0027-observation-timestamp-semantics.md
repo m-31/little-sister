@@ -1,19 +1,12 @@
 # ADR-0027 — Observation timestamps: stamped where written, rolled up while unambiguous
 
 - **Status:** Accepted
-- **Date:** 2026-08-23 (accepted 2026-08-01)
+- **Date:** 2026-09-20 (accepted 2026-08-01)
 - **Related:** [ADR-0004](0004-status-aggregation-semantics.md) (status roll-up),
   [ADR-0005](0005-dashboard-freshness-and-self-monitoring.md) (staleness),
   [ADR-0008](0008-json-output-api.md) (JSON contract),
   [ADR-0006](0006-config-file-and-timezones.md) (timestamp storage & rendering).
 - **Register:** [`../decisions.md`](../decisions.md)
-
-> **Update (2026-09-06):** the nullable `timestamp` is gone rather than made
-> non-nullable: [ADR-0080](0080-the-envelope-is-the-snapshot-published.md) replaced
-> it with a `run` object that is **absent** where nothing answers for a node and
-> present with a null `observed_at` where something answers and has never written.
-> The two states this record could only spell as one null are now two, and the
-> deferred formal bump it named happened there.
 
 ## Context
 `Status.timestamp` is meant to be the **observation time**: `update()` re-stamps it on
@@ -83,11 +76,18 @@ observed" instead of inventing an instant.
 shows nothing — notably the root of any deployment with more than one check. Clients
 lose a root-level "data observed at" value at this stage; what an alerting client
 should get instead — above all the *cause* behind a non-OK status, plus whatever
-freshness view it needs — is deliberately deferred and will be designed with the
-client in one contract change. Strictly, required-to-nullable is an incompatible
-change under ADR-0008's versioning rule; `schema_version` stays **1** for now and the
-formal bump is consolidated into that deferred round — the field's one consumer is
-first-party and updates in lockstep.
+freshness view it needs — is deliberately deferred and designed with the client in
+one contract change. Strictly, required-to-nullable is an incompatible change under
+ADR-0008's versioning rule; `schema_version` stays **1** until that round and the
+formal bump is consolidated into it — the field's one consumer is first-party and
+updates in lockstep.
+
+That round is [ADR-0080](0080-the-envelope-is-the-snapshot-published.md), and it
+settled the nullable field by **removing** it rather than by making it non-nullable:
+a `run` object is **absent** where nothing answers for a node, and present with a
+null `observed_at` where something answers and has never written. The two states this
+record could only spell as one null are two there, and the bump deferred above
+arrived with them.
 
 ## Consequences
 - "Has a timestamp" now equals "unambiguously attributable" — boot time can no longer

@@ -23,8 +23,8 @@ from little_sister import app as app_module
 from little_sister import readiness
 from little_sister.readiness import Outcomes, Readiness, TrustStore
 
-FULL = TrustStore(certificates=142)
-EMPTY = TrustStore(certificates=0)
+FULL = TrustStore(usable=True)
+EMPTY = TrustStore(usable=False)
 
 
 def _readiness(*, doors=True, trust=FULL, first_pass=True, outcomes=None):

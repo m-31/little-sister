@@ -48,7 +48,7 @@
        a two-minute run reading `115 s`. #}
     <table class="table table-sm align-middle">
         <thead>
-            <tr><th>Check</th><th>Type</th><th>Frequency</th><th>Running</th><th>Next run</th><th>Last run</th><th>Declared</th></tr>
+            <tr><th>Check</th><th>Type</th><th>Frequency</th><th>Running</th><th>Next run</th><th>Last run</th><th>Declared</th><th>Through</th></tr>
         </thead>
         <tbody>
             {% for c in info.checks %}
@@ -79,16 +79,44 @@
                     {# The type's own estimate, beside the run it is an estimate
                        of. A type that will not estimate says nothing, and the
                        cell is empty rather than zero — nothing declared is not
-                       the same claim as nothing spent. #}
+                       the same claim as nothing spent.
+
+                       The record is the third declaration and the one whose
+                       measurement has no column of its own, so the largest record
+                       the last run carried is shown here in parentheses, beside
+                       what was declared. It stands even where nothing was
+                       declared: the drift a declaration hides is only visible if
+                       both are shown, and a record nobody declared is still worth
+                       seeing grow. #}
                     <td class="text-muted">
                         {% if c.expected_cost is not none %}{{ c.expected_cost | elapsed }}{% endif %}
                         {%- if c.expected_cost is not none and c.expected_entries is not none %} · {% endif %}
                         {%- if c.expected_entries is not none %}{{ "{:,}".format(c.expected_entries) }} entries{% endif %}
-                        {%- if c.expected_cost is none and c.expected_entries is none %}—{% endif %}
+                        {%- if c.expected_record is not none %}
+                            {%- if c.expected_cost is not none or c.expected_entries is not none %} · {% endif %}
+                            {{- "{:,}".format(c.expected_record) }} B record
+                        {%- endif %}
+                        {%- if c.record_bytes is not none %}
+                            {%- if c.expected_cost is not none or c.expected_entries is not none or c.expected_record is not none %} {% endif %}
+                            {{- "(" }}{{ "{:,}".format(c.record_bytes) }} B seen{{ ")" }}
+                        {%- endif %}
+                        {%- if c.expected_cost is none and c.expected_entries is none
+                              and c.expected_record is none and c.record_bytes is none %}—{% endif %}
+                    </td>
+                    {# What this check is reached **through** (backlog #38 A). The
+                       graph belongs on one page rather than one node at a time:
+                       a single failing dependency withholds every check naming
+                       it, and *how many* is the question to ask before declaring
+                       one — not after a quiet morning. An em dash where a check
+                       stands on its own, which is nearly all of them. #}
+                    <td class="text-muted">
+                        {%- if c.depends_on %}
+                            <a href="{{ url_for('status', branch=c.depends_on | url_branch) }}">{{ c.depends_on }}</a>
+                        {%- else %}—{% endif %}
                     </td>
                 </tr>
             {% else %}
-                <tr><td colspan="7" class="text-muted">No checks.</td></tr>
+                <tr><td colspan="8" class="text-muted">No checks.</td></tr>
             {% endfor %}
         </tbody>
     </table>

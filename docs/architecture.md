@@ -188,7 +188,28 @@ A node in the tree. Fields:
   (`ReasonEntry(slug, text)`), which is the one internal form
   ([ADR-0036](adr/0036-addressable-reasons.md)). A bare string is one entry;
   `members: bool` says the entries are individually suppressible rather than one
-  condition in several paragraphs.
+  condition in several paragraphs. An entry may also carry a `subject` — what the
+  line is *about*, as the source's own identifier — and `data`, the **record** the
+  check read about it; neither declares members, because data about a claim is not
+  a claim. A **measure** is not a third field: it is a *projection over the record*,
+  chosen when it is drawn, which is the footing grading and rendering already have
+  ([ADR-0085](adr/0085-a-measure-is-read-out-of-a-record.md)). The unit belongs to
+  that projection, so a record's key names its unit for the reader (`response_ms`)
+  and a curve's axis is labelled where the curve is declared.
+- `subject: str`, `record: dict | None` — **what this node's check measured, and the
+  object it measured** ([ADR-0085](adr/0085-a-measure-is-read-out-of-a-record.md)). A
+  check run reads one object and the result is **one record**; the node's code, its
+  lines and its children are *derived* from that reading, so the reading belongs to the
+  `CheckResult` and reaches the node that stands for the object — the mount for a check
+  that reads one thing, the child for each object where it reads several. Only an object
+  with **no node** carries its record on a line instead (`Entry.data`), which is the
+  case a repository or a job run is. `subject` is the identifier the check actually
+  reached and deliberately **not** the path: a path is the deployment's label for where
+  a node hangs and may be renamed, while the reading is about a thing in the world, and
+  an identity not written down at the reading cannot be added afterwards. Written
+  through on every run like `report`, so a run that read nothing clears the last
+  reading; withheld by the snapshot on a mount two checks share, where no single writer
+  can be believed (ADR-0015, ADR-0044 decision 1).
 - `timestamp: str | None` — the **observation time** (ISO-8601): `None` until the
   node's first `update()` / `touch()`, so *having* one means a check has written this
   node ([ADR-0027](adr/0027-observation-timestamp-semantics.md)). Construction never
@@ -196,6 +217,13 @@ A node in the tree. Fields:
 - `description: str`, `frequency_seconds: int | None`, `config: str` — metadata
   inherited from the check and set by the tree; `config` is the curated parameters
   the check ran with, as Markdown ([ADR-0013](adr/0013-check-config-on-node.md)).
+- `stale_after: float | None` — how old this node's reading may get before it is
+  stale, where somebody **stated** the tolerance rather than a period implying it
+  ([ADR-0079](adr/0079-freshness-is-a-stated-tolerance.md),
+  [ADR-0081](adr/0081-an-instance-node-states-a-tolerance-not-a-period.md)). `None`
+  means nobody stated one and the tolerance is derived from `frequency_seconds`,
+  which is every check that has a period; the instance's own branch states one and
+  carries no period at all, because it is read on no check's schedule.
 - `report: str` — what the run **found**, beside `config`'s what it ran **with**
   ([ADR-0044](adr/0044-run-facts-on-the-node.md)): Markdown, written through on
   every run — an empty one **clears** the last, so a roster cannot outlive the run
@@ -345,7 +373,7 @@ The single in-memory state everything hangs off (ADR-0001/0002). `StatusTree`
 holds one root `Status` and a bounded `deque` of `Event`s behind one `RLock`.
 
 - `upsert(path, code, reason, *, description=None, frequency_seconds=None,
-  config=None)` — create-or-update a node by absolute path (intermediate nodes
+  stale_after=None, config=None)` — create-or-update a node by absolute path (intermediate nodes
   auto-created), store the inherited metadata, and append a transition `Event`
   **only when the node's own code changes**. `config` is static display metadata
   (the check's parameters, [ADR-0013](adr/0013-check-config-on-node.md)) — stored
@@ -463,6 +491,46 @@ holds one root `Status` and a bounded `deque` of `Event`s behind one `RLock`.
   not change what the node showed — it stayed in maintenance. Counting them would
   chop one window into a dozen phantom `ERROR` periods no surface ever displayed.
   They stay in the event log, which is where the other question is answered.
+- **A node says how often it changed its mind lately** — `changes`, its own status
+  transitions in the last hour between `OK`, `WARN` and `ERROR`, derived from the event
+  log at snapshot time and stored nowhere
+  ([ADR-0083](adr/0083-a-node-may-wait-before-it-escalates.md) decision 7). A first
+  reading is not a change and is not counted; a transition a rule kept from alarming
+  **is**, which is where this differs from the node's history — that answers *what did
+  this node show*, this answers *how is the subject behaving*. It is the one number
+  that says a subject is flapping, which the escalation counter deliberately cannot:
+  every recovery clears that counter. On the node's page and in the envelope, never on
+  a card.
+- **A check may be reached *through* another**
+  ([ADR-0084](adr/0084-a-check-may-be-reached-through-another.md)): `depends_on` names
+  one check's path, the loader refuses an unknown target and any cycle, and the tree is
+  told the graph as a registry — `set_dependency` and `dependents` —
+  exactly as it is told a mount. Whether a shield is **in force** is derived per
+  snapshot: while the dependency reports `ERROR`, the node keeps its own code and
+  contributes nothing at all, its `OK` as much as its `ERROR`, because a reading taken
+  through a broken path is no evidence either way. The mark sits at the check's mount;
+  a never-reported or stale dependency does not shield, a stale dependent is not
+  shielded (rule 6 again), and a dependency that is itself shielded does not shield on.
+  Resolved once for the whole tree before the recursion, since a dependency may sit
+  outside the subtree being rendered. The node's page names it and links it, the
+  dependency's page counts what is reached through it, `/system` carries the graph, and
+  the envelope publishes `shielded_by`.
+- **A parent accumulates its children's `contribution`, not their `code`**
+  ([ADR-0032](adr/0032-status-contribution-boundary.md) rule 5,
+  [ADR-0083](adr/0083-a-node-may-wait-before-it-escalates.md)). For a rule that
+  *withholds* a node the contribution says so with a null code and the rule's name, for
+  the envelope; what the parent then accumulates is `UNDEFINED`, which the roll-up skips.
+  For a pin and an unreported node that is the node's own code and nothing had to be
+  said — the roll-up reads the difference between those two — while a **shielded** node
+  holds a ranked reading of its own and has to contribute `UNDEFINED` explicitly
+  ([ADR-0084](adr/0084-a-check-may-be-reached-through-another.md) decision 3). A rule
+  that *transforms* one puts a real code there
+  instead, and today exactly one does: a **damping counter** holds a worse reading back
+  until it has been read `escalate_after` times in a row, and the node publishes what it
+  published before while it waits. The counter is advanced on the **reading**, in
+  `upsert`, and kept in a side-table beside the pins; the snapshot reads it and renders
+  the hold (`1 of 3 to escalate`). Staleness goes past it, because a stale node gives
+  its parent its degraded **raw** code and never anything derived.
 - The snapshot derives a node's **own status** rather than copying its stored code
   ([ADR-0036](adr/0036-addressable-reasons.md);
   [ADR-0041](adr/0041-maintenance-is-a-contribution-rule.md); the
@@ -494,9 +562,14 @@ holds one root `Status` and a bounded `deque` of `Event`s behind one `RLock`.
   the default rank rather than a request for alphabetical (§4.5).
   Ordering by the live grade is deliberately not offered — it would re-sort on every
   poll. It also computes **freshness** (ADR-0005):
-  a node not observed within ~2× its `frequency` is flagged `stale` and its `code` is
+  a node not observed within its **tolerance** is flagged `stale` and its `code` is
   degraded to at least `WARN` (worse-of, rolled up) — including a **pinned** node,
-  whose reading is what staleness judges. The aggregation rule itself is the reusable
+  whose reading is what staleness judges. `node_stale_after` resolves that tolerance
+  in one place, for both the verdict and the number the snapshot publishes: the
+  node's **stated** `stale_after` where there is one, and otherwise ~2× its
+  `frequency` ([ADR-0079](adr/0079-freshness-is-a-stated-tolerance.md),
+  [ADR-0081](adr/0081-an-instance-node-states-a-tolerance-not-a-period.md)). A node
+  with neither can never be stale by its own stamp. The aggregation rule itself is the reusable
   `status.effective_code`. The same recursion resolves each node's published **`timestamp`**
   ([ADR-0027](adr/0027-observation-timestamp-semantics.md)), which exists only where
   *"when did the check behind this node run?"* has exactly one answer: a written node
@@ -539,8 +612,31 @@ empty list) reading `OK`, because "nothing to report" is not "nothing reported".
 severity — and the entry codes exclude `MAINTENANCE`, which is never a check's
 claim. A check that emits healthy lines owes the **ordering rule**: non-OK first,
 then in-flight, then healthy-and-idle, or `reason_cap` folds the failures below
-the chevron. `reasons.py` owns the normalization, the content-hash slug
-(`h-` + ten hex digits) an undeclared entry gets, and the `derive_code` rule. Most checks return a
+the chevron. **An entry may also carry what it is about and what was read.** `Entry.subject` is
+the source's identifier for the entity the line stands for — a repository, a host —
+which several lines commonly share and which no slug can be split back into, and
+which is deliberately not an address: nothing is pinned by subject, because a pin
+holds an identifier and only a line has one. `Entry.data` is the **record**, the
+material a check read and used to throw away once it had written its sentence;
+`text` is untouched, so nothing on any surface moves until something renders it,
+and the node's own page shows it as a plain list of dotted names and values.
+
+The record is validated at this seam and refused **whole**, the way a
+declared-and-derived code is: it is a mapping, it serializes to JSON, its JSON
+weighs no more than `record_limit` bytes (`settings.yaml`, default
+`limits.RECORD_LIMIT`), and a value under one of `reasons.RECORD_TIMESTAMP_KEYS`
+(`at`, `started`, `ended`, at **any** depth) is an ISO-8601 string carrying an
+offset — converted to UTC here and never re-stamped — or null. What is stored is
+the JSON read back, so the tree holds plain types nobody outside owns, which is
+what keeps a record safe to read outside the lock
+([ADR-0002](adr/0002-rlock-snapshot-synchronization.md)). Those three names are the
+whole typed vocabulary: a name earns a type when a surface does something with it
+that it could not do without one, and a measurement — a number with a unit — waits
+for the series that will draw it.
+
+`reasons.py` owns the normalization, the content-hash slug
+(`h-` + ten hex digits) an undeclared entry gets, the record's validation, and the
+`derive_code` rule. Most checks return a
 single leaf; one that reports several aspects returns `children`, a small tree the
 engine writes as a branch beneath the check's node ([ADR-0007](adr/0007-check-result-branches.md)).
 A check also exposes a curated allow-list of the parameters it ran with via
@@ -910,7 +1006,11 @@ its leaves, and its own `about` carries the node-level "what is this box" (ADR-0
 - The scheduler loop is **hardened** (a transient tick error logs and continues),
   and the engine **heartbeats a top-level `little-sister` node** every tick — if the
   scheduler stalls, that node goes stale and red (ADR-0005). Whole-process death is
-  left to an external supervisor (launchd / systemd / gunicorn restart).
+  left to an external supervisor (launchd / systemd / gunicorn restart). What the
+  beat writes is a **stated tolerance** and no `frequency_seconds`
+  ([ADR-0081](adr/0081-an-instance-node-states-a-tolerance-not-a-period.md)): nothing
+  on this branch is read on a check's schedule, so it publishes no interval, and the
+  dead-scheduler window is the same number said as the promise it always was.
 - **The beat is a branch that carries the instance's report of itself** (§4.8,
   [ADR-0072](adr/0072-the-instance-reports-on-itself.md),
   [ADR-0076](adr/0076-the-instance-node-is-a-branch.md)): the root
@@ -1265,9 +1365,14 @@ the two lines the instance says about its own ability to observe anything at all
   `ready`, or the words it is waiting for. `app.py` composes it once and the route in
   §5.1 renders it.
   - **`doors`** — `identity.registered_doors()` is not empty (§5.2).
-  - **`trust`** — `measure_trust_store()` counted CA certificates in a default TLS
-    context. Measured **once**, at startup, and it is the only thing here that touches
-    the machine; a count that raised answers `TrustStore(None)`, which is *unknown*
+  - **`trust`** — `measure_trust_store()` found a usable trust source among the
+    default TLS verification paths: a `cafile` that exists and is not empty, or a
+    `capath` holding at least one hashed entry that resolves to a file. Asked of the
+    paths and never of a context, because OpenSSL consults a hash directory by subject
+    hash when it verifies a chain and never loads it, so a count of what a context had
+    loaded read a populated `/etc/ssl/certs` as empty (ADR-0073).
+    Measured **once**, at startup, and it is the only thing here that touches the
+    machine; a measurement that raised answers `TrustStore(None)`, which is *unknown*
     and never reported as empty.
   - **`first-pass`** — `Engine.outcomes.first_pass` (§4.6): every configured check has
     stored a result. An engine switched off with `LITTLE_SISTER_ENGINE=0` has no pass
@@ -1747,8 +1852,10 @@ raises rather than rendering blank):
   a muted time of day (`settings.yaml`'s timezone, ADR-0006) sitting just before the cue
   and status word, and shows **nothing at all** where the question has no single answer
   ([ADR-0027](adr/0027-observation-timestamp-semantics.md)) — the absence is the
-  signal, and the freshness *alarm* stays the stale badge, which is normalized per
-  check frequency. The time shows on the **topmost node visible in the current
+  signal, and the freshness *alarm* stays the stale badge, normalized per node
+  against the tolerance the server applied — a check's period implies one, and a node
+  with no period may state one
+  ([ADR-0081](adr/0081-an-instance-node-states-a-tolerance-not-a-period.md)). The time shows on the **topmost node visible in the current
   view** and is suppressed below, where it would be identical
   ([ADR-0044](adr/0044-run-facts-on-the-node.md)): the branch head carries it when
   it renders, a card carries it as before, and a **nested box** now carries its own
@@ -2268,7 +2375,10 @@ icon registry keeps its built-in pack. `/system` marks each filler *built-in* or
   against), `entry_limit` (default 100,000) and `memory_share` (default 0.5, a
   fraction in `(0, 1]`), whose defaults are the constants in `limits.py` beside the
   measurements that read them ([ADR-0075](adr/0075-a-check-declares-what-it-costs.md),
-  §4.6) — and `instance` (default the
+  §4.6) — `escalate_after` (default 1, how many consecutive readings of a worse code a
+  node needs before the level above counts it; overridable per check, and `1` is
+  publish-at-once, [ADR-0083](adr/0083-a-node-may-wait-before-it-escalates.md)) — and
+  `instance` (default the
   hostname: what this instance is called, on `/system` and in whatever a package
   writes down about the process — [ADR-0074](adr/0074-this-instance-has-a-name.md);
   validated in `instance.py`, which appends the parts that make the mark unique, so
@@ -2489,7 +2599,8 @@ is explicit. A tag promises to keep these stable:
       code  coerce_code  config_markdown  parse_duration  parse_secret_refs  plain
       CHECKS_ASPECT  checks_dirs  load_checks
   little_sister.reasons
-      Entry  MAX_SLUG_LENGTH  ReasonError  derived_slug  normalize  plain  slug
+      Entry  MAX_SLUG_LENGTH  MAX_SUBJECT_LENGTH  RECORD_TIMESTAMP_KEYS
+      ReasonError  derived_slug  normalize  plain  slug
   little_sister.status
       StatusCode  join_path
   little_sister.values
@@ -2502,13 +2613,19 @@ is explicit. A tag promises to keep these stable:
       Response  fault_for  fetch  retry_after
   ```
 
-  Two **optional declarations** on `Check` join that surface additively
+  Three **optional declarations** on `Check` join that surface additively
   ([ADR-0075](adr/0075-a-check-declares-what-it-costs.md)): `expected_cost()` and
   `expected_entries()`, what one run is expected to occupy in worker seconds and what
-  the check expects to hold in reason entries, each computed by the type from its own
-  configuration and each `None` by default. What is promised is that a type that
-  overrides them is summed at startup against the worker ceiling and the entry limit,
-  and that a type that does not is unaffected — never that a particular sum refuses.
+  the check expects to hold in reason entries; and `expected_record()`, the bytes one
+  of its records is expected to need
+  ([ADR-0082](adr/0082-a-line-carries-what-it-is-about-and-what-it-read.md)'s limit).
+  Each is computed by the type from its own configuration and each is `None` by
+  default. What is promised is that a type that overrides one is measured at startup —
+  the first two **summed** against the worker ceiling and the entry limit, the third
+  **compared**, per check, against `record_limit`, because that limit bounds one record
+  rather than a shared ceiling — and that a type that does not is unaffected; never
+  that a particular number refuses. The measured counterpart of each stands beside it
+  on `/system`.
 
   `little_sister.spans` is on the list because a check writes a duration into a
   reason line — *"the backup took 2h 7m"* — and one that formatted its own would

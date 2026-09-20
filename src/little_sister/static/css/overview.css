@@ -1165,6 +1165,18 @@ body[data-ls-card-state="below"] .status-card__state {
     float: none;
     margin-left: 0;
 }
+/* The record under a reason line: names and values in two columns, layout only —
+   it inherits `small text-muted` from the markup and introduces no ink of its own,
+   so it needs no pass of the contrast sweep. */
+.reason-record {
+    display: grid;
+    grid-template-columns: minmax(6rem, max-content) 1fr;
+    gap: 0.05rem 0.6rem;
+    margin: 0.25rem 0 0;
+}
+.reason-record dt { font-weight: 400; }
+.reason-record dd { margin: 0; overflow-wrap: anywhere; }
+
 .reason-pin { position: relative; }
 .reason-pin > summary {
     display: flex;

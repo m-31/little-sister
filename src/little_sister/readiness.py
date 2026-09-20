@@ -25,6 +25,8 @@ Three rules carry the design:
 """
 from __future__ import annotations
 
+import os
+import re
 import ssl
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -56,40 +58,74 @@ NOT_READY = "not ready"
 
 @dataclass(frozen=True)
 class TrustStore:
-    """What the default TLS verification paths held when they were measured.
+    """Whether the default TLS verification paths held a usable trust source
+    when they were measured.
 
-    ``certificates`` is ``None`` where the measurement itself failed, which is
-    **not** the same fact as an empty store and is never reported as one: an
-    instance whose trust store could not be counted is not thereby known to be
-    unable to verify anything, and refusing readiness over what we could not
-    measure would be a guess with a load balancer behind it.
+    ``usable`` is ``None`` where the measurement itself failed, which is **not**
+    the same fact as an empty store and is never reported as one: an instance
+    whose trust store could not be measured is not thereby known to be unable to
+    verify anything, and refusing readiness over what we could not measure would
+    be a guess with a load balancer behind it.
     """
 
-    certificates: int | None
+    usable: bool | None
 
     @property
     def empty(self) -> bool:
-        """Whether the store is known to hold no CA certificate at all."""
-        return self.certificates == 0
+        """Whether the machine is known to hold no usable trust source at all."""
+        return self.usable is False
+
+
+#: A certificate in an OpenSSL hash directory: eight hex digits of the subject
+#: hash, a dot and a sequence number — ``4042bcee.0``. A CRL sits beside it as
+#: ``4042bcee.r0`` and anchors nothing.
+_HASHED_ENTRY = re.compile(r"[0-9a-f]{8}\.[0-9]+")
 
 
 def measure_trust_store() -> TrustStore:
-    """Count the CA certificates a default TLS context loads — **once**, at
-    startup, because this is the one thing here that touches the machine.
+    """Whether the default TLS verification paths hold a usable trust source —
+    asked **once**, at startup, because this is the one thing here that touches
+    the machine.
 
-    A container built without its distribution's CA certificates gets a default
-    context with an empty store, and then every TLS connection this instance makes
-    fails to verify — every ``http`` check, and an identity provider's discovery
-    document besides. Each failure looks like its own subject being unreachable,
-    and nothing says the cause is local. This is the measurement that lets it be
-    said once, in one line, about the instance.
+    Asked of the paths, never of a context. ``cert_store_stats()`` counts what a
+    context has **loaded**, and OpenSSL never loads a hash directory — a
+    ``capath`` is consulted by subject hash when a chain is verified — so a
+    populated ``/etc/ssl/certs`` beside a ``cafile`` the distribution does not
+    create counted zero on an instance that verified every connection, and the
+    latch kept it there (ADR-0073). A source is usable when OpenSSL
+    would read something from it: a ``cafile`` that exists and is not empty, or
+    a ``capath`` holding at least one hashed entry that resolves to a file.
+
+    A container built without its distribution's CA certificates has neither,
+    and then every TLS connection this instance makes fails to verify — every
+    ``http`` check, and an identity provider's discovery document besides. Each
+    failure looks like its own subject being unreachable, and nothing says the
+    cause is local. This is the measurement that lets it be said once, in one
+    line, about the instance.
     """
     try:
-        context = ssl.create_default_context()
-        return TrustStore(int(context.cert_store_stats()["x509_ca"]))
+        paths = ssl.get_default_verify_paths()
+        return TrustStore(_usable_file(paths.cafile)
+                          or _usable_directory(paths.capath))
     except Exception:
         logger.exception("readiness: the trust store could not be measured")
         return TrustStore(None)
+
+
+def _usable_file(cafile: str | None) -> bool:
+    """Present — ``get_default_verify_paths()`` answers ``None`` otherwise — and
+    not empty."""
+    return cafile is not None and os.path.getsize(cafile) > 0
+
+
+def _usable_directory(capath: str | None) -> bool:
+    """Holding at least one hashed entry OpenSSL could open — a link ``c_rehash``
+    left dangling is a name, not a certificate."""
+    if capath is None:
+        return False
+    with os.scandir(capath) as entries:
+        return any(_HASHED_ENTRY.fullmatch(entry.name) is not None
+                   and entry.is_file() for entry in entries)
 
 
 @dataclass(frozen=True)

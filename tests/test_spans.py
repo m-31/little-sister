@@ -7,7 +7,13 @@ import unittest
 from datetime import UTC, datetime, timedelta, timezone
 from unittest import mock
 
-from little_sister.spans import coarse_span, format_duration, format_span, local_time
+from little_sister.spans import (
+    coarse_span,
+    format_duration,
+    format_span,
+    format_tolerance,
+    local_time,
+)
 
 
 class FormatSpanTests(unittest.TestCase):
@@ -172,6 +178,25 @@ class LocalTimeTests(unittest.TestCase):
         moment = datetime(2026, 9, 4, 20, 32, 39, tzinfo=UTC)
         with self._settings("Europe/Berlin", "%Y-%m-%d %H:%M:%S"):
             self.assertEqual(local_time(moment, "%H:%M"), "22:32")
+
+
+class FormatToleranceTests(unittest.TestCase):
+    """A freshness tolerance is an interval and is written like one — the rounding
+    is the whole of what this adds over `format_duration` (ADR-0081)."""
+
+    def test_a_derived_tolerance_is_rounded_to_an_interval(self):
+        # `frequency + max(frequency, 30s)` arrives as a float, and the raw filter
+        # would spell it `31.0s`.
+        self.assertEqual(format_tolerance(31.0), "31s")
+        self.assertEqual(format_tolerance(120.4), "2m")
+
+    def test_a_stated_tolerance_keeps_the_units_it_was_written_in(self):
+        self.assertEqual(format_tolerance(3600), "1h")
+        self.assertEqual(format_tolerance(90), "90s")
+
+    def test_nothing_stated_is_the_em_dash_like_every_other_interval(self):
+        self.assertEqual(format_tolerance(None), "—")
+        self.assertEqual(format_tolerance(0), "—")
 
 
 if __name__ == "__main__":

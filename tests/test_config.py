@@ -13,6 +13,7 @@ from little_sister.config import (
     DEFAULT_TIMEZONE,
     ENTRY_LIMIT,
     MEMORY_SHARE,
+    RECORD_LIMIT,
     load_config,
 )
 
@@ -230,6 +231,35 @@ class EngineSizingTests(TestCase):
         self.assertEqual(cfg.memory_share, MEMORY_SHARE)
         self.assertEqual((DEFAULT_MAX_WORKERS, ENTRY_LIMIT, MEMORY_SHARE),
                          (8, 100_000, 0.5))
+
+    def test_reads_the_record_limit_and_defaults_to_the_constant(self):
+        # how heavy an entry's record may be: the deployment's answer to a refusal
+        # it disagrees with, and 2 KB where it says nothing
+        self.assertEqual(self._load("record_limit: 8192\n").record_limit, 8192)
+        self.assertEqual(self._load("timezone: UTC\n").record_limit, RECORD_LIMIT)
+        self.assertEqual(RECORD_LIMIT, 2_048)
+
+    def test_a_bad_record_limit_falls_back_with_a_warning(self):
+        # zero would refuse every record, including the ones this deployment
+        # configured a check to gather
+        for value in ("plenty", "0", "-16"):
+            with self.subTest(value=value), self.assertLogs(level="WARNING"):
+                self.assertEqual(
+                    self._load(f"record_limit: {value}\n").record_limit,
+                    RECORD_LIMIT)
+
+    def test_reads_the_escalation_count_and_defaults_to_one(self):
+        # one is today's behavior: the counter arrives switched off
+        self.assertEqual(self._load("escalate_after: 3\n").escalate_after, 3)
+        self.assertEqual(self._load("timezone: UTC\n").escalate_after, 1)
+
+    def test_a_bad_escalation_count_falls_back_with_a_warning(self):
+        # zero would mean *never publish*, which is the one direction ADR-0032
+        # rule 7 refuses outright
+        for value in ("often", "0", "-1"):
+            with self.subTest(value=value), self.assertLogs(level="WARNING"):
+                self.assertEqual(
+                    self._load(f"escalate_after: {value}\n").escalate_after, 1)
 
     def test_a_bad_worker_ceiling_falls_back_with_a_warning(self):
         # a typo must not leave the engine with no thread to run a check on

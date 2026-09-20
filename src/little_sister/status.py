@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import OrderedDict
 from collections.abc import Iterable
 from datetime import datetime
-from typing import Self
+from typing import Any, Self
 
 # The vocabulary lives in the leaf module `codes` (it must be importable from
 # `reasons.py`, which this module imports — ADR-0042); these re-exports keep the
@@ -128,9 +128,25 @@ class Status:
         # the first :meth:`update` / :meth:`touch`, so *having* a timestamp means a
         # check has written the node; construction never stamps (ADR-0027).
         self.timestamp: str | None = None
+        # **The measurement this node's check took, and the object it took it on**
+        # (ADR-0085). A check run reads one object and the result is one record;
+        # what stands on this node — its code, its lines, its children — is derived
+        # from that reading. `subject` is the object's own identifier rather than
+        # this node's path, because the path is the deployment's label: `/hosts/web01`
+        # measures `web01.example`. Both empty / `None` on a node no check measures —
+        # a container, or one the check reached through a child.
+        self.subject: str = ""
+        self.record: dict[str, Any] | None = None
         # Metadata inherited from the check (questions §3.6); set by the tree.
         self.description: str = ""
         self.frequency_seconds: int | None = None
+        # How old this node's reading may get before it is stale, where somebody
+        # **stated** the tolerance rather than a period implying it (ADR-0079
+        # decision 1, ADR-0081). `None` means nobody stated one and the tolerance
+        # is derived from `frequency_seconds`, which is every check that has a
+        # period; a node the engine re-asserts on its own tick states one and
+        # carries no period, because it is read on no check's schedule.
+        self.stale_after: float | None = None
         # Curated config the check ran with — display metadata, not status
         # (ADR-0013); Markdown, shown on the detail page.
         self.config: str = ""
@@ -159,6 +175,12 @@ class Status:
         # keeps a `nodes.yaml` `show_when_quiet: false` — a deployment taking back
         # what a check declared — distinguishable from silence.
         self.show_when_quiet: bool | None = None
+        # How many consecutive readings of a **worse** code this node needs before
+        # it publishes that code to its parent (backlog #38 B). `1` is today's
+        # behavior — publish at once — and is what a node nothing configured keeps.
+        # Resolved by the engine from the check's own value and the deployment's
+        # default, because the tree does not read configuration.
+        self.escalate_after: int = 1
         # The marker that an admin pin is on this node (ADR-0032 rule 4, ADR-0041).
         # It is *not* sticky and holds no value: the check keeps writing underneath
         # it and the snapshot derives MAINTENANCE from it, so the node never forgets

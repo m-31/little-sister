@@ -1,7 +1,7 @@
 # ADR-0032 — The contribution boundary: what a node shows and what it publishes
 
 - **Status:** Accepted
-- **Date:** 2026-08-23 (accepted 2026-08-01)
+- **Date:** 2026-09-20 (accepted 2026-08-01)
 - **Related:** [ADR-0004](0004-status-aggregation-semantics.md) (the roll-up this
   names a second half of), [ADR-0005](0005-dashboard-freshness-and-self-monitoring.md)
   (staleness — the first and, today, only transform),
@@ -11,12 +11,6 @@
   breaks the rule below), [ADR-0027](0027-observation-timestamp-semantics.md) (the
   other per-node value resolved in the same snapshot pass).
 - **Register:** [`../decisions.md`](../decisions.md)
-
-> **Update (2026-09-06):** the field the consequences hold back arrived:
-> [ADR-0080](0080-the-envelope-is-the-snapshot-published.md) publishes `reported`,
-> `own` and `code` under their own names and adds `contribution` — what the parent
-> counted, null where that was simply `code`, and otherwise naming the rule. Rule 5
-> reaches the API with it.
 
 ## Context
 
@@ -166,9 +160,12 @@ raw reading (6), and a suppression whose entry is not present simply does not ap
   the way decision 8 answers it for virtual children (`MAINTENANCE`, not
   `UNDEFINED`), or real and virtual children would read differently in one model.
 - **The envelope already carries `own_code` and `code`.** A contribution that
-  differs from the effective status will need a field of its own and a
-  `schema_version` decision; that rides the client-facing contract round rather
-  than arriving piecemeal.
+  differs from the effective status needs a field of its own and a `schema_version`
+  decision, so it rides the client-facing contract round rather than arriving
+  piecemeal. [ADR-0080](0080-the-envelope-is-the-snapshot-published.md) is that
+  round: `reported`, `own` and `code` are published under their own names, and
+  `contribution` beside them is what the parent counted — null where that was simply
+  `code`, and otherwise naming the rule. Rule 5 reaches the API there.
 - `Status.get_status_code()` keeps its ADR-0004 unit tests unchanged, because the
   boundary deliberately sits outside it.
 

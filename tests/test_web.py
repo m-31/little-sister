@@ -190,6 +190,36 @@ class WebTests(TestCase):
         self.assertIn('href="/status/system/alpha"', body)     # ancestor linked
         self.assertNotIn('href="/status/system/alpha/disk"', body)  # current: plain
 
+    def test_a_shielded_node_says_so_and_links_the_dependency(self):
+        # the page of a node that is red and reaching nothing above it: without
+        # this sentence an operator reads a quiet parent as good news
+        self._login()
+        self.tree.upsert("/net/vpn", StatusCode.ERROR)
+        self.tree.upsert("/svc/api", StatusCode.ERROR, "no route to host")
+        self.tree.set_dependency("/svc/api", "/net/vpn")
+        body = self.client.get("/status/svc/api").get_data(as_text=True)
+        self.assertIn("Reached through", body)
+        self.assertIn('href="/status/net/vpn"', body)
+
+    def test_a_dependency_page_counts_what_is_reached_through_it(self):
+        # the other end, and the risk the feature carries: one declaration can
+        # quiet dozens, so the number has to be on the page that owns it
+        self._login()
+        self.tree.upsert("/net/vpn", StatusCode.ERROR)
+        for name in ("api", "db", "queue"):
+            self.tree.upsert(f"/svc/{name}", StatusCode.ERROR)
+            self.tree.set_dependency(f"/svc/{name}", "/net/vpn")
+        body = self.client.get("/status/net/vpn").get_data(as_text=True)
+        self.assertIn("3 checks are", body)
+        self.assertIn("reached through this", body)
+
+    def test_an_ordinary_node_says_neither(self):
+        self._login()
+        self.tree.upsert("/svc/api", StatusCode.OK)
+        body = self.client.get("/status/svc/api").get_data(as_text=True)
+        self.assertNotIn("Reached through", body)
+        self.assertNotIn("reached through this", body)
+
     def test_config_shown_on_detail_page(self):
         self._login()
         self.tree.upsert("/svc/api", StatusCode.OK,
@@ -215,6 +245,59 @@ class WebTests(TestCase):
         self.assertIn("<strong>down</strong>", body)
         self.assertIn("<em>billing</em>", body)
         self.assertIn("<code>prod</code>", body)
+
+    def test_a_damped_node_says_so_on_its_card_and_on_its_page(self):
+        # a red leaf under a green parent is what a broken roll-up looks like, so
+        # the count is on both surfaces in words (backlog #38 B)
+        self._login()
+        self.tree.upsert("/svc/api", StatusCode.OK, escalate_after=3)
+        self.tree.upsert("/svc/api", StatusCode.ERROR)
+        page = self.client.get("/status/svc/api").get_data(as_text=True)
+        self.assertIn("consecutive", page)
+        self.assertIn("1 of 3", page)
+        self.assertIn("still counts", page)
+        card = self.client.get("/status").get_data(as_text=True)
+        self.assertIn("1 of 3 to escalate", card)
+
+    def test_an_undamped_node_says_nothing_about_escalation(self):
+        self._login()
+        self.tree.upsert("/svc/api", StatusCode.OK)
+        self.tree.upsert("/svc/api", StatusCode.ERROR)
+        page = self.client.get("/status/svc/api").get_data(as_text=True)
+        self.assertNotIn("to escalate", page)
+
+    def test_record_shown_on_detail_page_as_dotted_names(self):
+        # the record reaches the node's own page (backlog #32): a plain list, no
+        # name read for its meaning, dotted the way the field is addressed
+        self._login()
+        self.tree.upsert("/ci", StatusCode.ERROR, [
+            Entry("build", "CI: failed", code=StatusCode.ERROR,
+                  data={"workflow": "CI", "run_number": 41,
+                        "completed": {"at": "2026-09-19T09:12:00Z"}}),
+        ], members=True)
+        body = self.client.get("/status/ci").get_data(as_text=True)
+        self.assertIn("reason-record", body)
+        self.assertIn("completed.at", body)
+        self.assertIn("2026-09-19T09:12:00Z", body)
+        self.assertIn(">41<", body)
+
+    def test_a_line_without_a_record_renders_no_record_block(self):
+        self._login()
+        self.tree.upsert("/db", StatusCode.ERROR, "boom")
+        body = self.client.get("/status/db").get_data(as_text=True)
+        self.assertNotIn("reason-record", body)
+
+    def test_record_values_are_escaped_like_any_other_data(self):
+        # the escaping the check no longer has to get right itself (ADR-0018):
+        # a record field is data escaped at render, not text a check interpolated
+        self._login()
+        self.tree.upsert("/ci", StatusCode.ERROR, [
+            Entry("build", "CI: failed", code=StatusCode.ERROR,
+                  data={"branch": "<script>x</script>"}),
+        ], members=True)
+        body = self.client.get("/status/ci").get_data(as_text=True)
+        self.assertNotIn("<script>x</script>", body)
+        self.assertIn("&lt;script&gt;", body)
 
     def test_reason_raw_html_is_escaped_in_page(self):
         self._login()
@@ -1547,6 +1630,57 @@ class WebTests(TestCase):
         self.assertIn("· 3.4 s", body)
         self.assertIn("—", body)                   # check b has no last run yet
         self.assertNotIn(">running<", body)        # the old placeholder is gone
+
+    def test_system_shows_a_declared_record_beside_the_one_it_measured(self):
+        # ADR-0075 decision 8: an estimate nobody can compare against a
+        # measurement decays invisibly, so both stand in one cell
+        from little_sister.engine import CheckInfo
+        self._login()
+        body = self._system_body((
+            CheckInfo(path="/svc/a", type_name="github", frequency_seconds=60,
+                      running=False, running_since=None, running_seconds=None,
+                      next_run_at="2026-07-20T13:52:00+00:00",
+                      next_in_seconds=60.0,
+                      last_run_at="2026-07-20T13:50:57+00:00",
+                      elapsed_seconds=0.4,
+                      expected_record=1_024, record_bytes=612),))
+        self.assertIn("1,024 B record", body)
+        self.assertIn("(612 B seen)", body)
+
+    def test_system_measures_a_record_nobody_declared(self):
+        # the measurement stands on its own: a record no type estimated is still
+        # worth watching grow
+        from little_sister.engine import CheckInfo
+        self._login()
+        body = self._system_body((
+            CheckInfo(path="/svc/a", type_name="github", frequency_seconds=60,
+                      running=False, running_since=None, running_seconds=None,
+                      next_run_at="2026-07-20T13:52:00+00:00",
+                      next_in_seconds=60.0, last_run_at=None,
+                      elapsed_seconds=None, record_bytes=612),))
+        self.assertIn("(612 B seen)", body)
+        self.assertNotIn("B record", body)
+
+    def test_system_says_what_each_check_is_reached_through(self):
+        # the graph on one page (backlog #38 A): *how many* checks one
+        # dependency can quiet is the question to ask before declaring it, and
+        # node by node it is not a question anybody asks
+        from little_sister.engine import CheckInfo
+        self._login()
+        body = self._system_body((
+            CheckInfo(path="/svc/a", type_name="http", frequency_seconds=60,
+                      running=False, running_since=None, running_seconds=None,
+                      next_run_at="2026-07-20T13:52:00+00:00",
+                      next_in_seconds=60.0, last_run_at=None,
+                      elapsed_seconds=None, depends_on="/net/vpn"),
+            CheckInfo(path="/net/vpn", type_name="ssh-command",
+                      frequency_seconds=60,
+                      running=False, running_since=None, running_seconds=None,
+                      next_run_at="2026-07-20T13:52:00+00:00",
+                      next_in_seconds=60.0, last_run_at=None,
+                      elapsed_seconds=None),))
+        self.assertIn('<th>Through</th>', body)
+        self.assertIn('href="/status/net/vpn">/net/vpn</a>', body)
 
     def test_system_queued_run_is_not_running(self):
         # submitted but still waiting for a worker: no start time to show yet
@@ -3575,6 +3709,28 @@ class NodeFactsTests(TestCase):
         self.assertIn("Next update", body)
         self.assertIn("Last run took", body)
         self.assertIn("/history/quality/github", body)
+
+    def test_a_node_with_a_period_still_says_it_is_checked(self):
+        # The half of the rule that did not change (ADR-0081): a check *is* read
+        # on its interval, so its page says so in the words it always used.
+        self._container()
+        body = self.client.get("/status/quality/github").get_data(as_text=True)
+        self.assertIn("Checked every 5m", body)
+        self.assertNotIn("Goes stale after", body)
+
+    def test_the_instances_own_node_says_how_fresh_it_promises_to_be(self):
+        # `/little-sister/startup` rendered "Checked every 1s" beside
+        # real checks whose identical line meant a subject had been read on that
+        # period. Nothing is checked here at all — the lines are recorded state
+        # read on the tick, and readiness measured its trust store once, at
+        # startup — so the node carries no period and the page states the
+        # freshness the server actually promises instead (ADR-0081).
+        self.tree.upsert("/little-sister/startup", StatusCode.OK,
+                         stale_after=31.0)
+        body = self.client.get(
+            "/status/little-sister/startup").get_data(as_text=True)
+        self.assertNotIn("Checked every", body)
+        self.assertIn("Goes stale after 31s", body)
 
     def test_the_block_is_inside_the_polled_fragment(self):
         # `report` is an output of the run, so it changes every tick: outside

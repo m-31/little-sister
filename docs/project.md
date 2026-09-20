@@ -225,8 +225,10 @@ The app offers:
   degraded, so green always means freshly checked. The engine even reports its own
   liveness as a node, so a dead monitor is visible too.
 - **Check detail** (a leaf) — its description, current status and reason, the time
-  interval the current status has held, the heartbeat interval, and a link to its
-  history. An admin can set/clear **maintenance** here.
+  interval the current status has held, how often it is checked, and a link to its
+  history. A node nothing checks — one the engine re-asserts on its own tick — says
+  instead how fresh it promises to be, since *checked every* is a claim only a check
+  can make. An admin can set/clear **maintenance** here.
 - **Status history** (`/history/<path>`) — a node's status periods over time.
 - **Events** (`/events`) — the transition log across all checks, newest first.
 - **About** (`/about`) — who this is, why it is called that, and the version of the

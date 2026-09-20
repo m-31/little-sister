@@ -113,3 +113,27 @@ entry_limit: 100000
 # above 0 and at most 1; default 0.5, one gunicorn worker beside the OS. Where
 # the machine cannot say what it gives the process there is no memory line at all.
 memory_share: 0.5
+
+# How heavy one entry's record may be, counted in the bytes of its JSON — the form
+# it costs in, since that is what every API client is sent. A record is what a
+# check read about one subject, and the default is drawn where a composed record
+# ends and a payload dump begins: a few hundred bytes for the first records written
+# by hand, several kilobytes for a single raw row from a provider's API. An
+# over-heavy record fails its whole check, loudly, with the size in the line — so
+# raising this is how a deployment answers a refusal it disagrees with, and the
+# other answer is a check that hands over less. A check type that *declares* what one
+# of its records needs (`expected_record()`) is measured against this at startup and
+# named there instead, before it has run at all. A positive integer; default 2048.
+record_limit: 2048
+
+# How many consecutive readings of a **worse** code a node needs before it publishes
+# that code to the level above it. The leaf itself is honest from the first failure —
+# its card, its page and the event log all say so at once — and what waits is only the
+# claim that everything above it is broken, which is what a single failed check is not
+# proof of. Recovery is immediate and never waits, a different worse code restarts the
+# count, and a check that stops running altogether escalates on staleness regardless,
+# so the counter cannot hold a door shut on a check nobody is running. The count is
+# memory: a restart mid-escalation re-arms the whole delay. A positive integer;
+# default 1, which publishes at once and is what every deployment had before there was
+# a counter. A check may state its own `escalate_after:` for the nodes it writes.
+escalate_after: 1

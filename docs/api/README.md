@@ -55,13 +55,23 @@ curl -si -H "Accept: application/json" -H "Authorization: Bearer $TOKEN" \
 (what the check said), `own` (what the node shows once its own pins apply) and `code`
 (rolled up, degraded when stale) — plus `contribution`, which is non-null only when
 something kept this node out of its parent's count and names the rule that did.
-`entries` holds the node's reasons: `addressable` says whether they are members with
+`changes` is how many times this node's own status changed in the last hour, counting
+only moves between `OK`, `WARN` and `ERROR` — the one number that says *this thing is
+flapping*, since a subject that recovers between failures never trips the escalation
+counter. `contribution` names the rule and carries what was counted: null for a rule that
+withholds the node, a real code for one that transforms what it publishes — `damping`,
+where a node has read a worse code but not yet often enough in a row for this
+deployment to believe it. `entries` holds the node's reasons: `addressable` says whether they are members with
 stable slugs that can be pinned one by one, and each item carries its `text`, its own
-`code` where the check declared one, and its own `maintenance`. `run` holds the timing
-— `observed_at`, `wall_seconds`, `next_at`, and where there is a schedule
-`frequency_seconds` and the `stale_after_seconds` the server measured freshness by —
-and is **absent entirely** where nothing answers for the node, which is not the same
-as present with a null `observed_at`. `maintenance` is one object or null, and the text on it is `note`. The
+`code` where the check declared one, its own `maintenance`, the `subject` it is about
+and the `data` the check read — free-form JSON in the check's own vocabulary, of which
+only `at`, `started` and `ended` are typed, as RFC 3339 UTC date-times at any depth. `run` holds the timing
+— `observed_at`, `wall_seconds`, `next_at`, `frequency_seconds` where a check reads
+this node's subject on an interval, and `stale_after_seconds`, the tolerance the
+server measured freshness by, wherever it applied one — and is **absent entirely**
+where nothing answers for the node, which is not the same as present with a null
+`observed_at`. The last two come apart: a node the server re-asserts on its own tick
+names a tolerance and no interval, and so will a paced unit. `maintenance` is one object or null, and the text on it is `note`. The
 Markdown metadata is `about`, `title`, `description`, `config` (what the check ran
 with) and `report` (what its last run found) — **raw Markdown**, render it
 client-side. `order` is the declared rank, `show_when_quiet` a tri-state, and
@@ -96,8 +106,70 @@ object, the nullable `timestamp` and `frequency_seconds` became `run` — absent
 nothing answers for a node — and `report`, `order`, `show_when_quiet` and the
 envelope's `instance` are new.
 
+**2.1.0 adds `subject` and `data` to an entry** — what a line is about, and the record
+the check read about it. Both are additive: a client that reads neither is unaffected.
+
+**2.2.0 is the first version in which `contribution.code` can be a real code** rather
+than only null. No field moves: a rule that withholds a node still reports null, and the
+new `damping` rule reports what the parent counted. A client that showed
+`contribution` only as *withheld* should read the code.
+
+**2.3.0 adds `changes` to a node** — its status changes in the last hour. Additive.
+
+**2.4.0 adds `shielded_by` to a node** — the failing dependency it is reached
+through, or null. Additive, and worth reading: while it is set, the node's `code`
+is still its own but nothing of it reaches its parent, so a client that sums
+children itself will otherwise disagree with the server about the tree.
+
+**2.5.0 adds `subject` and `record` to a node** — the object its check measured and
+what that run read about it. Additive. This is where a measurement now lives: a check
+that reads one object records it on the node that stands for it, and only an object with
+no node of its own carries its record on a line instead.
+
 Decode defensively all the same: tolerate unknown fields and any child order, and
 treat an absent `run` as *nothing answers for this node* rather than as an error.
+
+## The golden envelope
+
+[`openapi.yaml`](openapi.yaml) says what the envelope *may* contain;
+`envelope-2.json` beside it is one envelope that contains all of it — a node with a
+`run` and one without, a run on a schedule carrying `frequency_seconds` and
+`stale_after_seconds` and one carrying neither, entries addressable and prose, an entry
+carrying `subject` and `data` and one carrying neither, a record carrying the typed
+`at` / `started` / `ended` keys at two depths, a `maintenance` pin and a null, and the
+`instance` block. It carries **both** shapes of `contribution`: the pin's, which
+*withholds* a node and reports `code: null`, and a damped node's, which *transforms* one
+— the node reads ERROR, the parent counted OK, and `contribution.code` is that OK. Those
+two are deliberately both here: before damping every rule withheld, so a fixture with
+only the null would quietly teach a client that `contribution` means *not counted*. It is **generated from the server's own
+API** and a test holds the server to it, so it cannot quietly stop being true.
+
+Which means it has an obligation attached. A field added to the served snapshot is added
+to this contract in the same change — and it makes this artifact stale in that same
+change, so **regenerating it belongs to the change that adds the field**, not to a
+follow-up. `python tests/test_contract_fixture.py` rewrites it; the diff is the review.
+
+It exists so that the server and its clients test **one** artifact instead of each
+keeping hand-written JSON that drifts apart. It ships inside the Python wheel, where a
+plugin reads it without a copy:
+
+```python
+from little_sister import contract
+
+envelope = contract.golden_envelope()          # as GET /status answers it
+artifact = contract.golden_artifact()          # plus schema_version and volatile
+```
+
+A client that cannot import the wheel carries the identical bytes as a shared file of
+the family.
+
+Some field **names** are volatile — they differ between two correct runs — and the
+artifact names them itself under `volatile`, so a consumer keeps no list of its own:
+`generated_at`, `observed_at` and `next_at`, the instance's `version`, and a pin's
+`set_at` and `created_at`. Wherever they occur the artifact holds `"<volatile>"`;
+normalize both sides before comparing, and what is left is the shape and every stable
+value. A pin's `expires_at` is deliberately **not** volatile — the scene fixes it, so a
+client's date decoding is tested against a real one.
 
 ## Rendering the spec
 

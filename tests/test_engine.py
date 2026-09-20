@@ -14,6 +14,7 @@ from little_sister.checks.base import Check, CheckError, CheckResult
 from little_sister.config import config
 from little_sister.engine import Engine
 from little_sister.limits import Limits
+from little_sister.reasons import Entry
 from little_sister.status import HEARTBEAT_PATH, StatusCode
 from little_sister.tree import StatusTree
 
@@ -58,6 +59,73 @@ class _CostlyCheck(_FakeCheck):
         return self._entries
 
 
+class RecordMeasurementTests(TestCase):
+    """The largest record the last run carried, beside what the type declared
+    (ADR-0075 decision 8): an estimate nobody can compare against a measurement
+    decays invisibly."""
+
+    def _info(self, result):
+        engine = Engine([_FakeCheck(path="/a", result=result)], StatusTree())
+        engine.run_once()
+        check, = engine.info().checks
+        return check
+
+    def test_a_run_with_no_record_measures_nothing(self):
+        # empty is not zero: nothing measured is not the claim that nothing is held
+        self.assertIsNone(self._info(CheckResult(StatusCode.OK, ["fine"]))
+                          .record_bytes)
+
+    def test_the_largest_record_is_what_is_kept(self):
+        info = self._info(CheckResult(reason=[
+            Entry("small", "a", StatusCode.OK, data={"a": 1}),
+            Entry("big", "b", StatusCode.OK, data={"note": "x" * 100}),
+        ]))
+        assert info.record_bytes is not None
+        self.assertGreater(info.record_bytes, 100)
+        self.assertLess(info.record_bytes, 200)
+
+    def test_a_branch_check_is_measured_over_its_children(self):
+        # the records sit on the children; the declaration is about the check
+        info = self._info(CheckResult(StatusCode.OK, ["host up"], children=(
+            CheckResult(reason=[Entry("d", "disk", StatusCode.OK,
+                                      data={"note": "y" * 200})], name="disk"),
+        )))
+        assert info.record_bytes is not None
+        self.assertGreater(info.record_bytes, 200)
+
+    def test_the_measurement_is_of_the_last_run_and_is_cleared(self):
+        # like `elapsed_seconds` above it: a figure that outlived the run that
+        # produced it would be exactly the drift this exists to show
+        check = _FakeCheck(path="/a", result=CheckResult(reason=[
+            Entry("w", "x", StatusCode.OK, data={"note": "z" * 200})]))
+        engine = Engine([check], StatusTree())
+        engine.run_once()
+        self.assertIsNotNone(engine.info().checks[0].record_bytes)
+        check._result = CheckResult(StatusCode.OK, ["nothing to say"])
+        engine.run_once()
+        self.assertIsNone(engine.info().checks[0].record_bytes)
+
+    def test_the_declaration_travels_beside_the_measurement(self):
+        engine = Engine([_RecordingCheck(path="/a", record=1_024,
+                                         result=CheckResult(StatusCode.OK))],
+                        StatusTree())
+        engine.run_once()
+        check, = engine.info().checks
+        self.assertEqual(check.expected_record, 1_024)
+        self.assertEqual(engine.info().record_limit, config.record_limit)
+
+
+class _RecordingCheck(_FakeCheck):
+    """A type that declares how heavy one of its records is (ADR-0075)."""
+
+    def __init__(self, *, record: int | None = None, **kwargs: object) -> None:
+        super().__init__(**kwargs)
+        self._record = record
+
+    def expected_record(self) -> int | None:
+        return self._record
+
+
 class _ConfiguredCheck(_FakeCheck):
     """A leaf check that reports a config summary (ADR-0013)."""
 
@@ -88,6 +156,66 @@ class EngineTests(TestCase):
         assert node_b is not None
         self.assertEqual(node_b.own_code, StatusCode.ERROR)
         self.assertEqual(node_b.reason, ("boom",))
+
+    def test_a_runs_measurement_reaches_the_node_it_measured(self):
+        """The seam of ADR-0085: a check reads an object, and what it read lands on
+        the node that stands for it — not on a line, which is a rendering."""
+        tree = StatusTree()
+        result = CheckResult(StatusCode.OK, ["200 in 412 ms"],
+                             subject="http://web01.example",
+                             record={"status": 200, "response_ms": 412})
+        Engine([_FakeCheck(path="/web", result=result)], tree).run_once()
+        node = tree.snapshot("/web")
+        assert node is not None
+        self.assertEqual(node.subject, "http://web01.example")
+        self.assertEqual(node.record["response_ms"], 412)
+
+    def test_a_check_that_reads_several_objects_measures_each_child(self):
+        """One run, several objects: each measurement lands on the child that stands
+        for its object, and the container that merely rolls them up measures none."""
+        tree = StatusTree()
+        result = CheckResult(StatusCode.UNDEFINED, children=(
+            CheckResult(StatusCode.OK, ["fine"], name="a", subject="host-a",
+                        record={"cpu_pct": 7}),
+            CheckResult(StatusCode.OK, ["fine"], name="b", subject="host-b",
+                        record={"cpu_pct": 91}),
+        ))
+        Engine([_FakeCheck(path="/hosts", result=result)], tree).run_once()
+        first = tree.snapshot("/hosts/a")
+        second = tree.snapshot("/hosts/b")
+        container = tree.snapshot("/hosts")
+        assert first is not None and second is not None and container is not None
+        self.assertEqual(first.record["cpu_pct"], 7)
+        self.assertEqual(second.subject, "host-b")
+        self.assertEqual(container.subject, "")
+        self.assertIsNone(container.record)
+
+    def test_a_declared_dependency_reaches_the_tree(self):
+        """The declaration is worth nothing until the tree knows about it, and the
+        tree is where the rule is evaluated — so this seam is the whole of what
+        makes `depends_on` in a check file do anything at all."""
+        tree = StatusTree()
+        checks = [
+            _FakeCheck(path="/net/vpn", result=CheckResult(StatusCode.ERROR)),
+            _FakeCheck(path="/svc/api", result=CheckResult(StatusCode.ERROR),
+                       depends_on="/net/vpn"),
+        ]
+        Engine(checks, tree).run_once()
+        self.assertEqual(tree.dependents("/net/vpn"), ("/svc/api",))
+        node = tree.snapshot("/svc/api")
+        assert node is not None
+        self.assertEqual(node.shielded_by, "/net/vpn")
+        self.assertEqual(tree.effective("/svc"), StatusCode.UNDEFINED)
+
+    def test_a_check_without_one_registers_nothing(self):
+        # the guard, not the loop: registering unconditionally would hand the tree
+        # a `None` target, and nearly every deployment declares no dependency at all
+        tree = StatusTree()
+        Engine([_FakeCheck(path="/svc/api")], tree).run_once()
+        self.assertEqual(tree.dependents("/svc/api"), ())
+        node = tree.snapshot("/svc/api")
+        assert node is not None
+        self.assertIsNone(node.shielded_by)
 
     def test_leaf_config_lands_on_its_node(self):
         tree = StatusTree()
@@ -784,6 +912,52 @@ class EngineTests(TestCase):
                 lambda: tree.snapshot(HEARTBEAT_PATH) is not None))
         finally:
             engine.stop()
+
+    def test_the_instance_branch_states_a_tolerance_and_carries_no_period(self):
+        # ADR-0081: nothing on this branch is checked on an interval
+        # — the lines are recorded state read on the tick (ADR-0072) and readiness
+        # measured its trust store once, at startup — so the branch carries no
+        # `frequency` for a surface to call a check's period. What it carries is
+        # the tolerance the tick implies, stated, which is the freshness promise
+        # the stamp was always really making.
+        from little_sister.engine import HEARTBEAT_PATH
+        tree = StatusTree()
+        engine = Engine([_FakeCheck(path="/x")], tree, poll_interval=1.0)
+        engine.start()
+        try:
+            self.assertTrue(_wait_for(
+                lambda: tree.snapshot(f"{HEARTBEAT_PATH}/engine") is not None))
+        finally:
+            engine.stop()
+        for path in (HEARTBEAT_PATH, f"{HEARTBEAT_PATH}/engine"):
+            snap = tree.snapshot(path)
+            assert snap is not None, path
+            self.assertIsNone(snap.frequency_seconds, path)
+            self.assertEqual(snap.stale_after_seconds, 31.0, path)
+
+    def test_a_stopped_scheduler_still_goes_stale_in_the_same_window(self):
+        # The detection window the stamp bought is exactly what may not be lost:
+        # `frequency + max(frequency, 30s)` at a 1s beat is 31s, and it is 31s
+        # whether the number arrives as a period or as a stated tolerance
+        # (ADR-0005 decision 3 stands).
+        from little_sister.engine import HEARTBEAT_PATH
+        tree = StatusTree()
+        engine = Engine([_FakeCheck(path="/x")], tree, poll_interval=1.0)
+        engine.start()
+        try:
+            self.assertTrue(_wait_for(
+                lambda: tree.snapshot(HEARTBEAT_PATH) is not None))
+        finally:
+            engine.stop()
+        beating = tree.snapshot(HEARTBEAT_PATH,
+                                now=datetime.now() + timedelta(seconds=30))
+        assert beating is not None
+        self.assertFalse(beating.stale)
+        dead = tree.snapshot(HEARTBEAT_PATH,
+                             now=datetime.now() + timedelta(seconds=32))
+        assert dead is not None
+        self.assertTrue(dead.stale)
+        self.assertEqual(dead.code, StatusCode.WARN)
 
     def test_heartbeat_carries_a_default_about(self):
         # The dashboard strip's hover card explains the self-monitor out of

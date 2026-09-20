@@ -35,9 +35,30 @@ _SEVERITY: dict[StatusCode, int] = {
 }
 
 
+#: The codes that carry a severity, and the only ones a change between is a change of
+#: mind. `MAINTENANCE` is an admin's act and `UNDEFINED` is *nothing has reported*, so
+#: a move touching either is not a node changing what it thinks.
+RANKED = frozenset(_SEVERITY)
+
+
 def worst_of(codes: Iterable[StatusCode]) -> StatusCode:
     """The most severe of `OK` / `WARN` / `ERROR` codes (others must be excluded)."""
     return max(codes, key=lambda code: _SEVERITY[code])
+
+
+def escalates(old: StatusCode, new: StatusCode) -> bool:
+    """Whether moving from ``old`` to ``new`` is a **worsening** of a ranked code.
+
+    The one question the damping counter asks, given a name so that the rule is in
+    one place rather than spelled out at the call site. Only `OK` / `WARN` / `ERROR`
+    are ranked, so a move that touches `UNDEFINED` or `MAINTENANCE` is not an
+    escalation and is never delayed: *nothing has reported* and *an admin silenced
+    this* are not claims a confidence counter has anything to say about, and holding
+    one back would delay a node's very first reading.
+    """
+    if old not in _SEVERITY or new not in _SEVERITY:
+        return False
+    return _SEVERITY[new] > _SEVERITY[old]
 
 
 def is_valid_status_code(value: str) -> bool:

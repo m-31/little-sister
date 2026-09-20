@@ -49,6 +49,7 @@ def load_checks(config_dir: str | Path | None = None) -> list[Check]:
             loaded.append((_load_one(config_path), config_path))
     _reject_reserved_paths(loaded)
     _reject_overlapping_owners(loaded)
+    _reject_broken_dependencies(loaded)
     return [check for check, _ in loaded]
 
 
@@ -111,6 +112,41 @@ def _reject_reserved_paths(loaded: list[tuple[Check, Path]]) -> None:
                     f"{source.name}: node {node!r} is on the reserved "
                     f"{HEARTBEAT_PATH!r} line — the engine's own heartbeat "
                     f"lives there (ADR-0005)")
+
+
+def _reject_broken_dependencies(loaded: list[tuple[Check, Path]]) -> None:
+    """Reject the load when a ``depends_on`` names no configured check, or when the
+    dependencies form a **cycle** (backlog #38 A).
+
+    Both are hard errors rather than a shrug, on
+    [ADR-0015](../../docs/adr/0015-check-discovery-union.md)'s argument: a
+    declaration that quietly does nothing is worse than a refusal, because what it
+    quietly does is *not shield*, and nobody finds out until the outage it was
+    written for arrives and forty subjects alarm anyway.
+
+    A cycle has no evaluation order at all — each of its members waits for another
+    to be believed — so there is no *fail toward alarming* answer available either;
+    the only honest one is to refuse the configuration that states it.
+    """
+    by_path = {check.path: source for check, source in loaded}
+    for check, source in loaded:
+        if check.depends_on is None:
+            continue
+        if check.depends_on not in by_path:
+            raise CheckError(
+                f"check {check.path!r} ({source.name}) depends on "
+                f"{check.depends_on!r}, which no configured check writes")
+    graph = {check.path: check.depends_on for check, _ in loaded}
+    for start in graph:
+        seen = [start]
+        at = graph[start]
+        while at is not None:
+            if at in seen:
+                seen.append(at)
+                raise CheckError(
+                    "check dependencies form a cycle: " + " -> ".join(seen))
+            seen.append(at)
+            at = graph.get(at)
 
 
 def _reject_overlapping_owners(loaded: list[tuple[Check, Path]]) -> None:

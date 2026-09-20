@@ -48,13 +48,15 @@ def _report(checks=(), *, limits: Limits | None = None, workers: int = 8,
                         capacity=capacity, resident=resident)
 
 
-def _declaring(path: str, *, cost=None, entries=None, frequency: int = 60):
-    """A check that declares what it costs — the two methods `Check` grew, which
+def _declaring(path: str, *, cost=None, entries=None, record=None,
+               frequency: int = 60):
+    """A check that declares what it costs — the three methods `Check` grew, which
     is all `declared_costs` reads."""
     return SimpleNamespace(path=path, timeout_seconds=30.0,
                            frequency_seconds=frequency,
                            expected_cost=lambda: cost,
-                           expected_entries=lambda: entries)
+                           expected_entries=lambda: entries,
+                           expected_record=lambda: record)
 
 
 def _slugs(report: EngineReport) -> list[str]:
@@ -504,6 +506,74 @@ class CapacityTests(TestCase):
                                              entries=400)])
         self.assertEqual(len(refused.refusals()), 2)
         self.assertEqual(refused.warnings(), ())
+
+
+class DeclaredRecordTests(TestCase):
+    """The third declaration, and the one that is compared rather than summed: a
+    record limit bounds one record, so what matters is whether a type's largest
+    fits — not what every type wants together."""
+
+    def _capacity(self, checks, *, record_limit=2_048):
+        return capacity(checks, max_workers=4,
+                        limits=Limits(entry_limit=100,
+                                      record_limit=record_limit))
+
+    def test_a_record_declaration_alone_is_read(self):
+        # a type that estimates nothing else still declares something
+        declared, = declared_costs([_declaring("/a", record=900)])
+        self.assertEqual(declared.record_bytes, 900)
+        self.assertIsNone(declared.cost_seconds)
+        self.assertIsNone(declared.entries)
+
+    def test_a_declaration_over_the_limit_refuses_and_names_the_check(self):
+        refused = self._capacity([_declaring("/a", record=4_096)],
+                                 record_limit=2_048)
+        said, = refused.refusals()
+        self.assertIn("/a", said)
+        self.assertIn("4,096", said)
+        self.assertIn("2,048", said)
+
+    def test_a_declaration_at_the_limit_fits(self):
+        # the limit is what a record may weigh, not what it must stay under
+        exactly = self._capacity([_declaring("/a", record=2_048)],
+                                 record_limit=2_048)
+        self.assertEqual(exactly.refusals(), ())
+
+    def test_declarations_are_not_summed(self):
+        # the decisive difference from the two limits above it: three checks each
+        # holding 1.5 kB of record are three checks that fit, not 4.5 kB that does
+        # not. Sum them and every deployment with a few record-bearing types would
+        # be refused for a bound none of them crosses.
+        fits = self._capacity([_declaring("/a", record=1_500),
+                               _declaring("/b", record=1_500),
+                               _declaring("/c", record=1_500)],
+                              record_limit=2_048)
+        self.assertEqual(fits.refusals(), ())
+
+    def test_near_the_limit_is_a_line_under_its_own_key(self):
+        near = self._capacity([_declaring("/a", record=1_700)],
+                              record_limit=2_048)
+        self.assertEqual(near.refusals(), ())
+        (limit, said), = near.warnings()
+        self.assertEqual(limit, "record")
+        self.assertIn("/a", said)
+        self.assertIn("1,700", said)
+
+    def test_comfortably_inside_the_limit_says_nothing(self):
+        quiet = self._capacity([_declaring("/a", record=200)],
+                               record_limit=2_048)
+        self.assertEqual(quiet.refusals(), ())
+        self.assertEqual(quiet.warnings(), ())
+
+    def test_a_declaration_the_library_cannot_read_is_a_silence(self):
+        # a type's estimate is code the library does not own (ADR-0075 decision 4):
+        # never a reason a monitoring process cannot start
+        raising = SimpleNamespace(
+            path="/a", timeout_seconds=30.0, frequency_seconds=60,
+            expected_cost=lambda: None, expected_entries=lambda: None,
+            expected_record=lambda: (_ for _ in ()).throw(RuntimeError("boom")))
+        with self.assertLogs(level="WARNING"):
+            self.assertEqual(declared_costs([raising]), ())
 
 
 class CapacityLineTests(TestCase):

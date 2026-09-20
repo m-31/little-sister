@@ -122,6 +122,19 @@
                                 {%- endif %}
                             </div>
                             <div class="md-body check-reason__body">{% if line.code %}{{ status_cue(line.code, labeled=true) }}{% endif %}{{ line.text | markdown }}</div>
+                            {#- The record (backlog #32): what the check read about
+                                this line's subject, beside the sentence it wrote.
+                                A plain list of dotted names and values — no name is
+                                read for its meaning here — on the node's own page
+                                only: a card shows the line, and this is the surface
+                                a reader comes to when the line is not enough. -#}
+                            {%- if line.data %}
+                                <dl class="reason-record small text-muted">
+                                    {%- for name, value in line.data | record_fields %}
+                                    <dt>{{ name }}</dt><dd>{{ value }}</dd>
+                                    {%- endfor %}
+                                </dl>
+                            {%- endif %}
                             {%- if line.quiet %}
                                 <div class="reason-quiet-note">
                                     <div>In maintenance{% if line.maintenance.set_by %}, set by <strong>{{ line.maintenance.set_by }}</strong>{% endif %} — expires {{ line.maintenance.expires_at | localtime }}.</div>
@@ -140,6 +153,18 @@
                             stays quiet once that pin is cleared. -#}
                         <div class="reason-quiet-count">{{ node.quiet_reasons }} of {{ node.reasons | length }} {% if node.maintenance %}also pinned individually{% else %}in maintenance{% if node.own_code.name == 'MAINTENANCE' %} — nothing here is reporting{% endif %}{% endif %}.</div>
                     {% endif %}
+                    {%- if node.damping %}
+                        {#- The counter, in words rather than as a number nobody can
+                            place: what this node shows, how far the count has got,
+                            and what its parent is counting meanwhile. The leaf is
+                            honest from the first failure (backlog #38 B) — what
+                            waits is only the claim that everything above is broken. -#}
+                        <div class="damping-note"><small>Showing
+                            <strong>{{ node.damping.pending.name.lower() }}</strong> —
+                            {{ node.damping.seen }} of {{ node.damping.needed }} consecutive
+                            readings before this escalates{% if node.contribution and node.contribution.code %}, so the level above still counts
+                            <strong>{{ node.contribution.code.name.lower() }}</strong>{% endif %}.</small></div>
+                    {%- endif %}
                     {% if node.stale %}
                         <div><small>Stale — last checked {{ node.age_seconds | elapsed }} ago.</small></div>
                     {% endif %}

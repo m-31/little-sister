@@ -1,0 +1,484 @@
+{
+  "envelope": {
+    "generated_at": "<volatile>",
+    "instance": {
+      "engine": "disabled",
+      "version": "<volatile>"
+    },
+    "schema_version": 2,
+    "status": {
+      "about": "",
+      "changes": 0,
+      "children": [
+        {
+          "about": "",
+          "changes": 0,
+          "children": [
+            {
+              "about": "",
+              "changes": 0,
+              "children": [],
+              "code": "ERROR",
+              "config": "",
+              "contribution": null,
+              "description": "",
+              "entries": {
+                "addressable": false,
+                "items": [
+                  {
+                    "code": null,
+                    "data": null,
+                    "maintenance": null,
+                    "running": false,
+                    "slug": "h-f221d92839",
+                    "subject": "",
+                    "text": "the tunnel is down"
+                  }
+                ]
+              },
+              "maintenance": null,
+              "name": "vpn",
+              "order": 0,
+              "own": "ERROR",
+              "path": "/network/vpn",
+              "record": null,
+              "report": "",
+              "reported": "ERROR",
+              "run": {
+                "next_at": null,
+                "observed_at": "<volatile>",
+                "wall_seconds": null
+              },
+              "shielded_by": null,
+              "show_when_quiet": null,
+              "stale": false,
+              "subject": "",
+              "title": ""
+            }
+          ],
+          "code": "ERROR",
+          "config": "",
+          "contribution": null,
+          "description": "",
+          "entries": {
+            "addressable": false,
+            "items": []
+          },
+          "maintenance": null,
+          "name": "network",
+          "order": 0,
+          "own": "UNDEFINED",
+          "path": "/network",
+          "record": null,
+          "report": "",
+          "reported": "UNDEFINED",
+          "shielded_by": null,
+          "show_when_quiet": null,
+          "stale": false,
+          "subject": "",
+          "title": ""
+        },
+        {
+          "about": "",
+          "changes": 0,
+          "children": [
+            {
+              "about": "",
+              "changes": 0,
+              "children": [],
+              "code": "OK",
+              "config": "",
+              "contribution": null,
+              "description": "",
+              "entries": {
+                "addressable": false,
+                "items": []
+              },
+              "maintenance": null,
+              "name": "api",
+              "order": 0,
+              "own": "OK",
+              "path": "/services/api",
+              "record": null,
+              "report": "",
+              "reported": "OK",
+              "run": {
+                "frequency_seconds": 300,
+                "next_at": null,
+                "observed_at": "<volatile>",
+                "stale_after_seconds": 900.0,
+                "wall_seconds": null
+              },
+              "shielded_by": null,
+              "show_when_quiet": null,
+              "stale": false,
+              "subject": "",
+              "title": ""
+            },
+            {
+              "about": "",
+              "changes": 0,
+              "children": [],
+              "code": "ERROR",
+              "config": "",
+              "contribution": {
+                "by": "dependency",
+                "code": null
+              },
+              "description": "",
+              "entries": {
+                "addressable": false,
+                "items": [
+                  {
+                    "code": null,
+                    "data": null,
+                    "maintenance": null,
+                    "running": false,
+                    "slug": "h-2f93c7f748",
+                    "subject": "",
+                    "text": "connect: no route to host"
+                  }
+                ]
+              },
+              "maintenance": null,
+              "name": "cache",
+              "order": 0,
+              "own": "ERROR",
+              "path": "/services/cache",
+              "record": null,
+              "report": "",
+              "reported": "ERROR",
+              "run": {
+                "next_at": null,
+                "observed_at": "<volatile>",
+                "wall_seconds": null
+              },
+              "shielded_by": "/network/vpn",
+              "show_when_quiet": null,
+              "stale": false,
+              "subject": "",
+              "title": ""
+            },
+            {
+              "about": "",
+              "changes": 0,
+              "children": [],
+              "code": "MAINTENANCE",
+              "config": "",
+              "contribution": {
+                "by": "maintenance",
+                "code": null
+              },
+              "description": "",
+              "entries": {
+                "addressable": false,
+                "items": [
+                  {
+                    "code": null,
+                    "data": null,
+                    "maintenance": null,
+                    "running": false,
+                    "slug": "h-6bc9d26a24",
+                    "subject": "",
+                    "text": "connection refused"
+                  }
+                ]
+              },
+              "maintenance": {
+                "created_at": "<volatile>",
+                "created_by": "lex",
+                "expires_at": "2027-01-01T00:00:00Z",
+                "note": "waiting on the vendor",
+                "set_at": "<volatile>",
+                "set_by": "lex"
+              },
+              "name": "db",
+              "order": 0,
+              "own": "MAINTENANCE",
+              "path": "/services/db",
+              "record": null,
+              "report": "",
+              "reported": "ERROR",
+              "run": {
+                "next_at": null,
+                "observed_at": "<volatile>",
+                "wall_seconds": null
+              },
+              "shielded_by": null,
+              "show_when_quiet": null,
+              "stale": false,
+              "subject": "",
+              "title": ""
+            },
+            {
+              "about": "",
+              "changes": 1,
+              "children": [],
+              "code": "ERROR",
+              "config": "",
+              "contribution": {
+                "by": "damping",
+                "code": "OK"
+              },
+              "description": "",
+              "entries": {
+                "addressable": false,
+                "items": [
+                  {
+                    "code": null,
+                    "data": null,
+                    "maintenance": null,
+                    "running": false,
+                    "slug": "h-270aa9a79f",
+                    "subject": "",
+                    "text": "the consumer is behind"
+                  }
+                ]
+              },
+              "maintenance": null,
+              "name": "queue",
+              "order": 0,
+              "own": "ERROR",
+              "path": "/services/queue",
+              "record": null,
+              "report": "",
+              "reported": "ERROR",
+              "run": {
+                "next_at": null,
+                "observed_at": "<volatile>",
+                "wall_seconds": null
+              },
+              "shielded_by": null,
+              "show_when_quiet": null,
+              "stale": false,
+              "subject": "",
+              "title": ""
+            },
+            {
+              "about": "",
+              "changes": 0,
+              "children": [],
+              "code": "OK",
+              "config": "",
+              "contribution": null,
+              "description": "",
+              "entries": {
+                "addressable": false,
+                "items": []
+              },
+              "maintenance": null,
+              "name": "web",
+              "order": 0,
+              "own": "OK",
+              "path": "/services/web",
+              "record": {
+                "response_ms": 412,
+                "status": 200
+              },
+              "report": "",
+              "reported": "OK",
+              "run": {
+                "next_at": null,
+                "observed_at": "<volatile>",
+                "wall_seconds": null
+              },
+              "shielded_by": null,
+              "show_when_quiet": null,
+              "stale": false,
+              "subject": "http://web01.example",
+              "title": ""
+            }
+          ],
+          "code": "OK",
+          "config": "",
+          "contribution": null,
+          "description": "",
+          "entries": {
+            "addressable": false,
+            "items": []
+          },
+          "maintenance": null,
+          "name": "services",
+          "order": 0,
+          "own": "UNDEFINED",
+          "path": "/services",
+          "record": null,
+          "report": "",
+          "reported": "UNDEFINED",
+          "shielded_by": null,
+          "show_when_quiet": null,
+          "stale": false,
+          "subject": "",
+          "title": ""
+        },
+        {
+          "about": "what this watches",
+          "changes": 0,
+          "children": [
+            {
+              "about": "",
+              "changes": 0,
+              "children": [
+                {
+                  "about": "",
+                  "changes": 0,
+                  "children": [],
+                  "code": "OK",
+                  "config": "",
+                  "contribution": null,
+                  "description": "",
+                  "entries": {
+                    "addressable": false,
+                    "items": []
+                  },
+                  "maintenance": null,
+                  "name": "acme-api",
+                  "order": 0,
+                  "own": "OK",
+                  "path": "/platform/actions/acme-api",
+                  "record": null,
+                  "report": "",
+                  "reported": "OK",
+                  "run": {
+                    "next_at": null,
+                    "observed_at": "<volatile>",
+                    "wall_seconds": null
+                  },
+                  "shielded_by": null,
+                  "show_when_quiet": null,
+                  "stale": false,
+                  "subject": "",
+                  "title": ""
+                }
+              ],
+              "code": "ERROR",
+              "config": "",
+              "contribution": null,
+              "description": "",
+              "entries": {
+                "addressable": true,
+                "items": [
+                  {
+                    "code": "ERROR",
+                    "data": {
+                      "at": "2026-09-18T06:12:04Z",
+                      "branch": "main",
+                      "repository": "acme/api",
+                      "run": {
+                        "conclusion": "failure",
+                        "ended": "2026-09-18T06:12:04Z",
+                        "number": 128,
+                        "started": "2026-09-18T06:04:41Z",
+                        "status": "completed"
+                      },
+                      "verdict": "failed",
+                      "workflow": "CI"
+                    },
+                    "maintenance": null,
+                    "running": false,
+                    "slug": "1001-workflow-42-main",
+                    "subject": "1001",
+                    "text": "acme/api (main) / CI: failed (#128)"
+                  },
+                  {
+                    "code": "WARN",
+                    "data": null,
+                    "maintenance": null,
+                    "running": false,
+                    "slug": "1001-workflow-77",
+                    "subject": "",
+                    "text": "acme/api / nightly: disabled manually"
+                  }
+                ]
+              },
+              "maintenance": null,
+              "name": "actions",
+              "order": 0,
+              "own": "ERROR",
+              "path": "/platform/actions",
+              "record": null,
+              "report": "",
+              "reported": "ERROR",
+              "run": {
+                "next_at": null,
+                "observed_at": "<volatile>",
+                "wall_seconds": null
+              },
+              "shielded_by": null,
+              "show_when_quiet": null,
+              "stale": false,
+              "subject": "",
+              "title": ""
+            }
+          ],
+          "code": "ERROR",
+          "config": "checks/platform.yaml",
+          "contribution": null,
+          "description": "the platform team's repositories",
+          "entries": {
+            "addressable": false,
+            "items": [
+              {
+                "code": null,
+                "data": null,
+                "maintenance": null,
+                "running": false,
+                "slug": "h-415dc6ff2b",
+                "subject": "",
+                "text": "one repository is short"
+              }
+            ]
+          },
+          "maintenance": null,
+          "name": "platform",
+          "order": 3,
+          "own": "WARN",
+          "path": "/platform",
+          "record": null,
+          "report": "- [api](https://example.test/api)",
+          "reported": "WARN",
+          "run": {
+            "next_at": null,
+            "observed_at": "<volatile>",
+            "wall_seconds": null
+          },
+          "shielded_by": null,
+          "show_when_quiet": false,
+          "stale": false,
+          "subject": "",
+          "title": "Platform"
+        }
+      ],
+      "code": "ERROR",
+      "config": "",
+      "contribution": null,
+      "description": "",
+      "entries": {
+        "addressable": false,
+        "items": []
+      },
+      "maintenance": null,
+      "name": "overall",
+      "order": 0,
+      "own": "UNDEFINED",
+      "path": "/",
+      "record": null,
+      "report": "",
+      "reported": "UNDEFINED",
+      "shielded_by": null,
+      "show_when_quiet": null,
+      "stale": false,
+      "subject": "",
+      "title": ""
+    }
+  },
+  "schema_version": 2,
+  "volatile": [
+    "generated_at",
+    "observed_at",
+    "next_at",
+    "version",
+    "set_at",
+    "created_at"
+  ]
+}

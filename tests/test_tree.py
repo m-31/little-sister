@@ -7,7 +7,7 @@ from unittest import TestCase
 from little_sister.maintenance import MaintenanceEntry
 from little_sister.reasons import Entry
 from little_sister.status import HEARTBEAT_PATH, StatusCode
-from little_sister.tree import Event, StatusTree
+from little_sister.tree import CHANGE_WINDOW_SECONDS, Event, StatusTree
 
 
 class _RecordingStore:
@@ -26,6 +26,469 @@ class _RecordingStore:
     def save(self, entries, entry_pins=None):
         self.saved = dict(entries)
         self.saved_entries = dict(entry_pins or {})
+
+
+class DampingTests(TestCase):
+    """The confidence counter at the node boundary (backlog #38 B).
+
+    The claim under test throughout: **the leaf is honest immediately and only the
+    escalation waits.** A test that checked the node's own code went quiet would be
+    testing the mechanism 1.5 rejected, not this one.
+    """
+
+    def _tree(self, needed: int = 3) -> StatusTree:
+        tree = StatusTree()
+        tree.upsert("/svc/api", StatusCode.OK, escalate_after=needed)
+        return tree
+
+    def _snap(self, tree: StatusTree, path: str = "/svc/api"):
+        snap = tree.snapshot(path)
+        assert snap is not None
+        return snap
+
+    def test_the_node_is_red_at_once_and_the_parent_is_not(self):
+        tree = self._tree()
+        tree.upsert("/svc/api", StatusCode.ERROR)
+        leaf = self._snap(tree)
+        self.assertIs(leaf.code, StatusCode.ERROR, "the leaf never lies")
+        self.assertIs(leaf.contribution.code, StatusCode.OK)
+        self.assertEqual(leaf.contribution.by, "damping")
+        self.assertIs(self._snap(tree, "/svc").code, StatusCode.OK)
+
+    def test_it_escalates_on_the_reading_the_deployment_asked_for(self):
+        tree = self._tree(3)
+        for expected in (StatusCode.OK, StatusCode.OK):
+            tree.upsert("/svc/api", StatusCode.ERROR)
+            self.assertIs(self._snap(tree, "/svc").code, expected)
+        tree.upsert("/svc/api", StatusCode.ERROR)      # the third reading
+        self.assertIs(self._snap(tree, "/svc").code, StatusCode.ERROR)
+        self.assertIsNone(self._snap(tree).contribution)
+        self.assertIsNone(self._snap(tree).damping)
+
+    def test_a_reading_that_changed_nothing_still_counts(self):
+        # three consecutive readings of ERROR is three readings, and only the first
+        # of them is a transition — a counter that advanced on transitions alone
+        # would never reach two
+        tree = self._tree(2)
+        tree.upsert("/svc/api", StatusCode.ERROR)
+        self.assertEqual(self._snap(tree).damping.seen, 1)
+        tree.upsert("/svc/api", StatusCode.ERROR)
+        self.assertIs(self._snap(tree, "/svc").code, StatusCode.ERROR)
+
+    def test_recovery_is_immediate_and_clears_the_count(self):
+        tree = self._tree(3)
+        tree.upsert("/svc/api", StatusCode.ERROR)
+        tree.upsert("/svc/api", StatusCode.OK)
+        self.assertIsNone(self._snap(tree).damping)
+        self.assertIs(self._snap(tree, "/svc").code, StatusCode.OK)
+
+    def test_a_different_worse_code_restarts_the_count(self):
+        # two readings that disagree are not two votes for either
+        tree = self._tree(3)
+        tree.upsert("/svc/api", StatusCode.ERROR)
+        tree.upsert("/svc/api", StatusCode.WARN)
+        marker = self._snap(tree).damping
+        self.assertIs(marker.pending, StatusCode.WARN)
+        self.assertEqual(marker.seen, 1)
+
+    def test_the_held_value_is_the_last_published_and_not_ok(self):
+        # a node that was already WARN publishes WARN while it holds back ERROR —
+        # publishing OK would invent a reading nobody made
+        tree = self._tree(2)
+        tree.upsert("/svc/api", StatusCode.WARN)   # published at once: 1st reading
+        tree.upsert("/svc/api", StatusCode.WARN)
+        tree.upsert("/svc/api", StatusCode.ERROR)
+        self.assertIs(self._snap(tree).contribution.code, StatusCode.WARN)
+
+    def test_the_first_reading_of_a_node_is_never_delayed(self):
+        tree = StatusTree()
+        tree.upsert("/svc/new", StatusCode.ERROR, escalate_after=5)
+        self.assertIsNone(self._snap(tree, "/svc/new").damping)
+        self.assertIs(self._snap(tree, "/svc").code, StatusCode.ERROR)
+
+    def test_a_move_through_undefined_is_not_an_escalation(self):
+        # a parent counts no `UNDEFINED` at all, so the first countable reading
+        # after one is the same case as a node's very first: there is nothing to
+        # escalate *from*, and holding it back would delay the only claim anybody
+        # has made. The state-is-new branch does not cover this — the node has
+        # damping state by now — so the ranking rule has to.
+        tree = self._tree(3)
+        tree.upsert("/svc/api", StatusCode.UNDEFINED)
+        tree.upsert("/svc/api", StatusCode.ERROR)
+        self.assertIsNone(self._snap(tree).damping)
+        self.assertIs(self._snap(tree, "/svc").code, StatusCode.ERROR)
+
+    def test_staleness_escalates_past_the_counter(self):
+        # a check that stopped running produces no new readings, so the count would
+        # never advance and the hold would never end (ADR-0032 rule 6)
+        tree = self._tree(3)
+        tree.upsert("/svc/api", StatusCode.ERROR, frequency_seconds=60)
+        stale = datetime.now() - timedelta(seconds=3600)
+        tree.snapshot("/svc/api")
+        node = tree._ensure_node("/svc/api")           # age it by hand
+        node.timestamp = stale.isoformat()
+        leaf = self._snap(tree)
+        self.assertTrue(leaf.stale)
+        self.assertIsNone(leaf.damping, "the hold is not in force on a stale node")
+        self.assertIs(self._snap(tree, "/svc").code, StatusCode.ERROR)
+
+    def test_the_default_publishes_at_once(self):
+        # `escalate_after` 1 is exactly the behavior every deployment had before
+        tree = StatusTree()
+        tree.upsert("/svc/api", StatusCode.OK)
+        tree.upsert("/svc/api", StatusCode.ERROR)
+        self.assertIsNone(self._snap(tree).damping)
+        self.assertIs(self._snap(tree, "/svc").code, StatusCode.ERROR)
+
+    def test_a_damped_transition_is_a_period_of_the_nodes_own_history(self):
+        """The one claim damping makes is that the leaf is honest, and its history is
+        a surface like any other. A pinned node's hidden transition is a different
+        case — it really did not change what anybody saw — and the two must not be
+        filtered by one test of *was this suppressed*."""
+        tree = self._tree(3)
+        tree.upsert("/svc/api", StatusCode.ERROR)
+        periods = tree.history("/svc/api")
+        self.assertEqual([period.code for period in periods],
+                         [StatusCode.OK, StatusCode.ERROR])
+
+    def test_a_pinned_nodes_hidden_transition_is_still_not_a_period(self):
+        # the case the filter exists for, kept working
+        tree = StatusTree()
+        tree.upsert("/svc/api", StatusCode.OK)
+        tree.set_maintenance("/svc/api", "window",
+                             expires_at=datetime(2999, 1, 1), set_by="ada")
+        tree.upsert("/svc/api", StatusCode.ERROR)
+        self.assertNotIn(StatusCode.ERROR,
+                         [period.code for period in tree.history("/svc/api")])
+
+    def test_the_changes_count_is_what_says_a_subject_is_flapping(self):
+        """The counter deliberately does not catch flap — every recovery clears it —
+        so without this number nothing anywhere says so."""
+        tree = self._tree(3)
+        for code in (StatusCode.ERROR, StatusCode.OK,
+                     StatusCode.ERROR, StatusCode.OK):
+            tree.upsert("/svc/api", code)
+        self.assertEqual(self._snap(tree).changes, 4)
+        self.assertIsNone(self._snap(tree).damping, "a flapper never holds")
+
+    def test_the_first_reading_is_not_a_change_of_mind(self):
+        # every node does `UNDEFINED` to something once at startup; counting it
+        # would put a 1 beside every node on the dashboard for an hour
+        tree = StatusTree()
+        tree.upsert("/svc/new", StatusCode.OK)
+        self.assertEqual(self._snap(tree, "/svc/new").changes, 0)
+
+    def test_a_transition_that_alarmed_nobody_still_counts(self):
+        # the difference from the history: this is the subject's behavior, so a
+        # check flapping underneath a pin is exactly what is worth seeing
+        tree = StatusTree()
+        tree.upsert("/svc/api", StatusCode.OK)
+        tree.set_maintenance("/svc/api", "window",
+                             expires_at=datetime(2999, 1, 1), set_by="ada")
+        tree.upsert("/svc/api", StatusCode.ERROR)
+        self.assertEqual(self._snap(tree).changes, 1)
+        self.assertEqual(tree.history("/svc/api")[-1].code, StatusCode.MAINTENANCE,
+                         "the history says what the node showed, which was the pin")
+
+    def test_a_change_older_than_the_window_drops_out(self):
+        tree = StatusTree()
+        tree.upsert("/svc/api", StatusCode.OK)
+        tree.upsert("/svc/api", StatusCode.ERROR)
+        later = datetime.now() + timedelta(seconds=CHANGE_WINDOW_SECONDS + 60)
+        snap = tree.snapshot("/svc/api", now=later)
+        assert snap is not None
+        self.assertEqual(snap.changes, 0)
+
+    def test_the_held_transition_is_marked_in_the_event_log(self):
+        tree = self._tree(3)
+        tree.upsert("/svc/api", StatusCode.ERROR)
+        event = tree.recent_events()[-1]
+        self.assertIs(event.new, StatusCode.ERROR, "the log is honest")
+        self.assertEqual(event.suppressed_by, "damping")
+
+
+class ShieldingTests(TestCase):
+    """Dependency shielding (backlog #38 A).
+
+    The claim under test throughout: **the node that could not be reached keeps its
+    own reading and stops reaching its parent, and the dependency raises the one
+    alarm.** A test that checked the dependent went green would be testing a
+    mechanism this rejected — nobody is claiming the unit is well.
+    """
+
+    def _tree(self) -> StatusTree:
+        """A gateway and a unit behind it, mounted apart on purpose: a dependency
+        may sit anywhere in the tree, and a test that put both under one parent
+        would pass even if the shield were resolved inside the recursion."""
+        tree = StatusTree()
+        tree.upsert("/net/vpn", StatusCode.OK)
+        tree.upsert("/svc/api", StatusCode.OK)
+        tree.set_dependency("/svc/api", "/net/vpn")
+        return tree
+
+    def _snap(self, tree: StatusTree, path: str = "/svc/api"):
+        snap = tree.snapshot(path)
+        assert snap is not None
+        return snap
+
+    def _age(self, tree: StatusTree, path: str, seconds: float = 3600.0) -> None:
+        node = tree._ensure_node(path)
+        node.frequency_seconds = 60
+        node.timestamp = (datetime.now() - timedelta(seconds=seconds)).isoformat()
+
+    def test_the_unit_keeps_its_reading_and_stops_reaching_its_parent(self):
+        tree = self._tree()
+        tree.upsert("/net/vpn", StatusCode.ERROR)
+        tree.upsert("/svc/api", StatusCode.ERROR)
+        leaf = self._snap(tree)
+        self.assertIs(leaf.code, StatusCode.ERROR, "the leaf never lies")
+        self.assertEqual(leaf.shielded_by, "/net/vpn")
+        self.assertEqual(leaf.contribution.by, "dependency")
+        self.assertIsNone(leaf.contribution.code, "nothing was counted")
+        self.assertIs(self._snap(tree, "/svc").code, StatusCode.UNDEFINED)
+
+    def test_a_shielded_node_does_not_drag_a_healthy_sibling_down(self):
+        # the payoff the whole rule exists for: one alarm at the gateway, and the
+        # rest of the container still says what it knows
+        tree = self._tree()
+        tree.upsert("/svc/db", StatusCode.OK)
+        tree.upsert("/net/vpn", StatusCode.ERROR)
+        tree.upsert("/svc/api", StatusCode.ERROR)
+        self.assertIs(self._snap(tree, "/svc").code, StatusCode.OK)
+
+    def test_the_dependency_itself_still_escalates(self):
+        # shielding silences the consequence, never the cause — a rule that quieted
+        # both would turn a failed gateway into an all-green dashboard
+        tree = self._tree()
+        tree.upsert("/net/vpn", StatusCode.ERROR)
+        tree.upsert("/svc/api", StatusCode.ERROR)
+        self.assertIs(self._snap(tree, "/net").code, StatusCode.ERROR)
+        self.assertIsNone(self._snap(tree, "/net/vpn").shielded_by)
+
+    def test_a_dependency_that_is_merely_amber_does_not_shield(self):
+        # `WARN` has not stopped anybody reaching anything, and shielding on it
+        # would silence a subtree because something was amber
+        tree = self._tree()
+        tree.upsert("/net/vpn", StatusCode.WARN)
+        tree.upsert("/svc/api", StatusCode.ERROR)
+        self.assertIsNone(self._snap(tree).shielded_by)
+        self.assertIs(self._snap(tree, "/svc").code, StatusCode.ERROR)
+
+    def test_a_dependency_that_has_never_reported_does_not_shield(self):
+        # silence is the state a naive implementation would read as permission
+        tree = StatusTree()
+        tree.upsert("/svc/api", StatusCode.ERROR)
+        tree.set_dependency("/svc/api", "/net/vpn")
+        self.assertIsNone(self._snap(tree).shielded_by)
+        self.assertIs(self._snap(tree, "/svc").code, StatusCode.ERROR)
+
+    def test_a_stale_dependency_does_not_shield(self):
+        # a gateway whose check stopped running is not evidence about anything;
+        # its own `ERROR` may be an hour old
+        tree = self._tree()
+        tree.upsert("/net/vpn", StatusCode.ERROR)
+        tree.upsert("/svc/api", StatusCode.ERROR)
+        self._age(tree, "/net/vpn")
+        self.assertIsNone(self._snap(tree).shielded_by)
+        self.assertIs(self._snap(tree, "/svc").code, StatusCode.ERROR)
+
+    def test_a_stale_dependent_is_not_shielded(self):
+        # ADR-0032 rule 6: a check that stopped running escalates whatever else is
+        # true of it, or a permanent shield becomes a permanent blindfold
+        tree = self._tree()
+        tree.upsert("/net/vpn", StatusCode.ERROR)
+        tree.upsert("/svc/api", StatusCode.ERROR)
+        self._age(tree, "/svc/api")
+        leaf = self._snap(tree)
+        self.assertTrue(leaf.stale)
+        self.assertIsNone(leaf.shielded_by)
+        self.assertIs(self._snap(tree, "/svc").code, StatusCode.ERROR)
+
+    def test_a_dependency_that_is_itself_shielded_does_not_shield_on(self):
+        # two hops would let one red root quiet half a tree with nothing saying
+        # why: the middle node is already withholding, so it is not evidence
+        tree = self._tree()
+        tree.upsert("/net/wan", StatusCode.ERROR)
+        tree.upsert("/net/vpn", StatusCode.ERROR)
+        tree.upsert("/svc/api", StatusCode.ERROR)
+        tree.set_dependency("/net/vpn", "/net/wan")
+        self.assertEqual(self._snap(tree, "/net/vpn").shielded_by, "/net/wan")
+        self.assertIsNone(self._snap(tree).shielded_by,
+                          "the unit is two hops from the only thing that failed")
+        self.assertIs(self._snap(tree, "/svc").code, StatusCode.ERROR)
+
+    def test_a_pin_outranks_the_shield_in_naming_the_node(self):
+        # one rule names each node, and an admin's pin is the most specific thing
+        # anybody said about this one
+        tree = self._tree()
+        tree.upsert("/net/vpn", StatusCode.ERROR)
+        tree.upsert("/svc/api", StatusCode.ERROR)
+        tree.set_maintenance("/svc/api", "window",
+                             expires_at=datetime(2999, 1, 1), set_by="ada")
+        leaf = self._snap(tree)
+        self.assertEqual(leaf.contribution.by, "maintenance")
+        self.assertEqual(leaf.shielded_by, "/net/vpn",
+                         "the shield is still a fact about the node")
+
+    def test_the_mark_sits_at_the_mount_and_not_on_every_child(self):
+        # a check emitting a subtree declares one dependency, and the marker belongs
+        # where the declaration was made; the children are withheld because their
+        # mount is, which is the roll-up doing its ordinary job
+        tree = self._tree()
+        tree.upsert("/svc/api/pool", StatusCode.ERROR)
+        tree.upsert("/net/vpn", StatusCode.ERROR)
+        tree.upsert("/svc/api", StatusCode.ERROR)
+        self.assertEqual(self._snap(tree).shielded_by, "/net/vpn")
+        self.assertIsNone(self._snap(tree, "/svc/api/pool").shielded_by)
+        self.assertIs(self._snap(tree, "/svc").code, StatusCode.UNDEFINED)
+
+    def test_the_shield_lifts_the_moment_the_dependency_recovers(self):
+        # derived per snapshot, never stored: nothing has to remember to unshield
+        tree = self._tree()
+        tree.upsert("/net/vpn", StatusCode.ERROR)
+        tree.upsert("/svc/api", StatusCode.ERROR)
+        self.assertEqual(self._snap(tree).shielded_by, "/net/vpn")
+        tree.upsert("/net/vpn", StatusCode.OK)
+        self.assertIsNone(self._snap(tree).shielded_by)
+        self.assertIs(self._snap(tree, "/svc").code, StatusCode.ERROR)
+
+    def test_an_ok_reading_behind_a_failed_dependency_is_withheld_too(self):
+        """The shield is a statement about **evidence**, not a filter on bad news.
+
+        Letting an `OK` through because it alarms nobody would be the exact failure
+        a monitor exists to prevent: green on the dashboard for a unit we could not
+        reach, on the strength of a reading taken through a broken path. `UNDEFINED`
+        — *nothing here is reporting* — is the true sentence, and the gateway's own
+        `ERROR` is what the operator is meant to be looking at.
+        """
+        tree = self._tree()
+        tree.upsert("/net/vpn", StatusCode.ERROR)
+        self.assertIs(self._snap(tree).code, StatusCode.OK, "the leaf never lies")
+        self.assertEqual(self._snap(tree).shielded_by, "/net/vpn")
+        self.assertIs(self._snap(tree, "/svc").code, StatusCode.UNDEFINED)
+
+    def test_the_held_transition_is_marked_in_the_event_log(self):
+        # the log is honest and says which rule kept the reading from reaching
+        # anybody — the same treatment a pin and the counter already get
+        tree = self._tree()
+        tree.upsert("/net/vpn", StatusCode.ERROR)
+        tree.upsert("/svc/api", StatusCode.ERROR)
+        event = tree.recent_events()[-1]
+        self.assertIs(event.new, StatusCode.ERROR)
+        self.assertEqual(event.suppressed_by, "dependency")
+
+    def test_a_shielded_transition_is_still_a_period_of_the_nodes_history(self):
+        """The history filters out transitions that were *hidden* — a check going red
+        underneath a pin did not change what the node showed. A shielded node did: it
+        is red on its own page from the first reading, and only its parent's count is
+        withheld. So the filter turns on which rules hide the reading, and this is not
+        one of them."""
+        tree = self._tree()
+        tree.upsert("/net/vpn", StatusCode.ERROR)
+        tree.upsert("/svc/api", StatusCode.ERROR)
+        self.assertEqual([period.code for period in tree.history("/svc/api")],
+                         [StatusCode.OK, StatusCode.ERROR])
+
+    def test_the_shield_outranks_the_counter(self):
+        """Both rules are about a reading, and the order between them is not
+        cosmetic: the counter would put a *code* on the contribution and the parent
+        would accumulate it, so a shielded node evaluated counter-first would reach
+        its parent after all — with the value it published before the outage."""
+        tree = StatusTree()
+        tree.upsert("/net/vpn", StatusCode.OK)
+        tree.upsert("/svc/api", StatusCode.OK, escalate_after=3)
+        tree.set_dependency("/svc/api", "/net/vpn")
+        tree.upsert("/net/vpn", StatusCode.ERROR)
+        tree.upsert("/svc/api", StatusCode.ERROR)
+        leaf = self._snap(tree)
+        self.assertEqual(leaf.contribution.by, "dependency")
+        self.assertIsNone(leaf.contribution.code)
+        self.assertIsNone(leaf.damping, "the counter is not what is speaking")
+        self.assertIs(self._snap(tree, "/svc").code, StatusCode.UNDEFINED)
+
+    def test_the_graph_is_visible_from_both_ends(self):
+        # one dependency shields dozens of dependents — that is its risk, so the
+        # node's page has to be able to say how many
+        tree = self._tree()
+        tree.upsert("/svc/web", StatusCode.OK)
+        tree.set_dependency("/svc/web", "/net/vpn")
+        self.assertEqual(tree.dependents("/net/vpn"), ("/svc/api", "/svc/web"))
+        self.assertEqual(tree.dependents("/svc/api"), (),
+                         "a dependent is not itself depended on")
+
+
+class MeasurementTests(TestCase):
+    """The run's own measurement on the node (ADR-0085).
+
+    The claim under test: **what a check measured reaches the node it measured**,
+    and it is the object's identity that travels, not the path the deployment chose.
+    """
+
+    def test_the_node_holds_what_its_check_measured(self):
+        tree = StatusTree()
+        tree.upsert("/hosts/web01", StatusCode.OK, subject="web01.example",
+                    record={"cpu_pct": 7, "mem_pct": 63})
+        snap = tree.snapshot("/hosts/web01")
+        assert snap is not None
+        self.assertEqual(snap.subject, "web01.example")
+        self.assertEqual(snap.record["cpu_pct"], 7)
+
+    def test_the_object_is_not_the_path(self):
+        # `/hosts/web01` measures `web01.example`, `/hosts/nas/system` measures `nas01`:
+        # the path is the deployment's label and may be moved or renamed, and an
+        # identity not written down at the reading cannot be added afterwards
+        tree = StatusTree()
+        tree.upsert("/hosts/web01", StatusCode.OK, subject="web01.example")
+        snap = tree.snapshot("/hosts/web01")
+        assert snap is not None
+        self.assertNotEqual(snap.subject, snap.path)
+
+    def test_a_later_reading_replaces_the_one_before_it(self):
+        # written through like the report: a measurement that outlives its run is
+        # yesterday's numbers mistaken for today's
+        tree = StatusTree()
+        tree.upsert("/hosts/web01", StatusCode.OK, subject="web01.example",
+                    record={"cpu_pct": 7})
+        tree.upsert("/hosts/web01", StatusCode.OK, subject="web01.example",
+                    record={"cpu_pct": 91})
+        snap = tree.snapshot("/hosts/web01")
+        assert snap is not None
+        self.assertEqual(snap.record["cpu_pct"], 91)
+
+    def test_a_run_that_read_nothing_clears_the_last_reading(self):
+        tree = StatusTree()
+        tree.upsert("/hosts/web01", StatusCode.OK, subject="web01.example",
+                    record={"cpu_pct": 7})
+        tree.upsert("/hosts/web01", StatusCode.ERROR, "ssh: connection refused",
+                    subject="web01.example")
+        snap = tree.snapshot("/hosts/web01")
+        assert snap is not None
+        self.assertEqual(snap.subject, "web01.example",
+                         "we know what we could not read")
+        self.assertIsNone(snap.record)
+
+    def test_a_node_nobody_measures_carries_neither(self):
+        tree = StatusTree()
+        tree.upsert("/hosts/web01/website", StatusCode.OK, subject="http://web01.example",
+                    record={"status": 200})
+        parent = tree.snapshot("/hosts/web01")
+        assert parent is not None
+        self.assertEqual(parent.subject, "")
+        self.assertIsNone(parent.record)
+
+    def test_a_mount_two_checks_share_withholds_the_measurement(self):
+        """`/hosts/nas/system` carries `host-metrics` and `macos-memory` by design
+        (ADR-0015), and the container belongs to neither — so the last writer must
+        not be believed there, exactly as it is not for the text and the run facts."""
+        tree = StatusTree()
+        tree.set_check_mount("/hosts/nas/system")
+        tree.set_check_mount("/hosts/nas/system")
+        tree.upsert("/hosts/nas/system", StatusCode.OK, subject="nas01",
+                    record={"cpu_pct": 7})
+        snap = tree.snapshot("/hosts/nas/system")
+        assert snap is not None
+        self.assertEqual(snap.subject, "")
+        self.assertIsNone(snap.record)
 
 
 class StatusTreeTests(TestCase):
@@ -460,6 +923,42 @@ class StatusTreeTests(TestCase):
         self.assertTrue(stale.stale)
         self.assertEqual(stale.code, StatusCode.WARN)     # degraded
         self.assertEqual(stale.own_code, StatusCode.OK)   # raw code unchanged
+
+    def test_a_stated_tolerance_is_what_freshness_measures(self):
+        # ADR-0081: a node may be read on no check's schedule and still have to go
+        # stale — the engine re-asserts its own branch every tick, and the stamp is
+        # what makes a dead scheduler visible (ADR-0005). It states the tolerance
+        # outright instead of stamping the tick as a period, so nothing downstream
+        # has a period to report as a check's.
+        tree = StatusTree()
+        tree.upsert("/little-sister/startup", StatusCode.OK, stale_after=31.0)
+        snap = tree.snapshot("/little-sister/startup")
+        assert snap is not None
+        self.assertIsNone(snap.frequency_seconds, "no period to misreport")
+        self.assertEqual(snap.stale_after_seconds, 31.0)
+        self.assertFalse(snap.stale)
+        fresh = tree.snapshot("/little-sister/startup",
+                              now=datetime.now() + timedelta(seconds=30))
+        assert fresh is not None
+        self.assertFalse(fresh.stale)
+        gone = tree.snapshot("/little-sister/startup",
+                             now=datetime.now() + timedelta(seconds=32))
+        assert gone is not None
+        self.assertTrue(gone.stale)
+        self.assertEqual(gone.code, StatusCode.WARN)
+
+    def test_a_stated_tolerance_wins_over_the_one_a_period_implies(self):
+        # Two sources, one answer, and the stated one is the answer — a deployment
+        # that says how fresh a reading has to be is not overruled by arithmetic
+        # over a period (ADR-0079 decision 1).
+        tree = StatusTree()
+        tree.upsert("/db", StatusCode.OK, frequency_seconds=60, stale_after=45.0)
+        snap = tree.snapshot("/db")
+        assert snap is not None
+        self.assertEqual(snap.stale_after_seconds, 45.0)
+        self.assertEqual(snap.frequency_seconds, 60, "the period is still shown")
+        self.assertTrue(tree.snapshot(
+            "/db", now=datetime.now() + timedelta(seconds=50)).stale)
 
     def test_stale_rolls_up(self):
         tree = StatusTree()

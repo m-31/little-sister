@@ -21,23 +21,11 @@ from typing import Any
 
 from little_sister.maintenance import MaintenanceEntry
 from little_sister.secrets import same_secret
-from little_sister.status import StatusCode
 from little_sister.tree import ReasonLine, StatusSnapshot
 
 #: Major version of the JSON / federation schema (ADR-0080). Bumped only when a field
 #: changes meaning or goes; an added field keeps it and moves the spec's minor.
 SCHEMA_VERSION = 2
-
-#: What a node contributes to its parent, where that is not simply its ``code``, and
-#: the rule that made it so (ADR-0032 decision 2; ADR-0080 decision 2). Both of
-#: today's rules withhold the node entirely — the value beside the name is ``None``,
-#: *not counted at all* — and a later rule that caps or delays a contribution puts a
-#: real code there instead.
-NOT_COUNTED = {
-    StatusCode.MAINTENANCE: "maintenance",
-    StatusCode.UNDEFINED: "undefined",
-}
-
 
 def _utc_z(timestamp: str) -> str:
     """Render an ISO-8601 timestamp as RFC 3339 UTC with a ``Z`` suffix.
@@ -89,12 +77,22 @@ def _entry(line: ReasonLine) -> dict[str, Any]:
     ``code`` is ``None`` where the entry carries the node's rather than one of its
     own (ADR-0042) — the distinction a client needs to know whether it may color the
     line by itself.
+
+    ``subject`` and ``data`` are the two fields ADR-0080 said would join the entry
+    "in the change that adds them to the snapshot", and this is that change:
+    compatible, ``schema_version`` unchanged, the spec's minor moved, invisible to a
+    client that does not want them. ``subject`` is what the line is about, empty
+    where the check did not say; ``data`` is the record it read, or null. The record
+    is plain JSON the client renders as it likes — a handful of names carry a time
+    in RFC 3339 UTC, the rest is the check's own vocabulary.
     """
     return {
         "slug": line.slug,
         "text": line.text,
         "code": None if line.code is None else line.code.name,
         "running": line.running,
+        "subject": line.subject,
+        "data": line.data,
         "maintenance": _maintenance(line.maintenance),
     }
 
@@ -153,11 +151,19 @@ def _contribution(snapshot: StatusSnapshot) -> dict[str, Any] | None:
     attributable, so a client can explain a red root by walking down it rather than
     guessing. Null on the ordinary case keeps the interesting one easy to find and
     keeps a healthy tree's response the size it was.
+
+    The value is the snapshot's, not derived here: a rule that **withholds** a node
+    could be read back off its code, but one that **delays** a contribution — the
+    damping counter — cannot, because the node's own code is precisely the value the
+    parent did *not* count. `code` is null for the first kind and a real code for
+    the second, which is the distinction ADR-0080 decision 2 described before there
+    was a rule of the second kind.
     """
-    rule = NOT_COUNTED.get(snapshot.code)
-    if rule is None:
+    if snapshot.contribution is None:
         return None
-    return {"code": None, "by": rule}
+    code = snapshot.contribution.code
+    return {"code": None if code is None else code.name,
+            "by": snapshot.contribution.by}
 
 
 def snapshot_to_dict(snapshot: StatusSnapshot) -> dict[str, Any]:
@@ -191,6 +197,21 @@ def snapshot_to_dict(snapshot: StatusSnapshot) -> dict[str, Any]:
         "show_when_quiet": snapshot.show_when_quiet,
         "maintenance": _maintenance(snapshot.maintenance_entry),
         "stale": snapshot.stale,
+        # **What this node's check measured, and the object it measured**
+        # (ADR-0085). The object's own identifier rather than the node's path,
+        # because the path is the deployment's label; both empty and null on a node
+        # no check measures, and on a mount two checks share, where the last writer
+        # cannot be believed. A client reads `record` as data about the reading, not
+        # as a claim: what alarms is a reason.
+        "subject": snapshot.subject,
+        "record": snapshot.record,
+        # *Which* dependency, not just that there was one: `contribution.by` names
+        # the rule, and the one thing an operator needs from a shielded node is
+        # where to go and look. Carried even where another rule spoke first — a
+        # pinned node behind a failed gateway is shielded whether or not the pin
+        # is what named it — and null on the ordinary node (ADR-0080 decision 1).
+        "shielded_by": snapshot.shielded_by,
+        "changes": snapshot.changes,
         **({} if (run := _run(snapshot)) is None else {"run": run}),
         "entries": _entries(snapshot),
         "children": [snapshot_to_dict(child) for child in snapshot.children],

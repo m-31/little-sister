@@ -1,20 +1,10 @@
 # ADR-0005 — Dashboard freshness & engine self-monitoring
 
 - **Status:** Accepted
-- **Date:** 2026-08-23 (accepted 2026-06-20)
+- **Date:** 2026-09-20 (accepted 2026-06-20)
 - **Related:** [ADR-0001](0001-in-process-threaded-engine.md) (the engine),
   [ADR-0004](0004-status-aggregation-semantics.md) (roll-up).
 - **Register:** [`../decisions.md`](../decisions.md)
-
-> **Update (2026-09-06):** decision 1 measures against the check's **period**, and a
-> paced check has none ([ADR-0078](0078-the-unit-is-what-the-engine-releases.md)).
-> Its scope is therefore *where there is a `frequency`* — which is every check that
-> exists, so nothing about it changes — and the general rule is
-> [ADR-0079](0079-freshness-is-a-stated-tolerance.md): freshness is judged against a
-> tolerance the deployment **stated**, this one where there is a period and a
-> declared cycle ceiling where there is not. Everything else here stands, including
-> the reason: a derived tolerance would grow with the estate, and green would stop
-> meaning freshly verified at exactly the moment the estate outgrew what it can read.
 
 ## Context
 State lives in memory and the dashboard is server-rendered, so two things can go
@@ -31,6 +21,15 @@ is **stale**. Its status is degraded to at least `WARN` by *worse-of* — so a r
 never-reported (`UNDEFINED`) nodes are exempt. Staleness is computed at **render
 time** in the snapshot (it depends on the clock, not on a check running); it is
 **not** recorded as an event.
+
+The interval is the check's **period**, so the rule reaches exactly as far as
+`frequency` does. A paced check has no period of its own
+([ADR-0078](0078-the-unit-is-what-the-engine-releases.md)) and is held to a declared
+cycle ceiling instead; both are one rule seen twice, and
+[ADR-0079](0079-freshness-is-a-stated-tolerance.md) states it: freshness is judged
+against a tolerance the deployment **stated**. Stated rather than derived, because a
+derived tolerance would grow with the estate — green would stop meaning *freshly
+verified* at exactly the moment the estate outgrew what it can read.
 
 **2. The dashboard polls.** The page re-fetches a server-rendered fragment
 (`/status?fragment=1`, the same template) every ~10s and swaps it in, showing

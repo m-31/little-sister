@@ -1,7 +1,7 @@
 # ADR-0036 — Addressable reasons: keyed entries, and maintenance on one of them
 
 - **Status:** Accepted
-- **Date:** 2026-09-05 (accepted 2026-08-01)
+- **Date:** 2026-09-20 (accepted 2026-08-01)
 - **Related:** [ADR-0032](0032-status-contribution-boundary.md) (the contribution
   boundary, amended by this decision to reach one level below a node),
   [ADR-0004](0004-status-aggregation-semantics.md) (the roll-up these entries reuse,
@@ -16,12 +16,6 @@
   [ADR-0025](0025-check-provided-subnode-metadata.md) (the other route — real
   subnodes — and why it is not this one)
 - **Register:** [`../decisions.md`](../decisions.md)
-
-> **Update (2026-09-06):** decision 13's object per entry shipped, in
-> [ADR-0080](0080-the-envelope-is-the-snapshot-published.md): `entries` — an object
-> whose `addressable` flag is this record's `members`, and whose items carry `slug`,
-> `text`, `code`, `running` and `maintenance` — in place of the string `reasons`.
-> The name this record could not spend twice was spent there.
 
 ## Context
 
@@ -210,6 +204,12 @@ stays, unchanged for every existing client; a new array — `entries`, the worki
 guidelines. It rides the one `schema_version` decision of the client contract round
 rather than arriving on its own.
 
+That round is [ADR-0080](0080-the-envelope-is-the-snapshot-published.md), and it took
+the name rather than the addition: `entries` is an object that **replaces** the string
+`reasons`, its `addressable` flag is this record's `members`, and its items carry
+`slug`, `text`, `code`, `running` and `maintenance`. The name this record could not
+spend twice was spent there.
+
 ## Consequences
 
 - The operator can pin the one finding they are working on. The other nineteen keep
@@ -234,7 +234,8 @@ rather than arriving on its own.
 - **A write client cannot yet address an entry.** Decision 13 publishes no slug, so a
   token-authed mutation (the JSON API's write actions) has nothing to name. Adding
   the slug later is additive but costs a second `schema_version` bump; that is the
-  accepted trade for a smaller envelope now.
+  accepted trade for a smaller envelope now, and the bump the contract round spends is
+  the one that carries it.
 - **Two shapes at one seam.** `CheckResult.reason` accepts four input forms and the
   core sees one. The normalization is the only place that knows the difference, which
   is the same rule the value readers follow

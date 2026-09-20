@@ -27,7 +27,7 @@ from dataclasses import dataclass
 from datetime import datetime, tzinfo
 
 from little_sister.config import DEFAULT_TIME_FORMAT
-from little_sister.spans import format_duration, format_span
+from little_sister.spans import format_duration, format_span, format_tolerance
 from little_sister.status import StatusCode
 from little_sister.titles import label_parts
 from little_sister.tree import ReasonLine, StatusSnapshot
@@ -237,9 +237,16 @@ def _node_facts(node: StatusSnapshot, style: TimeStyle,
     if node.run is not None and node.run.wall_seconds is not None:
         facts.append(_item(0,
             f"**Last run took:** {format_span(node.run.wall_seconds)}"))
+    # The period where there is one and the freshness promise where there is not,
+    # exactly as the page's Time card states them (ADR-0081): "checked every" is
+    # true of a check and of nothing else, and the instance's own nodes are read on
+    # no check's schedule.
     if node.frequency_seconds:
         facts.append(_item(0,
             f"**Checked every:** {format_duration(node.frequency_seconds)}"))
+    elif node.stale_after_seconds:
+        facts.append(_item(0,
+            f"**Goes stale after:** {format_tolerance(node.stale_after_seconds)}"))
     return facts
 
 

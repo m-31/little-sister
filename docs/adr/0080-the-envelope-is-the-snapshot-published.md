@@ -1,7 +1,7 @@
 # ADR-0080 — The envelope is the snapshot, published: `schema_version` 2
 
 - **Status:** Accepted
-- **Date:** 2026-09-06
+- **Date:** 2026-09-20 (accepted 2026-09-06)
 - **Supersedes:** [ADR-0008](0008-json-output-api.md) wholly (accepted 2026-06-27,
   rewritten 2026-08-23). Everything that record decided and this one keeps is
   restated below with its original reasoning, so nothing has to be read out of a
@@ -69,10 +69,30 @@ by whoever notices the gap two releases later. It is also what makes a `schema_v
 The rule cuts both ways, and the second edge is the one that needs saying: **the
 envelope does not publish what the snapshot cannot produce.** A field declared in the
 schema and never emitted is a promise no test can check and no reader can trust. So the
-entry keeps `slug`, `text`, `code`, `running` and `maintenance` today, and `subject`,
+entry keeps `slug`, `text`, `code`, `running` and `maintenance` here, and `subject`,
 `observed_at` and `data` join it in the change that adds them to the snapshot — a minor
 under this rule, invisible to a client that does not want them. Tags are the same case
 and were always going to be: nothing is reserved for them here.
+
+`subject` and `data` took exactly that route: they joined the entry with the change
+that put them in the snapshot, `schema_version` stayed 2 and the spec moved to 2.1.0
+([ADR-0082](0082-a-line-carries-what-it-is-about-and-what-it-read.md)). `observed_at`
+is still unpublished, for the reason above — nothing can emit it yet.
+
+**The rule has a second half, and it is an obligation rather than a rule.** One
+envelope is written down — `src/little_sister/contract/envelope-2.json`, generated from
+this API, shipped in the wheel and shared with the client, so both sides test one
+artifact instead of two hand-written ones. A field added to the snapshot is therefore
+added to the contract **and the artifact regenerated**, all in the same change:
+`python tests/test_contract_fixture.py` rewrites it and the diff is the review. Left to
+a follow-up it is not a follow-up at all — it is a red gate somebody meets later and
+has to reconstruct the reason for. The same holds for a field that changes meaning: the
+artifact is the only place the shape is written as a *value*, and a value nobody
+regenerates is the one that teaches the old shape. That is not hypothetical — the
+artifact's first version carried only `contribution.code: null`, because every rule at
+that boundary withheld until damping
+([ADR-0083](0083-a-node-may-wait-before-it-escalates.md)) transformed one, and a client
+written against it would have read the withheld case right and the damped case wrong.
 
 ### 2. A node carries three statuses and says what its parent counted
 

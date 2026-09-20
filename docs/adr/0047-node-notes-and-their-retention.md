@@ -1,7 +1,7 @@
 # ADR-0047 — A node keeps notes, and they outlive it
 
 - **Status:** Accepted
-- **Date:** 2026-08-08 (decided the same day, in the design round on what a
+- **Date:** 2026-09-20 (accepted 2026-08-08, in the design round on what a
   maintenance pin leaves behind)
 - **Related:** [ADR-0014](0014-maintenance-persistence.md) (the pin, its side-table,
   the two dates and the compare-and-set token this reuses; its `reason` field is
@@ -20,13 +20,6 @@
   someone wants to say about it),
   [ADR-0008](0008-json-output-api.md) (the envelope, deliberately untouched here)
 - **Register:** [`../decisions.md`](../decisions.md)
-
-> **Update (2026-09-06):** half of decision 15 is spent early.
-> [ADR-0080](0080-the-envelope-is-the-snapshot-published.md) publishes the pin as one
-> object and calls its text **`note`** — this record's word — because renaming a
-> published field later would be a second breaking change for one word, and that
-> round was the release in which it was free. The model still calls it `reason` until
-> the history here is built; nothing else of this record ships yet.
 
 ## Context
 
@@ -177,7 +170,12 @@ issue tracker buys nothing, and it would not have answered the second half at al
 
 15. **The JSON envelope changes nothing here.** Notes reach clients in the client
     contract round's one `schema_version` decision, additively, and nothing ships
-    piecemeal before it ([ADR-0008](0008-json-output-api.md)).
+    piecemeal before it ([ADR-0008](0008-json-output-api.md)). Half of that is spent
+    early: [ADR-0080](0080-the-envelope-is-the-snapshot-published.md) publishes the
+    pin as one object and calls its text **`note`**, this record's word, because
+    renaming a published field later would be a second breaking change for one word
+    and that round was the release in which it was free. The model still calls it
+    `reason` until the history above is built; nothing else of this record ships yet.
 
 Whether history is kept forever, for a number of days, or as the last N changes was
 an open question. Decision 9 is the answer — **the conjunction of all three, with a

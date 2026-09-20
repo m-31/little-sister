@@ -9,6 +9,7 @@ shared status tree. A check that raises or times out becomes ``ERROR``
 """
 from __future__ import annotations
 
+import json
 import threading
 import time
 import traceback
@@ -37,7 +38,7 @@ from little_sister.reasons import Entry, derive_code, slug
 from little_sister.spans import format_duration
 from little_sister.state import StateLayer
 from little_sister.status import HEARTBEAT_PATH, StatusCode, join_path, leaf_name
-from little_sister.tree import StatusTree, status_tree
+from little_sister.tree import StatusTree, stale_after_seconds, status_tree
 
 # Innermost frames kept when a failing check's trace goes onto its node
 # (`stacktrace` in config/settings.yaml). The cause is almost always in the last
@@ -139,6 +140,46 @@ def _retry_settings(check: Check) -> tuple[int, int]:
     return max(0, interval), max(0, attempts)
 
 
+def _escalate_after(check: Check) -> int:
+    """How many consecutive worse readings the nodes this check writes need before
+    they publish upward — the check's own value where it stated one, the
+    deployment's default where it did not.
+
+    Resolved here rather than in the tree, which reads no configuration, and per
+    write rather than once, so a reload that changes the setting is picked up the
+    way every other per-run field is.
+    """
+    stated = check.escalate_after
+    return config.escalate_after if stated is None else stated
+
+
+def _largest_record(result: CheckResult) -> int | None:
+    """The biggest record this result carries, in the bytes of its JSON — the
+    measurement ADR-0075 decision 8 puts beside a declaration.
+
+    ``None`` where the result carries no record at all, which is every check that
+    has not adopted one; an empty column is not the same claim as a zero. The walk
+    goes through the **children** too, because a branch check's records sit on them
+    while the declaration is about the check.
+
+    The bytes are the seam's: what is on an entry here has already been through
+    `normalize_record`, so this re-serializes plain JSON types and counts the same
+    length that was measured against the limit when the result was built.
+    """
+    largest: int | None = None
+    pending: list[CheckResult] = [result]
+    while pending:
+        current = pending.pop()
+        pending.extend(current.children)
+        for entry in current.reason_entries:
+            if entry.data is None:
+                continue
+            size = len(json.dumps(entry.data).encode("utf-8"))
+            if largest is None or size > largest:
+                largest = size
+    return largest
+
+
 def _detail(result: CheckResult) -> str:
     """What one run's log line says after the code and the elapsed time.
 
@@ -194,6 +235,11 @@ class _Scheduled:
     # never runs, so both stay None. Read under the engine lock.
     last_run_at: str | None = None
     elapsed_seconds: float | None = None
+    # The biggest record the last run carried, in the bytes of its JSON — the
+    # measurement that stands beside `expected_record()` (ADR-0075 decision 8).
+    # `None` for a run that carried none, which is every check that has not
+    # adopted a record: nothing measured is not the same claim as nothing held.
+    record_bytes: int | None = None
     # The code of the **last result this check stored**, `None` until the first
     # one lands — including the ERROR a secret-pinned check stores without ever
     # calling run(). Deliberately not `last_code` above, which the retry block
@@ -236,6 +282,17 @@ class CheckInfo:
     #: decays as an estate grows, and the page is where that becomes visible.
     expected_cost: float | None = None
     expected_entries: int | None = None
+    #: Bytes one record of this check is declared to need, and the biggest one its
+    #: last run actually carried. The same estimate-beside-measurement pairing as
+    #: the two above, in one column because there is nothing else about records to
+    #: put in another.
+    expected_record: int | None = None
+    record_bytes: int | None = None
+    #: The check this one is reached **through**, or ``None``. Here rather than
+    #: only on the node page because the graph is the thing a reader wants whole:
+    #: one failing dependency withholds every check that names it, and a page that
+    #: could only be read one node at a time would make that count an exercise.
+    depends_on: str | None = None
 
 
 @dataclass(frozen=True)
@@ -256,6 +313,9 @@ class EngineInfo:
     declared_entries: int = 0
     entries_held: int = 0
     entry_limit: int = 0
+    #: The per-record bound this deployment set, so the page can name what a
+    #: declared or measured record is being read against. Never a sum.
+    record_limit: int = 0
 
 
 class Engine:
@@ -273,7 +333,8 @@ class Engine:
         # stated in `settings.yaml`, or the constants in `limits.py` where it
         # said nothing — unless a caller composed its own and passed them.
         self._limits = limits or Limits.from_machine(
-            entry_limit=config.entry_limit, memory_share=config.memory_share)
+            entry_limit=config.entry_limit, memory_share=config.memory_share,
+            record_limit=config.record_limit)
         # The pool is never larger than the roster: eight workers for three
         # checks are five threads that can never be used.
         ceiling = config.max_workers if max_workers is None else max_workers
@@ -311,8 +372,16 @@ class Engine:
         # The heartbeat above is deliberately *not* a mount: it is the engine's own
         # liveness rather than a check, so it neither blocks nor feeds that roll-up
         # (and the dashboard lifts it out of the grid anyway, ADR-0024).
+        # And, beside it, where a check is reached *through* another one
+        # (ADR-0032 rule 3, backlog #38 A). Registration only, exactly like the
+        # mount above: whether the shield is in force is derived per snapshot
+        # from what the dependency is reporting right now. The loader has
+        # already refused an unknown target and any cycle, so every target here
+        # names a mount that exists.
         for check in checks:
             tree.set_check_mount(check.path)
+            if check.depends_on is not None:
+                tree.set_dependency(check.path, check.depends_on)
         self._clock = clock
         self._poll_interval = poll_interval
         now = clock()
@@ -391,6 +460,8 @@ class Engine:
                          for item in self._capacity.declared}
         declared_entries = {item.path: item.entries
                             for item in self._capacity.declared}
+        declared_record = {item.path: item.record_bytes
+                           for item in self._capacity.declared}
         with self._lock:
             checks = tuple(
                 CheckInfo(path=item.check.path,
@@ -411,7 +482,10 @@ class Engine:
                           retry_attempt=item.retry_used,
                           retry_attempts=item.retry_attempts,
                           expected_cost=declared_cost.get(item.check.path),
-                          expected_entries=declared_entries.get(item.check.path))
+                          expected_entries=declared_entries.get(item.check.path),
+                          expected_record=declared_record.get(item.check.path),
+                          record_bytes=item.record_bytes,
+                          depends_on=item.check.depends_on)
                 for item in self._scheduled)
             running = sum(1 for item in self._scheduled if item.running)
         uptime = (now - self._started_monotonic
@@ -423,7 +497,8 @@ class Engine:
             declared_workers=self._capacity.workers,
             declared_entries=self._capacity.entries,
             entries_held=self._tree.entry_count,
-            entry_limit=self._limits.entry_limit)
+            entry_limit=self._limits.entry_limit,
+            record_limit=self._limits.record_limit)
 
     def start(self) -> None:
         """Start the scheduler and worker pool (idempotent).
@@ -522,10 +597,20 @@ class Engine:
         # appears when something is wrong is an absence a reader would have to
         # notice. Reading a contributor is recorded state, never a probe, and one
         # that raises is caught and named by the seam, so this stays a tick.
+        #
+        # What the branch states is a **tolerance**, not a period (ADR-0081).
+        # Nothing on it is checked on an interval — the lines are recorded state
+        # read on the tick, and readiness measured its trust store once, at
+        # startup — so a `frequency` here would be the tick wearing a check's
+        # word, which is what every surface then repeated. The stamp itself is not
+        # free to drop: it is what makes a dead scheduler visible (ADR-0005), so
+        # the tolerance the tick implies is stated outright and freshness reads
+        # that. Same detection window, and no period for a surface to misreport.
         beat = max(1, round(self._poll_interval))
+        tolerance = stale_after_seconds(beat)
         self._tree.upsert(
             HEARTBEAT_PATH, StatusCode.OK, (), members=True,
-            description=HEARTBEAT_DESCRIPTION, frequency_seconds=beat)
+            description=HEARTBEAT_DESCRIPTION, stale_after=tolerance)
         # Every line on a child carries a code; what the speaker merely *knows* is
         # its report, on the child's page and never on a card (ADR-0044 decision
         # 6, ADR-0076 decision 1). Written through every tick, empty included, so
@@ -535,13 +620,13 @@ class Engine:
             part for part in (self._heartbeat_report, self._report.report()) if part)
         self._tree.upsert(
             join_path(HEARTBEAT_PATH, ENGINE_REPORT), derive_code(own), own,
-            members=True, description=CHILD_DESCRIPTION, frequency_seconds=beat,
+            members=True, description=CHILD_DESCRIPTION, stale_after=tolerance,
             title=ENGINE_TITLE, about=ENGINE_ABOUT, report=own_report)
         for report in self_report.current_reports():
             self._tree.upsert(
                 join_path(HEARTBEAT_PATH, report.name), derive_code(report.lines),
                 report.lines, members=True, description=CHILD_DESCRIPTION,
-                frequency_seconds=beat, title=report.title or None,
+                stale_after=tolerance, title=report.title or None,
                 about=report.about or None, report=report.report)
         # Expire maintenance pins past their window (ADR-0014); a real transition,
         # so the next check refills the node.
@@ -634,6 +719,12 @@ class Engine:
             # erroring (ADR-0073). It is set before the retry block below, which
             # may or may not touch `last_code` and means something else by it.
             item.last_stored = result.stored_code
+            # The largest record this run carried, written through on every
+            # completion including one that carried none — the measurement is of
+            # the last run, exactly like `elapsed_seconds` above it, and a figure
+            # that outlived the run that produced it would be the drift this
+            # measurement exists to make visible.
+            item.record_bytes = _largest_record(result)
         # A faster second look on failure (ADR-0033): a non-OK completion pulls
         # the armed slot earlier — never later — to the retry interval, at most
         # `retry_attempts` times per episode. A secret-pinned check (`ran` False)
@@ -771,7 +862,15 @@ class Engine:
                           frequency_seconds=check.frequency_seconds,
                           config=config, report=result.report,
                           about=about, title=title, order=order,
-                          show_when_quiet=show_when_quiet)
+                          show_when_quiet=show_when_quiet,
+                          escalate_after=_escalate_after(check),
+                          # The run's measurement travels with its reading: this
+                          # result measured this object, and everything on the node
+                          # is derived from it (ADR-0085). A result that measured
+                          # nothing writes through empty and clears the last one.
+                          subject=result.subject,
+                          record=None if result.record is None
+                          else dict(result.record))
         for child in result.children:
             self._store(join_path(path, child.name), child, check)
 

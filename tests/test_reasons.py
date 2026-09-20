@@ -4,19 +4,27 @@ Prose is the default and members are declared — the rule the whole feature tur
 on, and the one most likely to be forgotten.
 """
 
+import os
+import subprocess
+import sys
+import tempfile
 import unittest
+from pathlib import Path
 from unittest import TestCase
 
 from little_sister.checks.base import CheckResult
 from little_sister.errors import CheckError
+from little_sister.limits import RECORD_LIMIT
 from little_sister.reasons import (
     MAX_SLUG_LENGTH,
+    MAX_SUBJECT_LENGTH,
     Entry,
     ReasonEntry,
     ReasonError,
     derive_code,
     derived_slug,
     normalize,
+    normalize_record,
 )
 from little_sister.status import Status, StatusCode
 
@@ -196,6 +204,199 @@ class CodedEntryTests(TestCase):
         self.assertEqual([e.slug for e in entries], ["w", "w-2"])
         self.assertEqual(entries[1].code, StatusCode.ERROR)
         self.assertTrue(entries[1].running)
+
+
+class SubjectTests(TestCase):
+    """What a line is about (backlog #32), carried and bounded."""
+
+    def test_a_subject_travels_and_declares_nothing(self):
+        # data about a claim is not a claim: prose carrying a subject stays prose
+        entries, members = normalize([Entry("w", "x", subject="1296269")])
+        self.assertEqual(entries[0].subject, "1296269")
+        self.assertFalse(members)
+
+    def test_an_over_long_subject_is_refused(self):
+        with self.assertRaises(ReasonError):
+            Entry("w", "x", subject="r" * (MAX_SUBJECT_LENGTH + 1))
+
+    def test_a_control_character_is_refused(self):
+        with self.assertRaises(ReasonError):
+            Entry("w", "x", subject="repo\x01")
+
+
+class RecordTests(TestCase):
+    """The record on an entry: what the check read, kept (backlog #32).
+
+    The seam is `CheckResult`, so the tests that matter go through it — a record
+    that travels only as far as `Entry` has not been validated at all.
+    """
+
+    def test_a_record_reaches_the_entry_and_the_text_does_not_move(self):
+        result = CheckResult(reason=[
+            Entry("w", "CI: failed (#41)", StatusCode.ERROR,
+                  subject="1296269",
+                  data={"workflow": "CI", "run_number": 41})])
+        self.assertEqual(result.reason_texts, ["CI: failed (#41)"])
+        self.assertEqual(result.reason_entries[0].data,
+                         {"workflow": "CI", "run_number": 41})
+
+    def test_a_record_alone_declares_no_members(self):
+        # `code`/`running` declare members by shape; a record deliberately does not
+        result = CheckResult(StatusCode.WARN, [Entry("w", "x", data={"a": 1})])
+        self.assertFalse(result.members)
+
+    def test_no_record_is_the_default_and_stays_none(self):
+        result = CheckResult(StatusCode.OK, ["nothing to say"])
+        self.assertIsNone(result.reason_entries[0].data)
+
+    def test_a_time_is_converted_to_utc_wherever_it_sits(self):
+        # RECORD_TIMESTAMP_KEYS are read at any depth — the first emitter's own
+        # times are nested under the run they belong to
+        result = CheckResult(StatusCode.OK, [Entry(
+            "w", "x", data={"at": "2026-09-19T11:12:00+02:00",
+                            "completed": {"ended": "2026-09-19T11:30:00+02:00"},
+                            "runs": [{"started": "2026-09-19T11:40:00+02:00"}]})])
+        record = result.reason_entries[0].data
+        assert record is not None
+        self.assertEqual(record["at"], "2026-09-19T09:12:00Z")
+        self.assertEqual(record["completed"]["ended"], "2026-09-19T09:30:00Z")
+        self.assertEqual(record["runs"][0]["started"], "2026-09-19T09:40:00Z")
+
+    def test_a_null_time_is_a_fact_and_is_kept(self):
+        result = CheckResult(StatusCode.OK,
+                             [Entry("w", "x", data={"ended": None})])
+        record = result.reason_entries[0].data
+        assert record is not None
+        self.assertIsNone(record["ended"])
+
+    def test_a_naive_time_is_refused_and_the_field_is_named(self):
+        # an instant from somebody else's clock, read by a viewer in a third zone
+        with self.assertRaises(CheckError) as caught:
+            CheckResult(StatusCode.OK,
+                        [Entry("w", "x", data={"completed": {"at": "2026-09-19"}})])
+        self.assertIn("completed.at", str(caught.exception))
+
+    def test_a_value_that_is_not_a_time_under_a_timed_name_is_refused(self):
+        with self.assertRaises(CheckError):
+            CheckResult(StatusCode.OK, [Entry("w", "x", data={"at": 1758276720})])
+
+    def test_a_record_that_is_not_json_is_refused(self):
+        with self.assertRaises(CheckError):
+            CheckResult(StatusCode.OK,
+                        [Entry("w", "x", data={"when": object()})])
+
+    def test_a_record_must_be_a_mapping(self):
+        with self.assertRaises(CheckError):
+            CheckResult(StatusCode.OK, [Entry("w", "x", data=["a", "b"])])
+
+    def test_an_over_heavy_record_refuses_the_whole_result(self):
+        # the cost of the loud refusal, stated: the healthy line does not survive
+        # the heavy one, because a silently dropped record would be believed missing
+        with self.assertRaises(CheckError) as caught:
+            CheckResult(reason=[
+                Entry("light", "fine", StatusCode.OK, data={"a": 1}),
+                Entry("heavy", "also fine", StatusCode.OK,
+                      data={"dump": "x" * (RECORD_LIMIT + 1)})])
+        self.assertIn("bytes", str(caught.exception))
+
+    def test_the_runs_own_record_meets_the_same_seam(self):
+        """A record is a record wherever it hangs (ADR-0085): the measurement at the
+        run goes through the same validation and the same limit as a line's, so a
+        check author who learned one rule does not meet a second."""
+        with self.assertRaises(CheckError) as caught:
+            CheckResult(StatusCode.OK, ["fine"],
+                        record={"dump": "x" * (RECORD_LIMIT + 1)})
+        self.assertIn("bytes", str(caught.exception))
+        with self.assertRaises(CheckError):
+            CheckResult(StatusCode.OK, ["fine"], record={"at": "not a time"})
+
+    def test_the_runs_record_is_read_back_as_plain_json(self):
+        # the same ADR-0002 safety the line's record has: a check that kept its
+        # mapping must not be able to change a value while a page renders it
+        handed = {"cpu_pct": 7, "nested": {"load": 0.4}}
+        result = CheckResult(StatusCode.OK, ["fine"], subject="host-a",
+                             record=handed)
+        handed["cpu_pct"] = 99
+        handed["nested"]["load"] = 9.9
+        self.assertEqual(result.record["cpu_pct"], 7)
+        self.assertEqual(result.record["nested"]["load"], 0.4)
+
+    def test_a_runs_subject_is_bounded_like_a_lines(self):
+        with self.assertRaises(CheckError):
+            CheckResult(StatusCode.OK, ["fine"], subject="x" * 4096)
+        with self.assertRaises(CheckError):
+            CheckResult(StatusCode.OK, ["fine"], subject="host\x00a")
+
+    def test_the_limit_is_the_json_bytes_not_the_characters(self):
+        # a euro sign is one character and three bytes: what a record costs is what
+        # goes on the wire
+        wide = {"note": "\u20ac" * RECORD_LIMIT}
+        with self.assertRaises(ReasonError):
+            normalize_record(wide, limit=RECORD_LIMIT)
+
+    def test_the_stored_record_is_a_copy_the_check_no_longer_owns(self):
+        # a snapshot is read outside the lock (ADR-0002); a check that kept its
+        # mapping must not be able to change a value while a page renders it
+        handed = {"verdict": "failure", "nested": {"run": 41}}
+        result = CheckResult(StatusCode.OK, [Entry("w", "x", data=handed)])
+        handed["verdict"] = "success"
+        handed["nested"]["run"] = 99
+        record = result.reason_entries[0].data
+        assert record is not None
+        self.assertEqual(record["verdict"], "failure")
+        self.assertEqual(record["nested"]["run"], 41)
+
+    def test_what_is_stored_is_what_a_client_receives(self):
+        # read back from JSON, so a tuple is already a list and a non-string key a
+        # string — rather than something that merely serializes to them
+        result = CheckResult(StatusCode.OK,
+                             [Entry("w", "x", data={"tags": ("a", "b"), 41: "run"})])
+        record = result.reason_entries[0].data
+        self.assertEqual(record, {"tags": ["a", "b"], "41": "run"})
+
+
+class WithoutADeploymentTests(TestCase):
+    """A result is built in plenty of places where there is no deployment, and a
+    record must not change that.
+
+    The seam reads `record_limit` from the configuration, and **importing** the
+    configuration resolves a configuration directory and refuses when there is none
+    (ADR-0031). A plugin's own test suite has none — that is the ordinary case, not
+    an exotic one — so this runs in a child process pointed at a directory that does
+    not exist, which is what a plugin looks like from here. Run in-process it would
+    prove nothing: this suite has a configuration beside it.
+    """
+
+    def _run(self, body: str) -> str:
+        with tempfile.TemporaryDirectory() as empty:
+            env = dict(os.environ)
+            env["LITTLE_SISTER_CONFIG_DIR"] = str(Path(empty) / "nowhere")
+            env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
+            env.pop("PYTHONDONTWRITEBYTECODE", None)
+            done = subprocess.run([sys.executable, "-c", body], env=env,
+                                  capture_output=True, text=True, timeout=60)
+        self.assertEqual(done.returncode, 0,
+                         f"stdout={done.stdout!r} stderr={done.stderr!r}")
+        return done.stdout
+
+    def test_a_record_is_carried_and_bounded_with_no_configuration(self):
+        out = self._run(
+            "from little_sister.checks.base import CheckResult, CheckError\n"
+            "from little_sister.limits import RECORD_LIMIT\n"
+            "from little_sister.reasons import Entry\n"
+            "from little_sister.status import StatusCode\n"
+            "kept = CheckResult(reason=[Entry('w', 'x', StatusCode.OK,\n"
+            "                                 data={'at': '2026-09-19T09:00:00Z'})])\n"
+            "assert kept.reason_entries[0].data == {'at': '2026-09-19T09:00:00Z'}\n"
+            "try:\n"
+            "    CheckResult(reason=[Entry('w', 'x', StatusCode.OK,\n"
+            "                              data={'d': 'x' * (RECORD_LIMIT + 1)})])\n"
+            "except CheckError as error:\n"
+            "    assert 'bytes' in str(error), error\n"
+            "else:\n"
+            "    raise AssertionError('the default limit did not apply')\n"
+            "print('ok')\n")
+        self.assertEqual(out.strip(), "ok")
 
 
 class DeriveCodeTests(TestCase):

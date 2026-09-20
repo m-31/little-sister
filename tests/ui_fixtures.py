@@ -65,6 +65,9 @@ class Fixture:
     detail: bool = False
     dense: bool = True
     reason_cap: int | None = None
+    #: What the page is told is reached *through* this node. A registry fact rather
+    #: than a snapshot one, so a fixture states it here instead of building it.
+    dependents: tuple[str, ...] = ()
 
 
 # The sheet is a static artifact, so the *observation* times the cards now carry
@@ -439,6 +442,30 @@ def _coded_workflows() -> StatusSnapshot:
     return _snapshot(coded_workflow_tree())
 
 
+def _shielded_unit() -> StatusSnapshot:
+    """A unit behind a failed gateway: red on its own page, reaching nothing above
+    it. The page has to say *why* it is quiet upward and *where* to go — a sheet
+    that shows only the red card is the case an operator misreads."""
+    tree = StatusTree()
+    tree.upsert("/net/vpn", StatusCode.ERROR, "the tunnel is down")
+    tree.upsert("/svc/api", StatusCode.ERROR, "connect: no route to host",
+                frequency_seconds=300)
+    tree.set_dependency("/svc/api", "/net/vpn")
+    return _snapshot(tree, branch="svc/api")
+
+
+def _gateway() -> StatusSnapshot:
+    """The other end: what the page says on a node dozens of checks are reached
+    through, while it is the thing that failed."""
+    tree = StatusTree()
+    tree.upsert("/net/vpn", StatusCode.ERROR, "the tunnel is down",
+                frequency_seconds=60)
+    for name in ("api", "db", "queue", "web"):
+        tree.upsert(f"/svc/{name}", StatusCode.ERROR)
+        tree.set_dependency(f"/svc/{name}", "/net/vpn")
+    return _snapshot(tree, branch="net/vpn")
+
+
 def _empty() -> StatusSnapshot:
     """The empty tree — a root with no children, which renders the
     'No checks reporting yet' hint (the whole overview while the engine is
@@ -804,6 +831,15 @@ FIXTURES: tuple[Fixture, ...] = (
             "the uncoded advisory the card folds, and the pinned line's read "
             "mode", _coded_workflows,
             branch="ci/actions", detail=True),
+    Fixture("dependency_shield_leaf",
+            "a unit behind a failed dependency: red on its own page, reaching "
+            "nothing above it, and saying where to go and look",
+            _shielded_unit, branch="svc/api", detail=True),
+    Fixture("dependency_gateway_leaf",
+            "the other end — the failing dependency four checks are reached "
+            "through",
+            _gateway, branch="net/vpn", detail=True,
+            dependents=("/svc/api", "/svc/db", "/svc/queue", "/svc/web")),
     Fixture("empty_engine_down",
             "the empty tree (engine disabled) — the 'No checks' hint", _empty),
     Fixture("engine_error_banner",

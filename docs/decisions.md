@@ -38,15 +38,13 @@ roll-up half unnoticed. → [record](adr/0004-status-aggregation-semantics.md)
 
 ### ADR-0005 — Dashboard freshness & engine self-monitoring
 
-A node not observed within about twice its interval is **stale** and degrades to at
-least `WARN` at render time; the dashboard polls a fragment every ~10 s and flags a
-failed refresh; the engine heartbeats a `little-sister` node each tick, so a stalled
+A node not observed within its stated freshness tolerance — about twice its interval
+where it has a `frequency`, the ceiling it declares where it has none
+([ADR-0079](adr/0079-freshness-is-a-stated-tolerance.md)) — is **stale** and degrades
+to at least `WARN` at render time; the dashboard polls a fragment every ~10 s and flags
+a failed refresh; the engine heartbeats a `little-sister` node each tick, so a stalled
 scheduler goes red through staleness, and an external supervisor handles whole-process
 death. → [record](adr/0005-dashboard-freshness-and-self-monitoring.md)
-
-*Amended by [ADR-0079](adr/0079-freshness-is-a-stated-tolerance.md) (2026-09-06):
-the staleness rule above is the one for a check with a `frequency`; a paced check is
-judged against the cycle ceiling it declares.*
 
 ### ADR-0006 — General config file & display timezones
 
@@ -590,7 +588,7 @@ each package's contributors. → [record](adr/0072-the-instance-reports-on-itsel
 ### ADR-0073 — A readiness answer beside `/health`, and it latches
 
 `/ready` answers *has this instance finished coming up*: `200` once a door is
-registered, the trust store holds CA certificates and the engine has run every check
+registered, the machine can verify a TLS certificate and the engine has run every check
 once; `503 {"waiting_for": [...]}` from the closed vocabulary `doors` / `trust` /
 `first-pass` until then. It **latches**, so no later failure withdraws a serving
 instance and takes its explaining page with it. An engine switched off is ready, one
@@ -611,14 +609,14 @@ promises are that no two processes share a mark and that one process's never mov
 
 ### ADR-0075 — A check declares what it costs, and startup adds it up
 
-A type may answer `expected_cost()` (worker seconds per run) and `expected_entries()`
-from its own configuration — estimates, not bounds, nothing by default. Startup sums
-**what is declared** — each cost over its period against the pool it will run, the
-entries against the entry limit — refuses past either naming the largest contributors,
-and at 80 % warns in the log and on an uncoded line. A silent check contributes nothing:
-the sums refuse the impossible and promise nothing else, by a `CheckError` raised before
-the tree is touched. `max_workers`, `entry_limit` and `memory_share` become settings.
-→ [record](adr/0075-a-check-declares-what-it-costs.md)
+A type may answer `expected_cost()` (worker seconds per run), `expected_entries()` and
+`expected_record()` — estimates, not bounds, nothing by default, and a silent check
+contributes nothing. Startup sums the first two, each cost over its period against the
+pool it will run and the entries against the entry limit, and **compares the third per
+check** against `record_limit`, which bounds one record and not a shared ceiling. Past
+a limit it refuses by name before the tree is touched; at 80 % it is a fact on the
+engine's node. Each declared figure stands beside its measurement on `/system`, and
+every limit here is a setting. → [record](adr/0075-a-check-declares-what-it-costs.md)
 
 ## Decided without a record
 
@@ -714,3 +712,58 @@ snapshot is added to the envelope in the same change**, additively. `reported` /
 `timestamp`; `report`, `order`, `show_when_quiet`; an `instance` block. No versioned
 media type: the client ships with the server. Supersedes
 [ADR-0008](adr/0008-json-output-api.md). → [record](adr/0080-the-envelope-is-the-snapshot-published.md)
+
+### ADR-0081 — An instance's own node states a freshness tolerance, never a period
+
+A node may **state** how old its reading may get (`Status.stale_after`), and a stated
+tolerance is what freshness measures — one resolution behind both the stale verdict and
+the number the envelope publishes. The instance's own branch states the tick's tolerance
+and carries no `frequency_seconds`, so nothing renders the scheduler tick as a check's
+period; the 31-second dead-scheduler window is unchanged. A surface shows the period
+where there is one and the promise where there is not. The envelope does not move:
+[ADR-0079](adr/0079-freshness-is-a-stated-tolerance.md) had separated the two fields.
+→ [record](adr/0081-an-instance-node-states-a-tolerance-not-a-period.md)
+
+### ADR-0082 — A line carries what it is about and what it read
+
+An entry gains **`subject`** — the source's identifier for the entity the line stands
+for, which a slug cannot be split back into and which nothing may be pinned by — and
+**`data`**, the record of what the check read beside the sentence it wrote. `text` does
+not move, and neither field declares members. Typed: `at`, `started`, `ended` at any
+depth, offset-bearing ISO-8601 or null, converted to UTC at the seam. The `CheckResult`
+seam refuses a record whole — not a mapping, a non-time under a timed name, or over
+`record_limit` bytes (default 2 KB) — and stores the JSON read back.
+→ [record](adr/0082-a-line-carries-what-it-is-about-and-what-it-read.md)
+
+### ADR-0083 — A node may wait before it escalates
+
+A node publishes a worse code upward only after `escalate_after` **consecutive
+readings** of it, counted on the reading and on what the check reported. The leaf is
+honest from the first failure; only the escalation waits, and a held node publishes
+**what it published before** — the first rule here that transforms a contribution rather
+than withholding one, so the snapshot carries it and `contribution.code` can be a real
+code (spec 2.2.0). Recovery is immediate, a different worse code restarts the count, an
+unranked move is none, and staleness goes past it. Default 1 ≡ today; memory, not state.
+→ [record](adr/0083-a-node-may-wait-before-it-escalates.md)
+
+### ADR-0084 — A check may be reached through another
+
+A check names one check it is reached **through** (`depends_on`, a path; unknown targets
+and cycles refused at load). While that dependency reports `ERROR`, the node keeps its
+own reading and contributes **nothing** upward — its `OK` as much as its `ERROR`, since a
+reading taken through a broken path is no evidence either way. The mark sits at the
+check's mount; a never-reported or stale dependency does not shield, a stale dependent is
+not shielded, and a shielded dependency does not shield on. Derived per snapshot. Both
+ends say so, and the envelope carries `shielded_by` (spec 2.4.0).
+→ [record](adr/0084-a-check-may-be-reached-through-another.md)
+
+### ADR-0085 — A measure is read out of a record, not declared into it
+
+A **measure is a projection over the record**, chosen when it is drawn, not a typed field
+declared at the seam — the footing grading and rendering already have. The unit belongs
+to the projection, so a wrong one costs an axis label and not a poisoned series. A check
+run reads **one object** and the result is **one record**: nodes, children and lines are
+derived from it, so the record belongs to the `CheckResult`, and a line carries one only
+where the object has no node. Every measurement names its object, because a node path is
+the deployment's editorial label. The `http` check times the endpoint, not our run.
+→ [record](adr/0085-a-measure-is-read-out-of-a-record.md)

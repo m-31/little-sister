@@ -1,11 +1,11 @@
 # ADR-0079 — Freshness is judged against a stated tolerance, never a derived one
 
 - **Status:** Accepted
-- **Date:** 2026-09-06
+- **Date:** 2026-09-20 (accepted 2026-09-06)
 - **Related:** [ADR-0005](0005-dashboard-freshness-and-self-monitoring.md) (the
-  freshness rule this extends, and whose decision 1 now carries an update pointing
-  here), [ADR-0078](0078-the-unit-is-what-the-engine-releases.md) (the unit this
-  measures, and the paced kind that made the question necessary),
+  freshness rule this extends, and whose decision 1 points here),
+  [ADR-0078](0078-the-unit-is-what-the-engine-releases.md) (the unit this measures,
+  and the paced kind that made the question necessary),
   [ADR-0072](0072-the-instance-reports-on-itself.md) (the engine's own lines, and
   `late.<path>` — the same sentence asked of a periodic check),
   [ADR-0051](0051-what-startup-refuses.md) /
@@ -51,13 +51,19 @@ should is a fact about the *engine*, not about the subject.
 
 ## Decision
 
-1. **Freshness is judged against a tolerance the deployment stated.** Where there is
-   a `frequency`, that tolerance is `frequency + max(frequency, 30s)` — ADR-0005
-   decision 1, unchanged and still the rule for every check that exists. Where there
-   is none, it is the **cycle ceiling** the check declares: the longest a unit may go
-   unobserved before its reading is stale, whatever the pace. Everything else about
-   ADR-0005 decision 1 stands: worse-of degradation to at least `WARN`, computed at
-   render time, maintenance and never-reported nodes exempt, no event recorded.
+1. **Freshness is judged against a tolerance the deployment stated.** Where one was
+   **stated** — a paced check's declared **cycle ceiling**, the longest a unit may go
+   unobserved before its reading is stale whatever the pace, or the tolerance the
+   engine states on its own branch
+   ([ADR-0081](0081-an-instance-node-states-a-tolerance-not-a-period.md)) — that is
+   the tolerance, and it wins over the one a period would imply. Where nothing was
+   stated and there is a `frequency`, the tolerance is `frequency +
+   max(frequency, 30s)` — ADR-0005 decision 1, unchanged and still the rule for every
+   check that exists. Everything else about ADR-0005 decision 1 stands: worse-of
+   degradation to at least `WARN`, computed at render time, maintenance and
+   never-reported nodes exempt, no event recorded. The rule has one home,
+   `tree.node_stale_after`, read by the stale verdict and by the number the envelope
+   publishes (decision 5) alike, so the two cannot disagree.
 
 2. **The ceiling is a common configuration field, `stale_after:`, and it is required
    of a paced check.** A paced check that declares no ceiling is refused at startup,

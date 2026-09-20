@@ -20,7 +20,12 @@ import yaml
 
 from little_sister import values
 from little_sister.config_dir import aspect_files
-from little_sister.limits import DEFAULT_MAX_WORKERS, ENTRY_LIMIT, MEMORY_SHARE
+from little_sister.limits import (
+    DEFAULT_MAX_WORKERS,
+    ENTRY_LIMIT,
+    MEMORY_SHARE,
+    RECORD_LIMIT,
+)
 from little_sister.logger import logger
 from little_sister.state import DEFAULT_STATE_INTERVAL
 
@@ -30,6 +35,12 @@ DEFAULT_MAINTENANCE_EXPIRY = "7d"
 DEFAULT_REASON_CAP = 6
 DEFAULT_BRANCH_CAP = 3
 DEFAULT_MAINTENANCE_CAP = 5
+
+#: Consecutive worse readings before a node escalates, unless somebody says
+#: otherwise. **One** is deliberate: it is exactly today's behavior, so the counter
+#: arrives switched off and a deployment turns it on where it has a flapping subject
+#: rather than everywhere at once.
+DEFAULT_ESCALATE_AFTER = 1
 DEFAULT_RETRY_ATTEMPTS = 2
 DEFAULT_CARD_STATUS_LINE = "beside"
 CARD_STATUS_LINES = ("beside", "below")
@@ -134,6 +145,18 @@ class Config:
     # beside the OS. There is no line at all where the machine cannot say what it
     # gives the process.
     memory_share: float = MEMORY_SHARE
+    # How heavy one entry's record may be, in the bytes of its JSON — the form it
+    # costs in, since that is what every client is sent. Refused at the
+    # `CheckResult` seam, whole: a check shapes the record it hands over to fit; and
+    # refused at startup for a type that declares more than this (ADR-0075).
+    # A positive integer; default 2,048, which leaves a composed record room to
+    # grow and refuses a raw row from a provider's API.
+    record_limit: int = RECORD_LIMIT
+    # How many consecutive readings of a worse code a node needs before it
+    # publishes that code to its parent (backlog #38 B). A positive integer;
+    # default 1, which publishes at once and is what every deployment had before
+    # there was a counter. A check may override it for itself.
+    escalate_after: int = DEFAULT_ESCALATE_AFTER
 
     @property
     def tzinfo(self) -> ZoneInfo:
@@ -287,6 +310,42 @@ def _valid_entry_limit(value: object) -> int:
     return entries
 
 
+def _valid_escalate_after(value: object) -> int:
+    """Coerce the escalation count to a positive int; a bad or non-positive value
+    falls back to the default with a warning. Zero would mean *never publish*, which
+    is a silence no deployment can have meant and the one direction ADR-0032 rule 7
+    refuses outright."""
+    try:
+        count = int(str(value).strip())
+    except ValueError:
+        logger.warning("config: escalate_after %r is not an integer; using %d",
+                       value, DEFAULT_ESCALATE_AFTER)
+        return DEFAULT_ESCALATE_AFTER
+    if count < 1:
+        logger.warning("config: escalate_after %d is not positive; using %d",
+                       count, DEFAULT_ESCALATE_AFTER)
+        return DEFAULT_ESCALATE_AFTER
+    return count
+
+
+def _valid_record_limit(value: object) -> int:
+    """Coerce the per-record byte limit to a positive int; a bad or non-positive
+    value falls back to the default with a warning. Zero would refuse every record
+    a check offers, including the ones this deployment configured a check to
+    gather, which is a limit that only looks like caution."""
+    try:
+        limit = int(str(value).strip())
+    except ValueError:
+        logger.warning("config: record_limit %r is not an integer; using %d",
+                       value, RECORD_LIMIT)
+        return RECORD_LIMIT
+    if limit < 1:
+        logger.warning("config: record_limit %d is not positive; using %d",
+                       limit, RECORD_LIMIT)
+        return RECORD_LIMIT
+    return limit
+
+
 def _valid_memory_share(value: object) -> float:
     """Coerce the resident-memory share to a fraction in ``(0, 1]``; anything
     else falls back to the default with a warning. A share above one would be a
@@ -384,6 +443,10 @@ def load_config(path: str | Path | None = None, *,
         entry_limit=_valid_entry_limit(data.get("entry_limit", ENTRY_LIMIT)),
         memory_share=_valid_memory_share(
             data.get("memory_share", MEMORY_SHARE)),
+        record_limit=_valid_record_limit(
+            data.get("record_limit", RECORD_LIMIT)),
+        escalate_after=_valid_escalate_after(
+            data.get("escalate_after", DEFAULT_ESCALATE_AFTER)),
     )
     if sources:
         logger.info(
@@ -391,13 +454,15 @@ def load_config(path: str | Path | None = None, *,
             "branch_cap=%d, maintenance_cap=%d, maintenance_default_expiry=%s, "
             "retry_interval=%s, retry_attempts=%d, card_status_line=%s, "
             "dashboard_columns=%s, state_interval=%d, max_workers=%d, "
-            "entry_limit=%d, memory_share=%s",
+            "entry_limit=%d, memory_share=%s, record_limit=%d, "
+            "escalate_after=%d",
             ", ".join(str(source.resolve()) for source in sources),
             cfg.timezone, cfg.time_format, cfg.reason_cap, cfg.branch_cap,
             cfg.maintenance_cap, cfg.maintenance_default_expiry,
             cfg.retry_interval or "off", cfg.retry_attempts,
             cfg.card_status_line, cfg.dashboard_columns, cfg.state_interval,
-            cfg.max_workers, cfg.entry_limit, cfg.memory_share)
+            cfg.max_workers, cfg.entry_limit, cfg.memory_share,
+            cfg.record_limit, cfg.escalate_after)
     return cfg
 
 

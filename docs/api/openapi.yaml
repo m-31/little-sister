@@ -56,7 +56,7 @@ info:
 
     See `docs/api/README.md` (linked below) for auth, `curl` examples and how tokens
     are provisioned.
-  version: 2.0.0
+  version: 2.5.0
   contact:
     name: little-sister
     url: https://github.com/m-31/little-sister
@@ -284,6 +284,48 @@ components:
             tolerance the server applied (see `run.stale_after_seconds`). It is the
             server's verdict: a client shows it and does not recompute freshness from
             a clock it does not share.
+        subject:
+          type: string
+          description: >-
+            The object this node's check measured, as the identifier that check
+            actually reached — a host, a URL, a provider's id — or empty where no
+            check measures this node. Deliberately **not** the node's path: the path
+            is the deployment's label for where the node hangs and may be moved or
+            renamed, while this is the thing in the world the reading is about.
+          examples: ["web01.example"]
+        record:
+          type: ["object", "null"]
+          additionalProperties: true
+          description: >-
+            What that run **read** about the object — the measurement the node's
+            code, lines and children are derived from — or null where nothing was
+            read, including a run that failed to reach its object. Free-form beyond
+            the timestamp keys `at`, `started` and `ended`, which are RFC 3339 UTC at
+            any depth. It is data, never a claim: anything that should alarm is a
+            reason. Empty on a mount two checks share, where no single writer can be
+            believed.
+          examples: [{"status": 200, "response_ms": 412}]
+        shielded_by:
+          type: [string, "null"]
+          description: >-
+            The path of the failing dependency this node is reached *through*, or null
+            — which is every node that declared none and every node whose dependency
+            is answering. While it is set, nothing of this node reaches its parent:
+            a reading taken through a broken path is not evidence, in either
+            direction, so an `OK` is withheld exactly as an `ERROR` is. The node's own
+            `code` is untouched and says what the check actually found.
+          examples: ["/net/vpn"]
+        changes:
+          type: integer
+          minimum: 0
+          description: >-
+            How many times this node's own status changed in the last hour, counting
+            only moves between `OK`, `WARN` and `ERROR`. Derived from the transition
+            log and stored nowhere. A node's first reading is not a change of mind and
+            is not counted; a transition that a rule kept from alarming **is**, because
+            this is about the subject's behaviour and not about what a surface showed —
+            which is what makes it the one number that says *this thing is flapping*.
+          examples: [0]
         run:
           $ref: "#/components/schemas/Run"
         entries:
@@ -311,6 +353,7 @@ components:
         - show_when_quiet
         - maintenance
         - stale
+        - changes
         - entries
         - children
 
@@ -321,8 +364,10 @@ components:
       properties:
         code:
           description: >-
-            The status the parent counted — null when the node was not counted at all,
-            which is what both of today's rules do.
+            The status the parent counted. **Null** where the node was not counted at
+            all, which is what a rule that *withholds* a node does; a **real code**
+            where a rule *transformed* the contribution, and then it is deliberately
+            not the node's own `code` — that is the value the parent did not count.
           oneOf:
             - $ref: "#/components/schemas/StatusCode"
             - type: "null"
@@ -331,9 +376,11 @@ components:
           description: >-
             The rule that transformed the contribution. `maintenance` — the node, or
             every one of its addressable entries, is pinned. `undefined` — the node has
-            never reported. Further rules add further names, which is a compatible
-            change; treat an unknown name as "something withheld this node" and show
-            it.
+            never reported. `damping` — the node has read a worse code but not yet as
+            many times in a row as this deployment asked for, so the parent still counts
+            what it published before. Further rules add further names, which is a
+            compatible change; treat an unknown name as "something changed what this
+            node contributed" and show it.
           examples: ["maintenance"]
       required:
         - code
@@ -387,6 +434,27 @@ components:
           description: >-
             Whether this line's subject has work in flight. Display only: it never
             affects the roll-up, so a red line whose job is re-running stays red.
+        subject:
+          type: string
+          description: >-
+            What this line is about, as the source's own identifier for it — a
+            repository, a host — which several lines commonly share. Empty where the
+            check did not say. It is what a view that groups groups by; it is never
+            an address, and nothing may be pinned by it.
+          examples: ["1296269"]
+        data:
+          description: >-
+            The record: what the check read about that subject, beside the sentence
+            in `text`, or null where it carried none. Free-form JSON in the check's
+            own vocabulary — a client renders what it understands and may ignore the
+            rest. A handful of names carry a type: `at`, `started` and `ended`, at
+            any depth, are RFC 3339 UTC date-times or null.
+          type: ["object", "null"]
+          additionalProperties: true
+          examples:
+            - {"repository": "acme/widget", "workflow": "CI", "branch": "main",
+               "verdict": "failure", "run_number": 41,
+               "completed": {"at": "2026-09-19T09:12:00Z"}}
         maintenance:
           description: The pin on this entry, or null when it is not pinned.
           oneOf:
@@ -397,6 +465,8 @@ components:
         - text
         - code
         - running
+        - subject
+        - data
         - maintenance
 
     Run:
@@ -435,8 +505,10 @@ components:
           type: integer
           minimum: 1
           description: >-
-            The interval this node is read on. Absent where it is read on no fixed
-            interval.
+            The interval a check reads this node's subject on. Absent where no check
+            answers for it on a schedule — a paced unit, which has no period at all,
+            and a node the engine re-asserts on its own tick, which is read but never
+            checked. Such a node still names a `stale_after_seconds`.
         stale_after_seconds:
           type: number
           minimum: 0

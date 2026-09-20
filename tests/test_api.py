@@ -112,6 +112,79 @@ class JsonApiTests(TestCase):
         self.assertIsNone(lint["maintenance"])
         self.assertEqual(node["own"], "OK", "what the unpinned entries leave")
 
+    def test_an_entry_carries_its_subject_and_its_record(self):
+        """The two fields ADR-0080 said would join the entry "in the change that
+        adds them to the snapshot" — additive, `schema_version` unchanged."""
+        self.tree.upsert("/ci", StatusCode.ERROR, [
+            Entry("build", "CI: failed (#41)", code=StatusCode.ERROR,
+                  subject="1296269",
+                  data={"workflow": "CI", "run_number": 41,
+                        "completed": {"at": "2026-09-19T09:12:00Z"}}),
+        ], members=True)
+        envelope = self.client.get("/status/ci", headers=JSON).get_json()
+        self.assertEqual(envelope["schema_version"], 2)
+        item, = envelope["status"]["entries"]["items"]
+        self.assertEqual(item["subject"], "1296269")
+        self.assertEqual(item["data"]["run_number"], 41)
+        self.assertEqual(item["data"]["completed"]["at"], "2026-09-19T09:12:00Z")
+
+    def test_an_entry_without_either_says_so_rather_than_omitting_them(self):
+        """Both are always present, because both are always known: empty is "the
+        check did not say", null is "no record" — not a field a client has to
+        discover the absence of."""
+        self.tree.upsert("/db", StatusCode.ERROR, "boom")
+        node = self.client.get("/status/db", headers=JSON).get_json()["status"]
+        item, = node["entries"]["items"]
+        self.assertEqual(item["subject"], "")
+        self.assertIsNone(item["data"])
+
+    def test_a_damped_node_publishes_a_real_code_in_its_contribution(self):
+        """The first rule that **transforms** rather than withholds: `code` is the
+        value the parent counted, not null, which is the case ADR-0080 decision 2
+        described before there was a rule of that kind."""
+        self.tree.upsert("/svc/api", StatusCode.OK, escalate_after=3)
+        self.tree.upsert("/svc/api", StatusCode.ERROR)
+        node = self.client.get("/status/svc/api", headers=JSON).get_json()["status"]
+        self.assertEqual(node["code"], "ERROR", "the node is honest")
+        self.assertEqual(node["contribution"], {"code": "OK", "by": "damping"})
+
+    def test_a_withheld_node_still_says_null_and_names_its_rule(self):
+        self.tree.upsert("/svc/api", StatusCode.UNDEFINED)
+        node = self.client.get("/status/svc/api", headers=JSON).get_json()["status"]
+        self.assertEqual(node["contribution"], {"code": None, "by": "undefined"})
+
+    def test_a_node_publishes_what_its_check_measured(self):
+        """2.5.0's addition, and where a measurement now lives: the object's own
+        identifier and the reading, on the node that stands for the object."""
+        self.tree.upsert("/web", StatusCode.OK, subject="http://web01.example",
+                         record={"status": 200, "response_ms": 412})
+        node = self.client.get("/status/web", headers=JSON).get_json()["status"]
+        self.assertEqual(node["subject"], "http://web01.example")
+        self.assertEqual(node["record"], {"status": 200, "response_ms": 412})
+
+    def test_a_node_nobody_measured_says_so(self):
+        self.tree.upsert("/web/page", StatusCode.OK)
+        node = self.client.get("/status/web", headers=JSON).get_json()["status"]
+        self.assertEqual(node["subject"], "")
+        self.assertIsNone(node["record"])
+
+    def test_a_shielded_node_names_the_dependency_it_is_reached_through(self):
+        """2.4.0's field, and the reason it is a field: `contribution.by` says a
+        dependency withheld the node, and only this says **which** — the one fact a
+        client can act on. The node's own `code` is untouched."""
+        self.tree.upsert("/net/vpn", StatusCode.ERROR)
+        self.tree.upsert("/svc/api", StatusCode.ERROR)
+        self.tree.set_dependency("/svc/api", "/net/vpn")
+        node = self.client.get("/status/svc/api", headers=JSON).get_json()["status"]
+        self.assertEqual(node["code"], "ERROR", "the node is honest")
+        self.assertEqual(node["shielded_by"], "/net/vpn")
+        self.assertEqual(node["contribution"], {"code": None, "by": "dependency"})
+
+    def test_a_node_reaching_its_parent_says_null(self):
+        self.tree.upsert("/svc/api", StatusCode.OK)
+        node = self.client.get("/status/svc/api", headers=JSON).get_json()["status"]
+        self.assertIsNone(node["shielded_by"])
+
     def test_metadata_fields_in_json_envelope(self):
         # the envelope carries the node-metadata fields as raw Markdown (ADR-0008)
         self.tree.upsert("/db", StatusCode.OK, config="- **url:** http://x")
@@ -203,6 +276,20 @@ class JsonApiTests(TestCase):
                               headers=JSON).get_json()["status"]["run"]
         self.assertNotIn("stale_after_seconds", run)
         self.assertNotIn("frequency_seconds", run)
+
+    def test_a_node_read_on_no_schedule_publishes_its_tolerance_alone(self):
+        """The instance's own nodes (ADR-0081): a stamp, a freshness promise, and
+        no period. `frequency_seconds` is a claim that a subject was read on that
+        interval and is only true of a check, so the branch the engine re-asserts
+        on its own tick carries the tolerance and nothing a client could render as
+        a check's period. Nothing in the envelope moved to say it — the two fields
+        were already separate (ADR-0079 decision 5)."""
+        self.tree.upsert("/little-sister/startup", StatusCode.OK, stale_after=31.0)
+        run = self.client.get("/status/little-sister/startup",
+                              headers=JSON).get_json()["status"]["run"]
+        self.assertNotIn("frequency_seconds", run)
+        self.assertEqual(run["stale_after_seconds"], 31.0)
+        self.assertIsNotNone(run["observed_at"], "the tick wrote it")
 
     def test_maintenance_is_one_object_and_carries_both_dates(self):
         """The bool and the details object were one fact in two fields, and the bool

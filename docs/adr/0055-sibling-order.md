@@ -1,7 +1,7 @@
 # ADR-0055 — Sibling order: alphabetical, unless somebody declares a rank
 
 - **Status:** Accepted
-- **Date:** 2026-08-09
+- **Date:** 2026-09-20 (accepted 2026-08-09)
 - **Supersedes:** the *Node sibling ordering* entry in
   [`../decisions.md`](../decisions.md) (2026-06, no ADR of its own), whose decision
   is restated in full below
@@ -13,11 +13,6 @@
   [ADR-0036](0036-addressable-reasons.md) (a node's entries are **virtual** children
   and keep the check's own order — untouched here)
 - **Register:** [`../decisions.md`](../decisions.md)
-
-> **Update (2026-09-06):** the rank is a field now:
-> [ADR-0080](0080-the-envelope-is-the-snapshot-published.md) publishes `order`
-> beside `reported`, `report` and the run facts, in the single decision this record
-> was waiting for.
 
 ## Context
 
@@ -122,7 +117,7 @@ back to the alphabet means stating `order: 0` on **every** sibling. The mechanis
 the plain one — a rank is a number and the sort is `(order, name)` — and the escape
 hatch is real; it is just per node, not per set.
 
-### 5. The JSON envelope's `children` order moves; the rank itself is not emitted yet
+### 5. The JSON envelope's `children` order moves; the rank follows in the contract round
 
 The envelope reads the same snapshot, so a ranked node's `children` order moves there
 too. Order is not usually part of a contract
@@ -137,10 +132,12 @@ was — `info.version` to **1.3.0**, `schema_version` staying **1**, and the for
 consolidated into the client-facing revision. The client repository re-syncs its copy of
 `docs/api/`, which is the standing one-way obligation whenever that directory moves.
 
-The rank as a **field** stays server-side for now, with `reported_code`, `report` and
-the run facts, and ships with them in the client contract round's single
+The rank as a **field** stays server-side at this point, with `reported_code`,
+`report` and the run facts, and ships with them in the client contract round's single
 `schema_version` decision. A client must not be shown a field one release and a rename
-the next, and this one has no reason to be the exception that arrives piecemeal.
+the next, and this one has no reason to be the exception that arrives piecemeal. That
+round is [ADR-0080](0080-the-envelope-is-the-snapshot-published.md), and `order` is
+published there beside them.
 
 ## Consequences
 

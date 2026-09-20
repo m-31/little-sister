@@ -150,6 +150,20 @@ def format_duration(seconds: int | None, *, none: str = "—") -> str:
     return f"{seconds}s"
 
 
+def format_tolerance(seconds: float | None, *, none: str = "—") -> str:
+    """A freshness tolerance — how old a reading may get before it is stale
+    (ADR-0079 decision 1) — as an interval.
+
+    :func:`format_duration` with the seconds rounded, and that is the whole of it.
+    The rounding is why this exists rather than the filter being pointed at a
+    float: a stated tolerance is a number somebody typed, but a derived one is
+    ``frequency + max(frequency, 30s)`` and arrives as a float, and
+    ``format_duration`` spells a float ``31.0s``. A tolerance is an interval and is
+    written like every other interval this project writes.
+    """
+    return format_duration(None if seconds is None else round(seconds), none=none)
+
+
 def coarse_span(seconds: float) -> str:
     """A span as its largest one or two units: ``2d 3h`` / ``5h`` / ``12m``.
 

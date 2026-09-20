@@ -1,7 +1,7 @@
 # ADR-0041 — Maintenance is a contribution rule, not a value
 
 - **Status:** Accepted
-- **Date:** 2026-08-02
+- **Date:** 2026-09-20 (accepted 2026-08-02)
 - **Supersedes:** [ADR-0004](0004-status-aggregation-semantics.md)'s `MAINTENANCE` half
   (its §3 and its *Implemented (`tree.py`)* note); the other two pieces are
   [ADR-0039](0039-status-rollup-semantics.md) and
@@ -14,10 +14,6 @@
   [ADR-0005](0005-dashboard-freshness-and-self-monitoring.md) (the liveness backstop
   this may not switch off)
 - **Register:** [`../decisions.md`](../decisions.md)
-
-> **Update (2026-09-06):** decision 3's raw answer is no longer server-side:
-> [ADR-0080](0080-the-envelope-is-the-snapshot-published.md) publishes it as
-> `reported`, so a client can say *maintenance · error* the way a card does.
 
 ## Context
 
@@ -60,7 +56,9 @@ raised.
    the node shows; **`reported_code`** is what the check said. Once `own_code` became
    derived, the raw answer had nowhere to live, and rule 5 — a transformed contribution
    is visible and attributable — needs it: a card says `maintenance · error`, not just
-   blue. It stays server-side for now; the JSON field rides the client-contract round.
+   blue. The JSON field rides the client-contract round, where
+   [ADR-0080](0080-the-envelope-is-the-snapshot-published.md) publishes it as
+   `reported`, so a client can say the same thing the card does.
 4. **Clearing restores nothing, because nothing was destroyed.** Releasing a pin lets
    the node show what it has been holding all along, immediately.
 5. **The freshness backstop applies under a pin.** The `_is_stale` exemption is gone,

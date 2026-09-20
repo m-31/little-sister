@@ -112,6 +112,7 @@ def render_page(fixture: Fixture) -> str:
                 firstname="Harness",
                 node=node,
                 branch=fixture.branch,
+                dependents=fixture.dependents,
                 max_depth=MAX_DEPTH,
                 depth_limit=MAX_DEPTH,
                 hide_ok=False,

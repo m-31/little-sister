@@ -8,6 +8,172 @@ contract versions **separately** — see `docs/api/openapi.yaml` `info.version`.
 
 ## [Unreleased]
 
+## [0.3.17] - 2026-09-20
+
+### Added
+
+- **A golden envelope ships in the wheel, so a client and this server test one
+  artifact.** `openapi.yaml` says what the envelope may contain; `envelope-2.json`
+  beside it is one that contains all of it — a node with a `run` and one without,
+  entries addressable and prose, an entry carrying `subject` and `data` and one
+  carrying neither, a `maintenance` object and a null, a `contribution` naming its
+  rule, the `instance` block. It is generated from this application's own API and a
+  test holds the server to it, so it cannot quietly stop being true, and it is a
+  shared file of the family, so a client that cannot import a wheel carries the
+  identical bytes. A plugin reads it with `little_sister.contract.golden_envelope()`.
+  Four field names are volatile between two correct runs — `generated_at`,
+  `observed_at`, `next_at` and the instance's `version` — and the artifact names them
+  itself under `volatile` so a consumer keeps no list of its own. Nothing about the
+  served API changes; this is what it already answers, written down where both sides
+  can read it. [`docs/api/README.md`](docs/api/README.md).
+- **A node's page says how often it changed its mind in the last hour.** Its own status
+  transitions between `OK`, `WARN` and `ERROR`, beside the History button, and in the
+  JSON as `changes` (contract **2.3.0**, additive). It is the one number that says a
+  subject is **flapping** — a subject that recovers between failures never trips the
+  escalation counter below, and that counter's own marker clears on every recovery. A
+  node's first reading is not counted, so nothing carries a spurious 1 after a restart;
+  a transition that a maintenance pin kept from alarming **is** counted, because this
+  is about the subject and not about what the dashboard showed. Nothing is stored for
+  it: the transitions were already kept.
+
+- **A check's reading now lands on the node it read.** A check run reads one object and
+  what comes back is **one record** — the measurement — and the node, the children and
+  the lines it writes are derived from that reading
+  ([ADR-0085](docs/adr/0085-a-measure-is-read-out-of-a-record.md)). So a check puts what
+  it read on its result, beside the identifier of the thing it read it from, and only an
+  object with no node of its own — a repository, a job run, a finding — carries its
+  record on a line. The identifier is what the check actually reached, not the node's
+  path: a path is your label for where a node hangs and you may rename it, while the
+  reading is about something in the world. A node's page shows what was measured under
+  **Measured**, and the JSON carries `subject` and `record` on every node (contract
+  **2.5.0**, additive). A run that reads nothing clears the last reading rather than
+  leaving yesterday's numbers to be taken for today's, and a mount two checks share
+  shows neither, because no single writer can be believed there. Nothing changes for a
+  check that records nothing.
+
+- **The `http` check now measures the thing it watches.** A URL check asked for a
+  status and stopped, so the family's most common check produced no number at all. It
+  now reports one line — `HTTP 200 in 412 ms` — and records the status and the response
+  time on the run, on every path that got an answer
+  ([ADR-0085](docs/adr/0085-a-measure-is-read-out-of-a-record.md)). A request that
+  never answered is **also recorded**, with the status and the time standing as null and
+  the reason beside them — the check learned that it could not get there, and a history
+  of failures answers *how often did this answer at all*, which a history with holes in
+  it cannot. What the nulls never hold is how long we waited before giving up: that is
+  the timeout's number, not the endpoint's. What is timed is the endpoint, never our own
+  run — the engine already reports that separately, and confusing the two makes a
+  monitor report its own slowness as an outage. Your dashboard does not change: a
+  healthy node collapses to a chip as before and the line lives on its page, except in
+  the chips-off layout, where `show_when_quiet` decides. The line can be pinned like
+  any other, and the cost — one entry and one record per check — is declared at
+  startup with the rest. **Nothing about drawing it yet**: a curve needs records over
+  time, which is the next round, and a measure is deliberately something you read
+  *out* of a record when you draw it rather than something a check declares into it.
+
+- **A check can say it is reached *through* another one.** `depends_on` in a check's
+  configuration names one other check by path
+  ([ADR-0084](docs/adr/0084-a-check-may-be-reached-through-another.md)). While that
+  check reports `error`, everything reached through it keeps its own reading and stops
+  counting toward the level above — so a gateway, a VPN or a host going down raises
+  **one** alarm instead of a dozen true reports about the same thing. Nothing changes
+  until a check declares one. What is shielded stays honest: the node is still red on
+  its own page, in its history and in the event log, and it says which dependency it is
+  waiting on, with a link. A good reading is withheld exactly as a bad one is — a
+  reading taken through a broken path is no evidence either way, so the level above
+  reads *nothing is reporting* rather than a green nobody could stand behind. The
+  dependency's own page says how many checks are reached through it, which is the
+  number to look at **before** declaring one, and `/system` lists the whole graph. A
+  check that has stopped running is never shielded, a dependency that has stopped
+  running never shields, and a dependency that is itself shielded does not pass the
+  shield on. An unknown target or a cycle is refused at startup. In the JSON a node
+  carries `shielded_by` — the dependency's path, or null — and the contract's minor
+  moves to **2.4.0**, additively.
+
+- **A node can be made to wait before it escalates.** `escalate_after` in
+  `settings.yaml`, with a per-check override, says how many **consecutive readings** of
+  a worse status a node needs before the level above it counts that status
+  ([ADR-0083](docs/adr/0083-a-node-may-wait-before-it-escalates.md)). The default is
+  **1** — publish at once, exactly what every deployment had before — so nothing changes
+  until you raise it. The node itself never lies: its card, its page and the event log
+  all go red on the first failure, and what waits is only the claim that everything
+  above it is broken. While it waits, the card says `1 of 3 to escalate` and the node's
+  page says what the level above is counting meanwhile. Recovery never waits, a
+  different worse status restarts the count, and a check that **stops running
+  altogether** still escalates on staleness — the counter can never hold a door shut on
+  a check nobody is running. Two things worth knowing before you turn it on: a
+  restart mid-escalation re-arms the whole delay, and a subject that flaps (red, green,
+  red, green) never reaches two in a row, so it escalates on staleness or not at all.
+  In the JSON, a waiting node's `contribution` now carries a **real** status — what the
+  parent counted — instead of null, and the contract's minor moves to **2.2.0**.
+
+- **A reason line can carry what it is about and what the check read.** `Entry` gains
+  two optional attributes — `subject`, the source's own identifier for the entity the
+  line stands for, and `data`, the **record** of what was read about it — and both
+  join the JSON entry additively: `schema_version` stays **2** and the contract moves
+  to **2.1.0**, so a client that reads neither is unaffected
+  ([ADR-0082](docs/adr/0082-a-line-carries-what-it-is-about-and-what-it-read.md)).
+  Nothing moves until a check opts in: `text` is untouched, no card changes, and a
+  record renders only on the node's own page, as a plain list of dotted names and
+  values. Three key names are typed and read at any depth — `at`, `started`, `ended`
+  — each an ISO-8601 string carrying an offset, or null, converted to UTC where the
+  check hands it over; every other key is the check's own. Neither attribute makes a
+  line a member, so prose that carries a record stays prose and keeps the node pin as
+  its unit of suppression. **Nothing may be pinned by subject**, deliberately: a pin
+  holds an identifier and only a line has one.
+- **A check type can declare how heavy one of its records is, and startup measures
+  it.** `Check.expected_record()` joins `expected_cost()` and `expected_entries()` as a
+  third optional declaration, `None` by default
+  ([ADR-0075](docs/adr/0075-a-check-declares-what-it-costs.md)). A type declaring more
+  than this deployment's `record_limit` is **named at startup** and refuses the engine
+  before the tree is touched, instead of failing on its first run fifteen minutes later
+  in a package the deployment did not write; at 80 % of the limit it is a fact on the
+  engine's node rather than a refusal. Unlike the two declarations beside it the figure is **compared per
+  check, never summed** — the limit bounds one record and not a ceiling every check
+  shares, so adding two types' declarations together would refuse deployments that
+  work. It does not raise the limit: the bound exists against the check. `/system`
+  shows the declaration beside the largest record the last run actually carried, for
+  both a declaring type and a silent one.
+- **`record_limit` in `settings.yaml`** — how heavy one entry's record may be, counted
+  in the bytes of its JSON, default **2048**. A record that is not a JSON mapping,
+  carries a non-time under a timed name, or exceeds the limit refuses its check's
+  **whole result**, loudly, with the field and the size in the line — a record is what
+  a check read about one subject, never a payload dump. A check type should aim at the
+  default rather than at any deployment's setting, since a package cannot see which
+  deployment it is installed into.
+
+### Fixed
+
+- **The instance's own nodes no longer say they are checked every second.**
+  `/little-sister` and each of its children rendered **"Checked every 1s"**, beside
+  real checks whose identical line means a subject was read on that period. Nothing
+  there is checked at all: the lines are recorded state read on the scheduler tick,
+  and readiness measures its trust store once, at startup. The tick was being stamped
+  as the node's `frequency`, and it was not free to simply drop — freshness derived
+  its tolerance from that field, and a stale heartbeat is how a dead scheduler becomes
+  visible. A node can now **state** how old its reading may get, the branch states the
+  tick's tolerance and publishes no interval at all, and one resolution answers both
+  the stale verdict and the number the API carries. The dead-scheduler window is the
+  same 31 seconds it was. Both surfaces follow one rule — the period where there is
+  one, the promise where there is not: *Checked every 5m*, or *Goes stale after 31s*,
+  which is also the sentence a paced check will get when the scheduler releases units.
+  The JSON contract does not move for it: `frequency_seconds` and
+  `stale_after_seconds` were already separate fields, this changes which of them such
+  a node emits, and the spec's wording for the first is corrected to say what it
+  means (ADR-0081).
+
+- **`readiness.trust` no longer stands on a machine whose trust store is a hash
+  directory.** The measurement counted the CA certificates a default TLS context had
+  loaded, and OpenSSL never loads a `capath` — a hash directory is consulted by subject
+  hash when a chain is verified — so an interpreter whose compiled-in `cafile` the
+  distribution does not create (a uv-installed Python on a Debian base, whose trust
+  store is all of `/etc/ssl/certs`) counted zero: `/ready` answered `503` naming
+  `trust`, and the line stood at ERROR for the life of a process that verified every
+  connection, because readiness latches. The measurement now asks whether a source is
+  **usable** — a `cafile` that exists and is not empty, or a `capath` holding at least
+  one hashed entry — and reports `trust` only when neither is; one that fails still
+  answers *unknown*, never *empty* (ADR-0073). A deployment that named its bundle in
+  `SSL_CERT_FILE` to work around this can take that line out.
+
 ## [0.3.16] - 2026-09-06
 
 **Breaking — the JSON API is `schema_version` 2, and nothing about a node is

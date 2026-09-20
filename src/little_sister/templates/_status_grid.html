@@ -22,9 +22,17 @@
     it was not merely hidden but destroyed. Shown wherever a node's own status has
     been derived away from a countable reading, by a node pin or by every member
     being pinned; a check that reported ``MAINTENANCE`` itself has nothing to add.
-    ``word`` includes the status word for surfaces that do not already print it. -#}
+    ``word`` includes the status word for surfaces that do not already print it.
+
+    **A damping counter is the same kind of fact and takes the same slot**: the node
+    shows what it read and its parent is still counting the quieter value, so the
+    card says how many readings are in and how many the deployment asked for. A red
+    leaf under a green parent is what a broken roll-up looks like, and this is the
+    sentence that tells the two apart. Same ink as the maintenance suffix — the
+    transform is one idea and it should not look like two. -#}
 {% macro reported_suffix(node, word=False) -%}
 {%- if node.own_code.name == 'MAINTENANCE' and node.reported_code.name not in ('MAINTENANCE', 'UNDEFINED') %} <span class="status-reported">{% if word %}maintenance {% endif %}· {{ node.reported_code.name.lower() }}</span>{% endif -%}
+{%- if node.damping %} <span class="status-reported">· {{ node.damping.seen }} of {{ node.damping.needed }} to escalate</span>{% endif -%}
 {%- endmacro %}
 {#- Why the node is blue: who pinned it, until when, and their explanation. It sits
     **above** the reason block and outside the ``reason_cap`` clamp, so the reason
@@ -113,8 +121,10 @@
     where a single check owns everything beneath it, so an identical value below can
     only be the same run; ``shown`` is the ancestor's displayed rendering, compared
     at display precision. It sits inside the poll fragment, so it refreshes with
-    the grid; the freshness *alarm* stays the stale badge (ADR-0005), which is
-    normalized per check frequency. -#}
+    the grid; the freshness *alarm* stays the stale badge (ADR-0005), normalized
+    per node against the tolerance the server applied rather than against an absolute
+    age — a check's period implies one, and a node with no period may state one
+    (ADR-0081). -#}
 {% macro card_time(node, shown="") -%}
 {%- if node.timestamp -%}
 {%- set moment = node.timestamp | localtime("%H:%M") -%}
