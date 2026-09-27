@@ -27,7 +27,14 @@
            (ADR-0075). The declared figures are what startup measured the
            configuration against; the entries held is the count the engine's own
            `entries` line watches. A declaration that has drifted from the
-           measurement is only visible if both are shown. #}
+           measurement is only visible if both are shown.
+
+           The series are the third line (ADR-0087), and the one where nothing is
+           declared: what they hold against their ceiling, as the engine's `series`
+           line reads it, and beside it the projection its `series.projection` line
+           reads — what this configuration would need at today's estate. A series
+           fills slowly, so the second figure is the one that says, on the first
+           tick, what the first will say hours later. #}
         <div class="col-auto">
             <div class="card"><div class="card-body">
                 <div class="text-muted small">Declared load</div>
@@ -36,6 +43,9 @@
                 <div class="text-muted small mt-2">Entries held</div>
                 <div>{{ "{:,}".format(info.entries_held) }}
                     <span class="text-muted">of {{ "{:,}".format(info.entry_limit) }}{% if info.declared_entries %} · {{ "{:,}".format(info.declared_entries) }} declared{% endif %}</span></div>
+                <div class="text-muted small mt-2">Series held</div>
+                <div>{{ info.series_held | weight }}
+                    <span class="text-muted">of {{ info.series_limit | weight }}{% if info.series_projection %} · {{ info.series_projection | weight }} at this estate{% endif %}</span></div>
             </div></div>
         </div>
     </div>
@@ -87,7 +97,10 @@
                        what was declared. It stands even where nothing was
                        declared: the drift a declaration hides is only visible if
                        both are shown, and a record nobody declared is still worth
-                       seeing grow. #}
+                       seeing grow. A declared record below the engine's own
+                       failure record is shown at that floor, with the type's
+                       number beside it, because the page must not claim more
+                       precision than the check has nor hide what it said. #}
                     <td class="text-muted">
                         {% if c.expected_cost is not none %}{{ c.expected_cost | elapsed }}{% endif %}
                         {%- if c.expected_cost is not none and c.expected_entries is not none %} · {% endif %}
@@ -95,10 +108,12 @@
                         {%- if c.expected_record is not none %}
                             {%- if c.expected_cost is not none or c.expected_entries is not none %} · {% endif %}
                             {{- "{:,}".format(c.expected_record) }} B record
+                            {%- if c.stated_record is not none %} (floor; declares {{ "{:,}".format(c.stated_record) }} B){% endif %}
                         {%- endif %}
                         {%- if c.record_bytes is not none %}
                             {%- if c.expected_cost is not none or c.expected_entries is not none or c.expected_record is not none %} {% endif %}
-                            {{- "(" }}{{ "{:,}".format(c.record_bytes) }} B seen{{ ")" }}
+                            {{- "(" }}{{ "{:,}".format(c.record_bytes) }} B seen
+                            {%- if c.record_refused %}, refused{% endif %}{{ ")" }}
                         {%- endif %}
                         {%- if c.expected_cost is none and c.expected_entries is none
                               and c.expected_record is none and c.record_bytes is none %}—{% endif %}

@@ -1,8 +1,12 @@
 import json
+import subprocess
+import sys
 import tempfile
+import textwrap
 import threading
 import time
 import unittest
+from collections.abc import Sequence
 from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -10,13 +14,19 @@ from unittest import TestCase
 from unittest.mock import patch
 
 from little_sister import engine as engine_module
+from little_sister.checks import Measurement
 from little_sister.checks.base import Check, CheckError, CheckResult
 from little_sister.config import config
-from little_sister.engine import Engine
+from little_sister.engine import (
+    FAILURE_RECORD_BYTES,
+    Engine,
+    _failure_measurement,
+)
 from little_sister.limits import Limits
 from little_sister.reasons import Entry
 from little_sister.status import HEARTBEAT_PATH, StatusCode
 from little_sister.tree import StatusTree
+from tests.running import subprocess_env
 
 
 class _FakeCheck(Check):
@@ -25,20 +35,37 @@ class _FakeCheck(Check):
     def __init__(self, *, result: CheckResult | None = None,
                  raises: Exception | None = None,
                  ran: threading.Event | None = None,
-                 block: threading.Event | None = None, **kwargs: object) -> None:
+                 block: threading.Event | None = None,
+                 measurements: Sequence[Measurement] = (),
+                 raises_grading: Exception | None = None,
+                 **kwargs: object) -> None:
         super().__init__(**kwargs)   # type: ignore[arg-type]
         self._result = result or CheckResult(StatusCode.OK)
         self._raises = raises
+        self._raises_grading = raises_grading
         self._ran = ran
         self._block = block
+        self._measurements = tuple(measurements)
+        #: What the grading was handed on the last run, for a test whose subject
+        #: is the seam rather than the verdict.
+        self.graded: tuple[Measurement, ...] = ()
+        self.graded_at: datetime | None = None
 
-    def run(self) -> CheckResult:
+    def measure(self) -> Sequence[Measurement]:
         if self._block is not None:
             self._block.wait(timeout=5)
         if self._raises is not None:
             raise self._raises
         if self._ran is not None:
             self._ran.set()
+        return self._measurements
+
+    def grade(self, measurements: Sequence[Measurement],
+              now: datetime) -> CheckResult:
+        self.graded = tuple(measurements)
+        self.graded_at = now
+        if self._raises_grading is not None:
+            raise self._raises_grading
         return self._result
 
 
@@ -158,37 +185,209 @@ class EngineTests(TestCase):
         self.assertEqual(node_b.reason, ("boom",))
 
     def test_a_runs_measurement_reaches_the_node_it_measured(self):
-        """The seam of ADR-0085: a check reads an object, and what it read lands on
-        the node that stands for it — not on a line, which is a rendering."""
+        """The seam of ADR-0085 under the split (ADR-0086): a check reads an
+        object, hands back a measurement, and the **engine** puts it on the node
+        that stands for it — the grading never touches it."""
         tree = StatusTree()
-        result = CheckResult(StatusCode.OK, ["200 in 412 ms"],
-                             subject="http://web01.example",
-                             record={"status": 200, "response_ms": 412})
-        Engine([_FakeCheck(path="/web", result=result)], tree).run_once()
+        check = _FakeCheck(
+            path="/web", subject="http://web01.example",
+            result=CheckResult(StatusCode.OK, ["200 in 412 ms"]),
+            measurements=[Measurement(record={"status": 200,
+                                              "response_ms": 412})])
+        Engine([check], tree).run_once()
         node = tree.snapshot("/web")
         assert node is not None
         self.assertEqual(node.subject, "http://web01.example")
         self.assertEqual(node.record["response_ms"], 412)
 
-    def test_a_check_that_reads_several_objects_measures_each_child(self):
-        """One run, several objects: each measurement lands on the child that stands
-        for its object, and the container that merely rolls them up measures none."""
+    def test_a_measurement_may_name_an_object_the_answer_taught_it(self):
+        """A check declares its object at construction, out of its configuration —
+        but a rate-limit check learns whose budget it read only from the answer, so
+        a measurement that names one wins."""
         tree = StatusTree()
-        result = CheckResult(StatusCode.UNDEFINED, children=(
-            CheckResult(StatusCode.OK, ["fine"], name="a", subject="host-a",
-                        record={"cpu_pct": 7}),
-            CheckResult(StatusCode.OK, ["fine"], name="b", subject="host-b",
-                        record={"cpu_pct": 91}),
-        ))
-        Engine([_FakeCheck(path="/hosts", result=result)], tree).run_once()
-        first = tree.snapshot("/hosts/a")
-        second = tree.snapshot("/hosts/b")
-        container = tree.snapshot("/hosts")
-        assert first is not None and second is not None and container is not None
-        self.assertEqual(first.record["cpu_pct"], 7)
-        self.assertEqual(second.subject, "host-b")
-        self.assertEqual(container.subject, "")
-        self.assertIsNone(container.record)
+        check = _FakeCheck(
+            path="/gh", subject="configured",
+            measurements=[Measurement(record={"remaining": 4980},
+                                      subject="from-the-answer")])
+        Engine([check], tree).run_once()
+        node = tree.snapshot("/gh")
+        assert node is not None
+        self.assertEqual(node.subject, "from-the-answer")
+
+    def test_several_objects_are_placed_by_the_grading_and_not_by_the_engine(self):
+        """One run, several objects: which node, child or line each stands for is
+        what the grading already said in the tree it returned — a record that
+        becomes a *line* is an `Entry` the engine has no shape for — so the engine
+        places none of them and the check's own node measures nothing."""
+        tree = StatusTree()
+        check = _FakeCheck(
+            path="/hosts", subject="the-estate",
+            result=CheckResult(reason=[
+                Entry("a", "host-a fine", StatusCode.OK, subject="host-a",
+                      data={"cpu_pct": 7}),
+                Entry("b", "host-b busy", StatusCode.WARN, subject="host-b",
+                      data={"cpu_pct": 91})]),
+            measurements=[Measurement(record={"cpu_pct": 7}, subject="host-a"),
+                          Measurement(record={"cpu_pct": 91},
+                                      subject="host-b")])
+        Engine([check], tree).run_once()
+        node = tree.snapshot("/hosts")
+        assert node is not None
+        self.assertEqual(node.subject, "")
+        self.assertIsNone(node.record)
+        lines = {entry.slug: entry for entry in node.reasons}
+        self.assertEqual(lines["b"].data["cpu_pct"], 91)
+
+    def test_a_run_that_measures_nothing_clears_the_last_reading(self):
+        """The node's observation time moves with every run, so a kept record
+        would not be undated but **wrongly dated** (ADR-0085)."""
+        tree = StatusTree()
+        check = _FakeCheck(path="/web", subject="web01.example",
+                           measurements=[Measurement(record={"status": 200})])
+        Engine([check], tree).run_once()
+        check._measurements = ()
+        Engine([check], tree).run_once()
+        node = tree.snapshot("/web")
+        assert node is not None
+        self.assertEqual(node.subject, "")
+        self.assertIsNone(node.record)
+
+    def test_the_grading_is_handed_the_measurements_and_an_aware_clock(self):
+        """Both halves of the purity promise, at the one seam that can keep it:
+        the grading is given what was measured and what time it is, so nothing in
+        it has to reach for either."""
+        taken = Measurement(record={"status": 200}, subject="web01.example")
+        check = _FakeCheck(path="/web", measurements=[taken])
+        Engine([check], StatusTree()).run_once()
+        self.assertEqual(check.graded, (taken,))
+        assert check.graded_at is not None
+        self.assertIsNotNone(check.graded_at.tzinfo)
+
+    def test_a_check_that_raises_while_measuring_still_records_the_attempt(self):
+        """The engine writes the failure record itself, so no author can forget to
+        record a reading that failed — which is exactly the weakness of doing it by
+        hand in one check (ADR-0085 decision 3, ADR-0086)."""
+        tree = StatusTree()
+        check = _FakeCheck(path="/web", subject="web01.example",
+                           raises=RuntimeError("the door is shut"))
+        Engine([check], tree).run_once()
+        node = tree.snapshot("/web")
+        assert node is not None
+        self.assertEqual(node.code, StatusCode.ERROR)
+        self.assertEqual(node.subject, "web01.example")
+        self.assertIn("the door is shut", node.record["error"])
+
+    def test_a_grading_that_raises_does_not_discard_the_reading_it_had(self):
+        """A grading that threw over a reading that succeeded has not made that
+        reading untrue, and `{"error": …}` in its place would throw away the one
+        thing this run did get right."""
+        tree = StatusTree()
+        check = _FakeCheck(
+            path="/web", subject="web01.example",
+            measurements=[Measurement(record={"status": 200})],
+            raises_grading=RuntimeError("bad threshold"))
+        Engine([check], tree).run_once()
+        node = tree.snapshot("/web")
+        assert node is not None
+        self.assertEqual(node.code, StatusCode.ERROR)
+        self.assertEqual(node.record["status"], 200)
+
+    def test_the_failure_reading_itself_names_the_object(self):
+        """The Done-when of ADR-0086, held at the only place that can hold it.
+
+        The node test above cannot: `_store` resolves a node's subject as
+        `measurement.subject or check.subject`, so the node is named correctly
+        whether or not the **reading** carries the object — the fallback answers
+        for both paths and the two are indistinguishable from outside. Measured:
+        drop `subject=check.subject` from `_failure_measurement` and the whole
+        suite still passes.
+
+        It has to be on the measurement, because the measurement is what a series
+        keeps. A record that reaches a store without its object is a reading about
+        nothing, and an identity not written down at the reading cannot be added
+        afterwards — which is the entire reason a check declares its object at
+        construction rather than per run.
+        """
+        check = _FakeCheck(path="/web", subject="web01.example")
+        taken, = _failure_measurement(check, RuntimeError("the door is shut"))
+        self.assertEqual(taken.subject, "web01.example")
+        self.assertIn("the door is shut", taken.record["error"])
+
+    def test_a_failure_reading_is_not_built_at_the_cost_of_the_error(self):
+        """The guard around it: a record that will not build must never cost the
+        `ERROR` that is already decided. A subject too long to travel is refused
+        by the seam, and what comes back is no reading rather than no verdict."""
+        check = _FakeCheck(path="/web", subject="fine")
+        object.__setattr__(check, "subject", "x" * 4096)   # past MAX_SUBJECT_LENGTH
+        self.assertEqual(_failure_measurement(check, RuntimeError("boom")), ())
+
+    def test_a_failure_record_is_bounded_so_it_cannot_refuse_itself(self):
+        """An exception message routinely carries a page of captured output. The
+        reason line keeps it whole; the record is kept per reading and must not be
+        what fills a series."""
+        tree = StatusTree()
+        check = _FakeCheck(path="/web", subject="web01.example",
+                           raises=RuntimeError("x" * 5000))
+        Engine([check], tree).run_once()
+        node = tree.snapshot("/web")
+        assert node is not None
+        self.assertLessEqual(len(json.dumps(node.record).encode("utf-8")),
+                             FAILURE_RECORD_BYTES)
+        self.assertIn("x" * 100, node.reasons[0].text)
+
+    def _failure_record(self, message):
+        check = _FakeCheck(path="/web", subject="web01.example")
+        taken = _failure_measurement(check, RuntimeError(message))
+        self.assertEqual(len(taken), 1, "the failure record was lost")
+        return taken[0].record
+
+    def test_a_failure_record_in_ascii_fits_the_engines_maximum(self):
+        message = "x" * 500
+        self.assertEqual(len(message), 500)
+        record = self._failure_record(message)
+        self.assertLessEqual(len(json.dumps(record).encode("utf-8")),
+                             FAILURE_RECORD_BYTES)
+
+    def test_a_failure_record_of_escaping_characters_fits_exactly(self):
+        """Every one of these escapes to two bytes, so the clip fills the budget to
+        the last byte: the record weighs exactly the maximum — a ceiling that is
+        also reached, which is what makes it a derivation and not a guess."""
+        message = '"' * 500
+        self.assertEqual(len(message), 500)
+        record = self._failure_record(message)
+        self.assertEqual(len(json.dumps(record).encode("utf-8")),
+                         FAILURE_RECORD_BYTES)
+
+    def test_a_failure_record_in_emoji_is_kept(self):
+        """The regression. Clipped to 500 **characters** this was 6013 bytes, past
+        the 2 KB `record_limit`, so the seam refused it and the engine's guard
+        dropped the failure record — the one thing ADR-0086 decision 5 exists to
+        prevent. Clipped in bytes it is kept, and inside the maximum."""
+        emoji = "\U0001F600"
+        self.assertEqual(len(emoji), 1)
+        self.assertEqual(len(json.dumps(emoji)), 14)     # 12 bytes and 2 quotes
+        message = emoji * 500
+        self.assertEqual(len(message), 500)
+        record = self._failure_record(message)
+        self.assertIn(emoji, record["error"])
+        self.assertLessEqual(len(json.dumps(record).encode("utf-8")),
+                             FAILURE_RECORD_BYTES)
+
+    def test_a_declared_record_below_the_maximum_is_held_to_it(self):
+        """The floor at the engine: a type declaring less than the record the
+        engine can write for it is reported at that record's maximum, with its
+        own number beside it; one that declares nothing is left undeclared."""
+        class Small(_FakeCheck):
+            def expected_record(self) -> int:
+                return 64
+
+        tree = StatusTree()
+        engine = Engine([Small(path="/small"), _FakeCheck(path="/silent")], tree)
+        info = {c.path: c for c in engine.info().checks}
+        self.assertEqual(info["/small"].expected_record, FAILURE_RECORD_BYTES)
+        self.assertEqual(info["/small"].stated_record, 64)
+        self.assertIsNone(info["/silent"].expected_record)
+        self.assertIsNone(info["/silent"].stated_record)
 
     def test_a_declared_dependency_reaches_the_tree(self):
         """The declaration is worth nothing until the tree knows about it, and the
@@ -331,7 +530,7 @@ class EngineTests(TestCase):
 
         tree = StatusTree()
         check = _FakeCheck(path="/boom", raises=None)
-        check.run = _boom                              # type: ignore[method-assign]
+        check.measure = _boom                          # type: ignore[method-assign]
         with patch.object(engine_module, "config",
                           replace(config, stacktrace=True)):
             Engine([check], tree).run_once()
@@ -1366,10 +1565,10 @@ class _Gate(_FakeCheck):
         super().__init__(**kwargs)
         self.gate = threading.Event()
 
-    def run(self) -> CheckResult:
+    def measure(self) -> Sequence[Measurement]:
         self.gate.wait(timeout=5)
         self.gate.clear()
-        return self._result
+        return self._measurements
 
 
 class EngineOwnLinesTests(TestCase):
@@ -1740,6 +1939,191 @@ class WorkerCeilingTests(TestCase):
         with patch.object(engine_module, "config", replace(config, max_workers=8)):
             engine = Engine([_FakeCheck(path="/only")], StatusTree())
         self.assertEqual(engine.info().max_workers, 1)
+
+
+
+class StopTests(TestCase):
+    """A stop ends at its save (ADR-0088): it abandons what is in flight, says so once,
+    and nothing a run delivers afterwards is recorded."""
+
+    def _slow(self, tree: StatusTree) -> tuple[Engine, threading.Event]:
+        block = threading.Event()
+        slow = _FakeCheck(path="/slow", result=CheckResult(StatusCode.OK), block=block)
+        engine = Engine([slow], tree)
+        engine.start()
+        self.assertTrue(_wait_for(lambda: engine._scheduled[0].running))
+        return engine, block
+
+    def test_a_stop_abandons_a_run_in_flight_and_names_it_once(self):
+        tree = StatusTree()
+        engine, block = self._slow(tree)
+        started = time.monotonic()
+        with self.assertLogs("little_sister", level="INFO") as logs:
+            engine.stop(trigger="worker_exit")
+        self.assertLess(time.monotonic() - started, 2.0)
+        said = [line for line in logs.output if "abandoned" in line]
+        self.assertEqual(len(said), 1, logs.output)
+        self.assertIn("/slow", said[0])
+        self.assertIn("worker_exit", said[0])
+        block.set()
+
+    def test_a_result_delivered_after_the_stop_is_dropped(self):
+        tree = StatusTree()
+        engine, block = self._slow(tree)
+        engine.stop(trigger="test")
+        block.set()
+        time.sleep(0.3)
+        self.assertIsNone(tree.snapshot("/slow"))
+
+    def test_a_second_stop_says_nothing(self):
+        engine = Engine([_FakeCheck(path="/x")], StatusTree())
+        engine.start()
+        engine.stop(trigger="worker_exit")
+        with self.assertNoLogs("little_sister", level="INFO"):
+            engine.stop(trigger="atexit")
+
+    def test_the_stop_makes_one_save_and_writes_nothing_after_it(self):
+        from little_sister.state import StateLayer
+        with tempfile.TemporaryDirectory() as directory:
+            state = StateLayer(directory, interval_seconds=3600)
+            tree = StatusTree()
+            block = threading.Event()
+            engine = Engine([_FakeCheck(path="/slow", result=CheckResult(StatusCode.OK),
+                                        block=block)], tree, state=state)
+            engine.start()
+            self.assertTrue(_wait_for(lambda: engine._scheduled[0].running))
+            engine.stop(trigger="test")
+            self.assertFalse(state.write("late.json", {"late": True}))
+            block.set()
+
+    def test_a_run_in_flight_does_not_hold_the_interpreter_s_exit(self):
+        """The standard pool's exit hook joins every thread it started, whatever its
+        daemon flag; the engine's own pool is one the interpreter does not join."""
+        script = textwrap.dedent("""
+            import threading, time
+            from little_sister.checks.base import Check, CheckResult
+            from little_sister.engine import Engine
+            from little_sister.status import StatusCode
+            from little_sister.tree import StatusTree
+
+            class Hangs(Check):
+                def measure(self):
+                    threading.Event().wait()
+                    return ()
+                def grade(self, measurements, now):
+                    return CheckResult(StatusCode.OK)
+
+            engine = Engine([Hangs(path="/hangs")], StatusTree())
+            engine.start()
+            time.sleep(1.0)
+            print("leaving", flush=True)
+            """)
+        with tempfile.TemporaryDirectory() as directory:
+            started = time.monotonic()
+            done = subprocess.run([sys.executable, "-c", script], cwd=directory,
+                                  env=subprocess_env(),
+                                  capture_output=True, text=True, timeout=20)
+        self.assertIn("leaving", done.stdout, done.stderr[-3000:])
+        self.assertLess(time.monotonic() - started, 6.0)
+
+
+class _Counted(_FakeCheck):
+    """A check that notes when each of its runs began."""
+
+    def __init__(self, runs: list[float], **kwargs: object) -> None:
+        super().__init__(**kwargs)
+        self.runs = runs
+
+    def measure(self) -> Sequence[Measurement]:
+        self.runs.append(time.monotonic())
+        return super().measure()
+
+
+class LostLeaseTests(TestCase):
+    """A holder that loses the state directory's lease stops its engine as well as its
+    writes (ADR-0090 decision 7): it runs no more checks, and serves the last view it
+    had with the readiness line that says why."""
+
+    THIEF = "thief:2:20260926T000000Z:0b5e55ed"
+
+    def _engine(self, directory: str, runs: list[float]):
+        from little_sister import self_report
+        from little_sister.lease import Lease
+        from little_sister.readiness import Readiness, TrustStore
+        from little_sister.state import StateLayer
+        where = Path(directory) / "var" / "state"
+        state = StateLayer(where, interval_seconds=3600)
+        lease = Lease(where, mark="me:1:t:a", kernel="kernel-A", beat_seconds=0.05)
+        lease.take()
+        self.addCleanup(lease.release)
+        state.hold(lease)
+        report = Readiness(doors=lambda: True, trust=lambda: TrustStore(usable=True),
+                           first_pass=lambda: True, outcomes=lambda: None,
+                           lost=lambda: lease.lost)
+        self_report.register_contributor("readiness", report.lines)
+        tree = StatusTree()
+        engine = Engine([_Counted(runs, path="/often", frequency_seconds=1)], tree,
+                        state=state, poll_interval=0.02)
+        return engine, tree, lease
+
+    def _take(self, directory: str) -> None:
+        """Another kernel's process takes the directory over."""
+        (Path(directory) / "var" / "state.lease").write_text(json.dumps(
+            {"mark": self.THIEF, "host": "elsewhere", "pid": 2}), encoding="utf-8")
+
+    def test_a_lost_lease_halts_the_engine_and_no_check_runs_after_it(self):
+        runs: list[float] = []
+        with tempfile.TemporaryDirectory() as directory:
+            engine, _, _ = self._engine(directory, runs)
+            engine.start()
+            scheduler = engine._scheduler
+            assert scheduler is not None
+            self.assertTrue(_wait_for(lambda: len(runs) >= 1))
+            with self.assertLogs("little_sister", level="ERROR") as logs:
+                self._take(directory)
+                self.assertTrue(_wait_for(lambda: not scheduler.is_alive(), 3.0),
+                                "the scheduler went on after the lease was lost")
+            ran = len(runs)
+            time.sleep(1.5)
+            self.assertEqual(len(runs), ran, "a check ran after the lease was lost")
+            halted = [line for line in logs.output if "engine: halted" in line]
+            self.assertEqual(len(halted), 1, logs.output)
+            self.assertIn(self.THIEF, halted[0])
+            self.assertIn("runs no more checks", halted[0])
+
+    def test_it_serves_its_last_view_with_the_line_that_says_why(self):
+        runs: list[float] = []
+        with tempfile.TemporaryDirectory() as directory:
+            engine, tree, _ = self._engine(directory, runs)
+            engine.start()
+            self.assertTrue(_wait_for(lambda: len(runs) >= 1))
+            with self.assertLogs("little_sister", level="ERROR"):
+                self._take(directory)
+                self.assertTrue(_wait_for(
+                    lambda: engine._scheduler is not None
+                    and not engine._scheduler.is_alive(), 3.0))
+            node = tree.snapshot(f"{HEARTBEAT_PATH}/readiness")
+            assert node is not None
+            self.assertEqual(node.code, StatusCode.ERROR)
+            self.assertIn(self.THIEF, " ".join(line.text for line in node.reasons))
+            self.assertIsNotNone(tree.snapshot("/often"), "the last view is kept")
+
+    def test_the_stop_after_it_says_nothing_and_releases_nothing(self):
+        runs: list[float] = []
+        with tempfile.TemporaryDirectory() as directory:
+            engine, _, _ = self._engine(directory, runs)
+            engine.start()
+            self.assertTrue(_wait_for(lambda: len(runs) >= 1))
+            with self.assertLogs("little_sister", level="ERROR"):
+                self._take(directory)
+                self.assertTrue(_wait_for(
+                    lambda: engine._scheduler is not None
+                    and not engine._scheduler.is_alive(), 3.0))
+            with self.assertNoLogs("little_sister", level="INFO"):
+                engine.stop(trigger="worker_exit")
+            holder = json.loads((Path(directory) / "var" / "state.lease").read_text())
+            self.assertEqual(holder["mark"], self.THIEF,
+                             "the stop wrote over the new holder's lease")
 
 
 if __name__ == '__main__':

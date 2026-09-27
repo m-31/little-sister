@@ -18,10 +18,12 @@ else was registered. An installation that registers nothing now starts, warns th
 nobody can sign in, and lets nobody in.
 
 **The registrations go before ``little_sister.app`` is imported**, which is the shape
-every installation in this family uses: importing the app builds the engine, loads the
-check configs and settles the identity doors, so anything a deployment adds has to be
-there already. ``gunicorn`` serves ``wsgi:app`` (``instance.sh``), run from the
-repository root so this module resolves on ``sys.path``.
+every installation in this family uses: importing the app builds it and settles the
+identity doors, and the server's start right after the import builds the engine from
+the check configs (ADR-0091), so anything a deployment adds has to be there already.
+``gunicorn`` serves ``wsgi:app`` (``instance.sh``), run from the repository root so
+this module resolves on ``sys.path``, and loads ``little_sister.gunicorn_hooks``,
+which is that start and the stop.
 
 The system admin's password is a **reference, never a value**: ``setup.sh`` writes a
 generated one into the git-ignored ``.env`` (ADR-0003), and what stands in the

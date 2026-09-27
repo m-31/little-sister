@@ -138,7 +138,7 @@ uv sync
 
 # --- Stop the old instance (if any), then make sure the port is free ---------
 if [ -n "$restart_master" ]; then
-  stop_master "$restart_master"
+  stop_instance "$restart_master"
 fi
 # Only this run's port has to be free -- the old instance's, whichever it was, is
 # gone by now, and nothing else is about to bind the other one.
@@ -170,7 +170,16 @@ mkdir -p var          # runtime artifacts (gunicorn log + pidfile) live under va
 # separate interpreter with its own status tree and its own engine, and
 # process-wide state -- an `aws sso login` in flight, for one --
 # would be held once per worker. Threads are how this serves more than one reader.
+#
+# The last three flags are the stop and the start (little-sister ADR-0088, ADR-0091).
+# The grace is one value (lib.sh). Keep-alive is off because an idle keep-alive
+# connection -- a page open between two polls -- holds the worker's exit to the end of
+# the grace. And the hooks module starts the engine right after the worker's import
+# and stops it when the worker leaves: without it the application serves with no
+# engine, and says so on every page.
 nohup gunicorn --workers 1 --threads 8 --timeout "${WORKER_TIMEOUT}" \
+      --graceful-timeout "${GRACEFUL_TIMEOUT}" --keep-alive 0 \
+      --config python:little_sister.gunicorn_hooks \
       --bind "${HOST}:${PORT}" ${tls_args[@]+"${tls_args[@]}"} \
       --pid "$PID_FILE" "$APP" > "$LOG" 2>&1 &
 app_pid=$!

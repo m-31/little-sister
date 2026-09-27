@@ -9,12 +9,15 @@ returning it raw.
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from little_sister.checks.base import (
     CheckError,
     CheckResult,
+    Measurement,
     config_markdown,
     register,
 )
@@ -48,7 +51,18 @@ class ScriptCheck(SshScriptCheck):
                                 "script": Path(self.script_path).name,
                                 "interpreter": self.interpreter})
 
-    def run(self) -> CheckResult:
-        result = self._run()
-        return self._output_result(result, capture=self.capture,
-                                   max_chars=self.max_chars, keep=self.keep)
+    def measure(self) -> Measurement:
+        """Pipe the script to the host and keep what it printed. The **host** is
+        the object; the script is how this check reads it."""
+        return self._output_measurement(
+            self._run(), capture=self.capture, max_chars=self.max_chars,
+            keep=self.keep)
+
+    def grade(self, measurements: Sequence[Measurement],
+              now: datetime) -> CheckResult:
+        """OK on exit 0, ERROR otherwise, WARN on an ssh advisory — all of it out
+        of the record. `measure` above always hands back exactly one reading."""
+        return self._output_result(measurements[0].record)
+
+    def expected_record(self) -> int:
+        return self._output_record_bytes(self.max_chars)

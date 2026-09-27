@@ -55,6 +55,9 @@ little-sister/
 │   ├── fetch.py         # one HTTP request with that policy applied
 │   ├── engine.py        # scheduler + thread pool: runs checks → upserts the tree
 │   ├── limits.py        # the engine's limits, what it measures against them, its own lines (ADR-0072)
+│   ├── series.py        # a subject's readings over time, and the memory tier that keeps them (ADR-0087)
+│   ├── measures.py      # what a measure is, where it is declared, how its value is written (ADR-0092)
+│   ├── curves.py        # a measure's curve over its series: the geometry a page draws (ADR-0092)
 │   ├── config.py        # general config (config/settings.yaml) → Config
 │   ├── config_dir.py    # the config path-list and its aspects (ADR-0031)
 │   ├── values.py        # typed reads out of decoded YAML/JSON bags (ADR-0026)
@@ -142,7 +145,8 @@ library has never heard of, because the registry is the only thing they share.
 ## 3. Process & runtime model
 
 little-sister runs as **one process**: `gunicorn --workers 1 --threads N` (the
-`gthread` worker), or `app.run()` for local dev.
+`gthread` worker) with the library's hooks module, `--config
+python:little_sister.gunicorn_hooks`, or `python -m little_sister.app` for local dev.
 
 - The **engine** runs checks on a **bounded thread pool**, scheduling each at its
   `frequency`. Checks are I/O-bound and the GIL is released during I/O, so threads
@@ -154,10 +158,19 @@ little-sister runs as **one process**: `gunicorn --workers 1 --threads N` (the
   (§4.8, [ADR-0071](adr/0071-what-a-restart-keeps-is-a-directory-of-files.md)):
   JSON files under `var/state/` — the admins' maintenance side-table, written
   through ([ADR-0014](adr/0014-maintenance-persistence.md)), and the event log,
-  written at most once per interval and at graceful shutdown — read back at
-  startup. Nothing that is a service is in the core.
-- The engine starts **once, after the fork** (in the worker), with **daemon
-  threads**.
+  written at most once per interval and at the stop's one save — read back at
+  startup. The directory has **one writer**, the process that holds its lease
+  ([ADR-0090](adr/0090-one-state-directory-one-writer.md)). Nothing that is a service
+  is in the core.
+- **An import is not an instance**
+  ([ADR-0091](adr/0091-an-import-is-not-an-instance.md)): importing the application
+  builds it and writes nothing. The engine starts **once, at the server's start** —
+  gunicorn's `post_worker_init` in the worker, right after its import, through the
+  hooks module, or the development server's `__main__` — and runs its checks on
+  **daemon threads the interpreter does not join**. It **stops when the worker
+  leaves**, at `worker_exit`, with `atexit` as the backstop: the runs in flight are
+  abandoned, what they started is ended, and one final save is the last write
+  ([ADR-0088](adr/0088-a-stop-ends-at-its-save.md)).
 
 A **single worker is a hard constraint**: a second worker would be a separate
 process with its own tree. This follows from keeping all state in memory
@@ -190,8 +203,9 @@ A node in the tree. Fields:
   `members: bool` says the entries are individually suppressible rather than one
   condition in several paragraphs. An entry may also carry a `subject` — what the
   line is *about*, as the source's own identifier — and `data`, the **record** the
-  check read about it; neither declares members, because data about a claim is not
-  a claim. A **measure** is not a third field: it is a *projection over the record*,
+  check read about it, or, where the seam refused that record in a run, `refused`,
+  why ([ADR-0093](adr/0093-a-record-the-seam-refuses-costs-its-line.md)); none of
+  them declares members, because data about a claim is not a claim. A **measure** is not a third field: it is a *projection over the record*,
   chosen when it is drawn, which is the footing grading and rendering already have
   ([ADR-0085](adr/0085-a-measure-is-read-out-of-a-record.md)). The unit belongs to
   that projection, so a record's key names its unit for the reader (`response_ms`)
@@ -199,10 +213,13 @@ A node in the tree. Fields:
 - `subject: str`, `record: dict | None` — **what this node's check measured, and the
   object it measured** ([ADR-0085](adr/0085-a-measure-is-read-out-of-a-record.md)). A
   check run reads one object and the result is **one record**; the node's code, its
-  lines and its children are *derived* from that reading, so the reading belongs to the
-  `CheckResult` and reaches the node that stands for the object — the mount for a check
-  that reads one thing, the child for each object where it reads several. Only an object
-  with **no node** carries its record on a line instead (`Entry.data`), which is the
+  lines and its children are *derived* from that reading, so the reading belongs to a
+  `Measurement` ([ADR-0086](adr/0086-a-check-measures-and-grades.md)) and the engine
+  puts it on the node that stands for the object — the mount, for the one-object case
+  every check in this repository is. Where a run reads **several** objects the engine
+  places none of them, because which node, child or line each stands for is what the
+  grading said in the tree it returned. Only an object with **no node** carries its
+  record on a line instead (`Entry.data`), which is the
   case a repository or a job run is. `subject` is the identifier the check actually
   reached and deliberately **not** the path: a path is the deployment's label for where
   a node hangs and may be renamed, while the reading is about a thing in the world, and
@@ -463,8 +480,20 @@ holds one root `Status` and a bounded `deque` of `Event`s behind one `RLock`.
   `from_dict()` carry the codes by name, and `events_from_payload()` refuses a file
   of a shape it does not know whole rather than half-reading it — the layer then
   reports the file (§4.8). A restored log makes `/events` and every node's history
-  start where the last process left off; the first run after a restart still
-  records `UNDEFINED → OK`, because the node *was* unobserved.
+  start where the last process left off. **A restart is no transition**
+  ([ADR-0094](adr/0094-a-restart-is-no-transition.md)): `restore_events` keeps what the
+  log last recorded per path — the node's last reading, passing over an admin's pin
+  set, and what it last showed — and a node's **first** write in this process is
+  compared with that rather than with the `UNDEFINED` a restart leaves, so the same
+  reading keeps its period and any other one, `UNDEFINED` included, changes from the
+  old code; the pins' replay compares with what the log last showed, and a pin whose
+  period the log holds writes nothing. The instance's own node records the gap
+  instead, once: `close_unobserved(path, since, reason)` ends `/little-sister`'s
+  restored period with an event to `UNDEFINED`, dated when the old process was last
+  alive — `last_alive`, the later of the `stopped_at` the stop's one save writes beside
+  the events (`note_stop`, §4.6; `stopped_at_of` reads it back) and the lease's
+  `previous_beat` (§4.8) — so its first beat is a transition from there and its
+  history reads the time nothing watched.
 - **Events under a suppression are recorded and marked.** Because a pinned node keeps
   being written, its transitions still happen, and the log keeps all of them: an
   `Event` carries `suppressed_by`, the **name of the contribution rule** that kept
@@ -593,7 +622,27 @@ writes to it, the web layer reads snapshots from it. `StatusSnapshot`, `Event` a
 `StatusPeriod` are frozen dataclasses.
 
 ### 4.5 Checks — `checks/` package
-A check returns a `CheckResult` — a **recursive value** (`code`, `reason`, and
+A check run is **two steps** ([ADR-0086](adr/0086-a-check-measures-and-grades.md)).
+`measure()` reads the world and hands back a `Measurement` — a `record`, the
+`subject` it was taken on and either the `identity` of the event it is of, where the
+source keeps a history, or the `state` the object is in (§4.10) — or a sequence of
+them where the run reads several
+objects; `grade(measurements, now)` turns those records into the codes and the
+texts. What a check may reach for in the second half is the record, the fields its
+type parsed at construction, and the `now` it is **given**: a later phase grades
+old records out of a series when the process that took them is gone, so a grading
+that leaned on anything else would answer something quietly wrong rather than
+fail. The `record` is validated exactly as a line's is (below), and it is not the
+check's working state — the raw answer stays inside the check.
+
+The **object** is declared by the check, at construction, out of its own
+configuration (a `url`, a `host`); a measurement names one only where the check
+learned it from the answer. The engine places a single measurement on the check's
+own node and leaves several to the grading, which has already said in its tree
+where each belongs. Where the **measurement** raises, the engine writes the
+failure record itself, against that declared object (ADR-0040).
+
+`grade` returns a `CheckResult` — a **recursive value** (`code`, `reason`, and
 optional `name` / `description` / `config` / `children`). `reason` is **keyed**
 ([ADR-0036](adr/0036-addressable-reasons.md)): a string, a list of strings, a
 `{slug: text}` mapping, `(slug, text)` pairs or a list of `Entry` values,
@@ -619,20 +668,44 @@ which is deliberately not an address: nothing is pinned by subject, because a pi
 holds an identifier and only a line has one. `Entry.data` is the **record**, the
 material a check read and used to throw away once it had written its sentence;
 `text` is untouched, so nothing on any surface moves until something renders it,
-and the node's own page shows it as a plain list of dotted names and values.
+and the node's own page shows it as a list of dotted names and values.
 
-The record is validated at this seam and refused **whole**, the way a
-declared-and-derived code is: it is a mapping, it serializes to JSON, its JSON
-weighs no more than `record_limit` bytes (`settings.yaml`, default
+The record is validated at this seam: it is a mapping, it serializes to JSON, its
+JSON weighs no more than `record_limit` bytes (`settings.yaml`, default
 `limits.RECORD_LIMIT`), and a value under one of `reasons.RECORD_TIMESTAMP_KEYS`
 (`at`, `started`, `ended`, at **any** depth) is an ISO-8601 string carrying an
-offset — converted to UTC here and never re-stamped — or null. What is stored is
-the JSON read back, so the tree holds plain types nobody outside owns, which is
-what keeps a record safe to read outside the lock
+offset — converted to UTC here and never re-stamped — or null. **What a refusal
+costs depends on where the record is built**
+([ADR-0093](adr/0093-a-record-the-seam-refuses-costs-its-line.md)). Everywhere but
+inside a run the engine drives it raises `reasons.RecordRefused`, a `CheckError` at
+`CheckResult` and `Measurement`, naming the field or the bytes, as a
+declared-and-derived code does — so a check's own tests meet it where the record is
+built. Inside one (`reasons.lenient_records`, a context variable `_execute` sets
+around `measure()` and around `grade()`, §4.6) the seam **marks** it instead and
+collects a `reasons.Refusal` — why, the refused record's weight, and whether the
+weight is why: a line keeps its text and code with `data` null and `Entry.refused`
+saying why, and a reading keeps `Measurement.refused` and, as its record, the failure
+record naming the refusal. A subject, an identity or a state it refuses still raises
+there. What is stored is the JSON read back, so the tree holds plain types nobody
+outside owns, which is what keeps a record safe to read outside the lock
 ([ADR-0002](adr/0002-rlock-snapshot-synchronization.md)). Those three names are the
 whole typed vocabulary: a name earns a type when a surface does something with it
-that it could not do without one, and a measurement — a number with a unit — waits
-for the series that will draw it.
+that it could not do without one. A measurement — a number with a unit — is not one of
+them: which fields are measured, and in which unit, is **declared** in the check's
+configuration (§4.11), because a key's name cannot carry the unit an axis needs.
+
+The node's own page is that surface, and one list serves it for a line's record and
+for the node's measured one (`_record_list.html`). Its rows are the record's fields by
+their dotted names, from `reasons.record_leaves` — the one walk a measure reads a field
+through too (§4.11), so what the list shows is what `measures:` names. The
+`record_fields` filter decides
+what kind each row is — the one place a field's kind is decided — by the field's own
+name, never its value, reading the seam's set rather than a copy of it: a value under
+one of the three names reads in the configured `timezone` and `time_format` (§7), and
+everything else is shown as it was stored — a null, a time the zone cannot hold, a
+time-shaped value under any other name. No age stands beside a time
+([ADR-0082](adr/0082-a-line-carries-what-it-is-about-and-what-it-read.md) and its
+update).
 
 `reasons.py` owns the normalization, the content-hash slug
 (`h-` + ten hex digits) an undeclared entry gets, the record's validation, and the
@@ -645,9 +718,9 @@ node like `description` and the detail page renders
 ([ADR-0013](adr/0013-check-config-on-node.md)); a **branch** check leaves its shared
 container bare and tags each child's `config` instead.
 `checks/base.py` holds the `Check` ABC, the `CheckResult` / `CheckError` types,
-common config parsing (`path`, `description`, `frequency`, `timeout`;
-`parse_duration` accepts `15m` / `2h` / `1w` / seconds, lowercase units only) and a
-`type`→class registry.
+common config parsing (`path`, `description`, `frequency`, `timeout`, `series_keep`,
+`measures`, `reading_cap`; `parse_duration` accepts `15m` / `2h` / `1w` / seconds,
+lowercase units only) and a `type`→class registry.
 Config blocks are read with **`values.py`** ([ADR-0026](adr/0026-reading-values-from-decoded-bags.md)):
 `values.text` / `number` / `real` / `flag` / `rows` take a decoded YAML (or JSON)
 bag plus a path of keys and always return the declared type — absent yields the
@@ -665,19 +738,22 @@ Built-ins:
   else `stale_code`. Relative `file` paths resolve under the executing user's `$HOME`.
 - **`command`** — run a shell string or argv; OK on exit 0; reason = captured
   `stdout` / `stderr` / `both`, shortened to `max_chars` from `tail` / `head`
-  (stdlib `subprocess`, per-check timeout).
-The **SSH family** runs over one connection, `SshConnection` (`checks/ssh/connection.py`):
-a value object that carries the connection block (`host` / `user` / `port` /
-`identity_file` / `options` / `sudo` / `timeout`), builds the `ssh` argv (`BatchMode`
-forced; the legacy SHA-1 `ssh-rsa` algorithm **off by default**, applied after the
-user's `options` so a host can re-enable it), and runs a remote command or pipes a
-local script — returning a `RemoteResult` (stdout, stderr, exit code, a failure
-`error`, and any ssh advisory `notice`). It flags a **non-post-quantum key
-exchange**, which every connecting check surfaces as **WARN**;
-a legacy host silences it with `options: ["-o", "WarnWeakCrypto=no-pq-kex"]`. A pure,
-I/O-free toolkit, `ssh_metrics` (`checks/ssh/metrics.py`) — `parse_metrics`, `grade`,
-the formatters, `unavailable`, `volume_name` — is the **public** API the parsing
-checks share (stdlib `subprocess`; the external `ssh` binary). The five checks:
+  (`little_sister.process`, per-check timeout).
+The **SSH family** runs over one connection, `SshConnection`
+(`checks/ssh/connection.py`): a value object that carries the connection block (`host` /
+`user` / `port` / `identity_file` / `options` / `sudo` / `timeout`), builds the `ssh`
+argv (`BatchMode` forced; the legacy SHA-1 `ssh-rsa` algorithm **off by default**,
+applied after the user's `options` so a host can re-enable it), and runs a remote
+command or pipes a local script — through `little_sister.process` and a remote wrapper
+that ends the remote command with its connection, the script on stdin ahead of the
+hang-up line ([ADR-0089](adr/0089-a-process-a-check-starts-ends-with-it.md) decision 4)
+— returning a `RemoteResult` (stdout, stderr, exit code, a failure `error`, and any ssh
+advisory `notice`). It flags a **non-post-quantum key exchange**, which every connecting
+check surfaces as **WARN**; a legacy host silences it with
+`options: ["-o", "WarnWeakCrypto=no-pq-kex"]`. A pure, I/O-free toolkit, `ssh_metrics`
+(`checks/ssh/metrics.py`) — `parse_metrics`, `grade`, the formatters, `unavailable`,
+`volume_name` — is the **public** API the parsing checks share (`little_sister.process`;
+the external `ssh` binary). The five checks:
 
 - **`ssh-connect`** — connectivity: connect and run a trivial remote `true`; OK if
   reachable, ERROR if not, **WARN** on the non-PQ advisory.
@@ -713,7 +789,7 @@ checks share (stdlib `subprocess`; the external `ssh` binary). The five checks:
   paths, makes `disk` a branch with one graded child per filesystem (named by its
   volume; a list reports just those volumes); `debug: true` adds the raw
   (unstripped) ssh stderr, exit code and the script's `debug_*` lines to the `ssh`
-  leaf's reason for diagnosis (stdlib `subprocess`, per-check timeout, the external
+  leaf's reason for diagnosis (`little_sister.process`, per-check timeout, the external
   `ssh` binary). All three scripts parse `df` by anchoring on the capacity column,
   so a space in the filesystem name (macOS autofs `map auto_home`) can't shift it,
   skip 0-block stubs so a real volume is found, and pick the disk row by the
@@ -967,7 +1043,26 @@ its leaves, and its own `about` carries the node-level "what is this box" (ADR-0
   included, so a `raise X from Y` shows both. The full trace is always in the log
   (`logger.exception`); putting it on the node too means an operator reading the
   dashboard of a cloud deployment does not have to go find the log.
-- `_execute` runs `check.run()`, maps any exception or timeout to `ERROR`, records
+- A **refused record** costs its line or its reading, never the run
+  ([ADR-0093](adr/0093-a-record-the-seam-refuses-costs-its-line.md)). `_execute`
+  opens `reasons.lenient_records` around `measure()` and around `grade()` — a context
+  variable, so the seam is lenient on the run's own thread and strict everywhere
+  else, the engine's own records included — and keeps what it marked there. A
+  reading marked `refused` is kept out of the grading, keeps the failure record
+  naming the refusal, and gets a line from `_refused_lines` naming its subject and
+  why, which `_with_lines` adds to the root in the node's own form — a coded `WARN`
+  line under `refused-<subject>` where the node's lines carry codes, an uncoded one
+  and the node's code raised to `WARN` where it declares one — after the grading's
+  leading `ERROR` and `WARN` lines, so the card's budget does not fold away the
+  reason for the color. Where no reading passed there is nothing to grade, and the
+  run stands as a check that raised: `ERROR`, those lines its reason, no trace. A
+  line whose record was refused stands as graded. `_say_refused` holds a `WARN` on
+  `/little-sister/runtime` per check and reading and per check and line (§4.8), and
+  `_largest_record` counts the refused records at their size, setting
+  `record_refused` where the heaviest was refused for its weight.
+- `_execute` runs `check.measure()` and then `check.grade(measurements, now)` with
+  an aware UTC instant (ADR-0086), maps any exception or timeout from either to
+  `ERROR`, records
   the run's **wall time** on the schedule entry (`elapsed_seconds` — a raising or
   timed-out run keeps its full wait), logs the
   result at **INFO** (`check <path>: <code> (<ms>) — <reason>`), and **stores** it
@@ -982,12 +1077,38 @@ its leaves, and its own `about` carries the node-level "what is this box" (ADR-0
   `report` from the **result** at every level, root included — unlike `config`,
   whose root value comes from the check object, what a run found can only come
   from the run — and passes it on every upsert, so a run that finds nothing
-  clears what the last one found. A check with
+  clears what the last one found. It carries the run's **measurement** the same
+  way and on the root alone — one where the run read one object, nothing where it
+  read several — so a run that measured nothing clears the last reading rather
+  than leaving it to be read as today's. Where `measure()` **raised**, what it
+  writes is the engine's own failure record, `{"error": …}` against the object the
+  check declared, the message clipped once in bytes to at most
+  `FAILURE_RECORD_BYTES`; where the *grading* raised over a reading that succeeded, that
+  reading stands. Last, `_keep_series` hands each of the run's readings that names a
+  subject — its own, or the check's declared object for the one measurement a run
+  handed back alone — to the engine's series store (§4.10), where the check's
+  `series_keep` is at least one, stamped with the instant the grading was handed and
+  with what **stood** where it landed: for the one reading placed on the node, the
+  root's code and texts as the result wrote them, or — where the root is a branch
+  check's `UNDEFINED` container, silent or saying what it watches — what the result
+  rolls up to, beside the root's texts (`_rolled_up`: §4.3's `effective_code` over the
+  root and every child the run returned), never read back from the tree, which also
+  holds another check's children
+  on a shared mount and a child an earlier run left there (ADR-0007), and a pin;
+  for one of several, the code and the text of the line whose `data` is its record and
+  whose `subject` is its subject, found by `_line_of` among the lines `_lines_of`
+  gathers from the result, root first and depth first, the first line not yet claimed
+  winning; for one no line carried that names the object the check declared, what the
+  placed one keeps (`_placed`), since it stood on the node too; for any other one no
+  line carried, neither; for a refused one among several, the failure record beside
+  the engine's line about it, at that line's code. A store that raises is a `runtime`
+  line
+  (§4.8) and never costs the stored result. A check with
   recorded `secret_errors` (§4.5) is
   **pinned**: `_execute` stores that `ERROR` ("secret unresolvable: …") without
-  calling `run()` — no retry until restart, and no runtime recorded
-  ([ADR-0023](adr/0023-secret-references.md)), so its run facts carry a real next
-  slot and no wall time.
+  measuring — no retry until restart, no runtime recorded and no record, since it
+  never went ([ADR-0023](adr/0023-secret-references.md)), so its run facts carry a
+  real next slot and no wall time.
 - `start()` / `stop()` are idempotent; threads are daemons. `run_once()` runs every
   check synchronously (for tests). `create_engine(config_dir)` loads checks into a
   new engine bound to `status_tree`; when the checks aspect resolves but is **empty**
@@ -995,7 +1116,10 @@ its leaves, and its own `about` carries the node-level "what is this box" (ADR-0
   directories it searched (§7). `info()` returns runtime state for the `/system`
   page — uptime, pool size, check counts, and per check its type, the in-flight
   run (start + elapsed so far), the armed next slot (projected onto the wall
-  clock) and the last completed run (start + wall time).
+  clock) and the last completed run (start + wall time); and, as the last tick
+  measured them, what the series hold, their ceiling and the projection (§4.10),
+  which the page shows as the third line beside the declared load and the entries
+  held.
 - At **construction** the engine tells the tree where each of its checks writes —
   `set_check_mount(check.path)` for every check (§4.4) — so a container above a single
   check can publish that check's run time as its own observation
@@ -1025,21 +1149,32 @@ its leaves, and its own `about` carries the node-level "what is this box" (ADR-0
   the child's worst code into the roll-up, and arrives instead as a WARN saying it
   belongs in the report), its code derived from its lines, its `title` and `about`
   filled from the registration where `nodes.yaml` said nothing; the root's code is
-  the roll-up. The
-  tick also drives the state layer's writer (`state.tick()`), and `stop()` flushes
-  the kept files once more after the scheduler thread is gone.
+  the roll-up. Before any of it the tick **sweeps the series** (§4.10) —
+  `MemoryStore.sweep`'s one production caller: every series held to its check's
+  `series_keep` as it is now, a series whose check keeps none dropped, and whole series
+  evicted past `series_limit` — and hands what went to `_observe`; a sweep that raises
+  is the `runtime` line `series.sweep` (§4.8) and costs the tick nothing else. The
+  tick also drives the state layer's writer (`state.tick()`), last, so a file written
+  on the tick holds what the sweep left, and `stop()` flushes the kept files once more
+  after the scheduler thread is gone — first telling the tree the stop has come
+  (`note_stop`), so the log that save writes carries the moment of the stop, which the
+  next process dates the instance's gap by (§4.4,
+  [ADR-0094](adr/0094-a-restart-is-no-transition.md)).
 - **The engine's own lines** — `limits.py`: what the engine measures against its
   limits as it runs, **recorded on its side and read on the tick, never probed**.
   The rule is that a limit the engine enforces is a line it can show, and a limit
   it cannot compute is one it cannot observe either; every line clears when its
-  condition does. `Limits` holds the numbers — constants today, and the one
-  construction site to change when they become settings — and `EngineReport` the
+  condition does. `Limits` holds the numbers — the constants in `limits.py`, or what
+  `settings.yaml` states for the ones a deployment sets (§7) — and `EngineReport` the
   record: the tick's `_observe` hands it the tree's entry count (`entry_count`, a
-  counter the tree keeps on its write path, §4.4), the checks waiting for a worker
-  and the runs that outgrew their period, and the report measures the one thing
+  counter the tree keeps on its write path, §4.4), the checks waiting for a worker,
+  the runs that outgrew their period and what the series hold after the tick's sweep
+  (`SeriesHeld`: the weight held, what the sweep evicted, and the projection with
+  each check's part in it), and the report measures the one thing
   the engine does not record, the resident size (`/proc/self/statm` on Linux;
   elsewhere the high-water mark `getrusage` keeps, and the line says *peak*).
-  The lines, each under `engine.`:
+  The lines, each under a slug of its own on `/little-sister/engine` (ADR-0072
+  decision 4, ADR-0076 decision 3 — the path carries the engine's name, not the slug):
   - `entries` — the entry count against `ENTRY_LIMIT` (100,000): WARN at 80 % of
     it, ERROR at it. A constant rather than a share of memory, because at the
     measured half kilobyte an entry the snapshot copied per poll binds long
@@ -1048,6 +1183,20 @@ its leaves, and its own `about` carries the node-level "what is this box" (ADR-0
     process (physical memory, or the cgroup's limit where one is set and smaller —
     the number that kills the process), WARN at 80 %, ERROR at the limit, the
     machine's figure named beside it. No line where the machine cannot say.
+  - `series` — what every series weighs together (§4.10) against `series_limit`
+    (`SERIES_LIMIT`, 8 MiB): WARN at 80 % of it, with what is held; ERROR while a
+    sweep in the last ten minutes (`EVICTION_MEMORY_SECONDS`) evicted a series to stay
+    under it — curves are being shortened now — naming what went, the series written
+    to longest ago first, five and a count, and how many sweeps did it inside the
+    window. A held record (§4.8's `Held`), for the `lag` line's reason: an eviction
+    shortens a curve for good, and a line gone on the next tick would say so for a
+    second.
+  - `series.projection` — WARN when what this configuration would need at today's
+    estate is past the ceiling: per check that keeps a series, its `series_keep` × the
+    series it holds × the mean weight of its kept readings, summed, with the largest
+    parts named. Every factor is measured, so the line is there on the first tick
+    after the checks' first runs, hours before a slowly filling series reaches the
+    ceiling, and it moves with an estate that grows.
   - `pool` — WARN once a check has waited for a worker longer than 10 s, with how
     many are waiting and the longest wait. A check that has never completed a
     run does not count: the first sweep submits every check at once by design,
@@ -1067,9 +1216,11 @@ its leaves, and its own `about` carries the node-level "what is this box" (ADR-0
     *declared* sum (below) is at or above 80 % of it and inside it. Neither is a
     line: a declaration claims something about what will happen, and the coded
     line for what did is `late.<path>` or `entries` above, so the node stays OK
-    until a run actually does.
+    until a run actually does. Beside them stands what the series hold of their
+    ceiling and what this configuration would need at today's estate, once either is
+    more than nothing — the two figures the `series` lines grade.
   The path in a line's slug is `slug(path)` (§4.3's declared slug, narrowed to
-  `[A-Za-z0-9._-]`), so a line is pinnable per check like any entry. `run()` is measured on the engine's one
+  `[A-Za-z0-9._-]`), so a line is pinnable per check like any entry. A run is measured on the engine's one
   clock — the `clock` it was constructed with — which is what lets the tick see a
   run's age while it is still in flight.
 - **What each check last stored** (§4.9,
@@ -1104,9 +1255,43 @@ its leaves, and its own `about` carries the node-level "what is this box" (ADR-0
   tree; and `info()` carries the sums, the entries the tree holds now and each check's
   declared figures, so `/system` shows the estimate beside the measurement.
 
-`app.py` starts the engine once at import (post-fork worker), guarded by
-`LITTLE_SISTER_ENGINE` (set `0` to disable); the dev server uses
-`use_reloader=False` so it starts exactly once.
+**The start** ([ADR-0091](adr/0091-an-import-is-not-an-instance.md)). Importing
+`little_sister.app` builds the application — its configuration, routes and doors —
+and writes nothing: no lease, no log file, no engine. `app.start()` does the rest,
+once, in the process that serves: it takes the state directory's lease (§4.8) first,
+so a process the lease refuses has touched nothing there; opens the log file with what
+the import logged (`logger.open_log_file()` writes the first 1,000 buffered records
+before anything else, and counts the rest, which went to stderr only); resolves
+`SECRET_KEY` and `LITTLE_SISTER_API_TOKENS` where they are references — a literal is
+read at the import, and a malformed reference still refuses there; and builds,
+restores and starts the engine, with `atexit` as the backstop of its stop. gunicorn
+reaches it through `little_sister.gunicorn_hooks`'s `post_worker_init`, right after
+the worker's import and before it serves; `python -m little_sister.app` calls it
+before `app.run` (with `use_reloader=False`, so it starts exactly once). The hooks
+module never imports the application — gunicorn loads it in the master — and finds it
+in `sys.modules`. A start the lease refuses logs the holder to stderr and raises,
+which gunicorn turns into its worker boot error and a halted server.
+`LITTLE_SISTER_ENGINE=0` is a server that runs no engine: the start takes no lease
+and builds none.
+
+**The stop** ([ADR-0088](adr/0088-a-stop-ends-at-its-save.md)) is
+`app.stop(trigger=…)`, reached by the hooks module's `worker_exit` once the worker
+has left its loop, with `atexit` as the backstop; a second call does nothing and says
+nothing. It abandons the links probe's pass, then stops the engine: the scheduler
+ends, the runs in flight are abandoned — a result one delivers later is dropped —
+every process group a run started is ended (`process.end_all()`), one INFO line names
+the runs it abandoned and what reached the stop, and the state layer makes its one
+final save and releases the lease. The checks run on a `DaemonPool` (`pool.py`) whose
+threads the interpreter does not join: the standard pool's exit hook joins every
+thread it started, whatever its daemon flag, which is what held an exit for the check
+in flight.
+
+**A lease taken from this instance halts the engine**
+([ADR-0090](adr/0090-one-state-directory-one-writer.md) decision 7). The scheduler
+reads `StateLayer.lost` before every tick, and once it names a holder the engine stops
+as at a stop but without the save — the directory is the new holder's — logs one
+ERROR line, and publishes the `/little-sister` branch a last time, so that the
+readiness line says why. The instance goes on serving the last view it had.
 
 Two failures are told apart deliberately. An unusable configuration **tree** — no
 configuration directory, a named root that does not exist, an aspect stored in a form
@@ -1123,9 +1308,11 @@ one check config) does not stop the web app, but it must not hide in the log eit
 reason is kept in a module-level `engine_error`, injected into every template by a
 context processor, and the shared header partial renders it as a persistent red
 banner — *"Engine not started — …"* — on every page (the standalone login page
-excluded, so nothing leaks pre-login). It is `None` on success and on the
-deliberate `LITTLE_SISTER_ENGINE=0` disable, and clears only with a restart
-against a fixed config. The JSON API carries no engine-health signal.
+excluded, so nothing leaks pre-login). Until the start has run it says the
+application was never started and names the hooks flag, which is all a gunicorn line
+without the hooks module ever says (`NOT_STARTED`). It is `None` with a running
+engine and on the deliberate `LITTLE_SISTER_ENGINE=0` disable, and clears only with a
+restart against a fixed config. The JSON API carries no engine-health signal.
 
 A hung check still occupies a pool worker (Python can't kill threads); the built-in
 checks honor their own timeouts, and custom checks must too.
@@ -1195,12 +1382,36 @@ disciplines, one atomic write, and a seam for what the instance says about itsel
   `take_stock()` reads the directory once at startup — which files are there, when
   each was written, which `.bak` an earlier process set aside — so the report never
   has to.
+- **One writer** ([ADR-0090](adr/0090-one-state-directory-one-writer.md)).
+  `var/state.lease`, beside the directory, names the process that writes it — its mark,
+  host, pid and kernel — and that process rewrites it every 10 s from a thread of its
+  own; it lapses at 30 s. How the holder came by it (`taken`) and whether it still holds
+  it (`state`, `held` or `released`) are two fields, and only `state` decides: a
+  graceful restart takes a released lease and holds it. `var/state.lock` is an exclusive
+  `flock` the holder keeps for its life. Under one kernel the lock decides; across
+  kernels — the device VM's mount of a Mac's checkout — the heartbeat does, a lapsed
+  lease being watched for one more beat. `Lease` (`lease.py`) is taken by the server's
+  start before anything reads the directory, refusing with `LeaseRefused` rather than
+  standing by, and `hold(lease)` makes every write ask it first: a layer whose lease was
+  taken writes nothing more and says who holds the directory (`lost`), the engine halts
+  (§4.6), and the readiness node says so (§4.9). `shutdown()`, the stop's one save,
+  closes the layer, so nothing writes after it, and releases the lease. `take()` first
+  reads when the lease file was last written — `previous_beat`, the previous holder's
+  last beat or its release, whether it stopped or crashed — which dates the gap a
+  restart leaves on the instance's own node (§4.4,
+  [ADR-0094](adr/0094-a-restart-is-no-transition.md)).
 - **The files today**: `maintenance.json` (written through by the tree's
   `MaintenanceStore`, §4.4; moved from `var/`, a clean break — the old path is not
   read, and a file still there is named once at startup) and `events.json` (kept:
   `status_tree.events_payload`, restored by `app._restore_state` before the pins
-  are replayed, so this process's first transitions append to yesterday's). Run
-  facts stay ephemeral. The notes and the series files join as they are built.
+  are replayed, so this process's first transitions append to yesterday's) and
+  `series.json` (kept: the engine's `MemoryStore.payload`, restored by
+  `app._restore_series` once `_restore_state` has fetched what a keeper holds, and
+  registered with the store's `restore` for an adoption or *take the backups* — §4.10,
+  [ADR-0087](adr/0087-a-check-keeps-its-subjects-readings.md) decision 9). A series
+  file of another shape is `load.series.json` and the series start empty; one older
+  than the configuration is met by the first tick's sweep. Run facts stay ephemeral.
+  The notes file joins when it is built.
 - **A failure never refuses to start, and is never silent.** `lines()` is the
   layer's self-report: per file, `load.<file>` at ERROR for as long as the process
   runs (what the file held before the restart is not in force) and `save.<file>`
@@ -1227,7 +1438,8 @@ disciplines, one atomic write, and a seam for what the instance says about itsel
   A `.bak` is this machine's own: never mirrored, and refused from a keeper's
   listing like a walk upwards. The `restore` callables live in one registry, filled
   by their owners — the tree's `adopt_events` beside the log's producer, the
-  side-table's by `MaintenanceStore(state, tree=…)` at construction.
+  side-table's by `MaintenanceStore(state, tree=…)` at construction, and the series
+  store's `restore` beside its producer.
   **`take_backups()`** is the way back and the layer's one action on its child —
   *take the backups*, admin-only, `POST /little-sister/state/act/take-backups`: for
   every `.bak` beside a file the layer keeps or restores, the live file is set aside
@@ -1295,10 +1507,11 @@ disciplines, one atomic write, and a seam for what the instance says about itsel
     an avatar not shown, the retired maintenance file, a slot template, asset, icon
     or action refused, the theme bootstrap's hash missing; `runtime` (a `Held`, ten
     minutes) for what recurs — a slot's provider or template raising, an identity
-    door raising, a scheduler tick or an upsert raising, a reachability pass
-    failing, overrunning, stuck or giving up; and `security` (a `Held`, ten
-    minutes, graded by `security_lines`) — failed logins as a rate, a fact below
-    five in the window and WARN from five, and the system-admin account used.
+    door raising, a scheduler tick, an upsert, a series store or its sweep raising, a
+    reachability pass failing, overrunning, stuck or giving up; and `security` (a
+    `Held`, ten minutes, graded by `security_lines`) — failed logins as a rate, a
+    fact below five in the window and WARN from five, and the system-admin account
+    used.
     `plain()` lives in `little_sister.reasons` so these sites can fold a path or an
     error into a line; `little_sister.checks.plain` is the same function. Two sites
     stay log-only and say why in place: `LOG_LEVEL` unreadable (`logger.py`, beneath
@@ -1376,8 +1589,9 @@ the two lines the instance says about its own ability to observe anything at all
     and never reported as empty.
   - **`first-pass`** — `Engine.outcomes.first_pass` (§4.6): every configured check has
     stored a result. An engine switched off with `LITTLE_SISTER_ENGINE=0` has no pass
-    to wait for and is ready; one that could not load its configuration never is, and
-    `app.py`'s `_first_pass_done` is where the two stop being one answer.
+    to wait for and is ready; one that could not load its configuration, or was never
+    started, never is, and `app.py`'s `_first_pass_done` is where the two stop being
+    one answer.
 - **The answer latches.** All three are startup facts; once they hold the conditions
   are not asked again and no later failure takes the answer back. That is what stops a
   readiness route from withdrawing a *serving* instance and removing the very page
@@ -1387,8 +1601,12 @@ the two lines the instance says about its own ability to observe anything at all
   set on every completion and read under the engine's lock. The counts satisfy
   `erroring <= completed <= configured`, which is why `all_erroring` needs no separate
   first-pass guard.
-- **Two lines on the seam** (§4.8), registered as `readiness`, recorded state read on
-  the tick, clearing when their condition does: `readiness.trust` at ERROR (*the
+- **Three lines on the seam** (§4.8), registered as `readiness`, recorded state read on
+  the tick. `readiness.saves` at ERROR (*this instance runs no more checks and saves
+  nothing*, naming who holds the state directory now) stands from the moment the lease
+  was taken from this instance for the life of the process
+  ([ADR-0090](adr/0090-one-state-directory-one-writer.md)). The other two clear when
+  their condition does: `readiness.trust` at ERROR (*the
   machine's trust store holds no CA certificates*, so every check reading an `https`
   address fails on the certificate rather than on the subject) and
   `readiness.all-erroring` at WARN (*every check this instance runs is erroring, all N
@@ -1396,6 +1614,135 @@ the two lines the instance says about its own ability to observe anything at all
   for failures their own nodes already report). Neither is the readiness answer: why an
   instance did not become ready is the startup log and `/system`, where the reader has
   said who they are.
+
+### 4.10 The series — `series.py`
+
+A reading that names its subject is kept in that subject's **series** — its records
+over time — by the check that took it
+([ADR-0087](adr/0087-a-check-keeps-its-subjects-readings.md)). Memory is the tier this
+module holds, and the only one there is; the state layer keeps it in a file of its own
+(§4.8), and a ceiling bounds everything it holds together (§4.6's `series` lines).
+
+- **The key** is `SeriesKey(type_name, mount, subject)`: the check by its type and its
+  mount, because one mount carries two checks of different shape by design (§4.5,
+  [ADR-0015](adr/0015-check-discovery-union.md)), and the subject the reading names. A
+  reading with no subject has no series; the engine decides the subject exactly as it
+  places a measurement on a node (§4.6).
+- **The unit** is a `SeriesRecord`: the record as the measurement's seam normalized it
+  (`data`, never written to again), when the engine took the reading (`observed_at`,
+  an aware instant held in UTC — the one the grading was handed), the measurement's
+  `identity` or its `state`, at most one of them set and both empty for a reading that
+  is always a new one, and what **stood** where
+  the reading landed — `code`, a `StatusCode` or `None`, and `texts`, the line's text
+  or the node's — as the engine found them (§4.6, ADR-0087 decision 8): `None` and
+  empty for a reading no line carried that names another object than its check's.
+- **The seam** is the `SeriesStore` protocol, three operations. `add(key, record,
+  keep=n)` replaces the record of the same identity wherever the kept window holds one,
+  or the newest record where the record names a state and that one is in the same state,
+  and appends otherwise, then holds the series to *n*, the oldest out; a count below one
+  is refused, since a check that keeps none has no series and the engine never asks.
+  `window(key)` answers the kept records oldest first, empty for a series that does not
+  exist. `sweep(keep, ceiling=…)` holds every series to the count a callable answers
+  for it now and drops each series whose check keeps none — for what is held when a
+  retention changed under it, since `add` already holds its own series to its count —
+  and then, given a ceiling in bytes, **evicts whole series** until what is held fits:
+  the one written to longest ago first, by the newest `observed_at` a reading brought
+  it, a tie broken by the key so a sweep is repeatable. It answers a `Swept` — how many
+  records it trimmed, which series it dropped, which it evicted in the order they went
+  and what those weighed. The counts are asked outside the store's lock. The engine
+  sweeps on every tick (§4.6).
+- **One read more on the memory tier**: `placed(key)`, the window with each record's
+  **place** — a `Placed(record, at)`, where `at` is the instant the series orders the
+  record by (below): its own `at`, or when it was first observed, which a replacement
+  does not move and which the record itself does not carry. It is what the node that
+  stands for the subject draws and lists (§4.11), and the page reads this tier.
+- **The memory tier** is `MemoryStore`, one per engine (`Engine.series`), holding one
+  window per series under its own lock: the engine adds from its pool's workers and
+  sweeps from the scheduler, and a reader copies under the same lock. Every kept
+  reading is **weighed** as the file keeps it — the bytes of its `json.dumps`, the
+  spelling `record_limit` weighs a record in — and the store keeps the sum as it adds,
+  replaces, trims and evicts: `held()` is what the ceiling is measured against, and
+  `usage()` answers per check, by type and mount, the series, the readings and the
+  bytes a projection is made of.
+- **The file.** `payload()` is the producer of `series.json` (§4.8): every series in
+  key order, each reading as `data`, `observed_at` in UTC with a `Z`, `identity`, the
+  `code` by name or `null`, `texts`, `state` only where the reading names one, and
+  `first_observed_at` only where a replacement moved `observed_at` past it.
+  `restore(payload)` replaces everything held with a
+  payload read whole first — a shape it does not know is a `ValueError` naming what is
+  wrong, and the store keeps what it held — and leaves this configuration's retention
+  to the next sweep, since the file may be older than the configuration reading it.
+- **Order.** A window is sorted by the record's own time — its top-level `at`, which the
+  seam has already converted to UTC — and, where it has none, by when the record was
+  first observed, ties in arrival order. A record replaced by its identity or its state
+  keeps its place unless its own time moves it, and one older than every record of a
+  full window is not
+  kept at all. A time nested deeper (`modified.at`, a run block's `started`) is a value
+  the record carries and orders nothing.
+- **Retention** is the check's `series_keep`, read by `_parse_common` for every type
+  (§4.5) — a whole number, `0` when absent, junk and negatives refused at load — with
+  no settings key: where a history is wanted is a choice per check. It bounds each
+  series; `series_limit` (§7) bounds all of them together, and the projection says on
+  the first tick when this configuration will not fit it (§4.6).
+
+### 4.11 Measures and curves — `measures.py`, `curves.py`
+
+A series is drawn where its subject is: on the node that stands for it
+([ADR-0092](adr/0092-a-check-declares-its-measures.md)).
+
+- **A measure is declared.** A `Measure(field, unit, label)` is a projection over the
+  record ([ADR-0085](adr/0085-a-measure-is-read-out-of-a-record.md)): the field's dotted
+  name, spelled as the record list spells it (§4.5) — `Measure.read` walks the record
+  with the same `reasons.record_leaves`, and a field the record does not have reads as
+  null — its unit, and what its curve is titled, the field's own name where nothing
+  was given. A type passes `measure_defaults` to `Check.__init__`, shaped like the YAML
+  block; a deployment writes `measures:` in the check's YAML, read by `_parse_common`
+  for every type. Both are `read_measures`' shape — a field name to a unit, or to
+  `{unit, label}` — and `resolve_measures` merges them **per field** in the
+  constructor, once: a field the configuration names takes its entry, `null` removes
+  a default, every other field keeps it, and the defaults come first in the order the
+  type declared them. `check.measures` is the answer; a block of another shape — a
+  unit that is not text, a name that is not a field's, `null` in a type's declaration —
+  is a `CheckError` that the loader prefixes with the file (§4.5). `http` declares
+  `response_ms` in `ms`, labeled *Response time*.
+- **A unit is free text** and is never refused. `Measure.write` prints a number with
+  the unit beside it — whole numbers with separators, fractions at three significant
+  figures — except for `ms` and `s`, which are written as a span through
+  `spans.format_span` (1,850 ms reads `1.9 s`), a negative one keeping its sign; a
+  span names its unit in every value, so `axis_unit` is empty for those two and the
+  unit itself for every other. `B` reads as a plain label until a curve needs it
+  formatted.
+- **`reading_cap`** — how many readings the node shows — is the check's own where its
+  YAML states one (`_parse_reading_cap`: a whole number, `0` allowed, junk refused at
+  load) and `settings.yaml`'s otherwise (§7: 10 by default, a bad value logged and
+  replaced). The page resolves the two.
+- **The curve** is `curves.draw(measure, readings, tolerance=…)` — pure arithmetic
+  over a series' placed window that a template writes as SVG, on the server, with no
+  script. A reading sits at its place, to scale on a time axis spanning the whole kept
+  window; its value to scale from a baseline at zero (below it where a value is),
+  the axis stepping in about four clean steps — for a span unit, a span somebody would
+  name (500 ms, 15m, 2h). A reading whose measure is not a number — a null, a field
+  the record lacks, anything else — breaks the line and is a `Mark` in a lane beneath
+  the baseline, never a zero; two neighbors further apart than `tolerance` — the
+  node's own `stale_after_seconds`, the tolerance its freshness is judged by
+  ([ADR-0079](adr/0079-freshness-is-a-stated-tolerance.md)) — are a **hole**, and the
+  line breaks there with no mark. The line never crosses either: its `runs` are the
+  unbroken stretches of two readings or more, a reading standing alone between two
+  breaks is a dot, and `end` is the newest reading where it has a value. The
+  `hover` strips cut the plot between neighbors' midpoints, each titled with a
+  reading's time and value; the times read in the configured zone and format (§7).
+- **Where it is shown.** `Engine.series_at(path, subject)` answers, for a node, every
+  configured check mounted on it that keeps a series, each with that subject's placed
+  readings (`SubjectSeries`); nothing for an empty subject, a node below a mount, or
+  a check that keeps none. `app._series_views(node)` asks it for a node that carries
+  a subject — a node the engine placed a reading on (§4.6) — and builds one view per
+  series: a curve for each measure, and the newest `reading_cap` readings as rows,
+  each through `record_fields` (§4.5) so a time reads in the configured zone and
+  everything else as stored. `_node_facts.html` renders them as the **Readings** card
+  on the leaf page and on a branch page, whose poll renders it again and so carries no
+  more rows than the cap; `/history/<path>` renders every kept reading and no curve
+  (`every=True`). A subject that rides only on a line has no node of its own and no
+  curve yet.
 
 ---
 
@@ -1409,11 +1756,11 @@ the two lines the instance says about its own ability to observe anything at all
 | `/login`, `/logout` | GET, POST / GET | The **default door's** login step — the built-in login list on an install that registered it (`local_login.use_local()`), which stores `username`, name and an `admin` flag — or, under `identity.choose_at_login()`, a page offering every **enterable** door as a link to its own route, which takes no credential itself (§5.2) / runs the session's door `end_session` step, if it has one, and clears the session ([ADR-0069](adr/0069-identity-comes-from-outside-and-one-account-does-not.md)). |
 | `/login/<door>`, `/auth/callback/<door>` | GET, POST / GET | **One named door's** own login step and the return leg of its redirect flow (§5.2, [ADR-0069](adr/0069-identity-comes-from-outside-and-one-account-does-not.md)). Both dispatch on the name in the path to the provider registered under it — a provider never registers a route, so this costs no general route seam — and both answer `404` for a name nothing claims and for a hook the provider does not implement, since either is a way in this deployment does not have and a redirect there risks a loop. A door's own route matters mechanically rather than stylistically: under a provider that redirects, `/login` never renders a local form. |
 | `/status`, `/status/<path:branch>` | GET | Renders the dashboard from a live snapshot (whole tree or a branch; the `path:` converter passes the slash-separated node path, ADR-0016). A **leaf** check renders its **detail** page. `hide_ok` / `hide_idle` filter the view; `depth` caps how deep the tree renders (clamped to `MAX_DEPTH`, remembered in a `depth` cookie); `fragment=1` returns just the grid (for the page's live polling). With `Accept: application/json` and a valid bearer token, the same routes return the subtree as JSON instead (ADR-0008). A **leaf** page also carries the node's own **hand-off** — the two clipboard buttons of `/copy` aimed at one node: the same document machinery (`copy_status.py`, one formatter for both) over what only this page knows — the path, the observation and the period it bounds, the next update, the run's wall time, the frequency, the report, the configuration and every reason line uncapped — each line with its own code cue and in-flight marker where it declared them, each instant naming its offset. A pin does not change it: the document keeps the **measurement** and says a pin is in force, rather than presenting the pinned code as the reading. Containers get no buttons — their hand-off is `/copy`. |
-| `/history/<path>` | GET | A node's status history (Status / Since / Until / Reason). |
+| `/history/<path>` | GET | A node's status history (Status / Since / Until / Reason) and, beneath it, **every reading** the node's subject kept, newest first, in the table its page shows the newest of (§4.11). Not polled. |
 | `/little-sister/<contributor>/act/<slug>` | POST | **Admin only.** Runs an action a package offered on its self-report child ([ADR-0076](adr/0076-the-instance-node-is-a-branch.md)) — `self_report.register_action(contributor, slug, label, handler)` — logs who ran what, flushes the state layer (what the action changed reaches the store now), and redirects to `/status/little-sister/<contributor>` with the sentence the handler returned shown once (a flashed message, rendered by `_said.html` on the status and leaf pages); a handler that raises is caught and its label and error are the sentence. Unknown action: 404. The buttons are the library's built-in filler on `node.actions` (`_self_report_actions.html`), rendered only on a child of `/little-sister` and only for an admin, as POST forms. |
 | `/maintenance` | GET, POST | **GET** — the full, uncapped maintenance overview as its own read-only page (the leaf-detail pattern), reached from the strip pill's "+N more": **one row per pin** — a node's own, or one of its reasons' ([ADR-0036](adr/0036-addressable-reasons.md)) — with the path, what the pin *silences* (the whole node, or one reason line), time left, rendered Markdown explaining *why* it is silenced, and authorship (*pinned by … , last changed by …*). *Silenced* and *Why* are two columns on purpose: both are called "reason" in the model and are not the same thing. An entry row links to its line as `/status/<branch>?reason=<slug>`; the slug is never rendered as text. **POST** — **admin only**: set/edit/clear a node's maintenance with a raw-Markdown reason and optional duration-or-expiry (blank uses the duration from `settings.yaml`), recording who set it. Unit-suffixed durations and full ISO date/times are accepted alongside `MM-DD`, a day-of-month, `HH:MM`, and weekday/time shortcuts; a bare weekday uses 12:00, and unzoned values use the configured timezone. The resolved expiry must be **at least one second and at most 365 days away**; invalid, past, ambiguous-DST or out-of-range input is refused with the admin's words returned, and a blank reason on an *edit* keeps the stored one ([ADR-0014](adr/0014-maintenance-persistence.md)). A `slug` field addresses **one reason** of the node instead of the node ([ADR-0036](adr/0036-addressable-reasons.md)) — never a path segment, since the natural slug for a discovered entry contains a `/`; redirects to the node — or back to the page the form was opened on, via a validated `next` (the card dialog's way home). Every form carries the entry's `set_at` as a hidden **compare-and-set token**, so a write against a pin someone else has since changed is **refused whole** and answered with the conflict page — both rendered stored text and the admin's raw source, who set the stored one and when, the admin's own words preserved and one click to take the stored ones instead ([ADR-0014](adr/0014-maintenance-persistence.md)). |
 | `/events` | GET | The transition log, newest first (When / Status / Service / Reason). A transition that reached nobody is **shown and marked** with the contribution rule that held it back ([ADR-0032](adr/0032-status-contribution-boundary.md) rule 5, [ADR-0041](adr/0041-maintenance-is-a-contribution-rule.md)) — it keeps the status color it would have alarmed in, and the chip beside the code is what says it did not. Marked events are what makes *did it break during the window?* answerable, and they are excluded from `/history`, which answers the other question. |
-| `/system` | GET | **Admin only** — engine uptime, pool size, check counts; per check its type and the in-flight / armed-next / last run, each a time of day plus interval. Carries the dashboard's freshness stamp and ~10s poll (`fragment=1` returns just the info block). Below it, outside the polled fragment because they are settled at startup: the **check-type roster** (§11) — the types this configuration runs first, each with the number of checks behind it, a count that opens into the node path of every one of them so it can be believed without reading a config file, the rest folded into a disclosure so a registered-but-unused type stays readable without filling the card — the **package inventory** (§11), one row per installation outside the library with its distribution, version, loaded path and everything it registered, because a version belongs to the *installation* and a package that registers no check type would otherwise have one nowhere on the page — both tables print that loaded path **against a root the reader has** (`paths.py`): `site-packages/…` or `./…` under the working directory, whichever root is the nearer, because the diagnostic it carries is *which root the module came from* rather than the absolute string, nine tenths of which is the same prefix on every row and starts with somebody's home directory (the origins and the hover `title` keep it whole; a path under neither root stays long, which is the signal) — the **extension seams** (which package fills which slot, which configuration aspects were registered, and who registered each one), the **identity card** — one row per registered door with its route, its provider, the package that registered it and which one is the default, and beneath it whether a system-admin account is configured, whether its credential resolved and which keyword configured it, because a way into an application must not be knowable only by reading the source (§5.2, [ADR-0069](adr/0069-identity-comes-from-outside-and-one-account-does-not.md)) — and the **effective Content-Security-Policy**, directive by directive, with the contributor of every source — a request blocked inside somebody else's package is otherwise undebuggable from the running instance (§5.4, [ADR-0048](adr/0048-an-assembled-content-security-policy.md)). |
+| `/system` | GET | **Admin only** — engine uptime, pool size, check counts; the declared load, the entries held and the series held beside what each is measured against (the series with the projection, §4.10); per check its type and the in-flight / armed-next / last run, each a time of day plus interval. Carries the dashboard's freshness stamp and ~10s poll (`fragment=1` returns just the info block). Below it, outside the polled fragment because they are settled at startup: the **check-type roster** (§11) — the types this configuration runs first, each with the number of checks behind it, a count that opens into the node path of every one of them so it can be believed without reading a config file, the rest folded into a disclosure so a registered-but-unused type stays readable without filling the card — the **package inventory** (§11), one row per installation outside the library with its distribution, version, loaded path and everything it registered, because a version belongs to the *installation* and a package that registers no check type would otherwise have one nowhere on the page — both tables print that loaded path **against a root the reader has** (`paths.py`): `site-packages/…` or `./…` under the working directory, whichever root is the nearer, because the diagnostic it carries is *which root the module came from* rather than the absolute string, nine tenths of which is the same prefix on every row and starts with somebody's home directory (the origins and the hover `title` keep it whole; a path under neither root stays long, which is the signal) — the **extension seams** (which package fills which slot, which configuration aspects were registered, and who registered each one), the **identity card** — one row per registered door with its route, its provider, the package that registered it and which one is the default, and beneath it whether a system-admin account is configured, whether its credential resolved and which keyword configured it, because a way into an application must not be knowable only by reading the source (§5.2, [ADR-0069](adr/0069-identity-comes-from-outside-and-one-account-does-not.md)) — and the **effective Content-Security-Policy**, directive by directive, with the contributor of every source — a request blocked inside somebody else's package is otherwise undebuggable from the running instance (§5.4, [ADR-0048](adr/0048-an-assembled-content-security-policy.md)). |
 | `/about` | GET | The identity page — the gaze, the name and the reasoning behind it, the running instance's `__version__`, the repository link. Auth-gated like every other surface: it names the version of a live instance. |
 | `/preferences` | POST | Records this browser's **theme** and **layout** (§5.3, [ADR-0029](adr/0029-per-user-presentation-preferences.md)) and redirects back to the posting page. A value outside the roster is dropped in favor of what the browser already had; the return path is validated by `_safe_next` (a single leading `/`, and none of the characters a browser rewrites into a second one), so the hidden field cannot become an open redirect. |
 | `/copy`, `/copy/<path:branch>` | GET | Auth-gated incident hand-off, in three sizes from one route and one formatter: the **tree** (`/copy`), one **node** (`/copy/<branch>`) and one **reason line** (`/copy/<branch>?reason=<slug>` — the node a path, the entry a query value, [ADR-0036](adr/0036-addressable-reasons.md) decision 12, because a discovered entry's slug contains a `/`). A line's document is the line and just enough to locate it — the node's title, path and observation — and deliberately not the node's run facts, report or configuration, which the node's own document carries and which is where a secret reference would appear. An unmounted path and a slug this run does not report are both `404` with a page that says which: a suspended pin is not deleted, but a document made from its stored text would hand over a finding the check is no longer making. The tree document: one immutable root snapshot becomes one canonical Markdown document: every non-OK leaf (`WARN`, `ERROR`, `MAINTENANCE`, `UNDEFINED`) plus only the ancestors needed to locate it, in snapshot order; the synthetic root and wholly healthy branches are omitted. Leaves carry a non-color emoji cue, and so does a **reason line that declared a code of its own** ([ADR-0042](adr/0042-entries-carry-their-own-code.md)) — a healthy workflow under a failing node has to read as healthy in a pasted document too, and a line that declared none takes no cue because it carries its node's. A line whose subject is **running** says so in words: the page's italic is the glance, and a document has none. Authored check and maintenance explanations keep their Markdown, while node/per-reason maintenance also names who set it and its expiry. Every instant it writes — a pin's expiry here, and the whole node document's time facts — names its **UTC offset**: the pages render local time and stay silent about the zone, which is right for a screen somebody is standing in front of, and wrong for a document read in another office. The page renders the rich preview through the same hardened Markdown renderer as every other surface. **Copy Markdown** writes `text/plain`; **Copy Rich HTML** writes both `text/html` and the Markdown as `text/plain`, falling back honestly to plain/manual selection when clipboard access is unavailable — the buttons are one partial (`_copy_controls.html`) shared with the leaf detail page, so the pair is named and ordered the same in both places, and the label names the clipboard member rather than claiming RTF. An all-OK tree gets an empty state rather than an empty clipboard action. |
@@ -1436,7 +1783,8 @@ interval in the units the config wrote it in: `15m`, `1h` — a name for
 `little_sister.spans.format_span` writes it: `412 ms` / `3.1 s` / `43 s` /
 `1m 55s` / `2h 7m` / `1d 3h`; `—` for none), `localtime`
 (renders a timestamp in the configured timezone, §7 — an optional argument
-overrides the format, never the timezone), `url_branch`,
+overrides the format, never the timezone), `record_fields` (a record as the rows of
+its list, each with its kind, §4.5), `url_branch`,
 `markdown` / `markdown_inline` (server-side Markdown → safe HTML, §4.7), and
 `breadcrumbs` (a path → cumulative `(name, path)` crumbs for the clickable header
 trail, rendered by `_breadcrumb.html`; the current node stays plain). The dashboard
@@ -1510,7 +1858,23 @@ filter logic is `_filter_snapshot` (drops nodes whose effective code is hidden).
 - **`/login` may offer the doors instead of going to the default one.**
   `identity.choose_at_login()`, written in the same import-before-app block, makes that
   address render `identity.door_chooser()` — one link per **enterable** door, the
-  default first, labeled. While there is a door to ask, `challenge()` is untouched, and
+  default first, labeled. **With nothing enterable it says so**, in one of three
+  sentences, because the three states need three different actions: no door registered
+  at all (somebody has to add a line); a door that signs people in without a
+  `login_page` of its own — the header-verifying provider, the redirect flow that
+  renders nothing here — which is not a fault at all and means the reader is on the
+  wrong address; or every door registered with a page and none of them able to take a
+  credential (something has to resolve). It names no door and no reason — that is
+  `/system`'s, and `/system` is behind an admin session, while this page is open to
+  anybody — so it says *that* there is no way in and where the answer is. **Where is
+  not `/system`**: reaching that page needs an administrator's session, and the third
+  state is exactly the state in which no door can issue one, the system-admin door
+  included. It points at the instance's startup output, which is where
+  `announce_doors()` and the system-admin registration already wrote the door and the
+  reason. Without any of it the page was a heading over an empty list, which is the
+  state a deployment reaches whenever its doors resolve their credentials from
+  somewhere a given machine cannot see. While there is a door to ask, `challenge()` is
+  untouched, and
   that is the point: an unidentified request still goes wherever the provider sends it,
   so a live SSO session still arrives logged in having seen no page, while the address
   somebody *types* becomes a page **we** serve and therefore one that still answers when
@@ -1845,7 +2209,15 @@ raises rather than rendering blank):
   level 0, so depth 0 collapses to a single card carrying that node's rolled-up
   status (an overall traffic light), depth 1 shows its top-level systems, and so on.
   It is clamped to `MAX_DEPTH` and remembered in a `depth` cookie (resolved by
-  `_resolve_depth`). Nodes drill down; a **hide-ok** switch drops OK nodes and a
+  `_resolve_depth`). From depth 1 the viewed node **heads** its page with its **own**
+  status wherever it has something of its own to say, since the children right below
+  say theirs — except a node that declares nothing: its `UNDEFINED` is a container's,
+  which the roll-up skips ([ADR-0039](adr/0039-status-rollup-semantics.md)), so one
+  that carries a sentence (an `aws` check's root states its scope) heads with what it
+  rolls up to, pale as its card on the parent's page is, and that is the code a kept
+  reading records for it too
+  ([ADR-0087](adr/0087-a-check-keeps-its-subjects-readings.md) decision 8).
+  Nodes drill down; a **hide-ok** switch drops OK nodes and a
   **hide-idle** switch drops never-reported (UNDEFINED) ones; a **chips** switch (leaf density, default on) toggles the quiet-leaf chip collapse below off for a viewer who wants every leaf as a full box, and these view switches — like `depth` — persist across visits in a `SameSite=Lax` cookie set on an explicit change; **stale** nodes get a
   badge; a node with an unambiguous **observation time** — its own last
   write, or the run time of the single check below it — states *when* beside *what*, as
@@ -2046,16 +2418,23 @@ raises rather than rendering blank):
   form).
 - `_node_facts.html` — the node's own facts, the **one** block both detail surfaces
   render ([ADR-0044](adr/0044-run-facts-on-the-node.md) decision 8): a **Time**
-  card, a **Report** card and a **Configuration**
-  card, in that order — when it ran, what it found, what it ran with, outputs before
-  inputs because the outputs are why the page was opened. Both texts go through the
+  card, a **Measured** card where the run kept a record
+  ([ADR-0085](adr/0085-a-measure-is-read-out-of-a-record.md); its list is §4.5's), a
+  **Readings** card where the node stands for a subject whose check keeps a series
+  ([ADR-0092](adr/0092-a-check-declares-its-measures.md), §4.11: the curves of its
+  measures and its newest readings, from `_series.html`), a
+  **Report** card and a **Configuration** card, in that order — when it ran, what it
+  read, what it has read over time, what it found, what it ran with, outputs before
+  inputs because the outputs are why the page was opened. The report and the configuration go through the
   hardened Markdown renderer ([ADR-0018](adr/0018-markdown-rendering.md)), which
   `config` had been missing since before that renderer landed. The **Time** card
   never invents an instant
   ([ADR-0027](adr/0027-observation-timestamp-semantics.md)): it reads *from … until …*
   across the current status period — the **own**-status period, since that is what the
   event log bounds — falls back to a single *Observed …* where the node
-  has no transition of its own to bound one, and says *Not yet observed* when no check
+  has no transition of its own to bound one, or where it declares nothing above nodes
+  that report, since a container's `UNDEFINED` is no status for a period to name,
+  and says *Not yet observed* when no check
   has written it; it adds the **next update** and the run's **wall time** where the
   node carries run facts (this is where wall time surfaces at all), the check
   frequency, and the History button. The next update stays **absolute** here as on
@@ -2070,8 +2449,24 @@ raises rather than rendering blank):
   container two checks share — its text and run facts withheld by §4.4's rule — shows
   none of it. The kiosk keeps none of it either. This is the container acquiring the
   detail page it never had, by reuse rather than as a second surface.
+- `_series.html` — a subject's series, as two macros both detail surfaces and the
+  History page import ([ADR-0092](adr/0092-a-check-declares-its-measures.md), §4.11):
+  `curve`, which writes `curves.draw`'s geometry as SVG with no script — the value
+  axis as hairlines and its words, the unbroken runs of line, the dots, a mark in the
+  lane beneath the baseline for a reading without a value, the oldest and newest
+  time, and a transparent strip per reading titled with its time and value, lit
+  faintly under the pointer — with a caption that names the newest, the lowest and
+  the highest value and counts the marks (its key the mark itself) and the holes; and
+  `readings_table`, the readings newest first — the time on the series' clock, the
+  code as a labeled cue, a column per field through `record_fields`, the sentence as
+  it stood. Every ink is a token `test_contrast.py` measures on the card.
 - `history.html` / `events.html` — the status-history and event-log tables, rows
-  tinted by status (`row-*` classes in `overview.css`); a suppressed event carries the
+  tinted by status (`row-*` classes in `overview.css`); the history carries every
+  reading the node's subject kept beneath its periods (§4.11), and shows no row for the
+  current period of a node that declares nothing above nodes that report — own code
+  `UNDEFINED`, children present, the Time card's test — ending where it stopped
+  declaring and saying so in a line
+  ([ADR-0094](adr/0094-a-restart-is-no-transition.md)); a suppressed event carries the
   rule's name in an `event-suppressed` chip, which paints its own maintenance tint
   rather than inking onto the row color beneath it ([ADR-0028](adr/0028-design-tokens-and-themes.md)).
 - `system.html` / `_system_info.html` — the admin engine status page (per
@@ -2314,7 +2709,7 @@ icon registry keeps its built-in pack. `/system` marks each filler *built-in* or
   **opening `/links` is what starts a pass**, only when the newest answer is older
   than `interval:` (default `6h`, so the key measures how stale an answer may be
   rather than how often a timer fires). The engine's tick is deliberately not the
-  trigger: it is skipped wherever `LITTLE_SISTER_ENGINE=0` — which is exactly where
+  trigger: there is none wherever `LITTLE_SISTER_ENGINE=0` — which is exactly where
   the page still works — and structural validation already settles every icon that
   is not remote, so a timer would usually wake to probe an empty set. The open
   **never blocks**: the pass runs on a daemon thread and the page renders from
@@ -2357,7 +2752,7 @@ icon registry keeps its built-in pack. `/system` marks each filler *built-in* or
   roots, later winning; override the whole thing with a single file via
   `LITTLE_SISTER_CONFIG`)
   holds display/runtime options: `timezone` (default `Europe/Berlin`), `time_format`,
-  the dashboard budgets `reason_cap` (default 6), `branch_cap` (default 3) and `maintenance_cap` (default 5) — the reason-line, quiet-sub-branch and maintenance-pin caps ([ADR-0056](adr/0056-stable-useful-dashboard-flow.md)) — `maintenance_default_expiry` (default `7d`, the window applied when an admin
+  the dashboard budgets `reason_cap` (default 6), `branch_cap` (default 3) and `maintenance_cap` (default 5) — the reason-line, quiet-sub-branch and maintenance-pin caps ([ADR-0056](adr/0056-stable-useful-dashboard-flow.md)) — `reading_cap` (default 10, the readings a node standing for a subject shows beneath its curves, `0` the curves alone; a check's own wins, §4.11, [ADR-0092](adr/0092-a-check-declares-its-measures.md)), `maintenance_default_expiry` (default `7d`, the window applied when an admin
   gives no explicit duration or expiry — ADR-0014), `stacktrace` (default **true** — a failing
   check's trace on its node, §4.6), `card_status_line` (default `beside` — the
   compact one-line card head; `below` gives every card a standing status line
@@ -2370,12 +2765,16 @@ icon registry keeps its built-in pack. `/system` marks each filler *built-in* or
   the **failure retry** — `retry_interval` /
   `retry_attempts` (default off / 2; [ADR-0033](adr/0033-budgeted-failure-retry.md),
   §4.6), both overridable per check — `state_interval` (default 60, the seconds
-  between writes of the kept state files, §4.8), the engine's three sizing numbers —
+  between writes of the kept state files, §4.8), the engine's sizing numbers —
   `max_workers` (default 8, the worker ceiling and what declared costs are summed
-  against), `entry_limit` (default 100,000) and `memory_share` (default 0.5, a
-  fraction in `(0, 1]`), whose defaults are the constants in `limits.py` beside the
-  measurements that read them ([ADR-0075](adr/0075-a-check-declares-what-it-costs.md),
-  §4.6) — `escalate_after` (default 1, how many consecutive readings of a worse code a
+  against), `entry_limit` (default 100,000), `memory_share` (default 0.5, a
+  fraction in `(0, 1]`), `record_limit` (default 2,048 bytes, what one record may
+  weigh, §4.5) and `series_limit` (default 8,388,608 bytes, what every
+  series together may weigh before the one written to longest ago is evicted, §4.10,
+  [ADR-0087](adr/0087-a-check-keeps-its-subjects-readings.md)), whose defaults are the
+  constants in `limits.py` beside the measurements that read them
+  ([ADR-0075](adr/0075-a-check-declares-what-it-costs.md), §4.6) — `escalate_after`
+  (default 1, how many consecutive readings of a worse code a
   node needs before the level above counts it; overridable per check, and `1` is
   publish-at-once, [ADR-0083](adr/0083-a-node-may-wait-before-it-escalates.md)) — and
   `instance` (default the
@@ -2386,7 +2785,8 @@ icon registry keeps its built-in pack. `/system` marks each filler *built-in* or
   once into `config.py`'s `Config`
   ([ADR-0006](adr/0006-config-file-and-timezones.md)). Displayed timestamps are
   stored as server-local and converted to that timezone by the `localtime` filter
-  (`zoneinfo` + `tzdata`); the same zone interprets maintenance expiry input that has
+  (`zoneinfo` + `tzdata`) — a record's own times, which the seam stores in UTC, by
+  `record_fields` (§4.5); the same zone interprets maintenance expiry input that has
   no explicit offset (ADR-0006).
 **Startup contract** ([ADR-0031](adr/0031-deployment-config-directory.md)): strict
 about the tree, tolerant about its contents. The process **refuses to start** — naming
@@ -2402,8 +2802,9 @@ all-green root while nothing at all is watched.
 
 - **State** — `var/state/` (git-ignored runtime state, a fixed path) holds what a
   restart keeps: the admin maintenance pins (per node and per reason) in
-  `maintenance.json`, written through, and the event log in `events.json`, written
-  every `state_interval` and at graceful shutdown; both restored at startup (§4.8,
+  `maintenance.json`, written through, and the event log in `events.json` and the
+  series in `series.json`, written every `state_interval` and at graceful shutdown;
+  all three restored at startup (§4.8,
   [ADR-0071](adr/0071-what-a-restart-keeps-is-a-directory-of-files.md)). The tree
   itself is rebuilt by the checks. Where a deployment registers a **keeper**, the
   whole directory is mirrored to it on the same interval and restored from it before
@@ -2421,6 +2822,10 @@ Current gaps.
   itself survives a restart now (§4.8); what a store would add is a package's seam,
   never a database in the core
   ([ADR-0071](adr/0071-what-a-restart-keeps-is-a-directory-of-files.md)).
+- **A reader for the series on the API.** A series survives a restart and all of them
+  are bounded together (§4.10), and the node that stands for a subject draws its
+  measures' curves and newest readings from it (§4.11); no `series` read on the JSON API
+  exists yet, so a client sees a kept series nowhere.
 - **A keeper to register.** The seam is built (§4.8) and the library ships no
   implementation of it, which is the design rather than a gap — a store is a
   package's business, and a local installation wants none. Out of the box, then,
@@ -2510,7 +2915,13 @@ release that promised the names I write against." Neither works unless the surfa
 is explicit. A tag promises to keep these stable:
 
 - **WSGI application** — `little_sister.app:app` (the Flask app of §5), the object
-  a deployment runs under `gunicorn`.
+  a deployment runs under `gunicorn`, and the **hooks module** gunicorn loads beside it,
+  `--config python:little_sister.gunicorn_hooks`: importing the application starts
+  nothing, and the hooks start it after the worker's import and stop it when the worker
+  leaves ([ADR-0091](adr/0091-an-import-is-not-an-instance.md),
+  [ADR-0088](adr/0088-a-stop-ends-at-its-save.md)). A gunicorn line without the flag
+  serves an application with no engine, which says so on every page and as `failed` on
+  `/health`.
 - **Template slots** — `little_sister.slots`: `register(slot, package, template,
   context=…)`, the declared slot roster `SLOTS` and, per slot, the **context keys** it
   passes and the CSS classes of the frame around it (`.reason-actions` /
@@ -2594,13 +3005,13 @@ is explicit. A tag promises to keep these stable:
 
   ```
   little_sister.checks
-      CHECK_TYPES  Check  CheckError  CheckResult  Entry  register
+      CHECK_TYPES  Check  CheckError  CheckResult  Entry  Measurement  register
       API_VERSION  require_api
       code  coerce_code  config_markdown  parse_duration  parse_secret_refs  plain
       CHECKS_ASPECT  checks_dirs  load_checks
   little_sister.reasons
       Entry  MAX_SLUG_LENGTH  MAX_SUBJECT_LENGTH  RECORD_TIMESTAMP_KEYS
-      ReasonError  derived_slug  normalize  plain  slug
+      ReasonError  clip  derived_slug  normalize  plain  slug
   little_sister.status
       StatusCode  join_path
   little_sister.values
@@ -2611,6 +3022,8 @@ is explicit. A tag promises to keep these stable:
       Deadline  DeadlineExceeded  Fault  RemoteError  ask
   little_sister.fetch
       Response  fault_for  fetch  retry_after
+  little_sister.process
+      Ended  Finished  NotStarted  run
   ```
 
   Three **optional declarations** on `Check` join that surface additively
@@ -2623,9 +3036,14 @@ is explicit. A tag promises to keep these stable:
   default. What is promised is that a type that overrides one is measured at startup —
   the first two **summed** against the worker ceiling and the entry limit, the third
   **compared**, per check, against `record_limit`, because that limit bounds one record
-  rather than a shared ceiling — and that a type that does not is unaffected; never
+  rather than a shared ceiling, and raised first to `FAILURE_RECORD_BYTES`, the
+  engine's own failure record, where it declared less
+  ([ADR-0086](adr/0086-a-check-measures-and-grades.md) decision 5) — and that a type
+  that does not is unaffected; never
   that a particular number refuses. The measured counterpart of each stands beside it
-  on `/system`.
+  on `/system` — for a record, the heaviest one the last run produced, one the seam
+  refused included and marked *refused* where its weight was why
+  ([ADR-0093](adr/0093-a-record-the-seam-refuses-costs-its-line.md) decision 6).
 
   `little_sister.spans` is on the list because a check writes a duration into a
   reason line — *"the backup took 2h 7m"* — and one that formatted its own would
@@ -2652,7 +3070,7 @@ is explicit. A tag promises to keep these stable:
   ([ADR-0058](adr/0058-transport-policy-vocabulary.md)). It promises the **policy** and
   no client: `Deadline` (whose `budget(timeout)` clamps a per-request timeout to what
   the run has left, which is what makes `timeout:` a bound — the engine does not bound
-  `run()`, §4.6), `DeadlineExceeded` (outside `RemoteError` on purpose, so a per-item
+  `measure()`, §4.6), `DeadlineExceeded` (outside `RemoteError` on purpose, so a per-item
   handler cannot spell one run-level fact as forty item-level ones), `Fault`
   (*transient* / *answered* / *malformed*, set by status and never by message text),
   `RemoteError` (status plus fault, `fault` required with no default, meant to be
@@ -2725,6 +3143,26 @@ is explicit. A tag promises to keep these stable:
   trickling *those* is bounded only by the socket timeout per read, which is the residual
   for every caller.
 
+  `little_sister.process` is the process a check starts, `fetch`'s counterpart
+  ([ADR-0089](adr/0089-a-process-a-check-starts-ends-with-it.md)). `run(argv, *,
+  timeout, deadline=None, max_bytes=…, env=None, cwd=None, send=b"", hang_up=False)`
+  runs an **argument vector** — never a command string; a shell command is
+  `["/bin/sh", "-c", command]`, said by the caller — in a **session and process group of
+  its own** with `/dev/null` for stdin, bounded by `timeout`, which a run's `Deadline`
+  clamps to what it has left. It reads **both streams** itself, each kept up to
+  `max_bytes` (1 MiB) and the rest read and dropped, and ends **the whole group** —
+  TERM, a grace, KILL — at the bound, at the instance's stop, and at a normal end for
+  whatever the command left behind. It answers a `Finished`, a fact whatever the status:
+  `status`, `stdout`, `stderr`, `ended` (`Ended.EXITED`, `BOUND` or `STOP`), whether
+  each stream was cut, and how long it ran. It raises only where the command could not
+  start — `NotStarted`, with the `OSError` as its `__cause__`, or with none while the
+  instance is stopping — and `DeadlineExceeded` where the run's budget was already
+  spent. `send` puts bytes on stdin instead, written while both streams are read and
+  followed by the end of stdin; `hang_up=True` holds stdin open for the run, after
+  whatever was sent, which an `ssh` client carries to the remote side as the connection
+  closing. The library's `command` and `ssh` types start their processes through it, so
+  an abandoned run never leaves a process behind, here or on a remote host.
+
   The subnode-metadata helpers are on that first list rather than under
   `checks.metadata` for exactly the reason above — the module they live in is not the
   promise. `join_path` is there because a **branch** check's `owned_nodes` override
@@ -2739,19 +3177,25 @@ is explicit. A tag promises to keep these stable:
   added, and is told so by a `CheckError` naming the file, the type and the keyword.
 
   **This surface is versioned as an epoch of its own** — `API_VERSION`, currently
-  **2**. It bumps when a name above is removed or renamed, or a documented behavior
+  **3**. It bumps when a name above is removed or renamed, or a documented behavior
   changes; adding a name does not bump it, and neither does anything else in a
-  release. A package declares the epoch it was built for with `require_api(2)` beside
+  release. A package declares the epoch it was built for with `require_api(3)` beside
   its registrations, and a mismatch refuses at startup naming both numbers
   ([ADR-0051](adr/0051-what-startup-refuses.md)). The install-time floor a package
   declares (`little-sister >= x`) keeps a *too old* library out; the epoch catches the
-  upgrade the floor cannot see. `tests/fixtures/check_api_v2.txt` snapshots what
-  epoch 2 promises, and the gate requires the current block to still contain all of
+  upgrade the floor cannot see. `tests/fixtures/check_api_v3.txt` snapshots what
+  epoch 3 promises, and the gate requires the current block to still contain all of
   it — so a name cannot leave without the epoch moving, which is the hole a
   doc-and-code rename would otherwise slip through. **Epoch 2** opened by removing
   `parse_subnodes`, `resolve_text` and `expand_tokens`: a branch check used to read and
   layer its own `subnodes:` block, and the library reads the whole block now while a
-  type only declares (§4.5's node metadata paragraph, ADR-0025).
+  type only declares (§4.5's node metadata paragraph, ADR-0025). **Epoch 3** opened
+  on a *behavior* rather than a name: `run()` became `measure()` and `grade()`
+  ([ADR-0086](adr/0086-a-check-measures-and-grades.md)), `Measurement` joined the
+  surface and `CheckResult` lost `subject` and `record`, which a measurement now
+  carries alone. A type written for v2 cannot be adapted at runtime — it would still
+  decide a code from a world it re-reads inside the grading — so it refuses at
+  import, which is the supported shape of *the others follow later*.
 
   A **type name is claimed once**, and stays bare (`type: github`): two packages
   registering one name refuse at startup naming both classes, rather than letting
@@ -2845,7 +3289,7 @@ is explicit. A tag promises to keep these stable:
   settings file, bypassing layering — not redundant the way the user-list override
   was, because settings merge per key),
   `LITTLE_SISTER_API_TOKENS` (JSON-API bearer tokens), and `LITTLE_SISTER_ENGINE`
-  (disable the engine, e.g. in tests). The retired `LITTLE_SISTER_USERS` is part of the
+  (a server that runs no engine; an import never starts one, so tests need nothing). The retired `LITTLE_SISTER_USERS` is part of the
   contract too, in the negative: it is never honored, and a startup that finds it set
   **refuses**, naming the move. Defaults and formats are in §7.
 

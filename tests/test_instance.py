@@ -10,8 +10,6 @@ import unittest
 from dataclasses import replace
 from unittest import TestCase, mock
 
-# Import the app with the background engine disabled (no threads/network).
-os.environ.setdefault("LITTLE_SISTER_ENGINE", "0")
 os.environ.setdefault("SECRET_KEY", "test-key")
 
 from little_sister import app as app_module

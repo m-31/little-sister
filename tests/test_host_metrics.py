@@ -1,15 +1,25 @@
-import subprocess
 import tempfile
 import unittest
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest import TestCase, mock
 
-from little_sister.checks import CheckError
+from little_sister import process
+from little_sister.checks import CheckError, Measurement
 from little_sister.checks.ssh import HostMetricsCheck, _parse_disk_path
 from little_sister.checks.ssh.metrics import volume_name
 from little_sister.engine import Engine
+from little_sister.limits import RECORD_LIMIT
 from little_sister.status import StatusCode
 from little_sister.tree import StatusTree
+from tests.running import (
+    SSH_RUN,
+    finished,
+    record_of,
+    remote_args,
+    remote_parts,
+    run_check,
+)
 
 SSH_SAMPLE = """\
 os=Linux
@@ -44,13 +54,95 @@ class HostMetricsCheckTests(TestCase):
 
     def _run(self, directory, stdout, *, returncode=0, stderr="", **extra):
         check = self._check(directory, **extra)
-        completed = subprocess.CompletedProcess([], returncode, stdout, stderr)
-        with mock.patch("little_sister.checks.ssh.connection.subprocess.run",
+        completed = finished(stdout, returncode, stderr)
+        with mock.patch(SSH_RUN,
                         return_value=completed) as run:
-            return check.run(), run
+            return run_check(check), run
 
     def _kids(self, result):
         return {child.name: child for child in result.children}
+
+    def _record(self, directory, stdout, *, returncode=0, stderr="", **extra):
+        check = self._check(directory, **extra)
+        completed = finished(stdout, returncode, stderr)
+        with mock.patch(SSH_RUN,
+                        return_value=completed):
+            return check, record_of(check)
+
+    # --- the reading (ADR-0086) ---------------------------------------------
+
+    def test_the_reading_holds_numbers_and_not_the_script_s_strings(self):
+        """A curve is drawn from a record, and a series of `"85"` is a series of
+        text. The key already names the unit, so the value is a number — and an
+        integral one reads as a count rather than as `4.0`."""
+        with tempfile.TemporaryDirectory() as directory:
+            _, record = self._record(directory, SSH_SAMPLE)
+        self.assertEqual(record["disk_pct"], 85)
+        self.assertEqual(record["mem_pct"], 50)
+        self.assertEqual(record["load1"], 0.4)
+        self.assertEqual(record["ncpu"], 4)
+        for key in ("disk_pct", "mem_pct", "cpu_pct", "load1", "ncpu"):
+            self.assertIsInstance(record[key], (int, float), key)
+            self.assertNotIsInstance(record[key], str, key)
+
+    def test_a_key_the_script_did_not_give_stands_as_null(self):
+        """One shape per check, so a curve draws a real gap from a null instead of
+        inferring one from a key that is not there (ADR-0085 decision 3). The
+        grading then has one case to handle, not two."""
+        partial = "os=Linux\nhostname=alpha\ndisk_pct=85\nload1=notanumber\n"
+        with tempfile.TemporaryDirectory() as directory:
+            check, record = self._record(directory, partial)
+        self.assertIn("mem_pct", record)
+        self.assertIsNone(record["mem_pct"])
+        self.assertIn("load1", record)
+        self.assertIsNone(record["load1"], "unparseable is null, not the string")
+        kids = self._kids(check.grade((Measurement(record=record),),
+                                      datetime.now(UTC)))
+        self.assertEqual(kids["memory"].code, StatusCode.WARN)
+        self.assertEqual(kids["memory"].reason, ["unavailable"])
+
+    def test_the_grading_works_from_a_record_it_never_measured(self):
+        """The whole point of the split, tested the way the authoring guide now
+        tells an author to test it: hand the grading a record written by hand —
+        which is exactly what a series will hand it a year from now — and it
+        answers without touching ssh at all.
+
+        `subprocess.run` is replaced by something that *refuses*, so the test
+        cannot pass by quietly reaching for the world.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            check = self._check(directory, thresholds={"disk": {"warn": 80,
+                                                                "error": 90}})
+        typed = Measurement(record={
+            "exit_code": 0, "disk_pct": 93, "disk_avail_kb": 70000,
+            "disk_total_kb": 1000000, "disk_path": "/", "mem_pct": 50,
+            "cpu_pct": 7, "load1": 0.4, "ncpu": 4, "os": "Linux",
+            "hostname": "alpha", "uptime_seconds": 90061})
+        with mock.patch(SSH_RUN,
+                        side_effect=AssertionError("the grading read the world")):
+            kids = self._kids(check.grade((typed,), datetime.now(UTC)))
+        self.assertEqual(kids["disk"].code, StatusCode.ERROR)
+        self.assertIn("93% used", kids["disk"].reason[0])
+        self.assertEqual(kids["ssh"].reason[0],
+                         "alpha reachable — Linux, 4 CPUs, up 1d 1h")
+
+    def test_the_object_is_the_host_and_not_the_node_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertEqual(self._check(directory).subject, "host.example")
+
+    def test_the_declared_record_is_known_per_volume_and_unknown_for_all(self):
+        """ADR-0075's lower-bound reading, applied honestly: a check that cannot
+        know its estate declares nothing rather than guessing, and `disk_path:
+        all` puts the volume count in the host's hands."""
+        with tempfile.TemporaryDirectory() as directory:
+            one = self._check(directory)
+            listed = self._check(directory, disk_path=["/", "/data", "/backup"])
+            every = self._check(directory, disk_path="all")
+        self.assertIsNone(every.expected_record())
+        assert one.expected_record() is not None
+        assert listed.expected_record() is not None
+        self.assertGreater(listed.expected_record(), one.expected_record())
+        self.assertLessEqual(listed.expected_record(), RECORD_LIMIT)
 
     def test_host_node_has_ssh_leaf_and_metric_siblings(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -101,9 +193,9 @@ class HostMetricsCheckTests(TestCase):
     def _nodes(self, directory, stdout, **extra):
         """Every node this check writes, by path, after one engine tick."""
         check = self._check(directory, **extra)
-        completed = subprocess.CompletedProcess([], 0, stdout, "")
+        completed = finished(stdout, 0, "")
         tree = StatusTree()
-        with mock.patch("little_sister.checks.ssh.connection.subprocess.run",
+        with mock.patch(SSH_RUN,
                         return_value=completed):
             Engine([check], tree).run_once()
         nodes = {}
@@ -279,9 +371,7 @@ class HostMetricsCheckTests(TestCase):
         with tempfile.TemporaryDirectory() as directory:
             _, run = self._run(directory, SSH_SAMPLE,
                                disk_path=["/share/A", "/share/B"])
-        remote = run.call_args.args[0][-1]   # the remote command string
-        self.assertIn("/share/A", remote)
-        self.assertIn("/share/B", remote)
+        self.assertEqual(remote_args(run), ["/share/A\n/share/B"])
 
     def test_parse_disk_path(self):
         self.assertEqual(_parse_disk_path("/x"), "/x")
@@ -366,9 +456,9 @@ class HostMetricsCheckTests(TestCase):
         with tempfile.TemporaryDirectory() as directory:
             check = self._check(directory, timeout="2s")
             with mock.patch(
-                    "little_sister.checks.ssh.connection.subprocess.run",
-                    side_effect=subprocess.TimeoutExpired("ssh", 2)):
-                result = check.run()
+                    SSH_RUN,
+                    return_value=finished(returncode=-15, ended=process.Ended.BOUND)):
+                result = run_check(check)
         ssh = self._kids(result)["ssh"]
         self.assertEqual(ssh.code, StatusCode.ERROR)
         self.assertIn("timed out", ssh.reason[0])
@@ -387,8 +477,8 @@ class HostMetricsCheckTests(TestCase):
         self.assertEqual(argv[argv.index("-p") + 1], "2222")
         self.assertIn("X=Y", argv)
         self.assertIn("mon@host.example", argv)
-        self.assertEqual(argv[-1], "sudo -n bash -s -- /data")
-        self.assertEqual(run.call_args.kwargs["input"], "echo hi\n")
+        self.assertEqual(remote_parts(run), ("sudo -n bash -s", "echo hi\n"))
+        self.assertEqual(remote_args(run), ["/data"])
 
     def test_excludes_ssh_rsa_by_default(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -418,14 +508,14 @@ class HostMetricsCheckTests(TestCase):
         self.assertIn("post-quantum", joined)       # raw stderr surfaced verbatim
         self.assertIn("debug_df_raw", joined)        # script debug line surfaced
         self.assertIn("auto_home", joined)
-        # the remote command asked the script for debug output
-        self.assertEqual(run.call_args.args[0][-1].split()[-1], "debug")
+        # the script was asked for debug output
+        self.assertEqual(remote_args(run)[-1], "debug")
 
     def test_no_debug_lines_by_default(self):
         with tempfile.TemporaryDirectory() as directory:
             result, run = self._run(directory, SSH_SAMPLE, stderr="noise\n")
         self.assertNotIn("debug", " ".join(self._kids(result)["ssh"].reason))
-        self.assertNotIn("debug", run.call_args.args[0][-1])
+        self.assertNotIn("debug", remote_args(run))
 
     # --- profile: script + interpreter selection ---
 
@@ -453,7 +543,8 @@ class HostMetricsCheckTests(TestCase):
         with tempfile.TemporaryDirectory() as directory:
             _, run = self._run(directory, SSH_SAMPLE, profile="busybox",
                                disk_path="/")
-        self.assertEqual(run.call_args.args[0][-1], "sh -s -- /")
+        self.assertEqual(remote_parts(run)[0], "sh -s")
+        self.assertEqual(remote_args(run), ["/"])
 
     def test_unknown_profile_raises(self):
         with self.assertRaises(CheckError):

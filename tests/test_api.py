@@ -4,10 +4,8 @@ import unittest
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import ClassVar
-from unittest import TestCase
+from unittest import TestCase, mock
 
-# Import the app with the background engine disabled (no threads/network).
-os.environ.setdefault("LITTLE_SISTER_ENGINE", "0")
 os.environ.setdefault("SECRET_KEY", "test-key")
 
 from little_sister import api
@@ -137,6 +135,25 @@ class JsonApiTests(TestCase):
         item, = node["entries"]["items"]
         self.assertEqual(item["subject"], "")
         self.assertIsNone(item["data"])
+
+    def test_an_entry_whose_record_was_refused_says_why_beside_a_null_record(self):
+        """2.6.0 (ADR-0093): the line stands as its grading wrote it, and `refused`
+        is the sentence the node's page shows — null on every other line, and never
+        absent, for the reason `subject` and `data` never are."""
+        self.tree.upsert("/ci", StatusCode.ERROR, [
+            Entry("build", "CI: failed (#41)", code=StatusCode.ERROR,
+                  subject="1296269",
+                  refused="it is 2,811 bytes and the limit is 2,048"),
+            Entry("lint", "lint passed", code=StatusCode.OK),
+        ], members=True)
+        envelope = self.client.get("/status/ci", headers=JSON).get_json()
+        self.assertEqual(envelope["schema_version"], 2)
+        build, lint = envelope["status"]["entries"]["items"]
+        self.assertEqual(build["refused"], "it is 2,811 bytes and the limit is 2,048")
+        self.assertIsNone(build["data"])
+        self.assertEqual((build["text"], build["code"], build["subject"]),
+                         ("CI: failed (#41)", "ERROR", "1296269"))
+        self.assertIsNone(lint["refused"])
 
     def test_a_damped_node_publishes_a_real_code_in_its_contribution(self):
         """The first rule that **transforms** rather than withholds: `code` is the
@@ -344,7 +361,8 @@ class JsonApiTests(TestCase):
         """The two facts `/health` withholds from an ungated caller (ADR-0066), fine
         behind the token. Per envelope, never per node."""
         self.tree.upsert("/db", StatusCode.OK)
-        body = self.client.get("/status/db", headers=JSON).get_json()
+        with mock.patch.object(app_module, "engine_error", None):
+            body = self.client.get("/status/db", headers=JSON).get_json()
         self.assertEqual(set(body["instance"]), {"version", "engine"})
         self.assertEqual(body["instance"]["engine"], "disabled")
         self.assertNotIn("instance", body["status"])
@@ -481,11 +499,14 @@ class TheSpecIsTheContract(TestCase):
 
     def _a_tree_that_uses_every_shape(self):
         """One tree exercising every branch of the schema that has one: a pinned
-        node, a pinned entry, a coded entry, a rank, a schedule, a container nothing
-        answers for, and a node that has never reported."""
+        node, a pinned entry, a coded entry, an entry whose record was refused, a
+        rank, a schedule, a container nothing answers for, and a node that has never
+        reported."""
         self.tree.upsert("/ci", StatusCode.ERROR, [
             Entry("build", "build #4215 failed", code=StatusCode.ERROR, running=True),
             Entry("lint", "lint #4215 passed", code=StatusCode.OK),
+            Entry("deploy", "deploy #88 passed", code=StatusCode.OK,
+                  refused="it is 2,811 bytes and the limit is 2,048"),
         ], members=True, frequency_seconds=300, order=2,
             config="- **repo:** example", report="- 14 workflows",
             about="the build", title="CI", show_when_quiet=False)

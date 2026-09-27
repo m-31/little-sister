@@ -1,17 +1,24 @@
 """Dev WSGI wrapper for the live demo (testing-the-gui.md, Mode 2).
 
-Registers the scripted ``demo`` check type and this deployment's slot fillers
-through the public seams, and *then* imports the app — the same import-before-app
-slot a real deployment uses (``implementing-checks.md`` §4) — with the engine on and
-pointed at the demo check configs. Run it and watch the dashboard move (poll/swap,
+Registers the scripted ``demo`` check type, the door the fixture user signs in
+through and this deployment's slot fillers through the public seams, and *then*
+imports the app — the same import-before-app slot a real deployment uses
+(``implementing-checks.md`` §4) — pointed at the demo check configs. The import
+builds the application and starts nothing; the server's start runs the engine
+(ADR-0091), which is gunicorn's hooks module or, for the development server, the
+call at the bottom of this file. Run it and watch the dashboard move (poll/swap,
 eruption reflow, staleness, popovers across swaps):
 
-    uv run gunicorn -w 1 --threads 8 tests.demo_wsgi:app    # open http://localhost:8000
+    uv run gunicorn -w 1 --threads 8 --config python:little_sister.gunicorn_hooks \\
+        tests.demo_wsgi:app                      # open http://localhost:8000
     # or the Flask dev server:
     uv run python tests/demo_wsgi.py
 
 Log in with the committed fixture user (``pan`` / ``12345678``). Single worker: the
-engine and the status tree live in-process (ADR-0001).
+engine and the status tree live in-process (ADR-0001). What a restart keeps, and the
+log, go under ``var/demo/`` rather than into this checkout's own ``var/``, so the demo
+runs beside an instance of this checkout; ``LITTLE_SISTER_DEMO_DIR`` names another
+directory.
 
 Dev-only: lives under ``tests/`` and never ships in the package.
 """
@@ -40,10 +47,32 @@ os.environ.setdefault(
 os.environ.setdefault("SECRET_KEY", "demo-harness")
 os.environ.setdefault("LITTLE_SISTER_API_TOKENS", "demo=demo-token")
 
-# Register the `demo` type before importing the app (which loads + starts the
-# engine at import). importlib keeps this a runtime call, so import-sorting can't
-# hoist the app import above it — the ordering here is significant.
+# The demo's own directory, and the process's from here on. What a restart keeps —
+# the state directory and the lease on it — and the log are paths relative to where a
+# process runs, and run from this checkout they would be its own `var/state/` and
+# `var/little-sister.log`, which an instance of this checkout keeps: the demo could
+# not run beside that instance, whose lease refuses a second writer (ADR-0090), and
+# run after it, it would restore that instance's pins, events and series and save its
+# own over them. So it runs in `var/demo/` (a tool's output, named by the tool), and
+# `LITTLE_SISTER_DEMO_DIR` names another — which is how a test runs the demo without
+# writing into the checkout. Nothing in the demo is read relative to it: the
+# configuration roots above and `tests` on `sys.path` are absolute.
+_DEMO_DIR = Path(os.environ.get("LITTLE_SISTER_DEMO_DIR")
+                 or _REPO_ROOT / "var" / "demo")
+_DEMO_DIR.mkdir(parents=True, exist_ok=True)
+os.chdir(_DEMO_DIR)
+
+# Register the `demo` type before importing the app, whose start builds the engine
+# from the check configs. importlib keeps this a runtime call, so import-sorting
+# can't hoist the app import above it — the ordering here is significant.
 importlib.import_module("tests.demo_check")
+
+# The door the committed fixture user signs in through (ADR-0069): the built-in login
+# list, read from the fixture root named first above — the door this repository's
+# own `wsgi.py` and the suite's `conftest.py` register too. The library adds no door
+# on anybody's behalf, so without this call every page answers 401 and `/login` 404.
+local_login = importlib.import_module("little_sister.local_login")
+local_login.use_local()
 
 # The **second** layer of the slot demo (ADR-0034/0037). The first needs no code at
 # all: `demo_config/actions.yaml` fills both slots through the declarative list
@@ -83,4 +112,14 @@ __all__ = ["app"]
 
 
 if __name__ == "__main__":
+    # The development server has no hooks module, so its start is called here, as
+    # `python -m little_sister.app` calls it (ADR-0091): without it the demo serves
+    # a banner saying the engine never started. A refusal has already said whose the
+    # state directory is.
+    from little_sister.app import start
+    from little_sister.lease import LeaseRefused
+    try:
+        start()
+    except LeaseRefused:
+        raise SystemExit(1) from None
     app.run(host="127.0.0.1", port=8000, debug=True, use_reloader=False)

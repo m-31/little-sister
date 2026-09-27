@@ -85,6 +85,10 @@ def _entry(line: ReasonLine) -> dict[str, Any]:
     where the check did not say; ``data`` is the record it read, or null. The record
     is plain JSON the client renders as it likes — a handful of names carry a time
     in RFC 3339 UTC, the rest is the check's own vocabulary.
+
+    ``refused`` is 2.6.0's (ADR-0093): where the seam refused the line's record,
+    ``data`` is null and this is why, in the sentence the node's page shows; null on
+    every other line, and always present, for the reason the two before it are.
     """
     return {
         "slug": line.slug,
@@ -93,6 +97,7 @@ def _entry(line: ReasonLine) -> dict[str, Any]:
         "running": line.running,
         "subject": line.subject,
         "data": line.data,
+        "refused": line.refused or None,
         "maintenance": _maintenance(line.maintenance),
     }
 

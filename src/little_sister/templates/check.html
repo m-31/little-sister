@@ -3,6 +3,7 @@
 <head>
     {% from '_maintenance_fields.html' import maintenance_fields with context %}
     {% from '_status_cue.html' import status_cue %}
+    {% from '_record_list.html' import record_list %}
     {# the node, not the section: three leaf tabs open at once should be
        tellable apart #}
     {% set page_title = node.name %}
@@ -124,16 +125,19 @@
                             <div class="md-body check-reason__body">{% if line.code %}{{ status_cue(line.code, labeled=true) }}{% endif %}{{ line.text | markdown }}</div>
                             {#- The record (backlog #32): what the check read about
                                 this line's subject, beside the sentence it wrote.
-                                A plain list of dotted names and values — no name is
-                                read for its meaning here — on the node's own page
-                                only: a card shows the line, and this is the surface
-                                a reader comes to when the line is not enough. -#}
+                                A list of dotted names and values — its times in the
+                                configured timezone, everything else as stored — on
+                                the node's own page only: a card shows the line, and
+                                this is the surface a reader comes to when the line
+                                is not enough. -#}
                             {%- if line.data %}
-                                <dl class="reason-record small text-muted">
-                                    {%- for name, value in line.data | record_fields %}
-                                    <dt>{{ name }}</dt><dd>{{ value }}</dd>
-                                    {%- endfor %}
-                                </dl>
+                                {{ record_list(line.data) }}
+                            {#- Where the seam refused the record (ADR-0093), the
+                                line stands as its grading wrote it and this says
+                                why, in the record's place — escaped like any other
+                                data, since a why may quote the value it refused. -#}
+                            {%- elif line.refused %}
+                                <p class="reason-refused small text-muted">Record refused: {{ line.refused }}</p>
                             {%- endif %}
                             {%- if line.quiet %}
                                 <div class="reason-quiet-note">

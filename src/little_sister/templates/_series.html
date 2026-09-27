@@ -1,0 +1,105 @@
+{#- A subject's series on the node that stands for it (ADR-0092 decision 6): the
+    curves of its measures, drawn on the server as SVG with no script of its own, and
+    its readings as a table. `_node_facts.html` shows the curves and the newest
+    `reading_cap` rows; the History page shows every row and no curve.
+
+    The geometry is `little_sister.curves`' — every number below is its, and this
+    only writes it down. What is drawn, and what says so in words:
+
+    * the value axis — a hairline per step, its reading on the left, and a free-text
+      unit once above them; a span unit names itself in every step instead;
+    * the line, broken wherever a reading had no value or nothing was read for
+      longer than the node's freshness tolerance, and a dot for a reading that stands
+      alone between two breaks and for the newest one;
+    * a reading without a value, marked at its instant in the lane beneath the
+      baseline — never as a zero — and counted beside the title with the mark as its
+      key; a hole is counted too, and has no mark of its own;
+    * the oldest and the newest time, in the configured zone and format;
+    * each reading's time and value where the pointer is: the plot is cut between
+      each two neighbors' midpoints, so the pointer finds a time, not a line.
+
+    `role="img"` keeps the per-reading titles from being read out one by one: the
+    table is the accessible twin, and the caption says what the drawing shows. -#}
+{%- from '_status_cue.html' import status_cue %}
+
+{%- macro summary(c) -%}
+{%- if c.lowest -%}
+newest {{ c.newest }} · lowest {{ c.lowest }} · highest {{ c.highest }}
+{%- endif -%}
+{%- if c.unvalued -%}
+{%- if c.lowest %} · {% endif -%}
+<span class="ls-curve__key"><svg class="ls-curve__swatch" viewBox="0 0 6 12" width="6" height="12" focusable="false" aria-hidden="true"><line class="ls-curve__none" x1="3" x2="3" y1="1" y2="11"/></svg> {{ c.unvalued }} without a value</span>
+{%- endif -%}
+{%- if c.holes %} · {{ c.holes }} {{ "stretch" if c.holes == 1 else "stretches" }} without readings{% endif -%}
+{%- endmacro %}
+
+{%- macro curve(c) -%}
+<figure class="ls-curve">
+    <figcaption class="ls-curve__head">
+        <span class="ls-curve__title">{{ c.label }}</span>
+        <span class="ls-curve__summary">{{ summary(c) }}</span>
+    </figcaption>
+    <div class="ls-curve__frame">
+    <svg class="ls-curve__plot" viewBox="0 0 {{ c.width }} {{ c.height }}" width="{{ c.width }}" height="{{ c.height }}" focusable="false" role="img" aria-label="{{ c.label }}, {{ c.readings }} {{ 'reading' if c.readings == 1 else 'readings' }} from {{ c.first }} to {{ c.last }}">
+        {%- for tick in c.ticks %}
+        <line class="ls-curve__grid" x1="{{ c.left }}" x2="{{ c.right }}" y1="{{ '%.1f' | format(tick.y) }}" y2="{{ '%.1f' | format(tick.y) }}"/>
+        <text class="ls-curve__tick" x="{{ c.left - 8 }}" y="{{ '%.1f' | format(tick.y + 4) }}" text-anchor="end">{{ tick.text }}</text>
+        {%- endfor %}
+        {%- if c.unit_label %}
+        <text class="ls-curve__unit" x="{{ c.left - 8 }}" y="{{ c.unit_baseline }}" text-anchor="end">{{ c.unit_label }}</text>
+        {%- endif %}
+        {%- for d in c.paths %}
+        <path class="ls-curve__line" d="{{ d }}"/>
+        {%- endfor %}
+        {%- for dot in c.dots %}
+        <circle class="ls-curve__dot" cx="{{ '%.1f' | format(dot.x) }}" cy="{{ '%.1f' | format(dot.y) }}" r="4"/>
+        {%- endfor %}
+        {%- if c.end and c.end not in c.dots %}
+        <circle class="ls-curve__dot" cx="{{ '%.1f' | format(c.end.x) }}" cy="{{ '%.1f' | format(c.end.y) }}" r="4"/>
+        {%- endif %}
+        {%- for mark in c.marks %}
+        <line class="ls-curve__none" x1="{{ '%.1f' | format(mark.x) }}" x2="{{ '%.1f' | format(mark.x) }}" y1="{{ c.lane_top }}" y2="{{ c.lane_bottom }}"/>
+        {%- endfor %}
+        {%- if c.first == c.last %}
+        <text class="ls-curve__time" x="{{ c.right }}" y="{{ c.time_baseline }}" text-anchor="end">{{ c.last }}</text>
+        {%- else %}
+        <text class="ls-curve__time" x="{{ c.left }}" y="{{ c.time_baseline }}" text-anchor="start">{{ c.first }}</text>
+        <text class="ls-curve__time" x="{{ c.right }}" y="{{ c.time_baseline }}" text-anchor="end">{{ c.last }}</text>
+        {%- endif %}
+        <g class="ls-curve__hover">
+            {%- for strip in c.hover %}
+            <rect x="{{ '%.1f' | format(strip.x) }}" y="{{ c.top }}" width="{{ '%.1f' | format(strip.width) }}" height="{{ c.lane_bottom - c.top }}"><title>{{ strip.title }}</title></rect>
+            {%- endfor %}
+        </g>
+    </svg>
+    </div>
+</figure>
+{%- endmacro %}
+
+{#- The readings, newest first, as the ADR lists a row: the time on the series'
+    clock, the code the reading stood with as a cue — its column's header is for a
+    screen reader only, since a record's own `status` field often stands beside it
+    and a second visible *Status* would read as the same thing — a column per field
+    as the record list writes it, and the sentence as it stood. -#}
+{%- macro readings_table(view) -%}
+<div class="table-responsive">
+    <table class="table table-sm align-middle ls-readings">
+        <thead>
+            <tr><th scope="col">Time</th><th scope="col" class="ls-readings__cue"><span class="visually-hidden">Status</span></th>{% for column in view.columns %}<th scope="col">{{ column }}</th>{% endfor %}<th scope="col">Reason</th></tr>
+        </thead>
+        <tbody>
+            {%- for row in view.rows %}
+            <tr>
+                <td class="text-nowrap"><time datetime="{{ row.stored }}">{{ row.at }}</time></td>
+                <td class="ls-readings__cue">{% if row.code %}{{ status_cue(row.code, labeled=true) }}{% endif %}</td>
+                {%- for column in view.columns %}
+                {%- set field = row.fields.get(column) %}
+                <td>{% if field %}{% if field.kind == 'instant' %}<time datetime="{{ field.stored }}">{{ field.text }}</time>{% else %}{{ field.text }}{% endif %}{% endif %}</td>
+                {%- endfor %}
+                <td class="md-body">{{ row.texts | join('; ') | markdown_inline }}</td>
+            </tr>
+            {%- endfor %}
+        </tbody>
+    </table>
+</div>
+{%- endmacro %}

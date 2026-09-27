@@ -9,7 +9,6 @@ import unittest
 from pathlib import Path
 from unittest import TestCase
 
-os.environ.setdefault("LITTLE_SISTER_ENGINE", "0")
 os.environ.setdefault("SECRET_KEY", "test-key")
 
 from little_sister import app as app_module

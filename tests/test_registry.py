@@ -14,11 +14,18 @@ global, so every test here restores it.
 """
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
+from datetime import datetime
 
 import pytest
 
-from little_sister.checks import CHECK_TYPES, CheckError, register, require_api
+from little_sister.checks import (
+    CHECK_TYPES,
+    CheckError,
+    Measurement,
+    register,
+    require_api,
+)
 from little_sister.checks.base import API_VERSION, Check, CheckResult, registered_types
 from little_sister.status import StatusCode
 
@@ -48,7 +55,11 @@ def _a_check_class(name: str) -> type[Check]:
 
 
 class _Example(Check):
-    def run(self) -> CheckResult:                # pragma: no cover - never run
+    def measure(self) -> Measurement:            # pragma: no cover - never run
+        return Measurement(record={})
+
+    def grade(self, measurements: Sequence[Measurement],   # pragma: no cover
+              now: datetime) -> CheckResult:
         return CheckResult(code=StatusCode.OK)
 
 
@@ -108,6 +119,27 @@ def test_require_api_refuses_an_older_plugin() -> None:
     message = str(refusal.value)
     assert "little_sister_example" in message
     assert f"v{API_VERSION - 1}" in message and f"v{API_VERSION}" in message
+    assert "older than" in message
+
+
+def test_a_plugin_built_for_the_shape_before_the_split_refuses_by_number() -> None:
+    """The concrete case ADR-0086 owes an answer to, written with the numbers
+    rather than with arithmetic on the constant.
+
+    Epoch 2 is the shape where a check implemented `run()`. Such a type cannot be
+    adapted at runtime — it would still decide a code from a world it re-reads
+    inside the grading — so the refusal has to happen at **import**, and it has to
+    say both numbers, because *which* build to install is the only question the
+    reader has.
+    """
+    assert API_VERSION == 3, (
+        "this test is about the v2-to-v3 step; if the epoch moved again, keep this "
+        "case and add the new one beside it")
+    with pytest.raises(CheckError) as refusal:
+        require_api(2, by="little_sister_example")
+
+    message = str(refusal.value)
+    assert "v2" in message and "v3" in message
     assert "older than" in message
 
 

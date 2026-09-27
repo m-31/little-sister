@@ -31,9 +31,13 @@ os.environ.setdefault(
     os.pathsep.join((str(_HERE / "fixtures" / "config"),
                      str(_HERE / "demo_config"))))
 os.environ.setdefault("SECRET_KEY", "links-matrix")
-os.environ.setdefault("LITTLE_SISTER_ENGINE", "0")
 
+from little_sister import app as app_module  # noqa: E402
 from little_sister.app import app  # noqa: E402
+
+# Imported and never started (ADR-0091): these are the pages a server without an
+# engine serves, so no banner says that nothing started one.
+app_module.engine_error = None
 
 THEMES = ("default", "vivid", "pastel", "dark", "cyberpunk", "auto")
 _REPO = _HERE.parent

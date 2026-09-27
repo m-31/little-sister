@@ -135,16 +135,85 @@ def test_a_plugins_own_logger_lands_there_too(
 
 def test_with_no_application_setup_the_library_configures_the_default(
         as_the_default: Callable[[], None]) -> None:
-    """The ordinary `./start.sh` case still gets stderr plus the log file — the
-    default is only skipped when somebody else got there first — and its level is
-    **INFO**: nothing in the library logs below it, so a DEBUG root would collect
-    no line of ours and every line of every dependency's."""
+    """The ordinary `./start.sh` case still gets stderr, and the log file once the
+    server's start opens it — the default is only skipped when somebody else got
+    there first — and its level is **INFO**: nothing in the library logs below it,
+    so a DEBUG root would collect no line of ours and every line of every
+    dependency's."""
     as_the_default()
+    little_sister.logger.open_log_file()
 
     root = logging.getLogger()
     kinds = {type(handler) for handler in root.handlers}
     assert logging.FileHandler in kinds
+    assert logging.StreamHandler in kinds
     assert root.level == logging.INFO
+
+
+def test_an_import_opens_no_log_file(as_the_default: Callable[[], None],
+                                     log_file: Path) -> None:
+    """An import is not an instance (ADR-0091 decision 1): it logs to stderr, and
+    creates neither the log file nor the directory it would live in."""
+    as_the_default()
+    logging.getLogger("little_sister.test").warning("said at the import")
+
+    assert not any(isinstance(handler, logging.FileHandler)
+                   for handler in logging.getLogger().handlers)
+    assert not log_file.exists()
+
+
+def test_the_start_opens_the_log_with_what_the_import_logged_first(
+        as_the_default: Callable[[], None], log_file: Path) -> None:
+    """A run's log still begins with its configuration (ADR-0091 decision 4)."""
+    as_the_default()
+    said = logging.getLogger("little_sister.test")
+    said.info("configuration, first")
+    said.info("configuration, second")
+    little_sister.logger.open_log_file()
+    said.info("after the start")
+
+    lines = log_file.read_text().splitlines()
+    assert [line.rsplit(" - ", 1)[1] for line in lines] == [
+        "configuration, first", "configuration, second", "after the start"]
+
+
+def test_what_the_import_logged_past_the_bound_is_counted(
+        as_the_default: Callable[[], None], log_file: Path) -> None:
+    as_the_default()
+    buffer = little_sister.logger._buffer
+    assert buffer is not None
+    buffer.capacity = 3
+    said = logging.getLogger("little_sister.test")
+    for number in range(5):
+        said.info("line %d", number)
+    little_sister.logger.open_log_file()
+
+    text = log_file.read_text()
+    assert "line 2" in text and "line 3" not in text
+    assert "2 more lines" in text
+
+
+def test_a_second_start_opens_nothing_more(as_the_default: Callable[[], None],
+                                           log_file: Path) -> None:
+    as_the_default()
+    little_sister.logger.open_log_file()
+    little_sister.logger.open_log_file()
+    files = [handler for handler in logging.getLogger().handlers
+             if isinstance(handler, logging.FileHandler)]
+    assert len(files) == 1
+
+
+def test_an_application_that_configured_logging_gets_no_file_from_the_start(
+        application_logging: _Recorder, log_file: Path,
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LOG_FILE", str(log_file))
+    importlib.reload(little_sister.logger)
+    little_sister.logger.open_log_file()
+
+    handlers = logging.getLogger().handlers
+    assert application_logging in handlers
+    assert not any(isinstance(handler, logging.FileHandler) for handler in handlers)
+    assert not log_file.exists()
 
 
 def test_log_level_names_the_level_of_that_default(
@@ -177,11 +246,13 @@ def test_an_unknown_log_level_falls_back_to_info_and_says_so(
         as_the_default: Callable[[], None], log_file: Path,
         monkeypatch: pytest.MonkeyPatch) -> None:
     """A typo in an environment is not a reason to refuse to log. It is a reason to
-    say which value was not understood, in the log the default just opened — read
-    back from the file, because a warning nobody receives is the failure here."""
+    say which value was not understood, in the log the start opens with what the
+    import said — read back from the file, because a warning nobody receives is the
+    failure here."""
     monkeypatch.setenv("LOG_LEVEL", "chatty")
 
     as_the_default()
+    little_sister.logger.open_log_file()
 
     assert logging.getLogger().level == logging.INFO
     assert ("logger: LOG_LEVEL 'chatty' is not a level name; using INFO\n"

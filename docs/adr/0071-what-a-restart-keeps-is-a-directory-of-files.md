@@ -1,7 +1,7 @@
 # ADR-0071 — What a restart keeps is a directory of files, and a keeper carries it
 
 - **Status:** Accepted
-- **Date:** 2026-09-05
+- **Date:** 2026-09-27 (accepted 2026-09-05)
 - **Related:** [ADR-0001](0001-in-process-threaded-engine.md) (one process, in
   memory — the event log this record gives a life across restarts),
   [ADR-0002](0002-rlock-snapshot-synchronization.md) (the lock the writer stays
@@ -12,7 +12,10 @@
   (the registration rules the keeper follows),
   [ADR-0072](0072-the-instance-reports-on-itself.md) (the seam that carries this
   layer's two lines), [ADR-0031](0031-deployment-config-directory.md) (`var/` is
-  what the process writes)
+  what the process writes), [ADR-0088](0088-a-stop-ends-at-its-save.md) (the stop's
+  one save), [ADR-0090](0090-one-state-directory-one-writer.md) (the directory's one
+  writer), [ADR-0094](0094-a-restart-is-no-transition.md) (what the first reading after
+  a restart records)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -56,14 +59,20 @@ Three layers hold what this process wants to survive a restart.
    for what a person authors. Nothing else loose in `var/` is state: logs, pids and
    TLS material stay where they are. The directory is a fixed path relative to the
    working directory (ADR-0020), git-ignored and not env-overridable, exactly as the
-   maintenance file was.
+   maintenance file was. **The directory has one writer**: a process takes a lease on it
+   before it restores anything and keeps it for its life — a file beside the directory
+   with a heartbeat, and a kernel lock for the machine the kernel sees — and a process
+   that cannot take it restores, runs and saves nothing
+   ([ADR-0090](0090-one-state-directory-one-writer.md)).
 
 3. **Two write disciplines, one atomic write.** Maintenance and the notes are
    **written through**, as today: a pin is written when it changes, so a crash a
    minute later loses nothing. Events and the series are **kept**: written
    coalesced, at most once per `state_interval` (`settings.yaml`, default 60 s) on
-   the scheduler tick beside the sweeps, and once more at graceful shutdown; an
-   unclean shutdown loses at most the interval. A kept file whose state did not
+   the scheduler tick beside the sweeps, and once more at the stop — the stop's one
+   save, made after the scheduler has stopped, with nothing written to the directory
+   after it ([ADR-0088](0088-a-stop-ends-at-its-save.md) decision 3); an unclean
+   shutdown loses at most the interval. A kept file whose state did not
    change is not rewritten. Every write is a temporary file in the same directory
    and `os.replace`, the discipline `maintenance.json` always had; the producer of a
    kept file copies under its own lock and serializes outside it, so the writer is
@@ -132,9 +141,15 @@ Three layers hold what this process wants to survive a restart.
 ## Consequences
 
 - A restarted instance shows yesterday's events and its pins, and every node's
-  history starts where it left off. The first run after a restart still records
-  `UNDEFINED → OK` for each node, as it always did: the node *was* unobserved, and
-  a restart is visible in a history for that reason.
+  history starts where it left off. The first reading after a restart is compared
+  with what the restored log last recorded for its node
+  ([ADR-0094](0094-a-restart-is-no-transition.md)): a node reading what it read
+  before keeps its period, and one reading anything else — `UNDEFINED` included,
+  whose restored period had run on to the present — changes from the old code; the
+  pins' replay writes nothing where the log already holds the pin. The restart is
+  recorded once, where it happened: on `/little-sister`, whose last period closes when
+  the old process was last alive — a `stopped_at` the stop's one save writes into
+  `events.json`, or the lease's last beat.
 - `var/maintenance.json` is not read any more. A deployment that upgrades moves the
   file to `var/state/` before the restart or loses its pins — a startup warning
   names the file, and the release notes say so; nothing outside the family reads
@@ -146,9 +161,10 @@ Three layers hold what this process wants to survive a restart.
   has re-pinned by hand can silence the load line for the rest of the process.
 - The keeper's registration, its S3 implementation and the lines it adds are the
   next stage; the notes and the series join the directory as their own records are
-  built. Nothing here is designed for a second process: two instances sharing one
+  built. A second process never writes into the directory — the lease refuses it
+  ([ADR-0090](0090-one-state-directory-one-writer.md)); two instances sharing one
   keeper is the 412 the design reports, not a case it serves — and two instances
-  sharing one *lease* is [ADR-0077](0077-authority-follows-the-lease.md)'s.
+  sharing one *keeper's* lease is [ADR-0077](0077-authority-follows-the-lease.md)'s.
 
 ## Alternatives considered
 

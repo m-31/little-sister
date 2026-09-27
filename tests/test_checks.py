@@ -1,7 +1,10 @@
+import json
 import os
 import tempfile
 import time
 import unittest
+from collections.abc import Sequence
+from datetime import UTC, datetime, timedelta
 from email.message import Message
 from pathlib import Path
 from typing import ClassVar
@@ -12,9 +15,11 @@ from little_sister.checks import (
     Check,
     CheckError,
     Entry,
+    Measurement,
     code,
     load_checks,
     parse_duration,
+    plain,
 )
 from little_sister.checks.base import CheckResult
 from little_sister.checks.command import CommandCheck
@@ -27,8 +32,11 @@ from little_sister.checks.ssh.qnap_metrics import QnapMetricsCheck
 from little_sister.checks.ssh.script import ScriptCheck
 from little_sister.errors import ConfigError
 from little_sister.fetch import Response
+from little_sister.instance import this_instance
+from little_sister.limits import RECORD_LIMIT
 from little_sister.status import StatusCode
 from little_sister.transport import Fault, RemoteError
+from tests.running import measured, pid_gone, record_of, run_check
 
 HERE = Path(".")
 
@@ -104,11 +112,11 @@ class HttpCheckTests(TestCase):
 
     def test_ok_when_status_expected(self):
         with self._answering(200):
-            self.assertEqual(self._check().run().code, StatusCode.OK)
+            self.assertEqual(run_check(self._check()).code, StatusCode.OK)
 
     def test_error_on_unexpected_http_status(self):
         with self._answering(503):
-            result = self._check().run()
+            result = run_check(self._check())
         self.assertEqual(result.code, StatusCode.ERROR)
         self.assertIn("503", result.reason_texts[0])
 
@@ -118,43 +126,52 @@ class HttpCheckTests(TestCase):
         """The whole point: the family's most common check produced **no number at
         all**, because on the healthy path it returned a bare `OK`. Now the run
         carries the measurement, and the line retells it."""
+        check = self._check()
         with self._answering(200):
-            result = self._check().run()
+            record = record_of(check)
+            result = run_check(check)
         self.assertEqual(result.code, StatusCode.OK)
-        self.assertEqual(result.record["status"], 200)
-        self.assertIsInstance(result.record["response_ms"], int)
-        self.assertGreaterEqual(result.record["response_ms"], 0)
+        self.assertEqual(record["status"], 200)
+        self.assertIsInstance(record["response_ms"], int)
+        self.assertGreaterEqual(record["response_ms"], 0)
         entry, = result.reason_entries
         self.assertIn("HTTP 200", entry.text)
 
     def test_the_measurement_says_which_thing_in_the_world_it_read(self):
         """A node is a place in the tree; an object is a thing in the world. The
         path is the deployment's label and may be moved or renamed, so the reading
-        names the URL itself — on the **run**, because this check's node stands for
-        its object and the line is only a rendering (ADR-0085)."""
+        names the URL itself — declared at construction, because the engine has to
+        be able to name it when the check *raises* (ADR-0085, ADR-0086)."""
+        check = self._check()
+        self.assertEqual(check.subject, "http://x")
         with self._answering(200):
-            result = self._check().run()
-        self.assertEqual(result.subject, "http://x")
+            result = run_check(check)
         entry, = result.reason_entries
         self.assertEqual(entry.subject, "", "the line is not where the object lives")
         self.assertIsNone(entry.data)
+
+    def test_the_measurement_is_the_only_place_the_reading_lives(self):
+        """`subject` and `record` left `CheckResult` with the split (ADR-0086): two
+        writers for one field is what invites a check to forget one, so a grading
+        has nowhere to put a reading and nowhere to lose it either."""
+        self.assertFalse(hasattr(CheckResult(StatusCode.OK), "record"))
+        self.assertFalse(hasattr(CheckResult(StatusCode.OK), "subject"))
 
     def test_the_line_carries_no_code_of_its_own(self):
         """With one line the node's reading is already the verdict, and a coded entry
         beside a declared result code is the shape `CheckResult` refuses (ADR-0042).
         This is what lets the result keep declaring `OK` and `ERROR` itself."""
         with self._answering(503):
-            entry, = self._check().run().reason_entries
+            entry, = run_check(self._check()).reason_entries
         self.assertIsNone(entry.code)
 
     def test_a_status_nobody_expected_is_still_a_measurement(self):
         """A 503 answered, and how fast it answered is a reading about the object.
         Only a request that got *no* answer has nothing to measure."""
-        result = None
         with self._answering(503):
-            result = self._check().run()
-        self.assertEqual(result.record["status"], 503)
-        self.assertIn("response_ms", result.record)
+            record = record_of(self._check())
+        self.assertEqual(record["status"], 503)
+        self.assertIn("response_ms", record)
 
     def test_a_failed_reading_is_recorded_as_a_reading(self):
         """It is not nothing: the check learned that it could not get there, and why.
@@ -164,9 +181,10 @@ class HttpCheckTests(TestCase):
         with mock.patch("little_sister.checks.http.fetch",
                         side_effect=RemoteError("request failed for GET http://x: "
                                                 "boom", fault=Fault.TRANSIENT)):
-            result = self._check().run()
-        self.assertEqual(result.subject, "http://x")
-        self.assertIn("boom", result.record["error"])
+            measurement, = measured(self._check())
+        self.assertEqual(measurement.subject, "",
+                         "the object is the check's, declared at construction")
+        self.assertIn("boom", measurement.record["error"])
 
     def test_a_failed_reading_measures_nothing_but_keeps_the_shape(self):
         """`status` and `response_ms` are present and null rather than missing, so
@@ -175,25 +193,38 @@ class HttpCheckTests(TestCase):
         timeout's number, not the endpoint's."""
         with mock.patch("little_sister.checks.http.fetch",
                         side_effect=RemoteError("boom", fault=Fault.TRANSIENT)):
-            record = self._check().run().record
+            record = record_of(self._check())
         self.assertIn("status", record)
         self.assertIsNone(record["status"])
         self.assertIn("response_ms", record)
         self.assertIsNone(record["response_ms"])
 
+    def test_the_recorded_error_is_raw_and_the_line_is_escaped(self):
+        """A record's values are escaped where they are rendered, so folding one
+        through `plain()` on the way in stores the escaping and shows it. The line
+        is the one place the message has to be Markdown-safe."""
+        with mock.patch("little_sister.checks.http.fetch",
+                        side_effect=RemoteError("boom_for_x [see docs]",
+                                                fault=Fault.TRANSIENT)):
+            check = self._check()
+            record = record_of(check)
+            result = run_check(check)
+        self.assertEqual(record["error"], "boom_for_x [see docs]")
+        self.assertIn("\\[see docs\\]", result.reason_texts[0])
+
     def test_a_reading_that_answered_carries_no_error(self):
         # not dragged along as a null on every successful reading: a projection
         # treats a missing key as an empty one, and every record would be longer
         with self._answering(200):
-            self.assertNotIn("error", self._check().run().record)
+            self.assertNotIn("error", record_of(self._check()))
 
     def test_the_line_is_the_same_one_across_readings(self):
         """A pin holds a slug (ADR-0036), so the line an operator silenced must be the
         line the next run reports — and this check has one line, every time."""
         with self._answering(200):
-            healthy, = self._check().run().reason_entries
+            healthy, = run_check(self._check()).reason_entries
         with self._answering(503):
-            failing, = self._check().run().reason_entries
+            failing, = run_check(self._check()).reason_entries
         self.assertEqual(healthy.slug, failing.slug)
 
     def test_it_declares_what_one_run_holds(self):
@@ -202,6 +233,49 @@ class HttpCheckTests(TestCase):
         check = self._check()
         self.assertEqual(check.expected_entries(), 1)
         self.assertGreaterEqual(check.expected_record(), 36)
+
+    # --- a failed reading stays inside what the check declared ----------------
+    # (ADR-0086 decision 7: free text entering a record is clipped once, in bytes)
+
+    def _failing_record(self, message):
+        with mock.patch("little_sister.checks.http.fetch",
+                        side_effect=RemoteError(message, fault=Fault.TRANSIENT)):
+            check = self._check()
+            return check, record_of(check), run_check(check)
+
+    def test_a_very_long_error_fits_the_declaration(self):
+        """The partial run's `/probe/fails` read 139 bytes against a declared 64:
+        the error was stored whole. A kilobyte of it now fits what the check
+        declared, and the line says exactly the text the record kept."""
+        message = "request failed for GET http://x: " + "boom " * 200
+        self.assertEqual(len(message), 1033)
+        check, record, result = self._failing_record(message)
+        self.assertLessEqual(len(json.dumps(record).encode("utf-8")),
+                             check.expected_record())
+        self.assertLess(len(record["error"]), len(message))
+        self.assertEqual(result.reason_texts,
+                         [f"request failed: {plain(record['error'])}"])
+
+    def test_an_error_in_emoji_fits_the_declaration(self):
+        """An emoji is a surrogate pair in JSON — twelve bytes a character — so a
+        clip by characters alone would declare a size it can exceed twelvefold."""
+        emoji = "\U0001F600"
+        self.assertEqual(len(emoji), 1)
+        self.assertEqual(len(json.dumps(emoji)), 14)     # 12 bytes and 2 quotes
+        check, record, _result = self._failing_record(emoji * 400)
+        self.assertLessEqual(len(json.dumps(record).encode("utf-8")),
+                             check.expected_record())
+
+    def test_the_declaration_is_the_worst_failed_reading_exactly(self):
+        """Derived, not measured: a message whose every character escapes to two
+        bytes fills the byte budget to the last byte, and the record is then
+        exactly what the check declares — a ceiling that is also reached."""
+        quotes = '"' * 400
+        self.assertEqual(len(quotes), 400)
+        check, record, _result = self._failing_record(quotes)
+        self.assertEqual(len(json.dumps(record).encode("utf-8")),
+                         check.expected_record())
+        self.assertLessEqual(check.expected_record(), RECORD_LIMIT)
 
     # --- `follow_redirects:`, and the two readings it chooses between ---------
 
@@ -218,14 +292,14 @@ class HttpCheckTests(TestCase):
         written against a URL that answers 200 after a 301 would turn red on upgrade,
         on a config nobody edited."""
         with self._asked() as fetched:
-            self._check().run()
+            run_check(self._check())
         self.assertIs(fetched.call_args.kwargs["follow_redirects"], True)
 
     def test_a_config_can_ask_for_the_stricter_reading(self):
         """The point of the key: with redirects reported, a `200` at the end of a chain
         is no longer proof the page is there — a login wall answers one too."""
         with self._asked() as fetched:
-            self._check(follow_redirects=False).run()
+            run_check(self._check(follow_redirects=False))
         self.assertIs(fetched.call_args.kwargs["follow_redirects"], False)
 
     def test_a_reported_redirect_is_the_reading(self):
@@ -233,12 +307,12 @@ class HttpCheckTests(TestCase):
         so a deployment that wants it accepts the codes it means to in
         `expected_status`."""
         with self._answering(301):
-            moved = self._check(follow_redirects=False).run()
+            moved = run_check(self._check(follow_redirects=False))
         self.assertEqual(moved.code, StatusCode.ERROR)
         self.assertIn("301", moved.reason_texts[0])
         with self._answering(301):
-            allowed = self._check(follow_redirects=False,
-                                  expected_status=[200, 301]).run()
+            allowed = run_check(self._check(follow_redirects=False,
+                                  expected_status=[200, 301]))
         self.assertEqual(allowed.code, StatusCode.OK)
 
     def test_a_quoted_boolean_is_refused_rather_than_read_as_true(self):
@@ -287,14 +361,14 @@ class HttpCheckTests(TestCase):
         with mock.patch("little_sister.checks.http.fetch",
                         side_effect=RemoteError("request failed for GET http://x: "
                                                 "boom", fault=Fault.TRANSIENT)):
-            result = self._check().run()
+            result = run_check(self._check())
         self.assertEqual(result.code, StatusCode.ERROR)
         self.assertIn("request failed", result.reason_texts[0])
 
     def test_expected_status_list(self):
         with self._answering(204):
             self.assertEqual(
-                self._check(expected_status=[200, 204]).run().code, StatusCode.OK)
+                run_check(self._check(expected_status=[200, 204])).code, StatusCode.OK)
 
     def test_it_follows_redirects_and_reads_no_body(self):
         # Both are decisions, not defaults. Following is what it has always done, so a
@@ -302,7 +376,7 @@ class HttpCheckTests(TestCase):
         # check that wants a status has no use for the page behind it.
         with mock.patch("little_sister.checks.http.fetch",
                         return_value=Response(200, "http://x", Message(), b"")) as f:
-            self._check().run()
+            run_check(self._check())
         self.assertEqual(f.call_args.kwargs["follow_redirects"], True)
         self.assertEqual(f.call_args.kwargs["read_body"], False)
 
@@ -315,18 +389,18 @@ class FileFreshnessTests(TestCase):
             check = FileFreshnessCheck.from_config(
                 {"type": "file", "path": "/hb", "file": str(heartbeat),
                  "max_age": "20m"}, Path(directory))
-            self.assertEqual(check.run().code, StatusCode.OK)
+            self.assertEqual(run_check(check).code, StatusCode.OK)
 
             stale = time.time() - 3600
             os.utime(heartbeat, (stale, stale))
-            result = check.run()
+            result = run_check(check)
             self.assertEqual(result.code, StatusCode.ERROR)
             self.assertIn("stale", result.reason[0])
 
             missing = FileFreshnessCheck.from_config(
                 {"type": "file", "path": "/x",
                  "file": str(Path(directory) / "nope")}, Path(directory))
-            self.assertEqual(missing.run().code, StatusCode.ERROR)
+            self.assertEqual(run_check(missing).code, StatusCode.ERROR)
 
     def test_relative_path_resolves_under_home(self):
         # base_dir (/tmp) is ignored; relative paths resolve under $HOME.
@@ -340,6 +414,104 @@ class FileFreshnessTests(TestCase):
             {"type": "file", "path": "/x", "file": "/var/log/x.log"}, Path("/tmp"))
         self.assertEqual(absolute.file_path, "/var/log/x.log")
 
+    def test_the_grading_ages_the_reading_against_the_clock_it_is_given(self):
+        """The purity rule at the one check where it is impossible to fake: *how
+        old* is a fact about `now`, so the grading is handed one and must use it.
+
+        Same record, two clocks, two verdicts — which is exactly what the series
+        will do to this grading with a record from last week.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            heartbeat = Path(directory) / "hb.txt"
+            heartbeat.write_text("x")
+            check = FileFreshnessCheck.from_config(
+                {"type": "file", "path": "/hb", "file": str(heartbeat),
+                 "max_age": "20m"}, Path(directory))
+            taken = measured(check)
+            fresh = datetime.now(UTC)
+            self.assertEqual(
+                check.grade(taken, fresh).code, StatusCode.OK)
+            self.assertEqual(
+                check.grade(taken, fresh + timedelta(hours=2)).code,
+                StatusCode.ERROR)
+
+    def test_the_reading_is_the_modification_time_and_not_an_age(self):
+        """An age would be stale the moment it was written; an instant is not. It
+        carries an offset, because a record's time travels to a viewer in a third
+        zone."""
+        with tempfile.TemporaryDirectory() as directory:
+            heartbeat = Path(directory) / "hb.txt"
+            heartbeat.write_text("x")
+            check = FileFreshnessCheck.from_config(
+                {"type": "file", "path": "/hb", "file": str(heartbeat)},
+                Path(directory))
+            record = record_of(check)
+        moment = datetime.fromisoformat(record["modified"]["at"])
+        self.assertIsNotNone(moment.tzinfo)
+        self.assertNotIn("age_seconds", record)
+
+    def test_a_file_it_could_not_read_keeps_the_shape_and_says_why(self):
+        with tempfile.TemporaryDirectory() as directory:
+            missing = FileFreshnessCheck.from_config(
+                {"type": "file", "path": "/x",
+                 "file": str(Path(directory) / "nope")}, Path(directory))
+            record = record_of(missing)
+        self.assertIsNone(record["modified"]["at"])
+        self.assertIn("file not found", record["error"])
+
+    # --- a failed read stays inside what the check declared --------------------
+    # (ADR-0086 decision 7: free text entering a record is clipped once, in bytes)
+
+    def _unread(self, file, error=None):
+        with tempfile.TemporaryDirectory() as directory:
+            check = FileFreshnessCheck.from_config(
+                {"type": "file", "path": "/x", "file": file}, Path(directory))
+            if error is None:
+                record = record_of(check)
+                result = run_check(check)
+            else:
+                with mock.patch("little_sister.checks.file.os.path.getmtime",
+                                side_effect=error):
+                    record = record_of(check)
+                    result = run_check(check)
+        return check, record, result
+
+    def test_a_very_long_error_fits_the_declaration(self):
+        """The OS error is as long as the OS made it — the path is bounded by the
+        200 characters a subject may have, the message beside it is not."""
+        message = "Input/output error while reading the inode table " * 20
+        self.assertEqual(len(message), 980)
+        check, record, result = self._unread("/x", error=OSError(message))
+        self.assertLessEqual(len(json.dumps(record).encode("utf-8")),
+                             check.expected_record())
+        self.assertLess(len(record["error"]), len(message))
+        self.assertEqual(result.reason, [plain(record["error"])])
+
+    def test_a_missing_path_in_emoji_fits_the_declaration(self):
+        """Within the subject's 200 characters, a path in emoji is still twelve
+        bytes a character in JSON — over two kilobytes unclipped."""
+        emoji = "\U0001F600"
+        self.assertEqual(len(emoji), 1)
+        self.assertEqual(len(json.dumps(emoji)), 14)     # 12 bytes and 2 quotes
+        path = "/" + "/".join([emoji * 60] * 3)
+        self.assertEqual(len(path), 183)
+        check, record, _result = self._unread(path)
+        self.assertIn(emoji, record["error"])
+        self.assertLessEqual(len(json.dumps(record).encode("utf-8")),
+                             check.expected_record())
+
+    def test_the_declaration_is_the_worst_failed_read_exactly(self):
+        """`cannot read file: ` and then characters that escape to two bytes each
+        fill the byte budget to the last byte, so the record is exactly what the
+        check declares."""
+        quotes = '"' * 400
+        self.assertEqual(len(quotes), 400)
+        check, record, _result = self._unread("/x", error=OSError(quotes))
+        self.assertTrue(record["error"].startswith('cannot read file: "'))
+        self.assertEqual(len(json.dumps(record).encode("utf-8")),
+                         check.expected_record())
+        self.assertLessEqual(check.expected_record(), RECORD_LIMIT)
+
     def test_custom_stale_code(self):
         with tempfile.TemporaryDirectory() as directory:
             heartbeat = Path(directory) / "hb.txt"
@@ -349,7 +521,7 @@ class FileFreshnessTests(TestCase):
             check = FileFreshnessCheck.from_config(
                 {"type": "file", "path": "/hb", "file": str(heartbeat),
                  "max_age": "1m", "stale_code": "WARN"}, Path(directory))
-            self.assertEqual(check.run().code, StatusCode.WARN)
+            self.assertEqual(run_check(check).code, StatusCode.WARN)
 
 
 class CommandCheckTests(TestCase):
@@ -359,30 +531,121 @@ class CommandCheckTests(TestCase):
         return CommandCheck.from_config(config, HERE)
 
     def test_ok_on_exit_zero_with_stdout_reason(self):
-        result = self._check("echo hello").run()
+        result = run_check(self._check("echo hello"))
         self.assertEqual(result.code, StatusCode.OK)
         # captured output is fenced as a code block (ADR-0018)
         self.assertEqual(result.reason, [code("hello")])
 
     def test_error_on_nonzero_with_stderr_capture(self):
-        result = self._check("echo oops >&2; exit 3", capture="stderr").run()
+        result = run_check(self._check("echo oops >&2; exit 3", capture="stderr"))
         self.assertEqual(result.code, StatusCode.ERROR)
         self.assertIn("oops", result.reason[0])
 
     def test_argv_list_command(self):
-        result = self._check(["echo", "hi"]).run()
+        result = run_check(self._check(["echo", "hi"]))
         self.assertEqual((result.code, result.reason), (StatusCode.OK, [code("hi")]))
 
     def test_output_shortening_tail_and_head(self):
-        tail = self._check("printf abcdef", max_chars=3, keep="tail").run()
+        tail = run_check(self._check("printf abcdef", max_chars=3, keep="tail"))
         self.assertEqual(tail.reason, [code("def")])
-        head = self._check("printf abcdef", max_chars=3, keep="head").run()
+        head = run_check(self._check("printf abcdef", max_chars=3, keep="head"))
         self.assertEqual(head.reason, [code("abc")])
 
     def test_timeout_is_error(self):
-        result = self._check("sleep 5", timeout="1s").run()
+        result = run_check(self._check("sleep 5", timeout="1s"))
         self.assertEqual(result.code, StatusCode.ERROR)
         self.assertIn("timed out", result.reason[0])
+
+    def test_a_timeout_ends_what_the_shell_started(self):
+        """The defect a run's own timeout had: the shell was killed and what it had
+        started ran on under `init` (ADR-0089 decision 3)."""
+        with tempfile.TemporaryDirectory() as scratch:
+            marker = Path(scratch) / "child.pid"
+            command = f"sleep 41 & echo $! > {marker}; wait"
+            result = run_check(self._check(command, timeout="1s"))
+            self.assertIn("timed out", result.reason[0])
+            self.assertTrue(pid_gone(int(marker.read_text())),
+                            "the command's child outlived the check's timeout")
+
+    def test_what_the_command_leaves_behind_ends_with_the_run(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            marker = Path(scratch) / "child.pid"
+            command = f"sleep 42 & echo $! > {marker}; echo done"
+            result = run_check(self._check(command))
+            self.assertEqual((result.code, result.reason),
+                             (StatusCode.OK, [code("done")]))
+            self.assertTrue(pid_gone(int(marker.read_text())),
+                            "a background child outlived the run")
+
+    def test_the_object_is_the_machine_and_the_command_is_the_instrument(self):
+        """The distinction the transport vocabulary already turns on: an `http`
+        check's object is its URL and not `GET`, an `ssh-command`'s is the host
+        and not the command. This is that check's local twin, so its object is the
+        machine little-sister runs on — which the library names (ADR-0074)."""
+        check = self._check("echo hello")
+        self.assertEqual(check.subject, this_instance().name)
+        self.assertNotIn("echo hello", check.subject)
+
+    def test_the_line_is_rebuilt_from_the_record_and_nothing_else(self):
+        """The captured output has to be *in* the reading, because the grading may
+        read nothing else — and because a history of this check that did not keep
+        what the command said would keep nothing at all."""
+        check = self._check(["printf", "one\ntwo"])
+        record = record_of(check)
+        self.assertEqual(record["exit_code"], 0)
+        self.assertEqual(record["output"], "one\ntwo")
+        rebuilt = check.grade(
+            (Measurement(record={"exit_code": 0, "output": "one\ntwo"}),),
+            datetime.now(UTC))
+        self.assertEqual(rebuilt.reason, run_check(check).reason)
+
+    def test_a_run_with_no_exit_code_is_still_a_reading(self):
+        record = record_of(self._check("sleep 5", timeout="1s"))
+        self.assertIsNone(record["exit_code"])
+        self.assertIsNone(record["output"])
+        self.assertIn("timed out", record["error"])
+
+    def test_the_output_is_clipped_in_bytes_so_the_declaration_is_a_ceiling(self):
+        """`max_chars` is characters and `record_limit` is **bytes** — and JSON
+        writes an emoji as a surrogate pair, twelve bytes for one character. A
+        check clipping by characters alone would declare a size it exceeds
+        twelvefold and be refused at the seam on every run.
+
+        Run against the worst encoding there is, and asserted in both directions:
+        the record fits what the check declared, and what it declared fits what
+        the deployment allows.
+        """
+        check = self._check(["printf", "%s", "\U0001f600" * 400], max_chars=400)
+        declared = check.expected_record()
+        record = record_of(check)
+        self.assertLessEqual(len(json.dumps(record).encode("utf-8")), declared)
+        self.assertLessEqual(declared, RECORD_LIMIT)
+        # clipped once: the line says exactly what the record kept
+        self.assertEqual(run_check(check).reason, [code(record["output"])])
+        self.assertLess(len(record["output"]), 400,
+                        "the byte budget, not `max_chars`, is what bound this")
+
+    def test_a_small_max_chars_is_declared_at_the_worst_encoding(self):
+        """The case the budget does not hide. With `max_chars` small enough that
+        the byte budget never bites, the declaration is `max_chars` times the
+        worst a character can cost — and that is **twelve**, not six: an umlaut
+        is `\\u00e4` and costs six, but an emoji is a surrogate pair. Declare six
+        and this configuration exceeds what it promised.
+        """
+        check = self._check(["printf", "%s", "\U0001f600" * 100], max_chars=100)
+        declared = check.expected_record()
+        record = record_of(check)
+        self.assertEqual(len(record["output"]), 100,
+                         "max_chars is what bound this one, not the budget")
+        self.assertLessEqual(len(json.dumps(record).encode("utf-8")), declared)
+        self.assertLess(declared, RECORD_LIMIT,
+                        "a small configuration declares a small record")
+
+    def test_a_small_max_chars_declares_a_small_record(self):
+        """The declaration is not a constant 2 KB: it is what this configuration
+        can actually produce, so startup's comparison says something."""
+        self.assertLess(self._check("true", max_chars=50).expected_record(),
+                        self._check("true", max_chars=1000).expected_record())
 
 
 class CheckResultTreeTests(TestCase):
@@ -723,7 +986,11 @@ class ConstructorRefusalTests(TestCase):
                 retry_interval_seconds=retry_interval_seconds,
                 retry_attempts=retry_attempts)
 
-        def run(self) -> CheckResult:
+        def measure(self) -> Measurement:
+            return Measurement(record={})
+
+        def grade(self, measurements: Sequence[Measurement],
+                  now: datetime) -> CheckResult:
             return CheckResult(StatusCode.OK)
 
     class _BrokenBody(Check):
@@ -735,7 +1002,11 @@ class ConstructorRefusalTests(TestCase):
             super().__init__(**kwargs)   # type: ignore[arg-type]
             raise TypeError("the check's own bug")
 
-        def run(self) -> CheckResult:
+        def measure(self) -> Measurement:
+            return Measurement(record={})
+
+        def grade(self, measurements: Sequence[Measurement],
+                  now: datetime) -> CheckResult:
             return CheckResult(StatusCode.OK)
 
     def test_a_constructor_that_will_not_bind_names_the_type_and_the_keyword(self):
@@ -879,7 +1150,11 @@ class _DeclaringCheck(Check):
         super().__init__(subnode_defaults=self.DEFAULTS,      # type: ignore[arg-type]
                          label_tokens={"host": "alpha"}, **kwargs)
 
-    def run(self) -> CheckResult:
+    def measure(self) -> Measurement:
+        return Measurement(record={})
+
+    def grade(self, measurements: Sequence[Measurement],
+              now: datetime) -> CheckResult:
         return CheckResult(StatusCode.OK)
 
 
@@ -895,7 +1170,11 @@ def _declaring(defaults: dict, **config: object) -> Check:
             super().__init__(subnode_defaults=defaults,   # type: ignore[arg-type]
                              **kwargs)                    # type: ignore[arg-type]
 
-        def run(self) -> CheckResult:
+        def measure(self) -> Measurement:
+            return Measurement(record={})
+
+        def grade(self, measurements: Sequence[Measurement],
+                  now: datetime) -> CheckResult:
             return CheckResult(StatusCode.OK)
 
     return _Declared.from_config({"type": "x", "path": "/host", **config}, HERE)

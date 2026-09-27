@@ -142,6 +142,12 @@ Besides the current status, little-sister records **status changes**:
   forming an **event log** across all checks.
 - A node's **status history** is the sequence of status periods it has held
   (status, since, until, reason).
+- A check may keep the **readings** of the thing it reads — a URL, a host — as that
+  thing's history, a bounded number of them. The node that stands for the thing shows
+  it: a curve for each number the check's configuration declares worth drawing, in its
+  unit, where a failed reading is a marked gap and a stretch in which nothing was read
+  a plain one, and the newest readings as a table; every kept reading is on the node's
+  history page.
 - An **admin** can put a node into **maintenance** with a reason. Maintenance is a
   sticky override: it pins the node to `MAINTENANCE` (canceling its subtree) until
   an admin clears it, and it can be edited in place — extending a window keeps the
@@ -225,11 +231,13 @@ The app offers:
   degraded, so green always means freshly checked. The engine even reports its own
   liveness as a node, so a dead monitor is visible too.
 - **Check detail** (a leaf) — its description, current status and reason, the time
-  interval the current status has held, how often it is checked, and a link to its
-  history. A node nothing checks — one the engine re-asserts on its own tick — says
+  interval the current status has held, how often it is checked, what it measured,
+  the curves and newest readings of the thing it keeps a history of (§2.6), and a link
+  to its history. A node nothing checks — one the engine re-asserts on its own tick — says
   instead how fresh it promises to be, since *checked every* is a claim only a check
   can make. An admin can set/clear **maintenance** here.
-- **Status history** (`/history/<path>`) — a node's status periods over time.
+- **Status history** (`/history/<path>`) — a node's status periods over time, and
+  every reading kept of the thing it stands for.
 - **Events** (`/events`) — the transition log across all checks, newest first.
 - **About** (`/about`) — who this is, why it is called that, and the version of the
   instance in front of you.
@@ -271,8 +279,10 @@ the core carries only what every install needs; anything heavier is added by a
 deployment, never baked in.
 
 - **Status, not telemetry.** The core surfaces **status** — it is not a metrics / APM
-  platform, and a default install shows status and nothing more. (A deployment may of
-  course add checks that read from anywhere.)
+  platform, and a default install shows status and nothing more. A thing's **recent
+  history** is part of its status: a bounded number of readings per thing, drawn on the
+  node that stands for it, and nothing it would take a metrics store to hold. (A
+  deployment may of course add checks that read from anywhere.)
 - **A small core, extended — not a monolith.** Extensibility is now a goal, but the
   *core* stays lean: few dependencies, boring code. Heavier machinery (cloud SDKs,
   Keycloak, S3) rides in **extensions / plugin packages**, so it never weighs down a

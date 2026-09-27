@@ -1,12 +1,13 @@
 # ADR-0066 — `/health` answers liveness, and says almost nothing
 
 - **Status:** Accepted
-- **Date:** 2026-08-29
+- **Date:** 2026-09-27 (accepted 2026-08-29)
 - **Related:** [ADR-0005](0005-dashboard-freshness-and-self-monitoring.md) (what this
   application already says about itself, and where a dead engine is loud),
   [ADR-0008](0008-json-output-api.md) (the token-authed JSON API this is **not** part
   of), [ADR-0048](0048-an-assembled-content-security-policy.md) §6 (the other route
-  with no login gate)
+  with no login gate), [ADR-0091](0091-an-import-is-not-an-instance.md) (the server's
+  start is what starts the engine, and a server without the hooks has none)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -57,7 +58,12 @@ secondary fact in it invites the wrong reading.
 
 **`disabled` and `failed` are both "no engine" and are deliberately not one word.** The
 first is a deployment that said `LITTLE_SISTER_ENGINE=0` and got exactly what it asked
-for; the second is a configuration this instance could not load. Reporting them the same
+for; the second is a configuration this instance could not load, or a server that never
+started its engine. Importing the application does not start one — the server's start
+does — so a gunicorn line without the library's hooks serves with no engine and an error
+naming the missing flag ([ADR-0091](0091-an-import-is-not-an-instance.md)); the code is
+still `200`, which is what keeps a liveness probe that restarts on failure from turning a
+missing flag into a restart loop. Reporting them the same
 would make a deliberate quiet indistinguishable from a broken one, which is the
 confusion this whole application exists to remove.
 

@@ -35,7 +35,17 @@ PID_FILE="$PWD/var/gunicorn.pid"
 # exported three days ago answers nothing. Assigned rather than defaulted, so an
 # exported one cannot decide it either.
 ANY_INSTANCE=0
-STOP_TIMEOUT="${STOP_TIMEOUT:-50}"   # graceful-stop wait, in 0.2s steps (~10s)
+
+# The grace (little-sister ADR-0088): how long gunicorn gives a request still running at
+# the TERM before its master KILLs the worker. gunicorn's own default, written down once
+# here because three things are bounded by it: `start.sh` hands it to gunicorn as
+# `--graceful-timeout`, `stop_instance` below waits it out, and a container that runs
+# the instance names its stop timeout beside it. An installation raises it in
+# `instance.sh` or in the environment, the way it raises WORKER_TIMEOUT.
+GRACEFUL_TIMEOUT="${GRACEFUL_TIMEOUT:-30}"
+# What the master needs after its own KILL to reap its worker and exit: `stop_instance`
+# waits the grace and this, and then KILLs whatever is left.
+STOP_MARGIN=5
 
 # --- TLS, and the bind target it decides ------------------------------------
 #
@@ -368,10 +378,11 @@ fatal_in_log() {
 # being monitored -- so start.sh reports it and exits non-zero, leaving the process
 # up so the banner stays readable (./stop.sh ends it).
 #
-# The line is written while the WSGI app is imported, i.e. strictly before any
-# worker can answer a request: checking after a successful probe cannot race it. A
-# deliberate LITTLE_SISTER_ENGINE=0 logs "engine disabled via …" instead, so it does
-# not match here.
+# The line is written by the server's start -- gunicorn's `post_worker_init`, right
+# after the worker's import and before it serves anything (little-sister ADR-0091) --
+# so checking after a successful probe cannot race it. A deliberate
+# LITTLE_SISTER_ENGINE=0 logs "engine disabled via …" instead, so it does not match
+# here.
 ENGINE_ERROR_MARK="engine not started:"
 engine_error_in_log() {
   # `|| true` because no match is the healthy case, and `set -o pipefail` in the
@@ -462,16 +473,43 @@ master_of() {
   echo "${pids%% *}"   # fallback: first PID
 }
 
-# Gracefully stop a gunicorn master: TERM, wait, then KILL as a last resort.
-stop_master() {
-  local pid="$1" i
-  echo "Stopping running little-sister (PID ${pid})..."
-  kill -TERM "$pid" 2>/dev/null || true
-  for _ in $(seq 1 "$STOP_TIMEOUT"); do
-    kill -0 "$pid" 2>/dev/null || { echo "Stopped."; return 0; }
+# The processes of an instance: its master, and every process the master forked -- its
+# workers.
+instance_pids() {
+  echo "$1"
+  ps -A -o pid= -o ppid= 2>/dev/null | awk -v master="$1" '$2 == master { print $1 }'
+}
+
+# Stop an instance, and wait for **every process of it** (little-sister ADR-0088).
+#
+# The processes are read *before* the TERM, while the worker still listens: a worker
+# leaves its loop at the TERM and closes its sockets, and from then on nothing on the
+# port says it is there -- which is how a worker waiting on a check outlived a stop that
+# watched its master alone, and a start came up beside it. The TERM goes to the master,
+# whose own graceful stop gives a request still running the grace and then KILLs the
+# worker; this waits on all of them for the grace and STOP_MARGIN, and at that bound
+# KILLs what is left and names each one.
+stop_instance() {
+  local master="$1" pids pid left steps
+  steps=$(( (GRACEFUL_TIMEOUT + STOP_MARGIN) * 5 ))   # 0.2 s each
+  pids="$(instance_pids "$master" | tr '\n' ' ')"
+  echo "Stopping running little-sister (PID ${master})..."
+  kill -TERM "$master" 2>/dev/null || true
+  while :; do
+    left=""
+    for pid in $pids; do
+      if kill -0 "$pid" 2>/dev/null; then left="${left} ${pid}"; fi
+    done
+    if [ -z "$left" ]; then echo "Stopped."; return 0; fi
+    if [ "$steps" -le 0 ]; then break; fi
+    steps=$(( steps - 1 ))
     sleep 0.2
   done
-  echo "Did not exit in time; sending KILL." >&2
-  kill -KILL "$pid" 2>/dev/null || true
+  echo "Still running ${GRACEFUL_TIMEOUT}s and ${STOP_MARGIN}s after the TERM;" \
+       "sending KILL to:" >&2
+  for pid in $left; do
+    echo "  PID ${pid}: $(cmd_of "$pid")" >&2
+    kill -KILL "$pid" 2>/dev/null || true
+  done
   sleep 0.5
 }

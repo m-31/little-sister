@@ -4,6 +4,7 @@ Prose is the default and members are declared — the rule the whole feature tur
 on, and the one most likely to be forgotten.
 """
 
+import json
 import os
 import subprocess
 import sys
@@ -12,7 +13,7 @@ import unittest
 from pathlib import Path
 from unittest import TestCase
 
-from little_sister.checks.base import CheckResult
+from little_sister.checks.base import CheckResult, Measurement
 from little_sister.errors import CheckError
 from little_sister.limits import RECORD_LIMIT
 from little_sister.reasons import (
@@ -21,6 +22,7 @@ from little_sister.reasons import (
     Entry,
     ReasonEntry,
     ReasonError,
+    clip,
     derive_code,
     derived_slug,
     normalize,
@@ -276,6 +278,35 @@ class RecordTests(TestCase):
                         [Entry("w", "x", data={"completed": {"at": "2026-09-19"}})])
         self.assertIn("completed.at", str(caught.exception))
 
+    def test_a_bad_time_is_reported_as_a_bad_time(self):
+        # The walk that converts the times ran inside the handler for a value JSON
+        # cannot hold, so a time without an offset read as a record that "must be
+        # JSON-serializable" — which it was, and which sent a reader looking for
+        # the wrong thing before the real sentence.
+        with self.assertRaises(CheckError) as caught:
+            CheckResult(StatusCode.OK,
+                        [Entry("w", "x", data={"completed": {"at": "2026-09-19"}})])
+        message = str(caught.exception)
+        self.assertIn("record field 'completed.at' names a time", message)
+        self.assertNotIn("JSON-serializable", message)
+
+    def test_a_time_utc_cannot_hold_is_refused_as_a_bad_time(self):
+        # An offset can carry an instant at the edge of the calendar past it: the
+        # first hour of the year 1 at +01:00 is the year 0 in UTC. The conversion
+        # raised OverflowError out of the check, where every other bad time is a
+        # CheckError that names the field.
+        for value in ("0001-01-01T00:00:00+01:00", "9999-12-31T23:30:00-01:00"):
+            with self.subTest(value=value):
+                with self.assertRaises(CheckError) as caught:
+                    CheckResult(StatusCode.OK,
+                                [Entry("w", "x", data={"updated": {"at": value}})])
+                self.assertIn(
+                    f"record field 'updated.at' names a time that lies outside the "
+                    f"years 1 to 9999 once it is read in UTC: {value!r}",
+                    str(caught.exception))
+                with self.assertRaises(CheckError):
+                    Measurement(subject="w", record={"updated": {"at": value}})
+
     def test_a_value_that_is_not_a_time_under_a_timed_name_is_refused(self):
         with self.assertRaises(CheckError):
             CheckResult(StatusCode.OK, [Entry("w", "x", data={"at": 1758276720})])
@@ -299,33 +330,70 @@ class RecordTests(TestCase):
                       data={"dump": "x" * (RECORD_LIMIT + 1)})])
         self.assertIn("bytes", str(caught.exception))
 
-    def test_the_runs_own_record_meets_the_same_seam(self):
-        """A record is a record wherever it hangs (ADR-0085): the measurement at the
-        run goes through the same validation and the same limit as a line's, so a
-        check author who learned one rule does not meet a second."""
+    def test_clip_bounds_characters_and_then_bytes(self):
+        """The two bounds and their order. A record is weighed as `json.dumps`
+        writes it, which escapes to ASCII, so a character is a byte only while the
+        text is ASCII — measured: 1000 characters cost 1002 bytes in ASCII, 2002
+        in newlines, 6002 in umlauts and 12002 in emoji, which JSON writes as
+        surrogate pairs."""
+        self.assertEqual(clip("abcdef", chars=3, budget=1000), "abc")
+        for filler in ("a", "\n", "ä", "\U0001f600"):
+            with self.subTest(filler=filler):
+                kept = clip(filler * 1000, chars=1000, budget=2000)
+                self.assertLessEqual(
+                    len(json.dumps(kept).encode("utf-8")), 2000)
+        # and the byte bound is what bites, not the character one
+        self.assertLess(len(clip("ä" * 1000, chars=1000, budget=2000)), 1000)
+        self.assertEqual(len(clip("a" * 1000, chars=1000, budget=2000)), 1000)
+
+    def test_clip_cuts_both_bounds_off_the_same_end(self):
+        """A tail kept by characters and then trimmed at the front by bytes would
+        be neither end of anything — and, worse, would be measured at the wrong
+        end. The text below is cheap at the front and expensive at the back, so a
+        byte bound applied to the *head* would let through six times the budget
+        while still answering with a tail that looks right."""
+        self.assertEqual(clip("abcdef", chars=3, budget=1000, keep="tail"), "def")
+        lopsided = "a" * 500 + "ä" * 500
+        tail = clip(lopsided, chars=1000, budget=200, keep="tail")
+        self.assertTrue(tail.endswith("ä"), tail[-8:])
+        self.assertLessEqual(len(json.dumps(tail).encode("utf-8")), 200)
+        head = clip("START" + "ä" * 100, chars=105, budget=64, keep="head")
+        self.assertTrue(head.startswith("START"), head)
+        self.assertLessEqual(len(json.dumps(head).encode("utf-8")), 64)
+
+    def test_clip_is_exact_rather_than_conservative(self):
+        """One byte more would not fit, which is what makes a declaration built on
+        it a ceiling rather than a guess."""
+        kept = clip("ä" * 500, chars=500, budget=100)
+        self.assertLessEqual(len(json.dumps(kept).encode("utf-8")), 100)
+        self.assertGreater(
+            len(json.dumps(kept + "ä").encode("utf-8")), 100)
+
+    def test_a_measurement_meets_the_same_seam(self):
+        """A record is a record wherever it hangs (ADR-0085): the measurement goes
+        through the same validation and the same limit as a line's, so a check
+        author who learned one rule does not meet a second."""
         with self.assertRaises(CheckError) as caught:
-            CheckResult(StatusCode.OK, ["fine"],
-                        record={"dump": "x" * (RECORD_LIMIT + 1)})
+            Measurement(record={"dump": "x" * (RECORD_LIMIT + 1)})
         self.assertIn("bytes", str(caught.exception))
         with self.assertRaises(CheckError):
-            CheckResult(StatusCode.OK, ["fine"], record={"at": "not a time"})
+            Measurement(record={"at": "not a time"})
 
-    def test_the_runs_record_is_read_back_as_plain_json(self):
+    def test_a_measurements_record_is_read_back_as_plain_json(self):
         # the same ADR-0002 safety the line's record has: a check that kept its
         # mapping must not be able to change a value while a page renders it
         handed = {"cpu_pct": 7, "nested": {"load": 0.4}}
-        result = CheckResult(StatusCode.OK, ["fine"], subject="host-a",
-                             record=handed)
+        taken = Measurement(record=handed, subject="host-a")
         handed["cpu_pct"] = 99
         handed["nested"]["load"] = 9.9
-        self.assertEqual(result.record["cpu_pct"], 7)
-        self.assertEqual(result.record["nested"]["load"], 0.4)
+        self.assertEqual(taken.record["cpu_pct"], 7)
+        self.assertEqual(taken.record["nested"]["load"], 0.4)
 
-    def test_a_runs_subject_is_bounded_like_a_lines(self):
+    def test_a_measurements_subject_is_bounded_like_a_lines(self):
         with self.assertRaises(CheckError):
-            CheckResult(StatusCode.OK, ["fine"], subject="x" * 4096)
+            Measurement(record={}, subject="x" * 4096)
         with self.assertRaises(CheckError):
-            CheckResult(StatusCode.OK, ["fine"], subject="host\x00a")
+            Measurement(record={}, subject="host\x00a")
 
     def test_the_limit_is_the_json_bytes_not_the_characters(self):
         # a euro sign is one character and three bytes: what a record costs is what

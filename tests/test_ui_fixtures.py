@@ -278,3 +278,37 @@ class WallFixtureTests(TestCase):
         for name in ("solo", "pair", "never-run"):
             self.assertIn(f">{name}</a>", html)
         self.assertEqual(html.count('class="status-card__time"'), 1)
+
+    def test_the_series_leaf_draws_its_curve_with_both_breaks(self):
+        # ADR-0092 on the sheet: one curve, the four failed requests marked in its
+        # lane (and once more as the summary's key), the night's sleep counted and
+        # left unmarked, the slow first answer in the unit's second rung, and the
+        # newest ten readings beneath
+        html = self._render("series_http_leaf")
+        self.assertEqual(html.count('<figure class="ls-curve"'), 1)
+        self.assertEqual(len(re.findall(r'<line class="ls-curve__none"', html)), 5)
+        self.assertIn("4 without a value", html)
+        self.assertIn("1 stretch without readings", html)
+        self.assertIn("highest 1.9 s", html)
+        table = html.split('class="table table-sm align-middle ls-readings"')[1]
+        rows = table.split("<tbody>")[1].split("</tbody>")[0]
+        self.assertEqual(rows.count("<tr>"), 10)
+
+    def test_the_refused_records_leaf_says_why_in_the_records_place(self):
+        # ADR-0093 on the sheet: the line that lost its record stands with its own
+        # tint and says why where the list would be; the engine's line names the
+        # reading's subject; the record that passed is listed as ever
+        html = self._render("refused_records_leaf")
+        self.assertEqual(html.count('class="reason-refused'), 1)
+        self.assertIn("Record refused: it is 2,811 bytes and the limit is 2,048",
+                      html)
+        self.assertIn("the record of octo/web was refused, and not graded", html)
+        self.assertEqual(html.count('<dl class="reason-record'), 1)
+
+    def test_the_series_branch_keeps_two_measures_on_two_axes(self):
+        # never one chart with two scales: each measure is its own curve, and the
+        # free-text unit labels its axis once
+        html = self._render("series_host_branch")
+        self.assertEqual(html.count('<figure class="ls-curve"'), 2)
+        self.assertEqual(
+            len(re.findall(r'<text class="ls-curve__unit"[^>]*>%</text>', html)), 1)

@@ -245,17 +245,10 @@ def _environment(name: str) -> str:
 register_resolver("env", _environment)
 
 
-def resolve(reference: str) -> str:
-    """Resolve a secret reference to its value.
-
-    ``env://NAME`` reads that environment variable (fed by ``.env``, ADR-0003);
-    any other scheme calls the resolver registered for it. Raises
-    :class:`UnknownSchemeError` for a malformed reference — no scheme at all
-    (a pasted secret value, typically), an empty address, or a scheme nothing is
-    registered for — and :class:`SecretError` when a well-formed reference fails
-    to resolve.
-    """
-    reference = reference.strip()
+def _parsed(reference: str) -> tuple[str, str, Registration]:
+    """``reference`` taken apart — its scheme as written, its address and the
+    registration that answers for it — or :class:`UnknownSchemeError`, for everything
+    :func:`resolve` refuses before it reaches anything. ``reference`` is stripped."""
     if not reference:
         raise UnknownSchemeError("empty secret reference")
     if _SCHEME_SEPARATOR not in reference:
@@ -278,6 +271,31 @@ def resolve(reference: str) -> str:
         raise UnknownSchemeError(
             f"no secret resolver registered for scheme {scheme!r} "
             f"(reference {reference!r}; registered: {known})")
+    return scheme, address, registration
+
+
+def check_reference(reference: str) -> None:
+    """Refuse a malformed reference as :func:`resolve` would — no scheme, no address,
+    or a scheme nothing is registered for — without reaching the store it names.
+
+    For a setting the import reads and the server's start resolves (ADR-0091): a
+    typo in a scheme reaches nothing, so the import still refuses it.
+    """
+    _parsed(reference.strip())
+
+
+def resolve(reference: str) -> str:
+    """Resolve a secret reference to its value.
+
+    ``env://NAME`` reads that environment variable (fed by ``.env``, ADR-0003);
+    any other scheme calls the resolver registered for it. Raises
+    :class:`UnknownSchemeError` for a malformed reference — no scheme at all
+    (a pasted secret value, typically), an empty address, or a scheme nothing is
+    registered for — and :class:`SecretError` when a well-formed reference fails
+    to resolve.
+    """
+    reference = reference.strip()
+    scheme, address, registration = _parsed(reference)
     try:
         value = registration.resolver(address)
     except SecretError:

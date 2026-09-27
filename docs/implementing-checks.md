@@ -29,9 +29,17 @@ rewrite.
 little-sister is **checks → engine → shared status tree → web + JSON API**. A *check*
 is a small class that measures one thing and returns a value; the *engine* schedules
 it at its `frequency`, and writes the result into the one shared status tree that the
-web and JSON surfaces read. A check is a **pure function of the world → a result**: it
-never touches identity, timestamps, maintenance or event history — those belong to the
-tree ([ADR-0007](adr/0007-check-result-branches.md)).
+web and JSON surfaces read. A check never touches identity, timestamps, maintenance or
+event history — those belong to the tree
+([ADR-0007](adr/0007-check-result-branches.md)).
+
+This guide used to say a check is a *pure function of the world → a result*. That was
+always **two** functions wearing one coat, and they are written separately now
+([ADR-0086](adr/0086-a-check-measures-and-grades.md)): a **measurement**, world → a
+record, and a **grading**, record → a result. Splitting them is what lets a verdict be
+reached again later over a record this process did not take — which is what a history
+of a subject is for — and the code had the shape already: a metrics check reads one
+script and only then builds five children out of it.
 
 One question shapes almost everything else, and it is worth answering before you write
 a line: **is the thing you talk to the subject of your measurement, or the instrument
@@ -67,11 +75,14 @@ A check type is a subclass of `Check` decorated with `@register("<type>")`:
 ```python
 from __future__ import annotations
 
+from collections.abc import Sequence
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from little_sister.checks import (
-    Check, CheckError, CheckResult, config_markdown, plain, register,
+    Check, CheckError, CheckResult, Measurement, config_markdown, plain,
+    register,
 )
 from little_sister.status import StatusCode
 
@@ -81,7 +92,10 @@ class ExampleCheck(Check):
     """One-line description of what this check measures."""
 
     def __init__(self, *, url: str, **kwargs: Any) -> None:
-        super().__init__(**kwargs)          # common fields (path, frequency, …)
+        # `subject` is the OBJECT you read, out of your own configuration — the
+        # thing in the world, not the node's path and not the command you read
+        # it with (§2's `subject`/`record` paragraph).
+        super().__init__(subject=url, **kwargs)   # common fields (path, …)
         self.url = url                       # your own parsed fields
 
     @classmethod
@@ -99,17 +113,43 @@ class ExampleCheck(Check):
         node's detail page (ADR-0013)."""
         return config_markdown({"url": self.url})
 
-    def run(self) -> CheckResult:
-        """Do the work. A non-OK result MUST carry a reason."""
+    def measure(self) -> Measurement:
+        """Read the world. No codes, no sentences — just what you read."""
+        ...
+
+    def grade(self, measurements: Sequence[Measurement],
+              now: datetime) -> CheckResult:
+        """Say what it means. A non-OK result MUST carry a reason."""
         ...
 ```
 
 What the base class gives you and expects:
 
-- **`run(self) -> CheckResult`** — the one abstract method, and **the engine does not
-  bound it.** Python cannot kill a thread, so a hung `run()` occupies a pool worker
-  until it returns; `self.timeout_seconds` is a budget **you** enforce (§7). A non-OK
-  result must carry a reason.
+- **`measure(self) -> Measurement | Sequence[Measurement]`** — the half that touches
+  the world, and **the engine does not bound it.** Python cannot kill a thread, so a
+  hung `measure()` occupies a pool worker until it returns; `self.timeout_seconds` is
+  a budget **you** enforce (§7). It hands back one `Measurement` per object the run
+  read — one of them, or a sequence where you read several. One record is the common
+  case and deliberately **not** the signature: you say which you have by what you hand
+  back, and nothing downstream branches on shape.
+- **`grade(self, measurements, now) -> CheckResult`** — the half that decides. It gets
+  what you measured, normalized to a sequence, and returns the same tree a check has
+  always returned. A non-OK result must carry a reason.
+
+  **It must be pure over `(record, configuration, now)`**, and this is the rule the
+  whole split exists for. Read the records, read the fields your type parsed at
+  construction, read the `now` you are given — and nothing else: not an attribute
+  `measure()` left on `self`, not the clock, not the world again. A later phase grades
+  **old** records out of a subject's history, when the process that took them is long
+  gone; a grading that leaned on anything else would not fail there, it would answer
+  something quietly wrong.
+
+  Two things follow that catch people out. **What the line says has to be in the
+  record**, because the grading may read nothing else — so a check whose sentence *is*
+  its captured output puts that output in the record (clipped; see below). And
+  **mapping records to places is yours**: a record whose object has a node becomes
+  that node's reading, one whose object has none becomes a line, and only you can say
+  which, because a line is an `Entry` and no engine could place one for you.
 - **Construction from YAML** — `Check.from_config(config, base_dir)` merges the common
   fields (`_parse_common`) with your `_extra_from_config(...)` and calls the
   constructor. You override only `_extra_from_config`; you never parse `path` /
@@ -123,12 +163,21 @@ What the base class gives you and expects:
   default, `0` switches the fast retry off for this check), `escalate_after`
   ([ADR-0083](adr/0083-a-node-may-wait-before-it-escalates.md) — consecutive readings
   of a worse code before the level above counts it; `None` inherits the deployment
-  default, `1` publishes at once, `0` is refused) and `depends_on`
+  default, `1` publishes at once, `0` is refused), `depends_on`
   ([ADR-0084](adr/0084-a-check-may-be-reached-through-another.md) — the **path** of
   one other check this one is reached *through*; while that check reports `ERROR`
   this node keeps its own reading and contributes nothing upward. An unknown target
   and any cycle are refused at load, and a `tag:` value is refused by name rather
-  than read as a path). Durations accept `30s` /
+  than read as a path) and `series_keep`
+  ([ADR-0087](adr/0087-a-check-keeps-its-subjects-readings.md) — how many readings of
+  each subject the check keeps as its series, the oldest out; `0`, the default, is no
+  series, and there is no deployment default to inherit, because where a history is
+  wanted is the deployment's choice per check — so a type passes it on and never sets
+  it), and beside it `measures` and `reading_cap`
+  ([ADR-0092](adr/0092-a-check-declares-its-measures.md) — which fields of the record the
+  series is drawn by, merged over your type's `measure_defaults` as *Declare what your
+  record's numbers are* below says, and how many readings the node shows, `None`
+  leaving `settings.yaml`'s in force; a type passes both on). Durations accept `30s` /
   `15m` / `2h` / `1d` / `1w` or a bare number, the units lowercase. **`name:` in YAML
   is rejected** — it was merged into `path` (ADR-0016).
 - **Take `**kwargs` and forward them**, as the sketch above does — do not spell the
@@ -139,36 +188,109 @@ What the base class gives you and expects:
   decision 6). If yours does refuse a keyword, the loader says so with the file, the
   type and every refused keyword named, rather than raising a bare `TypeError` from
   inside itself.
-- **`subject` and `record` on the result** — **what your run measured, and the object
-  it measured** ([ADR-0085](adr/0085-a-measure-is-read-out-of-a-record.md)). A run reads
-  one object and produces one record; the node, the children and the lines you write are
-  *derived* from that reading, so the reading goes on the `CheckResult` and not on a
-  line. Which of the two cases you have:
-  - **Your object has a node** — one URL, one host, one file. Put `subject` and
-    `record` on the result (or on the child that stands for each object, if your run
-    reads several). `subject` is the identifier **you reached** — `web01.example`,
-    `http://web01.example`, an account id — and deliberately not the node's path: the
-    path is the deployment's label for where your node hangs, and it may be renamed or
-    moved, while the history is about the thing in the world.
-  - **Your object has no node** — a repository, a job run, a finding. Then it is a
-    line, and the line carries it: `Entry(slug, text, subject=…, data=…)`.
+- **`subject` on the check, `record` on the measurement** — **the object you read, and
+  what you read about it** ([ADR-0085](adr/0085-a-measure-is-read-out-of-a-record.md),
+  [ADR-0086](adr/0086-a-check-measures-and-grades.md)). A run reads one object and
+  produces one record; the node, the children and the lines you write are *derived*
+  from that reading. `CheckResult` carries neither — one field, one writer, nothing to
+  forget.
+
+  **Declare your object in the constructor**, out of your own configuration:
+  `super().__init__(subject=url, **kwargs)`. It is the identifier **you reached** —
+  `web01.example`, `http://web01.example`, an account id — and deliberately not the
+  node's path: the path is the deployment's label for where your node hangs and may be
+  renamed or moved, while the history is about the thing in the world. At construction
+  rather than per run, for two reasons: a subject that moved between runs would
+  silently split one history in two, and the engine needs a name for your object on the
+  run where your check **raises** and there is no measurement at all.
+
+  Ask which of the two things you are holding, because it is the same question §1 asks
+  about subjects and instruments: **the object is what you measure, the command is how
+  you measure it**. An `http` check's object is its URL, not `GET`; an `ssh-command`'s
+  is the host, not the command it runs there. Where your object is knowable only from
+  an **answer** — a rate-limit check asking the API whose token it holds, because the
+  rate-limit endpoint never says — leave the constructor's `subject` empty and put it
+  on the `Measurement` instead. Make it as fine as what has a history: that check names
+  one account's budget *per resource*, since each resource has its own limit and reset.
+  And when your run hands back **several** measurements, the constructor's subject
+  names none of them — a measurement without a subject of its own has no series, which
+  is right for a reading nobody needs the history of.
+
+  **Where your object has no node at all** — a repository, a job run, a finding — it is
+  a line, and the line carries its own: `Entry(slug, text, subject=…, data=…)`.
 
   A `record` is validated at the seam like a line's: JSON-serializable, bounded by
   `record_limit`, and `at` / `started` / `ended` at any depth must be times with an
-  offset. It is **data and never a claim** — anything that should alarm is a reason.
+  offset — and one it refuses costs what a line's does (below): a raise in your
+  tests, and in a run that reading and never the run, the engine saying on your node
+  which subject's record it was and why. It is **data and never a claim** — anything
+  that should alarm is a reason.
+  It is also **not your working state**: the raw answer — a 150-finding page, an
+  unshortened log — stays inside your check, and what crosses into the record is what
+  is worth keeping, because 2 KB is the default bound on one of them.
   A run that **failed** to read its object should still record the attempt — the reason
   beside the values it could not get, as nulls — because a history of failures answers
   *how often did this answer at all*, and a history with holes in it cannot: a hole
-  looks the same as a restart or a poll that never happened. A run that records nothing
-  at all clears what the last run recorded, since the node's observation time moves with
-  every run and a kept reading would be wrongly dated, not merely old.
+  looks the same as a restart or a poll that never happened. Keep **one shape**: a value
+  you could not read is `None`, never a missing key, so a curve draws a real gap instead
+  of inferring one. A *reason* is the exception and rides along only where there was
+  one. A run that records nothing at all — an empty sequence from `measure()` — clears
+  what the last run recorded, since the node's observation time moves with every run and
+  a kept reading would be wrongly dated, not merely old.
 
-  What this decides later is **history**. A reading you record becomes a *series* when
-  the deployment asks for one, and what a series is keyed by is your object — so a line
-  gets a history only where you **declare** its slug. A derived slug is a hash of the
-  sentence, so it moves whenever a number in the text moves and would mint a new object
-  every poll; where you have a real object, mint the slug with `slug(*parts)` from the
-  provider's own identifiers. A measurement taken at the run needs no slug at all.
+  **Free text in a record is clipped once, and in bytes.** A record is weighed as
+  `json.dumps` writes it, which escapes to ASCII: 1000 characters cost 1014 bytes in
+  ASCII, 2014 in newlines, 6014 in umlauts and 12014 in emoji, which JSON writes as
+  surrogate pairs. So `clip(text, chars=…, budget=…, keep=…)` bounds both at once, off
+  the same end, and you use the **one** result as your record value *and* in your
+  sentence — clip twice, to two lengths, and the sentence can no longer be written from
+  the reading stored beside it. Doing it this way is what lets `expected_record()` below
+  be a ceiling that cannot be exceeded, so a configuration that will not fit is refused
+  at startup by name instead of at the seam on every run.
+
+  **Two rules give a reading a history: the subject gives it one, and the identity
+  keeps each event in it once — or the state each spell**
+  ([ADR-0087](adr/0087-a-check-keeps-its-subjects-readings.md)). Where a deployment
+  sets `series_keep` on your check, the engine keeps that many readings of each subject
+  as its *series*, the oldest out, keyed by your check — its type and its mount — and
+  the subject. So a reading has a history only where it names an object: the one you
+  declared in the constructor, for a run that hands back a single measurement, or its
+  own `subject` among several. A reading with none is your grading's input and nothing
+  more, and a slug, declared or derived, plays no part in it. Whether a reading is a
+  new record in its series is `Measurement(…, identity=…)`: leave it empty where every
+  reading really is a new one — a response time, a load average — and name the event
+  where the source keeps the history — the run you read, a job's id — so that the same
+  finished run, read again on the next poll, replaces its record wherever it stands in
+  the kept window instead of becoming a second point. Where your object's source keeps
+  no event for it at all — a thing that is switched off, a state that simply stands —
+  name as its identity what that source calls *last changed*, where it has such a field
+  and the field moves whenever the state does. Where that field is a time, the identity
+  is the instant as your record keeps it and never the source's text: put the time under
+  a timed name (`at`, `started` or `ended`, at any depth), build the measurement, and
+  hand back one naming as its identity the time that `record` holds — one instant
+  written with another offset would otherwise be another event. Where there is no such
+  field, pass `Measurement(…, state=…)`, the **state itself**, spelled from the few
+  fields that constitute it and never from the whole record. A state is compared with
+  the newest record of its series alone — the same state replaces it, a different one
+  appends — so a return to an earlier state is a new record, where an identity would
+  have found the old one and rewritten it in place.
+  A measurement names an identity or a state, never both, and a reading of a frozen
+  state with neither writes the same record into its series on every poll. A series
+  orders by a record's own
+  time, its top-level `at`, where it has one — so a run's record puts when it finished
+  there — and otherwise by when it was first read, readings of one run in the order you
+  handed them back. A kept reading also keeps what **stood** where it landed, because
+  the thresholds that graded it may have changed by the time its window is read. The
+  one reading the engine places keeps your node's code and its texts; where your root
+  grades nothing, as a branch check's `UNDEFINED` container does whether or not it
+  also says what it watches, it keeps what your result rolls up to — your children's
+  codes, never another check's on the same node — beside whatever that root says. One
+  of several keeps the code and the text of the line your grading
+  carried it onto, and that line is found by the record it carries as its `data` and
+  the subject it names — so hand the measurement's record over unchanged and give the
+  line the reading's subject, or the reading is kept with neither. The exception is a
+  reading among several that names the object you declared: where no line carries
+  it, it stood on your node, and it keeps what the one placed reading would.
 - **`config_summary(self) -> str`** *(optional)* — Markdown display metadata for the
   detail page ([ADR-0013](adr/0013-check-config-on-node.md)). Build it with
   `config_markdown({"label": value, ...})`; **never** put a secret in here. Default
@@ -195,7 +317,10 @@ What the base class gives you and expects:
   knows which it has. Startup **sums** the first two over every declaring check — each
   cost over its own `frequency_seconds` against the deployment's `max_workers`, the
   entries against its `entry_limit` — and **compares the third per check** against
-  `record_limit`, which bounds one record rather than a ceiling every check shares. It
+  `record_limit`, which bounds one record rather than a ceiling every check shares —
+  raised, where you declared less, to the most the failure record the engine writes
+  for a check that raised can weigh, which therefore sets a floor under any record
+  size you declare ([ADR-0086](adr/0086-a-check-measures-and-grades.md) decision 5). It
   **refuses** a configuration whose declared part alone cannot fit, naming the checks;
   at 80 % of a limit it is a warning in the log and a fact in the `report` of
   `/little-sister/engine`.
@@ -353,18 +478,57 @@ constructor, but it is wrong: say why.
   sentence is written. Keep what a reader, a template or a curve would want — not the
   API response. Three names are typed and read at **any depth** — `at`, `started`,
   `ended` — and each must be an ISO-8601 string **with an offset** (or null), which
-  the seam converts to UTC; everything else is yours and renders as a name and a
-  value. Neither attribute declares members, so prose carrying a record stays prose.
+  the seam converts to UTC and the node's page shows in the deployment's configured
+  timezone. Everything else is yours and renders as a name and the value as you
+  stored it — a time under any other name included, so put a time you want read as
+  one under a timed name, nested where it belongs (`created.at`). The page shows no
+  age beside a time: where your grading reads one, your sentence says it. Neither
+  attribute declares members, so prose carrying a record stays prose.
 
-  The seam refuses the **whole result** if the record is not a JSON mapping, carries
-  a non-time under a timed name, or weighs more than `record_limit` bytes of JSON
-  (2 KB by default). Aim at the default rather than at a deployment's setting: your
-  package cannot see which one it is installed into. Values are escaped when they are
-  rendered, so a record field needs no `plain()`.
+  The seam refuses a record that is not a JSON mapping, carries a non-time under a
+  timed name, or weighs more than `record_limit` bytes of JSON (2 KB by default), and
+  what a refusal costs depends on where the record is built
+  ([ADR-0093](adr/0093-a-record-the-seam-refuses-costs-its-line.md)). **In your
+  tests, and anywhere else a result or a measurement is built, it raises** a
+  `CheckError` naming the field or the bytes, so you meet it where you built the
+  record. **In a run the engine drives it costs that line or that reading, never the
+  run**: a line keeps your text and code, its `data` null and `refused` saying why; a
+  reading is kept out of your grading, and the engine says on your node which
+  subject's record was refused and why; the instance says both on
+  `/little-sister/runtime`. Build your readings on the run's own thread: the run is
+  lenient through a context variable, and a thread you start yourself begins with a
+  context of its own, where a refused record still costs the whole run. Aim at the
+  default rather than at a deployment's setting: your package cannot see which one it
+  is installed into. Values are escaped when they are rendered, so a record field needs
+  no `plain()`.
 - **Reasons are Markdown** — fold untrusted text in safely: `plain(text)` escapes an
   inline value (a path, an error, an API message); `code(text)` fences multi-line /
   log output as a verbatim block ([ADR-0018](adr/0018-markdown-rendering.md)). Never
   interpolate raw external bytes straight into a reason.
+- **A time in a sentence reads the way the page reads it.** Write an instant with
+  `little_sister.spans.local_time`, which uses the deployment's configured `timezone`
+  and `time_format` ([ADR-0006](adr/0006-config-file-and-timezones.md)) — never a zone
+  of your own, and never the UTC your source handed you — and a span with
+  `format_span`, `coarse_span` or `format_duration`, whichever reading it is (their
+  docstrings say which). A sentence that says *the lease lapsed at …* in `GMT`, beside a
+  page whose every other time is in the configured zone, reads as a different moment.
+- **Declare what your record's numbers are: `measure_defaults`**
+  ([ADR-0092](adr/0092-a-check-declares-its-measures.md)). Where a deployment keeps
+  your check's series, the node that stands for its subject draws a curve for each of
+  the check's **measures** — fields of your record, by the dotted name its record list
+  spells them with, each in a unit. What a field means and in which unit is your
+  type's knowledge, so declare it once in the constructor, shaped like the YAML block:
+  `super().__init__(subject=url, measure_defaults={"response_ms": {"unit": "ms",
+  "label": "Response time"}}, **kwargs)`, or `{"field": "unit"}` where the field's name
+  is label enough. Whether it is drawn is the deployment's: its `measures:` block is
+  read by the library and merged over yours **per field** — naming a field takes it
+  whole, `null` removes one, and every field it does not name keeps your default — so
+  do not read `measures:` yourself. A unit is free text and is never refused; `ms` and
+  `s` are written as spans (`1.9 s`), so prefer them for a time. Keep the record's
+  shape the same on every path, with a null where a reading failed: a null is drawn as
+  a marked break, and a field that is simply missing reads as one too — never as a
+  zero. A declaration of another shape refuses the load like any configuration
+  error.
 - **`report` — what the run found** ([ADR-0044](adr/0044-run-facts-on-the-node.md)) —
   the outputs field beside `config`'s inputs: the repositories in scope, the volumes
   enumerated, the queues discovered. Markdown, shown on the node's own page — never
@@ -452,7 +616,7 @@ that declaration is what sits between the imports:
 # little_sister_example/__init__.py
 from little_sister.checks import require_api
 
-require_api(2)                       # refuses at startup on a mismatch, naming both
+require_api(3)                       # refuses at startup on a mismatch, naming both
 
 from little_sister_example import (  # noqa: E402  registers the type
     example,
@@ -628,7 +792,7 @@ A scheme is claimed **once**, and a second claim from a different package refuse
 startup naming both, because a scheme says where a credential is read from
 ([ADR-0064](adr/0064-the-resolver-is-a-registration.md)).
 
-- **Resolve at construction, never in `run()`.** Call
+- **Resolve at construction, never while measuring.** Call
   `self.resolve_secret(reference)` from the constructor and keep the value — cloud
   stores bill per read, and rotation is a restart, like any other config change.
 - **The failure split is handled for you.** A **malformed** reference raises
@@ -639,8 +803,9 @@ startup naming both, because a scheme says where a credential is read from
   parse instead of being looked up, and the message never quotes what it rejected. A
   **well-formed** reference that cannot be resolved (store unreachable, secret absent)
   is recorded on the check instead, and the engine **pins** it: the node shows `ERROR`
-  with *"secret unresolvable: …"*, `run()` is never called, and there is no retry until
-  restart.
+  with *"secret unresolvable: …"*, neither half of the check is ever called, and there
+  is no retry until restart. Nothing is recorded either: the check did not fail to
+  reach its object, it never went.
 - **Don't validate the resolved value yourself.** `resolve_secret` returns `""` on a
   failed resolution and records the failure; a constructor that answers with
   `raise CheckError("token is empty")` converts one pinned, visible, explained node
@@ -662,13 +827,14 @@ startup naming both, because a scheme says where a credential is read from
 
 Two questions. The library gives you the vocabulary for the first and refuses to
 answer the second at all. Everything here is promised by name (`little_sister.transport`,
-`little_sister.fetch`; [`architecture.md`](architecture.md) §11), and
-[ADR-0058](adr/0058-transport-policy-vocabulary.md) is the record.
+`little_sister.fetch`, `little_sister.process`; [`architecture.md`](architecture.md)
+§11), and [ADR-0058](adr/0058-transport-policy-vocabulary.md) is the record, with
+[ADR-0089](adr/0089-a-process-a-check-starts-ends-with-it.md) for a process.
 
 ### The budget is the run's, not the request's
 
 **`timeout:` bounds the whole run**, one request at a time inside it. Build a
-`Deadline` from `self.timeout_seconds` at the top of `run()` and pass it down:
+`Deadline` from `self.timeout_seconds` at the top of `measure()` and pass it down:
 
 ```python
 from little_sister.fetch import fetch
@@ -759,13 +925,48 @@ it, and a bare `403` may equally mean *not visible to this credential* — so
 so. Beyond that: batch where you can, keep `frequency` sane, and prefer few calls per
 run.
 
-### Never raise out of `run()`
+### A process goes through `run`
+
+A check that starts a process calls `little_sister.process.run` rather than
+`subprocess`. It is `fetch`'s counterpart and settles the same kind of questions once:
+it takes an argument vector — a shell command is `["/bin/sh", "-c", command]`, said by
+you — runs it in a process group of its own with `/dev/null` for stdin, reads both
+streams under a cap, and ends the whole group at the bound, when the instance stops,
+and at a normal end for whatever the command left behind, so an abandoned run never
+leaves a process behind. The answer is a `Finished` whatever the status; `NotStarted`
+is what it raises for a command that could not start, and `DeadlineExceeded` for a run
+already out of budget.
+
+```python
+from little_sister.process import Ended, NotStarted, run
+
+try:
+    done = run(["df", "-P", "/"], timeout=10, deadline=deadline)
+except NotStarted as error:
+    ...  # the command could not start: a reading that says so
+if done.ended is Ended.BOUND:
+    ...  # it outran its bound, and its group has been ended
+text = done.stdout.decode("utf-8", "replace")
+```
+
+What a status *means* stays yours, as with `fetch`: a non-zero exit is a fact about the
+command, and only your check can say whether it is a failure of its subject.
+
+### Never raise out of `measure()`
 
 Not because the engine cannot cope — it can, and turns any escaping exception into an
 `ERROR` node carrying `check error: …` plus a short traceback
-([ADR-0040](adr/0040-what-a-failing-check-becomes.md)). Because that node is ugly, it
+([ADR-0040](adr/0040-what-a-failing-check-becomes.md)), and writes a failure record
+naming your object so the attempt is still in the history
+([ADR-0086](adr/0086-a-check-measures-and-grades.md)). Because that node is ugly, it
 says nothing an operator can act on, and it replaces every line your check had
-published. Catch what you expect and say it properly.
+published. Catch what you expect, record it as a reading with its values standing as
+`None`, and say it properly in the grading.
+
+The same goes for `grade()`, and there it is worse: a grading has no I/O to blame, so
+an exception out of it is a bug in your own arithmetic — and the engine keeps the
+reading it already had rather than replacing it with the failure, precisely because
+that reading is still true.
 
 **Keep dependencies light.** The extracted check-type packages reach their provider
 through `little_sister.fetch` and `little_sister.transport`, and all but one ship
@@ -789,12 +990,16 @@ record). That is measured, not hoped for, and it is what keeps an extraction che
 - **`mypy` runs over `src` only** — tests are not type-checked. Where a test double
   has to model a real object's shape, nothing mechanical will tell you it drifted;
   say so in the double.
-- **Unit-test `run()` against recorded fixtures / a fake transport — no live network
-  in tests.** Patch the opener rather than the check: that keeps the seam at the
-  boundary the code is about. Assert the returned `code`, the `reason`, and (for a
-  branch) the child tree shape and names. For a check with a credential, substitute a
-  fake resolver / environment and cover both the resolved and the pinned path (see
-  `tests/test_secrets.py` for the patterns).
+- **Unit-test both halves against recorded fixtures / a fake transport — no live
+  network in tests.** Patch the opener rather than the check: that keeps the seam at
+  the boundary the code is about. Test `measure()` on the **record** — every key you
+  promised, present and null where the world did not answer — and `grade()` on the
+  `code`, the `reason` and (for a branch) the child tree shape and names. Test the
+  grading by **handing it a record you wrote yourself**, not one you just measured:
+  that is the one test that proves it is pure, because a record you typed is exactly
+  what a series will hand it a year from now. For a check with a credential,
+  substitute a fake resolver / environment and cover both the resolved and the pinned
+  path (see `tests/test_secrets.py` for the patterns).
 - **A test double is a claim about the real thing, and it can be wrong.** One that
   modeled a blocking `read` where the code needs `read1` hid a real overrun for a
   release: the double answered instantly and the socket did not. Where the shape

@@ -24,12 +24,18 @@ Dev-only: this module lives under ``tests/`` and never ships in the package.
 """
 from __future__ import annotations
 
-from collections.abc import Callable
+import math
+import random
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
-from little_sister.checks import code
+from little_sister.checks import Check, CheckResult, Measurement, code
+from little_sister.checks.http import HttpCheck
+from little_sister.engine import Engine
 from little_sister.reasons import Entry
+from little_sister.series import MemoryStore, SeriesKey, SeriesRecord
 from little_sister.status import StatusCode
 from little_sister.tree import StatusSnapshot, StatusTree
 
@@ -68,6 +74,10 @@ class Fixture:
     #: What the page is told is reached *through* this node. A registry fact rather
     #: than a snapshot one, so a fixture states it here instead of building it.
     dependents: tuple[str, ...] = ()
+    #: What the page asks for the node's series (ADR-0092): an engine holding the
+    #: check that keeps it and the readings it kept, never started. An engine fact
+    #: rather than a snapshot one, like the dependents above.
+    engine: Callable[[], Engine] | None = None
 
 
 # The sheet is a static artifact, so the *observation* times the cards now carry
@@ -466,6 +476,173 @@ def _gateway() -> StatusSnapshot:
     return _snapshot(tree, branch="net/vpn")
 
 
+def _record_times() -> StatusSnapshot:
+    """A leaf whose lines carry records and whose run measured one: both lists the
+    node's own page shows (`_record_list.html`). A Lambda function's line reads its
+    `at` in the configured zone, a batch job's run its nested `created.at` and its
+    `started` beside a null `ended` (it is still running), and what is not a time
+    the zone can hold is shown as stored — a time-shaped string under a name the
+    seam does not type, and the last half hour of the calendar. The measured record
+    carries an `at` of its own, so the Measured card reads the same way. The times
+    sit a few minutes before the sheet's pinned observation (ADR-0027)."""
+    tree = StatusTree()
+    tree.upsert("/aws/account", StatusCode.OK, [
+        Entry("batch-nightly-reindex", "nightly / reindex: running for 12m",
+              StatusCode.OK, running=True, subject="batch/nightly/reindex",
+              data={"queue": "nightly", "name": "reindex", "status": "RUNNING",
+                    "created": {"at": "2026-07-20T09:40:00Z"},
+                    "started": "2026-07-20T09:47:31Z", "ended": None,
+                    "at": None, "cache_key": "2026-07-20T09:40:00Z"}),
+        Entry("lambda-resize-images", "resize-images: no errors, last run 21m ago",
+              StatusCode.OK, subject="lambda/resize-images",
+              data={"name": "resize-images", "errors": 0,
+                    "at": "2026-07-20T09:38:00Z", "log_status": None}),
+        Entry("retention-archive", "archive / retention: kept to the end of time",
+              StatusCode.OK, data={"bucket": "archive",
+                                   "at": "9999-12-31T23:30:00Z"}),
+    ], members=True, subject="account/eu-central-1",
+        record={"regions": 1, "functions": 1, "queues": 1,
+                "at": "2026-07-20T09:59:31Z"})
+    return _snapshot(tree, branch="aws/account")
+
+
+def _refused_records() -> StatusSnapshot:
+    """A leaf whose check read three workflows in one run and whose seam refused two
+    records (ADR-0093), as the engine leaves the node: a line that stands as its
+    grading wrote it, its record refused for its weight and said so where the record
+    would be; a reading refused for a time without its offset, kept out of the
+    grading and reported on the node by the engine at WARN, naming the subject and
+    why; and a line whose record passed, listed as usual."""
+    tree = StatusTree()
+    tree.upsert("/ci/actions", StatusCode.WARN, [
+        Entry("refused-octo-web",
+              "the record of octo/web was refused, and not graded: "
+              "'completed.at' names a time, and '2026-07-20T09:12:00' is not one "
+              "with an offset",
+              StatusCode.WARN, subject="octo/web"),
+        Entry("octo-api-ci-main", "octo/api (main) / CI: passed (#128)",
+              StatusCode.OK, subject="octo/api",
+              data={"repository": "octo/api", "workflow": "CI", "branch": "main",
+                    "run_number": 128,
+                    "completed": {"at": "2026-07-20T09:41:00Z"}}),
+        Entry("octo-docs-deploy-main", "octo/docs (main) / deploy: passed (#12)",
+              StatusCode.OK, subject="octo/docs",
+              refused="it is 2,811 bytes and the limit is 2,048"),
+    ], members=True, frequency_seconds=300)
+    return _snapshot(tree, branch="ci/actions")
+
+
+#: The plan's first curve: one site, read every three minutes, a day of it kept.
+_SITE = "https://www.example.org"
+#: The newest reading sits a few minutes before the sheet's pinned observation.
+_SERIES_END = datetime(2026, 7, 20, 9, 57, tzinfo=UTC)
+
+
+def _site_node() -> StatusSnapshot:
+    """An `http` leaf whose node stands for its URL (ADR-0086), as the newest run
+    left it: the reading it placed, the line that retells it, the configuration it
+    ran with. The Readings card under it is the series (``_site_engine``)."""
+    tree = StatusTree()
+    tree.upsert("/web/site", StatusCode.OK,
+                [Entry("response", "HTTP 200 in 212 ms")],
+                frequency_seconds=180, subject=_SITE,
+                record={"status": 200, "response_ms": 212},
+                config=f"- **url:** {_SITE}\n- **expected status:** 200\n"
+                       "- **redirects:** followed")
+    return _snapshot(tree, branch="web/site")
+
+
+def _site_engine() -> Engine:
+    """Eight hours of that site, every three minutes, as its series keeps them —
+    the shapes the curve has to tell apart: a burst of three requests that failed
+    and one that failed alone (a marked break each), an hour and a half in which
+    the machine was asleep (a plain break), the slow first answer after it
+    (1.9 s — the unit's second rung), and the quiet noise in between."""
+    check = HttpCheck.from_config(
+        {"type": "http", "path": "/web/site", "url": _SITE, "frequency": "3m",
+         "series_keep": 480}, Path("."))
+    store = MemoryStore()
+    noise = random.Random(20260720)
+    start = _SERIES_END - timedelta(hours=8)
+    asleep = (start + timedelta(hours=2, minutes=33),
+              start + timedelta(hours=4, minutes=3))
+    failed = {start + timedelta(hours=5, minutes=m) for m in (15, 18, 21)}
+    failed.add(start + timedelta(hours=6, minutes=36))
+    woke = asleep[1] + timedelta(minutes=3)
+    for step in range(161):
+        at = start + timedelta(minutes=3 * step)
+        if asleep[0] <= at <= asleep[1]:
+            continue
+        if at in failed:
+            record: dict[str, object] = {
+                "status": None, "response_ms": None,
+                "error": "request failed for GET https://www.example.org: timed out"}
+            said = "request failed: timed out"
+        else:
+            wave = 60 * math.sin(step / 14)
+            response_ms = (1864 if at == woke
+                           else round(190 + wave + noise.gauss(0, 22)))
+            record = {"status": 200, "response_ms": response_ms}
+            said = f"HTTP 200 in {response_ms} ms"
+        store.add(SeriesKey("http", "/web/site", _SITE),
+                  SeriesRecord(record, at,
+                               code=(StatusCode.ERROR if at in failed
+                                     else StatusCode.OK),
+                               texts=(said,)),
+                  keep=check.series_keep)
+    return Engine([check], StatusTree(), series=store)
+
+
+class _HostReading(Check):
+    """A host check that keeps its readings, for the branch page's Readings card:
+    its measures are the deployment's, stated as the YAML would state them."""
+
+    type_name = "fixture-host"
+
+    def measure(self) -> Sequence[Measurement]:
+        return ()
+
+    def grade(self, measurements: Sequence[Measurement],
+              now: datetime) -> CheckResult:
+        return CheckResult(StatusCode.OK)
+
+
+def _host_node() -> StatusSnapshot:
+    """A host branch whose node stands for the machine it read (ADR-0086), with its
+    children beneath: on the branch page the node's facts — the Readings card among
+    them — stand under the child grid, and the poll renders them again."""
+    tree = StatusTree()
+    tree.upsert("/hosts/nas", StatusCode.OK, frequency_seconds=60, subject="nas1",
+                record={"load": 0.42, "memory": {"used_pct": 61}})
+    tree.upsert("/hosts/nas/disk", StatusCode.OK, "3 of 4 volumes above 70 %",
+                frequency_seconds=60)
+    tree.upsert("/hosts/nas/memory", StatusCode.OK, "61 % in use",
+                frequency_seconds=60)
+    return _snapshot(tree, branch="hosts/nas")
+
+
+def _host_engine() -> Engine:
+    """Ninety minutes of that host, a reading a minute: two measures, so two curves
+    one above the other — never one chart with two scales — the load without a unit
+    and the memory in `%`, which labels its axis once."""
+    check = _HostReading(
+        path="/hosts/nas", subject="nas1", frequency_seconds=60, series_keep=120,
+        measures={"load": {"unit": "", "label": "Load average"},
+                  "memory.used_pct": {"unit": "%", "label": "Memory in use"}})
+    store = MemoryStore()
+    start = _SERIES_END - timedelta(minutes=90)
+    for step in range(91):
+        at = start + timedelta(minutes=step)
+        load = round(0.35 + 0.25 * math.sin(step / 9) + 0.04 * (step % 5), 2)
+        used = 52 + step // 10
+        store.add(SeriesKey("fixture-host", "/hosts/nas", "nas1"),
+                  SeriesRecord({"load": load, "memory": {"used_pct": used}}, at,
+                               code=StatusCode.OK,
+                               texts=(f"load {load}, memory {used} %",)),
+                  keep=check.series_keep)
+    return Engine([check], StatusTree(), series=store)
+
+
 def _empty() -> StatusSnapshot:
     """The empty tree — a root with no children, which renders the
     'No checks reporting yet' hint (the whole overview while the engine is
@@ -840,6 +1017,26 @@ FIXTURES: tuple[Fixture, ...] = (
             "through",
             _gateway, branch="net/vpn", detail=True,
             dependents=("/svc/api", "/svc/db", "/svc/queue", "/svc/web")),
+    Fixture("record_times_leaf",
+            "records on a leaf page: a Lambda line's `at`, a batch run's nested "
+            "`created.at` and `started` in the configured zone, a null `ended`, a "
+            "time-shaped value under an untyped name and a time past the calendar "
+            "as stored, and the measured record read the same way",
+            _record_times, branch="aws/account", detail=True),
+    Fixture("refused_records_leaf",
+            "records the seam refused (ADR-0093): a line that stands without its "
+            "record and says why in its place, the engine's WARN line for a "
+            "reading kept out of the grading, and a record that passed",
+            _refused_records, branch="ci/actions", detail=True),
+    Fixture("series_http_leaf",
+            "a subject's series on its leaf page (ADR-0092): the response-time "
+            "curve with three failed requests and one alone marked, a night's "
+            "sleep left plain, and the newest ten readings",
+            _site_node, branch="web/site", detail=True, engine=_site_engine),
+    Fixture("series_host_branch",
+            "the same on a polled branch page: two measures, two curves, the "
+            "`%` axis labeled once",
+            _host_node, branch="hosts/nas", engine=_host_engine),
     Fixture("empty_engine_down",
             "the empty tree (engine disabled) — the 'No checks' hint", _empty),
     Fixture("engine_error_banner",

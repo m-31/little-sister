@@ -41,16 +41,18 @@ os.environ.setdefault(
     os.pathsep.join((str(_HERE / "fixtures" / "config"),
                      str(_HERE / "demo_config"))))
 os.environ.setdefault("SECRET_KEY", "contrast-sweep")
-os.environ.setdefault("LITTLE_SISTER_ENGINE", "0")
 
 from little_sister import app as app_module  # noqa: E402
 from little_sister.app import app  # noqa: E402
 from tests.ui_fixtures import coded_workflow_tree  # noqa: E402
 
-# The engine is off, so the tree the routes read is whatever we put there. Mode 1's
+# No engine runs — the application is imported and never started (ADR-0091) — so the
+# tree the routes read is whatever we put there, and these are the pages a server
+# without an engine serves, with no banner saying that nothing started one. Mode 1's
 # coded-entry fixture is exactly the page this sweep needs — every tint at once on a
 # card that rolled up to ERROR — and sharing it means the sheet you look at and the
 # ratios measured here are the same roster (ui_fixtures.coded_workflow_tree).
+app_module.engine_error = None
 app_module.status_tree = coded_workflow_tree()
 CODED_PATH = "ci/actions"          # the seeded node's member leaf page
 

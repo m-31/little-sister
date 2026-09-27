@@ -50,10 +50,11 @@ ENTRY_LIMIT = 100_000
 #: latter, which is the line the limit exists to hold.
 #:
 #: ``record_limit`` in ``settings.yaml`` overrides it. That override costs one
-#: thing worth knowing: the limit is enforced inside ``CheckResult``, which a check
-#: builds in its own ``run()``, so the seam reads the configuration **late** rather
-#: than importing it — a check module that bound the settings at import time would
-#: bind them when a *plugin* is imported.
+#: thing worth knowing: the limit is enforced inside ``CheckResult`` and
+#: ``Measurement``, which a check builds in its own ``measure()`` and ``grade()``,
+#: so the seam reads the configuration **late** rather than importing it — a check
+#: module that bound the settings at import time would bind them when a *plugin* is
+#: imported.
 RECORD_LIMIT = 2_048
 
 #: The share of what the machine gives this process that the process may be
@@ -61,6 +62,18 @@ RECORD_LIMIT = 2_048
 #: the smallest instance the family runs on. ``memory_share`` in
 #: ``settings.yaml`` overrides it.
 MEMORY_SHARE = 0.5
+
+#: What every series together may weigh (ADR-0087), counted as the record limit
+#: counts one record: the bytes of the JSON the series file keeps each reading in.
+#: A default rather than a share of memory, for the reason the entry limit is one —
+#: something else binds first. Here it is the file: the state layer rewrites
+#: ``series.json`` whole every interval a series changed, which with any check
+#: keeping one is every interval, and a keeper carries each copy. Measured on the
+#: device VM, eight mebibytes of kept readings are a file of about thirteen, written
+#: in a few hundredths of a second on the scheduler's tick — the time is not what
+#: binds, the copy a keeper sends every minute is. Past this the series written to
+#: longest ago is evicted. ``series_limit`` in ``settings.yaml`` overrides it.
+SERIES_LIMIT = 8 * 1024 ** 2
 
 #: The share of either limit at which its line first stands, at WARN.
 AMBER_SHARE = 0.8
@@ -80,6 +93,12 @@ LAG_SECONDS = 5.0
 #: on the next tick would flicker the node WARN and back within a second, which is
 #: two events and no information; a window makes the line say "recently".
 LAG_MEMORY_SECONDS = 600.0
+
+#: How long a sweep that evicted a series stays on the report. The lag line's
+#: window, for the lag line's reason: a series evicted on one tick has shortened a
+#: curve for good, and a line that vanished on the next tick would say so for one
+#: second.
+EVICTION_MEMORY_SECONDS = 600.0
 
 #: Where a cgroup says how much memory this process may use, when one does — v2
 #: first, then v1. Read once, at :meth:`Limits.from_machine`.
@@ -106,18 +125,23 @@ class Limits:
     pool_wait_seconds: float = POOL_WAIT_SECONDS
     lag_seconds: float = LAG_SECONDS
     lag_memory_seconds: float = LAG_MEMORY_SECONDS
+    #: Bytes every series together may hold before the oldest is evicted
+    #: (ADR-0087), and what a projection is measured against.
+    series_limit: int = SERIES_LIMIT
+    eviction_memory_seconds: float = EVICTION_MEMORY_SECONDS
 
     @classmethod
     def from_machine(cls, *, entry_limit: int = ENTRY_LIMIT,
                      memory_share: float = MEMORY_SHARE,
-                     record_limit: int = RECORD_LIMIT) -> Limits:
+                     record_limit: int = RECORD_LIMIT,
+                     series_limit: int = SERIES_LIMIT) -> Limits:
         """The limits a deployment stated (``settings.yaml``, defaulting to the
         constants above), with the memory limit derived from this machine:
         ``memory_share`` of what it gives the process."""
         given = machine_memory()
         return cls(entry_limit=entry_limit, record_limit=record_limit,
                    memory_limit=int(given * memory_share) if given else None,
-                   machine_memory=given)
+                   machine_memory=given, series_limit=series_limit)
 
 
 @dataclass(frozen=True)
@@ -146,6 +170,27 @@ class LateRun:
     seconds: float
     frequency_seconds: int
     in_flight: bool
+
+
+@dataclass(frozen=True)
+class SeriesHeld:
+    """What the series hold at a tick, against their ceiling, and what this
+    configuration would need at today's estate — both in bytes, both measured and
+    neither declared (ADR-0087).
+
+    ``projection`` is, summed over every check that keeps a series, its
+    ``series_keep`` times the series it holds times what one of its kept readings
+    weighs on average; ``needs`` is each check's share of it, ``(path, bytes)``, so
+    a line can name the largest. ``evicted`` names the series this tick's sweep gave
+    up to stay within the ceiling, in the order they went, already worded, and
+    ``evicted_bytes`` is what they weighed together.
+    """
+
+    held: int
+    projection: int = 0
+    needs: tuple[tuple[str, int], ...] = ()
+    evicted: tuple[str, ...] = ()
+    evicted_bytes: int = 0
 
 
 @dataclass(frozen=True)
@@ -245,8 +290,13 @@ class Declared:
     #: Bytes one of this check's records is expected to need, or ``None`` where
     #: the type did not say. Unlike the two above it is never summed: the limit it
     #: answers to bounds a single record, so the question is whether this type's
-    #: largest fits, not what every type wants together.
+    #: largest fits, not what every type wants together. It is the **effective**
+    #: size — what the type declared, raised to the record floor where it
+    #: declared less (:func:`declared_costs`).
     record_bytes: int | None = None
+    #: What the type itself declared, where the floor raised it; ``None`` where
+    #: the effective size is the type's own number, or where it declared none.
+    record_stated: int | None = None
 
     @property
     def workers(self) -> float:
@@ -292,11 +342,21 @@ def _declaration(check: object, name: str) -> float | None:
     return number
 
 
-def declared_costs(checks: Iterable[object]) -> tuple[Declared, ...]:
+def declared_costs(checks: Iterable[object], *,
+                   record_floor: int = 0) -> tuple[Declared, ...]:
     """What each check declares it costs — the checks that declare anything, in
     configuration order. Duck-typed on the two methods, as :func:`may_run_late`
     is on the two fields: the check base pulls in every built-in type, and this
-    module sits beneath the engine."""
+    module sits beneath the engine.
+
+    ``record_floor`` is the most a record the **engine** writes for a check can
+    weigh — the failure record of a check that raised (ADR-0086 decision 5) — and
+    a declared record size is raised to it: any check may raise, so the largest
+    record a declaring check can leave is never smaller. The engine passes its
+    number in because this module sits beneath it. Only a type that **declared**
+    a size is raised; one that declared none stays ``None``, because the library
+    makes no claim a type did not make.
+    """
     found: list[Declared] = []
     for check in checks:
         cost = _declaration(check, "expected_cost")
@@ -304,10 +364,13 @@ def declared_costs(checks: Iterable[object]) -> tuple[Declared, ...]:
         record = _declaration(check, "expected_record")
         if cost is None and entries is None and record is None:
             continue
+        stated = None if record is None else int(record)
+        effective = None if stated is None else max(stated, record_floor)
         found.append(Declared(str(getattr(check, "path", "")),
                               int(getattr(check, "frequency_seconds", 0)),
                               cost, None if entries is None else int(entries),
-                              None if record is None else int(record)))
+                              effective,
+                              stated if stated != effective else None))
     return tuple(found)
 
 
@@ -430,11 +493,14 @@ class Capacity:
 
 
 def capacity(checks: Iterable[object], *, max_workers: int,
-             limits: Limits) -> Capacity:
+             limits: Limits, record_floor: int) -> Capacity:
     """What the configured checks declared, against ``max_workers`` — the pool
     the engine will actually run, not the ceiling a deployment wrote down — and
-    against the entry limit."""
-    return Capacity(declared_costs(checks), max_workers=max_workers,
+    against the entry limit. ``record_floor`` is required rather than defaulted:
+    it is the engine's failure-record maximum, and a caller that forgot it would
+    compare declarations the engine itself can exceed."""
+    return Capacity(declared_costs(checks, record_floor=record_floor),
+                    max_workers=max_workers,
                     entry_limit=limits.entry_limit,
                     record_limit=limits.record_limit,
                     amber_share=limits.amber_share)
@@ -478,8 +544,13 @@ class EngineReport:
         #: late tick is logged and recorded in one call and the line is written
         #: from the worst inside the window.
         self._lag = Held(limits.lag_memory_seconds)
+        #: The sweeps that evicted a series, held for their window (ADR-0087):
+        #: an eviction has shortened a curve for good, so the line says
+        #: *recently* rather than *this second*.
+        self._evictions = Held(limits.eviction_memory_seconds)
         self._entries = 0
         self._memory: Resident | None = None
+        self._series: SeriesHeld | None = None
         self._waiting: tuple[Waiting, ...] = ()
         self._late: tuple[LateRun, ...] = ()
 
@@ -498,20 +569,47 @@ class EngineReport:
         ``None`` where nothing did the arithmetic."""
         return self._capacity
 
+    @property
+    def series(self) -> SeriesHeld | None:
+        """What the series held at the last tick, and what this configuration
+        would need at that tick's estate — ``None`` before the first tick."""
+        return self._series
+
     def observe(self, now: float, *, entries: int, waiting: Sequence[Waiting],
-                late: Sequence[LateRun]) -> None:
+                late: Sequence[LateRun], series: SeriesHeld | None = None) -> None:
         """Record one tick: ``now`` is the engine's clock at the tick, the rest is
-        what the engine's own records show at that moment."""
+        what the engine's own records show at that moment — ``series`` what the
+        series hold after this tick's sweep, and what it evicted."""
         if self._last_tick is not None:
             lag = now - self._last_tick - self._poll_interval
             if lag > self._limits.lag_seconds:
                 self._lag.see("lag", self._lag_text(lag), measure=lag, now=now)
         self._last_tick = now
         self._lag.prune(now)
+        if series is not None and series.evicted:
+            self._evictions.see("series", self._eviction_text(series),
+                                code=StatusCode.ERROR,
+                                measure=float(series.evicted_bytes), now=now)
+        self._evictions.prune(now)
         self._entries = entries
         self._memory = self._resident()
+        self._series = series
         self._waiting = tuple(waiting)
         self._late = tuple(late)
+
+    def _eviction_text(self, series: SeriesHeld) -> str:
+        """What one sweep that evicted says — the line's sentence while it is the
+        latest inside the window, and the log entry for every one."""
+        count = len(series.evicted)
+        named = list(series.evicted[:NAMED_IN_A_LINE])
+        if count > len(named):
+            named.append(f"and {count - len(named)} more")
+        which = ("the series written to longest ago was" if count == 1 else
+                 f"{count} series were, the one written to longest ago first")
+        return (f"the series outgrew their ceiling of "
+                f"{format_weight(self._limits.series_limit)}: {which} evicted "
+                f"({format_weight(series.evicted_bytes)}) — {', '.join(named)} — so "
+                f"their curves are shortened")
 
     def _lag_text(self, lag: float) -> str:
         """What one late tick says — the sentence the line carries for the worst
@@ -524,8 +622,10 @@ class EngineReport:
 
     def lines(self) -> tuple[Entry, ...]:
         """The engine's own lines, from the record and nothing else: each with a
-        stable slug the engine's name will prefix (ADR-0072 decision 4), coded
-        where it claims something and uncoded where it only informs."""
+        stable slug of its own on the engine's node, `/little-sister/engine` —
+        the path carries the engine's name, not the slug (ADR-0072 decision 4,
+        ADR-0076 decision 3) — coded where it claims something and uncoded where
+        it only informs."""
         limits = self._limits
         lines: list[Entry] = []
         entries, entry_limit = self._entries, limits.entry_limit
@@ -554,6 +654,7 @@ class EngineReport:
                                              f"of the limit of {_size(memory_limit)}"
                                              f"{given}",
                                    code=StatusCode.WARN))
+        lines.extend(self._series_lines())
         if self._waiting:
             longest = max(item.seconds for item in self._waiting)
             if longest > limits.pool_wait_seconds:
@@ -579,6 +680,42 @@ class EngineReport:
                 code=StatusCode.WARN))
         return tuple(lines)
 
+    def _series_lines(self) -> list[Entry]:
+        """The ceiling's two lines (ADR-0087). ``series`` is what the series
+        hold: ERROR while a sweep inside the window has evicted — curves are being
+        shortened now — and WARN from the amber share of the ceiling. And
+        ``series.projection`` is what this configuration would need at today's
+        estate: WARN when that is past the ceiling, on the first tick the checks'
+        series exist, long before a slowly filling series reaches it."""
+        limits, series = self._limits, self._series
+        ceiling = limits.series_limit
+        lines: list[Entry] = []
+        evicted = self._evictions.latest("series", now=self._last_tick)
+        if evicted is not None:
+            seen = self._evictions.count("series", now=self._last_tick)
+            text = evicted.text
+            if seen > 1:
+                window = format_duration(
+                    max(1, round(self._evictions.hold_seconds)))
+                text = f"{text} — {seen} times in the last {window}"
+            lines.append(Entry("series", text, code=StatusCode.ERROR))
+        elif series is not None and series.held >= ceiling * limits.amber_share:
+            lines.append(Entry("series",
+                               f"the series hold {format_weight(series.held)}, "
+                               f"{_percent(series.held, ceiling)} of their "
+                               f"ceiling of {format_weight(ceiling)}",
+                               code=StatusCode.WARN))
+        if series is not None and series.projection > ceiling:
+            largest = _named([(float(need), f"{_plain(path)} {format_weight(need)}")
+                              for path, need in series.needs])
+            lines.append(Entry(
+                "series.projection",
+                f"this configuration cannot be honored at this estate: its "
+                f"series would need {format_weight(series.projection)}, past their "
+                f"ceiling of {format_weight(ceiling)}: {largest}",
+                code=StatusCode.WARN))
+        return lines
+
     def report(self) -> str:
         """What the engine **knows** about its configuration and says as a fact,
         not a claim — the engine child's `report` (ADR-0044 decision 6, ADR-0076):
@@ -597,11 +734,32 @@ class EngineReport:
         if self._capacity is not None:
             for _limit, said in self._capacity.warnings():
                 facts.append(f"- {_plain(said)}")
+        series = self._series
+        if series is not None and (series.held or series.projection):
+            facts.append(
+                f"- the series hold {format_weight(series.held)} of their ceiling of "
+                f"{format_weight(self._limits.series_limit)}; at today's estate this "
+                f"configuration would need {format_weight(series.projection)}")
         return "\n".join(facts)
 
 
 def _percent(part: float, whole: float) -> str:
     return f"{round(100 * part / whole)} %"
+
+
+def format_weight(size: int) -> str:
+    """A weight in bytes at the resolution a series line needs — from a few
+    hundred bytes, a test's ceiling, to the mebibytes a deployment's is. Named
+    without an underscore for the system page's `weight` filter, which writes the
+    figures the engine's own lines write: one figure spelled two ways is two
+    figures to a reader comparing them."""
+    if size < 1024:
+        return f"{size:,} B"
+    if size < 1024 ** 2:
+        return f"{size / 1024:,.1f} KiB"
+    if size < 1024 ** 3:
+        return f"{size / 1024 ** 2:,.1f} MiB"
+    return f"{size / 1024 ** 3:,.1f} GiB"
 
 
 def _size(size: int | None) -> str:

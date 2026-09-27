@@ -257,16 +257,18 @@ maintenance_default_expiry: 7d       # maintenance window when none is given
 ```
 
 The shipped file documents the rest inline — the dashboard caps (`reason_cap`,
-`branch_cap`, `maintenance_cap`), whether a failing check keeps its `stacktrace`,
+`branch_cap`, `maintenance_cap`, and `reading_cap`, the newest readings a node shows
+beneath its curves), whether a failing check keeps its `stacktrace`,
 the card-head placement (`card_status_line`: compact `beside` by default, or the
 standing second line `below`), how cards spend a wide grid's columns
 (`dashboard_columns`: `flow` by default, or `plain` for the fixed one-track
 grid), the failure-retry budget (`retry_interval`, `retry_attempts`), how often
 the kept state files are written (`state_interval`), how many consecutive worse
 readings a node needs before the level above counts it (`escalate_after`), and the
-engine's four sizing numbers — `max_workers`, `entry_limit`, `memory_share` and
-`record_limit`, which are both what the instance measures itself against while it runs
-and what a check type's declarations are measured against at startup.
+engine's five sizing numbers — `max_workers`, `entry_limit`, `memory_share`,
+`record_limit` and `series_limit`, which are what the instance measures itself against
+while it runs, and three of them what a check type's declarations are measured against
+at startup.
 
 #### Curated links (`config/links.yaml`)
 
@@ -354,12 +356,22 @@ from little_sister.app import app  # noqa: E402
 PY
 
 # A SINGLE worker: the engine and the status tree live in-process.
-gunicorn --workers 1 --threads 8 --bind 0.0.0.0:8888 wsgi:app
+# The hooks module starts the application in the worker and stops it, with its save.
+gunicorn --workers 1 --threads 8 --keep-alive 0 \
+         --config python:little_sister.gunicorn_hooks \
+         --bind 0.0.0.0:8888 wsgi:app
 ```
 
 One worker is not a suggestion — the engine and the status tree live in the process
 ([ADR-0001](docs/adr/0001-in-process-threaded-engine.md)), so a second worker is a
-second, disagreeing tree. The packaged `users.example.yaml` documents every field of
+second, disagreeing tree. **The `--config` line is not optional either**: importing the
+application starts nothing, and the hooks module is what starts the engine once the
+worker is up and stops it, with its save, when the worker leaves
+([ADR-0091](docs/adr/0091-an-import-is-not-an-instance.md)). Without it every page says
+the engine is not running and names the flag. `--keep-alive 0` keeps an idle browser
+connection from holding a stop open to the end of gunicorn's grace
+([ADR-0088](docs/adr/0088-a-stop-ends-at-its-save.md)); a container that runs this line
+wants a stop timeout of that grace, 30 s by default, and ten seconds more. The packaged `users.example.yaml` documents every field of
 the user list, avatars included.
 
 An empty `checks/` is allowed and reports itself — *nothing is being watched* is a
@@ -373,7 +385,7 @@ limits, and a `timeout` longer than its `frequency` (warned about, never refused
 anyone relies on staying logged in: without one a random key is made per start, so
 sessions end with the process. Runtime state is written to `var/` beside the
 configuration: the log, and under `var/state/` what a restart keeps — the maintenance
-pins and the event log. That directory is what a **keeper** carries: a deployment that
+pins, the event log and the series. That is what a **keeper** carries: a deployment that
 registers one has it restored from there at startup and mirrored back to it while the
 instance runs, so a redeployment onto a fresh machine comes up with the state it left
 on the old one. Where two instances share a keeper's store, whoever holds its lease is
@@ -392,7 +404,8 @@ For developing little sister itself, or running a branch. The project is managed
 
 ```bash
 uv sync                              # create .venv and install from the lockfile
-uv run gunicorn --workers 1 --threads 8 --bind 0.0.0.0:8888 little_sister.app:app
+uv run gunicorn --workers 1 --threads 8 --keep-alive 0 \
+       --config python:little_sister.gunicorn_hooks --bind 0.0.0.0:8888 little_sister.app:app
 ```
 
 First-time setup: on a fresh checkout, **`./setup.sh`** creates
@@ -409,7 +422,11 @@ started the other), and refuses to touch a foreign process on the port — loggi
 accepts both users-aspect forms (and follows the configured root path-list) before it
 starts. **`./stop.sh`** stops it, whichever scheme it was started under; **`./test_api.sh`**
 smoke-tests the running JSON API
-(token from `LITTLE_SISTER_API_TOKENS`). Override the bind with
+(token from `LITTLE_SISTER_API_TOKENS`); **`./memory.sh`** says what the running
+instance holds in memory — the resident size of the gunicorn master and of each worker,
+and their sum — and adds it as a row to `var/memory.csv`, so a run measured at its start
+and a day later can be compared; `--background` does that every ten minutes, detached,
+until `./memory.sh --stop`. Override the bind with
 `LITTLE_SISTER_HOST` / `LITTLE_SISTER_PORT`.
 
 An instance belongs to the checkout it runs in — so a second checkout of this

@@ -12,8 +12,6 @@ import os
 import unittest
 from unittest import TestCase, mock
 
-# Import the app with the background engine disabled (no threads/network).
-os.environ.setdefault("LITTLE_SISTER_ENGINE", "0")
 os.environ.setdefault("SECRET_KEY", "test-key")
 
 from little_sister import app as app_module
@@ -51,8 +49,8 @@ class HealthTests(TestCase):
         self.assertEqual(payload["engine"], "running")
 
     def test_an_engine_switched_off_is_disabled_not_failed(self):
-        # The suite runs with LITTLE_SISTER_ENGINE=0, which is this case exactly: a
-        # deployment got what it asked for, and must not read as broken.
+        # A server started with LITTLE_SISTER_ENGINE=0 got what it asked for, and
+        # must not read as broken (ADR-0091 decision 7).
         with mock.patch.object(app_module, "engine", None), \
                 mock.patch.object(app_module, "engine_error", None):
             _, payload = self._health()
@@ -65,6 +63,25 @@ class HealthTests(TestCase):
         self.assertEqual(payload["engine"], "failed")
         self.assertEqual(response.status_code, 200,
                          "a failed engine must not take the instance out of service")
+
+    def test_a_server_that_never_started_the_engine_is_failed_and_still_200(self):
+        # A gunicorn line without the hooks module serves the application and never
+        # starts it (ADR-0091 decision 5). A liveness probe that restarts on failure
+        # must meet a live instance there, never a restart loop (decision 6).
+        with mock.patch.object(app_module, "engine", None), \
+                mock.patch.object(app_module, "engine_error", app_module.NOT_STARTED):
+            response, payload = self._health()
+        self.assertEqual(payload["engine"], "failed")
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("gunicorn_hooks", response.get_data(as_text=True))
+
+    def test_an_imported_application_that_was_never_started_says_so(self):
+        # This suite imports the application and never starts it, which is the
+        # state every test here begins in unless it says otherwise.
+        self.assertIsNone(app_module.engine)
+        self.assertEqual(app_module.engine_error, app_module.NOT_STARTED)
+        self.assertIn("--config python:little_sister.gunicorn_hooks",
+                      app_module.NOT_STARTED)
 
     def test_the_reason_an_engine_failed_is_never_in_the_body(self):
         secret = "/srv/deploy/config/checks/payments.yaml: no such key 'ap1_url'"

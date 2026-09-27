@@ -15,8 +15,6 @@ import os
 import unittest
 from unittest import TestCase, mock
 
-# Import the app with the background engine disabled (no threads/network).
-os.environ.setdefault("LITTLE_SISTER_ENGINE", "0")
 os.environ.setdefault("SECRET_KEY", "test-key")
 
 from little_sister import app as app_module
@@ -120,6 +118,13 @@ class CompositionTests(TestCase):
                 mock.patch.object(app_module, "engine_error", "boom"):
             self.assertFalse(app_module._first_pass_done())
 
+    def test_a_server_that_never_started_the_engine_never_finishes_one(self):
+        # A gunicorn line without the hooks module: 503 for good, while /health
+        # stays 200 (ADR-0091 decision 6).
+        with mock.patch.object(app_module, "engine", None), \
+                mock.patch.object(app_module, "engine_error", app_module.NOT_STARTED):
+            self.assertFalse(app_module._first_pass_done())
+
     def test_a_running_engine_answers_from_its_own_outcomes(self):
         engine = mock.Mock(outcomes=Outcomes(configured=3, completed=2, erroring=0))
         with mock.patch.object(app_module, "engine", engine):
@@ -136,6 +141,19 @@ class CompositionTests(TestCase):
         outcomes = Outcomes(configured=2, completed=2, erroring=2)
         with mock.patch.object(app_module, "engine", mock.Mock(outcomes=outcomes)):
             self.assertEqual(app_module._check_outcomes(), outcomes)
+
+    def test_a_lease_taken_from_this_instance_is_a_line_on_its_readiness(self):
+        # The application hands its lease to the readiness node, which says so where
+        # the instance is watched (ADR-0090 decision 7).
+        taken = mock.Mock(lost="beside:4242:t:b on elsewhere, pid 4242")
+        with mock.patch.object(app_module, "lease", taken):
+            lines = app_module.instance_readiness.lines()
+        self.assertEqual([line.slug for line in lines], ["saves"])
+        self.assertIn("beside:4242:t:b on elsewhere, pid 4242", lines[0].text)
+
+    def test_no_lease_is_no_line(self):
+        with mock.patch.object(app_module, "lease", None):
+            self.assertEqual(app_module.instance_readiness.lines(), ())
 
     def test_the_instance_lines_are_pinnable_under_the_readiness_name(self):
         # The suite empties the contributor registry before every test (conftest),

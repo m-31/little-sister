@@ -1,0 +1,75 @@
+# What check API epoch 3 promises — the check-authoring surface of
+# architecture.md §11 as it stood when API_VERSION became 3 (ADR-0051).
+#
+# Epoch 3 opened on a **behavior**, not a name. `Check.run()` became
+# `Check.measure()` and `Check.grade()` (ADR-0086): a check reads the world in one
+# half and says what it read means in the other, so that a grading can be run
+# again over an old record when the process that took it is gone. `Measurement`
+# joined the surface as the one place an object and its reading live, `clip`
+# joined it as the one way free text is fitted into a record, and `CheckResult`
+# lost its `subject` and `record` fields to the measurement.
+#
+# The fields are not names on this list, so nothing was removed from it — which is
+# exactly why the epoch had to move on the behavior instead. A type built for v2
+# cannot be adapted at runtime: it would still decide a code from a world it
+# re-reads inside the grading, which is the failure the split exists to make
+# impossible. So it refuses at import, naming both numbers.
+#
+# A plugin built for v3 imports these names. tests/test_public_surface.py requires
+# the block in §11 to still contain every line here, so a name cannot leave the
+# surface without API_VERSION moving — the one check a same-commit rename of both
+# the code and the doc cannot quietly satisfy.
+#
+# This file is APPEND-ONLY within an epoch: adding a name to the surface may add a
+# line, removing one is a new epoch and a new file (check_api_v4.txt). Never edit a
+# line out of it; a released plugin is still importing that name.
+#
+# One "<module> <name>" per line.
+little_sister.checks API_VERSION
+little_sister.checks CHECKS_ASPECT
+little_sister.checks CHECK_TYPES
+little_sister.checks Check
+little_sister.checks CheckError
+little_sister.checks CheckResult
+little_sister.checks Entry
+little_sister.checks Measurement
+little_sister.checks checks_dirs
+little_sister.checks code
+little_sister.checks coerce_code
+little_sister.checks config_markdown
+little_sister.checks load_checks
+little_sister.checks parse_duration
+little_sister.checks parse_secret_refs
+little_sister.checks plain
+little_sister.checks register
+little_sister.checks require_api
+little_sister.reasons Entry
+little_sister.reasons MAX_SLUG_LENGTH
+little_sister.reasons MAX_SUBJECT_LENGTH
+little_sister.reasons RECORD_TIMESTAMP_KEYS
+little_sister.reasons ReasonError
+little_sister.reasons clip
+little_sister.reasons derived_slug
+little_sister.reasons normalize
+little_sister.reasons slug
+little_sister.status StatusCode
+little_sister.status join_path
+little_sister.values flag
+little_sister.values number
+little_sister.values real
+little_sister.values rows
+little_sister.values strict_flag
+little_sister.values text
+little_sister.spans coarse_span
+little_sister.spans format_duration
+little_sister.spans format_span
+little_sister.spans local_time
+little_sister.transport Deadline
+little_sister.transport DeadlineExceeded
+little_sister.transport Fault
+little_sister.transport RemoteError
+little_sister.transport ask
+little_sister.fetch Response
+little_sister.fetch fault_for
+little_sister.fetch fetch
+little_sister.fetch retry_after

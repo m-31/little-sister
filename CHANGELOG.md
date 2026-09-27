@@ -8,6 +8,316 @@ contract versions **separately** — see `docs/api/openapi.yaml` `info.version`.
 
 ## [Unreleased]
 
+## [0.3.18] - 2026-09-27
+
+**Every gunicorn line needs one flag now: `--config python:little_sister.gunicorn_hooks`.**
+Importing `little_sister.app` no longer starts an engine, opens a log file or touches
+`var/` — an import is not an instance — and the hooks module that flag loads starts the
+application right after the worker's import and stops it, with its save, when the
+worker leaves. `./start.sh` passes it; a container entrypoint, a unit file or anything
+else that runs gunicorn itself must add it, with `--keep-alive 0` and
+`--graceful-timeout` as `start.sh` passes them, and a container needs a stop timeout of
+the grace and ten seconds. Without the flag the application serves with no engine: every
+page says so and names the flag, and `/health` answers `failed`, still with `200`. The
+check API epoch does not move — no check type sees a difference
+([ADR-0091](docs/adr/0091-an-import-is-not-an-instance.md),
+[ADR-0088](docs/adr/0088-a-stop-ends-at-its-save.md)).
+
+### Removed
+
+- **A check type implements `measure()` and `grade()` instead of `run()`, and the
+  check API epoch is now 3.** A check used to read the world and decide a status in
+  one method. It now does it in two: `measure()` reads and hands back what it read,
+  and `grade(measurements, now)` turns that reading into the codes and the sentences
+  ([ADR-0086](docs/adr/0086-a-check-measures-and-grades.md)). The reason is a
+  question the old shape could not be asked at all — *was the last run within 26
+  hours, and did the size not shrink by half* — because answering it means grading a
+  reading taken long ago, by a process that is gone. A grading may therefore read
+  only the record, the check's own configuration and the clock it is handed.
+  `CheckResult` loses `subject` and `record`, which a `Measurement` now carries
+  alone. **Every installed check-type package must be rebuilt for epoch 3**: one
+  built for epoch 2 refuses at import with both numbers in the message, which is
+  deliberate — loud at startup rather than quietly wrong at the first run.
+
+### Added
+
+- **A node shows the history it keeps: a curve of each measure, and the newest
+  readings.** Where a check keeps its subject's readings (`series_keep`), the node that
+  stands for that subject draws a curve for each of the check's **measures** — to scale
+  in time and in the configured timezone, a failed reading a marked break and a stretch
+  in which nothing was read a plain one — and lists the newest readings beneath, 10 by
+  default; every kept reading is on the node's History page. `measures:` in a check's
+  YAML names what is drawn — a record field and its unit, `{unit, label}`, or `null`
+  to take a type's default back — and a type declares its own as `measure_defaults`;
+  `http` draws its response time with no key of its own. `reading_cap` in
+  `settings.yaml`, and optionally in a check's YAML, says how many readings show. A
+  `measures:` block of another shape, or a check's `reading_cap` that is not a whole
+  number, refuses the start naming the file. Adding the keyword does not move the check
+  API epoch ([ADR-0092](docs/adr/0092-a-check-declares-its-measures.md)).
+- **`little_sister.process`, the process a check starts — promised beside `fetch`.**
+  `run(argv, *, timeout, …)` runs an argument vector in a process group of its own with
+  nothing on stdin but what the caller sends, reads both streams under a cap, and ends
+  the whole group at the bound, at the instance's stop, and at a normal end for whatever
+  the command left behind. It answers a `Finished` — the status, both streams, how the
+  process ended — and raises `NotStarted` only where the command could not start. A
+  check type that starts a process calls it rather than `subprocess`; adding it does not
+  move the check API epoch
+  ([ADR-0089](docs/adr/0089-a-process-a-check-starts-ends-with-it.md)).
+- **`little_sister.gunicorn_hooks`, the server's start and stop.** Its `post_worker_init`
+  starts the application after the worker's import, and its `worker_exit` stops it when
+  the worker leaves. It never imports the application and sets no other gunicorn
+  setting.
+- **One writer per state directory.** The process that serves holds a lease on
+  `var/state/` — `var/state.lease`, rewritten every 10 s, and a kernel lock in
+  `var/state.lock` — so a second process on the same checkout refuses to start and names
+  the holder; under gunicorn the server halts with *Worker failed to boot*. A process
+  whose lease was taken — two machines sharing a checkout — stops its checks and its
+  saves, keeps serving the last view it had, and says so as an ERROR line on
+  `/little-sister/readiness`; a takeover of a lapsed lease logs a WARNING naming the
+  holder it replaced ([ADR-0090](docs/adr/0090-one-state-directory-one-writer.md)).
+- **`GRACEFUL_TIMEOUT`, the grace, in the run scripts**: 30 s, gunicorn's own default,
+  written down once in `lib.sh` and raised in `instance.sh` the way `WORKER_TIMEOUT`
+  is. `start.sh` hands it to gunicorn, and `stop.sh` waits it out.
+- **Every built-in check now records what it read**, where only the URL check did.
+  A host's metrics, a file's age, a command's exit code and captured output, an SSH
+  connection's outcome: each run keeps its reading beside its verdict, which is what
+  a curve is later drawn from. The metrics checks keep **numbers** rather than the
+  text their scripts printed, and a value the check could not read stands as null
+  rather than vanishing, so a gap in a curve is a real gap and not a guess.
+- **A check that raises now still records the attempt.** The engine writes the
+  reading itself — *this is the object, and this is why it could not be read* —
+  against the object the check named when it was configured. A history can then
+  answer *how often did this answer at all*, which one with holes in it cannot.
+- **A check can keep a history of what it reads: `series_keep`.** Set `series_keep: 60`
+  on any check and it keeps the last 60 readings of each thing it reads — a URL, a host
+  — the oldest dropped first: that thing's *series*, failed readings included. The
+  default, `0`, keeps none, and there is deliberately no deployment-wide setting,
+  because where a history is wanted is a choice per check. A node draws its series as
+  the first entry above says. A negative or
+  non-numeric value is refused at startup, naming the file, and every template in
+  `config/checks/examples/` carries the line commented out.
+  ([ADR-0087](docs/adr/0087-a-check-keeps-its-subjects-readings.md))
+- **A kept reading remembers what it meant.** Beside what was read, each reading in a
+  series keeps the status and the sentence it stood with — the line it became, or what
+  its own check said on its node — so a history can still say what *OK* meant on a
+  given day after a threshold has changed. A check type that grades several readings
+  onto lines of their own is matched by the record it carries on each line; the
+  authoring guide says to carry it through unchanged.
+- **The series survive a restart.** They are kept in `var/state/series.json` beside
+  the event log and the maintenance pins: written every `state_interval` and at
+  shutdown, read back at startup, and carried by a keeper with the rest. A file that
+  cannot be read is a red line on `/little-sister/state` and the series start empty —
+  never a refusal to start — and a file older than the configuration is trimmed to
+  its `series_keep` on the first tick.
+- **What all the series weigh together is bounded: `series_limit`,** 8 MiB by default,
+  in `settings.yaml`. Past it, the series written to longest ago is dropped whole —
+  most often a thing no check reads any more — and `/little-sister/engine` turns red for
+  ten minutes, naming what went; from 80 % it is amber. Beside it stands a
+  **projection**, what this configuration would need at today's estate: past the
+  ceiling it is amber from the first tick — *this configuration cannot be honored at
+  this estate* — hours before a series fills far enough to be cut. `/system` shows
+  both next to the declared load and the entries held.
+- **A check type can say which event a reading is of: `Measurement(identity=…)` — or,
+  for an object that only stands in a state, which state: `Measurement(state=…)`.**
+  Where the source keeps the history — a workflow's runs, a batch job — naming the run
+  or the job keeps the same one, read again on the next poll, as one record in its
+  series rather than a second, wherever it stands in the kept window. Where it keeps
+  none — a workflow switched off, a queue — naming the state keeps an unchanged state as
+  one record and makes every change the next, a return to an earlier state included,
+  because a state is compared with the newest record only. A reading names one of the
+  two at most; leave both empty, the default, where every reading is a new one. Nothing
+  changes for a type that sets neither, and the check API epoch stays 3.
+- **`./memory.sh` says what a running instance holds in memory**: the resident size of
+  the gunicorn master and of each worker it forked, and their sum, on the terminal and
+  as a row added to `var/memory.csv` — so a run measured at its start, an hour in and a
+  day in can be read back as a column. It finds the instance the way `./stop.sh` does,
+  and refuses anything on the port that is not it. `--every SECONDS` measures again
+  until it is stopped, and `--background` does that detached from the terminal, every
+  ten minutes unless `--every` says otherwise, until `./memory.sh --stop`.
+
+### Changed
+
+- **A stop ends at its save.** The engine stops when gunicorn's worker leaves, or at
+  exit where nothing else stops it: a check in flight is abandoned rather than waited
+  for, whatever it started is ended — on this machine, and on the remote host for an
+  `ssh` run — one INFO line names what was abandoned, and one final save is the last
+  write. The next start runs every check at once, as every start does
+  ([ADR-0088](docs/adr/0088-a-stop-ends-at-its-save.md)).
+- **`./stop.sh` waits for every process of the instance.** It reads the master and its
+  worker before the TERM and waits on all of them for the grace and five seconds; what
+  is left at that bound is KILLed and named. `./start.sh` stops an old instance the same
+  way, so a start never comes up beside a process of the old one. `STOP_TIMEOUT` is
+  gone.
+- **Keep-alive is off on the run scripts' gunicorn line** (`--keep-alive 0`). An idle
+  connection — a page open between two polls — held a stop to the end of the grace;
+  now every answer closes its connection, which costs one connection per request.
+- **An `ssh` check's remote command now ends with its connection.** The command line
+  carries a small wrapper and the command, a script travels on stdin, and stdin stays
+  open for the whole run. When the client goes, the wrapper ends the remote command's
+  process group: the group the wrapper leads, or, where the server leaves a command in
+  the server's own group as Dropbear does, the group `setsid` gave the command. On a
+  host without `setsid` it ends only the command and says so on stderr. A remote host
+  needs `sh`, `cat` and `kill`, and every command line the library builds stays within
+  1,024 bytes, which even Dropbear 2012 takes.
+- **The log file is opened by the server's start**, and begins with what the import
+  logged, up to 1,000 lines; a plain import logs to stderr only and writes nothing.
+- **`SECRET_KEY` and `LITTLE_SISTER_API_TOKENS`, where they are references, resolve at
+  the server's start** rather than at the import. A literal value is still read at the
+  import, and a malformed reference still refuses there.
+- **`LITTLE_SISTER_ENGINE=0` is a server that runs no engine**, and nothing else needs
+  it: an import never starts one, so a test or a tool that imports the application sets
+  nothing. `/health` answers `failed` for a server that never started its engine, and
+  `/ready` stays `503` there.
+- **A command's captured output is now kept with its reading, and bounded in bytes.**
+  `max_chars` still says how much output you want; what it can actually keep is also
+  bounded by `record_limit`, because a record is measured as JSON and one character of
+  German or Japanese text costs six bytes there, an emoji twelve. The text is
+  shortened once and used for both the record and the line, so the two can never
+  disagree, and with output that is not plain ASCII a line may now show less than
+  `max_chars` asked for. Nothing is ever refused mid-run: that is the point of
+  bounding it here.
+
+  **At the default `record_limit` of 2 KB nothing changes for you.** The bound these
+  three checks aim at is that default, so whatever `max_chars` says, such a check
+  declares at most 2 KB and startup accepts it. A deployment that has **lowered**
+  `record_limit` below that is the one case where a `command`, `ssh-command` or
+  `ssh-script` check can now be refused at startup, by name. The remedy there is to
+  raise `record_limit` back: lowering `max_chars` only reduces what is declared below
+  about 139 characters, which is rarely the output anyone wanted to keep.
+- **A failing SSH command reports the host's own error rather than its advisory
+  banner.** Where ssh printed a key-exchange advisory alongside the real error, the
+  advisory used to come first and crowd it out.
+- **A record's times read in the configured timezone on its node's page.** A value
+  under `at`, `started` or `ended` — at the top of a record or nested, as a batch
+  run's `created.at` is — now reads in `settings.yaml`'s `timezone` and `time_format`,
+  like every other time on the page, where it read as the UTC string the record
+  holds: `2026-09-22T10:38:00Z` under a Lambda function's line reads
+  `2026-09-22 12:38:00` in Berlin. A line's record and the node's *Measured* card
+  both change. Everything else is shown as it was stored — a time-shaped value under
+  any other name, a null (a run that has not ended), a time the zone cannot hold —
+  and no age is shown beside a time. The JSON API does not change: a record still
+  carries its times in UTC. A package's slot template that iterates `record_fields`
+  now receives rows with `name`, `kind`, `text` and `stored` rather than name–value
+  pairs ([ADR-0082](docs/adr/0082-a-line-carries-what-it-is-about-and-what-it-read.md)
+  decision 5).
+- **A record the seam refuses costs its line or its reading, never the whole run.** A
+  record that is not a mapping, not JSON, heavier than `record_limit`, or carrying
+  something that is not a time under `at`, `started` or `ended` used to fail the whole
+  run of its check — every line and every reading, on every poll, for as long as the
+  data stayed that way. In a running instance the line now keeps its text and its
+  code and says *Record refused:* and why where its record would be; a reading is kept
+  out of the check's grading, its series keeps a failure naming the refusal, and the
+  check's node gets a WARN line naming the subject and why, while the rest of the run
+  lands as before. A run that read only that subject — every check that reads one
+  object — stands as a check that raised: ERROR, the refusal its reason. The instance
+  says each refusal on `/little-sister/runtime`, and `/system` counts a refused record
+  among those it saw, marked *refused* where its weight was why. **A check's own tests
+  see no difference**: building a result or a measurement with such a record still
+  raises `CheckError`, naming the field or the bytes. The JSON API adds `refused` to
+  every entry, null where nothing was refused — spec 2.6.0, a compatible change — and
+  the check API epoch does not move
+  ([ADR-0093](docs/adr/0093-a-record-the-seam-refuses-costs-its-line.md)).
+- **A restart is no longer a status change of every node.** A node's first reading
+  after a restart is compared with what it read before, from the restored event log: a
+  node reading what it read before keeps its period across the restart, and one reading
+  anything else — `UNDEFINED` included — changes from the old code. That mends a
+  history that ran a node's last period on to the present when its first reading after
+  a restart was `UNDEFINED`, and a restart no longer writes an `undefined → ok` event
+  for every node into the bounded log, pushing real transitions out of it. A pin in
+  force before the restart writes nothing at its replay. The restart is recorded once,
+  where it happened: `/little-sister`'s history shows *undefined — the instance was not
+  running* from when the old process was last alive until its first beat, dated by a
+  `stopped_at` the stop's save now writes into `var/state/events.json` or by the
+  lease's last beat. And a node that declares nothing above nodes that report shows no
+  `undefined` row for its current period on its History page, as its Time card already
+  names none ([ADR-0094](docs/adr/0094-a-restart-is-no-transition.md)).
+
+### Fixed
+
+- **A stop no longer writes a failure into the instance's history.** The standard
+  thread pool held the exit for the check in flight while the scheduler ticked into
+  the closed pool, logging *scheduler tick failed* and saving WARN lines the next start
+  restored; the engine now runs its checks on threads the interpreter does not join.
+- **A worker that outlived its stop no longer runs beside the next start**, or saves
+  over the files the next start restored: `stop.sh` waited for the master alone and
+  KILLed it, leaving its worker to finish a check with nothing to end it.
+- **A timed-out `command` check leaves nothing behind.** The timeout ended the shell
+  and not what it had started; the whole process group ends now.
+- **A failed URL or file check no longer records more than it declares.** The error a
+  failed `http` or `file` reading keeps — the request's failure, or the file path and
+  the operating system's message — was stored whole, so a long one made the record
+  larger than the size the check declares at startup, and `/system` showed more seen
+  than declared. It is now shortened once, to at most 300 characters and 320 bytes of
+  the record, and the line says exactly the text the record keeps; the declared size
+  is the largest record either check can now write — 368 bytes for `http`, 357 for
+  `file` — so it moves up, and that is what startup compares against `record_limit`;
+  at the default both fit with room.
+- **A check that raised no longer loses its failure record.** The record the engine
+  writes when a check raises was shortened to 500 characters, not bytes, so an error
+  message of emoji or other non-ASCII text could weigh past `record_limit` and was
+  then dropped — the check went red with no reading beside it. It is now shortened
+  the way every check's own failures are, to at most 300 characters and 320 bytes,
+  and is always kept; the node's reason line still shows the whole message.
+- **A declared record size can no longer be smaller than the record the engine may
+  write for that check.** Any check can raise, and the failure record the engine then
+  writes weighs up to 331 bytes, so a check type that declares a smaller record is
+  now compared against `record_limit` at 331, and `/system` shows it as
+  `331 B record (floor; declares 64 B)`. A type that declares no record size is
+  unaffected, and none of the built-in types declares less, so nothing you run today
+  moves.
+- **The URL check's recorded error text is no longer double-escaped.** A record's
+  values are escaped where they are rendered, so a failed reading could show
+  `&amp;` and stray backslashes where the message had punctuation in it.
+- **A node that declares no status of its own no longer heads its page *undefined*.**
+  A check's node that only holds others and says something about them — what is in
+  scope, say — showed a gray *undefined* card at the top of its own page, while its
+  card on the dashboard showed the status of everything below it. The top of its page
+  now shows that same status, pale like the card where the color comes from a node
+  below, and its Time card says when it was observed instead of bounding a period of
+  *undefined*. A node that declares a status of its own still heads its page with it.
+- **The login page now says when there is no way in.** On an installation that offers
+  the doors at `/login`, a visitor whose instance had no door it could actually enter
+  saw the brand and an empty page — no button, and no word about why. It now says
+  which of three states it is in: no identity door is registered at all; a door that
+  signs people in without a page of its own, so the reader is on the wrong address and
+  nothing is broken; or every door registered with a page and none of them able to
+  take a credential right now. It deliberately does not name the doors or say why each
+  is unavailable; that is on `/system`, which asks who you are first, while the login
+  page is open to anybody. **It does not send anybody to `/system` either**: reaching
+  that page needs an administrator's session, and the third state is exactly the state
+  in which no door can issue one — the system-admin door included, which is the door
+  that state is usually about. It points at the instance's own startup output instead,
+  where the door and the reason were already written. The state was already reported at
+  startup, on `/ready` and on `/system` — the page somebody is standing in front of was
+  the one place it was not.
+- **The startup line no longer calls an instance usable when it cannot know that.**
+  With doors registered and none of them marked default, the warning asking for the
+  missing `default=True` went on to say *so this instance is usable*. It knows what is
+  registered, not whether any of those doors can take a credential — so on a machine
+  that cannot reach the store its doors' credentials come from, it said *usable* a few
+  lines below the note saying the system-admin door was shut. It now says only that an
+  unidentified request still has somewhere to land, which is what the missing default
+  actually costs.
+- **A time a record cannot hold is reported as a bad time.** A value under `at`,
+  `started` or `ended` without a time zone offset refused the result as a record that
+  *must be JSON-serializable*, with the real reason after it — which sent a check
+  author looking for an object where the fix was an offset. The refusal now opens with
+  the field and what it needs. A time its offset carries past the edge of the calendar
+  — the first hour of the year 1 at `+01:00` is the year 0 in UTC — was not refused at
+  all: it raised an `OverflowError` out of the check. It is refused the same way now,
+  saying so.
+- **The live demo lets its fixture user in and runs its engine again, beside an
+  instance of the same checkout.** `tests/demo_wsgi.py` registers the login list's
+  door, so `pan` can sign in: since the library stopped adding a door on anybody's
+  behalf, every page of the demo answered 401 and `/login` 404. Its development server
+  calls the start, and the gunicorn line in `docs/testing-the-gui.md` carries
+  `--config python:little_sister.gunicorn_hooks`, so the engine runs. And the demo
+  keeps its state, the lease on it and its log in `var/demo/`, or wherever
+  `LITTLE_SISTER_DEMO_DIR` says: run from a checkout it used that checkout's own
+  `var/state/`, so an instance of the checkout would refuse it, and a demo run after
+  one would restore that instance's pins, events and series and save its own over
+  them.
+
 ## [0.3.17] - 2026-09-20
 
 ### Added

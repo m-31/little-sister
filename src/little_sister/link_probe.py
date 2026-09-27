@@ -50,7 +50,7 @@ import socket
 import ssl
 import threading
 from collections.abc import Mapping
-from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+from concurrent.futures import Future, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -59,6 +59,7 @@ from little_sister.checks import CheckError, parse_duration
 from little_sister.fetch import USER_AGENT, fetch
 from little_sister.links import DEFAULT_PROBE_INTERVAL, LinksConfig
 from little_sister.logger import logger
+from little_sister.pool import DaemonPool
 from little_sister.reasons import plain
 from little_sister.transport import RemoteError
 
@@ -349,6 +350,12 @@ def start_pass(config: LinksConfig) -> threading.Event:
         # a moment later and logs it where a failed pass belongs.
         count = 0
     with _lock:
+        if _stopped:
+            # The instance has stopped: the honest answer to "wait for the pass" is
+            # that there is not going to be one.
+            stopped = threading.Event()
+            stopped.set()
+            return stopped
         running = _running
         if running is not None:
             if not running.overdue():
@@ -417,12 +424,28 @@ def forget_probe_results() -> None:
     this cannot do is unblock the socket, which is why the wedging tests release
     their own event rather than relying on this.
     """
-    global _last_forced, _running
+    global _last_forced, _running, _pool, _stopped
     with _lock:
         _results.clear()
         _stuck.clear()
         _running = None
         _last_forced = None
+        _pool = None
+        _stopped = False
+
+
+def stop_probing() -> None:
+    """The instance's stop (ADR-0088 decision 6): the pass in flight is abandoned
+    the way it is at its own deadline — what it has queued is canceled, and what it
+    delivers later is refused by the generation guard — and no pass starts after it.
+    What the probe knows lives in memory only, so there is nothing here to save."""
+    global _running, _stopped
+    with _lock:
+        _stopped = True
+        _running = None
+        pool = _pool
+    if pool is not None:
+        pool.shutdown(wait=False, cancel_futures=True)
 
 
 @dataclass(frozen=True)
@@ -473,6 +496,10 @@ class _Stuck:
 _lock = threading.Lock()
 _results: dict[str, Verdict] = {}
 _running: _Pass | None = None
+#: The current sweep's pool, so the instance's stop can cancel what it has queued.
+_pool: DaemonPool | None = None
+#: Set by the instance's stop (ADR-0088 decision 6): no pass starts after it.
+_stopped = False
 _generation = 0
 _stuck: list[_Stuck] = []
 _last_forced: datetime | None = None
@@ -601,8 +628,12 @@ def _sweep(current: _Pass, urls: tuple[str, ...],
     would have been a deadline on nothing. Leaving the block by hand is what lets
     this walk away.
     """
-    pool = ThreadPoolExecutor(max_workers=min(CONCURRENCY, len(urls)),
-                              thread_name_prefix="links-probe")
+    global _pool
+    # Daemon threads the interpreter does not join (ADR-0088 decision 6): a pass in
+    # flight at the instance's stop is left, never waited for.
+    pool = DaemonPool(min(CONCURRENCY, len(urls)), "links-probe")
+    with _lock:
+        _pool = pool
     futures: dict[Future[Verdict], str] = {
         pool.submit(_probe, url, alive): url for url in urls}
     try:
@@ -630,7 +661,7 @@ def _sweep(current: _Pass, urls: tuple[str, ...],
     return True
 
 
-def _abandon(current: _Pass, pool: ThreadPoolExecutor,
+def _abandon(current: _Pass, pool: DaemonPool,
              futures: Mapping[Future[Verdict], str]) -> None:
     """Give up on a pass that reached its deadline, keeping what did come back.
 

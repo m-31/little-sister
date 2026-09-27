@@ -4,8 +4,6 @@ import os
 import unittest
 from unittest import TestCase
 
-# Import the app with the background engine disabled (no threads/network).
-os.environ.setdefault("LITTLE_SISTER_ENGINE", "0")
 os.environ.setdefault("SECRET_KEY", "test-key")
 
 from jinja2 import TemplateNotFound

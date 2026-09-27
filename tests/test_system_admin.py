@@ -19,8 +19,6 @@ from types import FunctionType
 from typing import Any
 from unittest import TestCase, mock
 
-# Import the app with the background engine disabled (no threads/network).
-os.environ.setdefault("LITTLE_SISTER_ENGINE", "0")
 os.environ.setdefault("SECRET_KEY", "test-key")
 
 from flask import redirect

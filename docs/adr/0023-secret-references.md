@@ -1,12 +1,14 @@
 # ADR-0023 — Secret references with deployment-registered resolvers
 
 - **Status:** Accepted
-- **Date:** 2026-08-23 (accepted 2026-07-18)
+- **Date:** 2026-09-27 (accepted 2026-07-18)
 - **Related:** [ADR-0003 — Configuration & secrets via a `.env` file](0003-config-and-secrets-via-env-file.md)
   (extended here: the reference syntax and the `env://` scheme),
   [ADR-0001](0001-in-process-threaded-engine.md) ("no extra services" — unchanged for
   the core), [ADR-0015](0015-check-discovery-union.md) (config applies at startup, no
-  live reload — the same stance governs secret rotation).
+  live reload — the same stance governs secret rotation),
+  [ADR-0091](0091-an-import-is-not-an-instance.md) (the start, not the import, is where
+  a setting's reference reaches its store).
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -78,7 +80,12 @@ almost never changes.
    own settings — `SECRET_KEY` and `LITTLE_SISTER_API_TOKENS` — may themselves be
    given as `scheme://address` references (`little_sister.secrets.resolve_setting`;
    the environment value already *is* the setting, so only the scheme shape is treated
-   as a reference), resolved once at startup. `SECRET_KEY` additionally defaults to a
+   as a reference), resolved once at startup — the **server's start**, never the import
+   ([ADR-0091](0091-an-import-is-not-an-instance.md) decision 8), since a reference
+   reaches a store and an import is not an instance. A literal is still read at the
+   import, and a malformed reference still refuses there, since neither reaches
+   anything; a check's own references resolve at its instantiation (decision 3), which
+   happens at the start as well. `SECRET_KEY` additionally defaults to a
    **random per-start key** when unset, replacing the insecure development fallback
    (sessions reset on restart — no cross-worker skew under the single worker,
    ADR-0001). Failure keeps decision §4's split: a malformed reference still fails

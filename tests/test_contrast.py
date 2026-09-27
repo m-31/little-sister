@@ -523,3 +523,64 @@ class MenuContrastTests(TestCase):
             with self.subTest(theme=theme):
                 self.assertIn("--ls-danger-ink", self.blocks[selector])
                 self.assertIn("--ls-menu-hover", self.blocks[selector])
+
+
+# A measure's curve (ADR-0092) sits on a card, and **Bootstrap paints the card**:
+# `--bs-card-bg` is `--bs-body-bg`, the same two surfaces the menu rows sit on, so
+# the curve is measured against :data:`DROPDOWN`. What it draws is ours: the line
+# and its dots in the body ink, a reading without a value in the danger ink — the
+# links page's *does not answer*, which is what a failed request says — and the axes'
+# words in the muted ink. Marks are graphics and owe 3:1 (WCAG 1.4.11); the axes'
+# words are text and owe the text bar. (rule, the property it paints, the token.)
+CURVE_MARKS = (
+    (".ls-curve__line", "stroke", "--ls-ink"),
+    (".ls-curve__dot", "fill", "--ls-ink"),
+    (".ls-curve__none", "stroke", "--ls-danger-ink"),
+)
+CURVE_WORDS = (
+    (".ls-curve__tick", "fill", "--ls-muted"),
+    (".ls-curve__time", "fill", "--ls-muted"),
+    (".ls-curve__unit", "fill", "--ls-muted"),
+)
+GRAPHICS = 3.0
+
+
+class CurveContrastTests(TestCase):
+    """The curve's marks and words, on the card surface, in every gated theme."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.blocks = _blocks(STYLESHEET.read_text(encoding="utf-8"))
+
+    def test_the_curve_paints_from_the_tokens_measured_here(self):
+        # a literal, or another token, and the numbers below are fiction
+        rules = _by_selector(self.blocks)
+        for rule, prop, token in CURVE_MARKS + CURVE_WORDS:
+            with self.subTest(rule=rule):
+                self.assertIn(f"{prop}: var({token})", rules[rule])
+                self.assertNotRegex(rules[rule], r"(?m)^\s*(opacity|fill-opacity|"
+                                                 r"stroke-opacity)\s*:")
+
+    def test_every_mark_clears_the_graphics_bar_on_the_card(self):
+        for theme, selector, canvas in THEMES:
+            palette = _tokens(self.blocks, selector)
+            for rule, _, token in CURVE_MARKS:
+                with self.subTest(theme=theme, rule=rule):
+                    ratio = _ratio(_rgb(palette[token]), _rgb(DROPDOWN[canvas]))
+                    if theme in UNGATED:
+                        self.assertGreater(ratio, 1.0)
+                        continue
+                    self.assertGreaterEqual(round(ratio, 2), GRAPHICS,
+                                            f"{rule} is {ratio:.2f}:1")
+
+    def test_every_word_on_the_axes_clears_aa_on_the_card(self):
+        for theme, selector, canvas in THEMES:
+            palette = _tokens(self.blocks, selector)
+            for rule, _, token in CURVE_WORDS:
+                with self.subTest(theme=theme, rule=rule):
+                    ratio = _ratio(_rgb(palette[token]), _rgb(DROPDOWN[canvas]))
+                    if theme in UNGATED:
+                        self.assertGreater(ratio, 1.0)
+                        continue
+                    self.assertGreaterEqual(round(ratio, 2), AA,
+                                            f"{rule} is {ratio:.2f}:1")

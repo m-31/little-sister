@@ -680,15 +680,28 @@ def announce_doors() -> None:
     listed = ", ".join(f"{one.name!r} ({one.owner})" for one in doors)
     fallback = default_door()
     if fallback is None and _choose_at_login:
-        # The instance is usable, and nothing says which door it expects: a
-        # configuration left half-written, which is what WARN is for.
+        # An unidentified request has somewhere to land, and nothing says which door
+        # this installation expects: a configuration left half-written, which is
+        # what WARN is for.
+        #
+        # **It no longer says the instance is usable**, which it said until
+        # 2026-09-24 and could not check. Registration is what this function knows;
+        # whether any of those doors can take a credential is
+        # :attr:`Door.enterable`, asked per request and allowed to probe. A
+        # deployment whose doors resolve their credentials from a parameter store it
+        # cannot reach registers them all and admits nobody — and this line was
+        # calling that instance usable a few lines from the system-admin note saying
+        # its door was shut. The paragraph below already says why that is the worse
+        # error: an operator reads a startup line once and believes it for months.
+        # What is missing is still a default, so that is still what it asks for.
         self_report.startup.note(
             "doors",
             plain(f"identity doors are registered and none of them is the "
                   f"default: {listed}. {LOGIN_PATH} still offers the choice and an "
-                  f"unidentified request is sent there, so this instance is usable "
-                  f"— but nothing says which door it expects anybody to use. Mark "
-                  f"exactly one registration default=True (ADR-0069)"))
+                  f"unidentified request is sent there, so nobody is turned away "
+                  f"for want of a default — but nothing says which door this "
+                  f"instance expects anybody to use. Mark exactly one registration "
+                  f"default=True (ADR-0069)"))
         return
     if fallback is None:
         self_report.startup.note(
@@ -821,7 +834,69 @@ def door_chooser() -> ResponseReturnValue:
     """
     offered = [one for one in registered_doors() if one.enterable]
     offered.sort(key=lambda one: not one.default)
-    return render_template("choose_door.html", doors=offered)
+    return render_template("choose_door.html", doors=offered,
+                           shut="" if offered else _no_way_in())
+
+
+def _no_way_in() -> str:
+    """What the chooser says when it has **nothing to offer**.
+
+    Without it the page is a heading over an empty list: the brand, the tagline,
+    and a `for` loop that never runs. Measured on a developer machine on
+    2026-09-24, where a deployment whose two doors both take their credentials
+    from a parameter store had neither, and the person in front of it was told
+    nothing at all.
+
+    That state was already diagnosed **everywhere except here** —
+    :func:`announce_doors` writes the startup line, ``/ready`` reports ``doors``,
+    ``/system`` shows the table, and :func:`challenge` distinguishes the two cases
+    at ``DEBUG``. Every one of those is somewhere a reader has to already know to
+    look. This is the one surface somebody is standing in front of at the moment
+    it matters, and it was the only one that stayed silent.
+
+    **Three states get three sentences**, because they need three different
+    actions — and because two of them are not faults at all:
+
+    * nothing registered: somebody has to add a line;
+    * a door that has no ``login_page``: the header-verifying provider and the
+      redirect flow that never renders anything of its own. Sign-in happens on
+      the way in rather than here, so the reader is in the wrong place, and
+      **nothing is broken**. Said whenever *any* door is of that kind, because
+      one such door is a way in whatever the others are doing;
+    * every door has a page and none can take a credential: something has to
+      resolve, and until it does nobody gets in at all.
+
+    What it deliberately does **not** do is name the doors or say why each failed.
+    That is ``/system``'s, and ``/system`` is behind an admin session on purpose
+    (ADR-0069 §5) — so this page says *that* there is no way in and where the
+    answer is, and leaves *which door and why* to a page that knows who is asking.
+
+    **It does not send anybody to ``/system``.** Measured on 2026-09-24: the
+    third state is exactly the state in which ``/system`` cannot be reached, since
+    reaching it needs an admin session and no door can issue one — the system-admin
+    door included, which is the door that state is usually about. Naming it there
+    offers a page nobody in front of this one can open. The instance has already
+    written which door and why into its startup output (:func:`announce_doors`, and
+    :mod:`system_admin` for its own), which is somewhere the person who can fix
+    this can actually read. ``/ready`` is named only in the case it reports.
+    """
+    doors = registered_doors()
+    if not doors:
+        return ("This instance has no identity door registered, so there is "
+                "nothing to sign in through. /ready says the same, and the "
+                "instance's startup line says what to add.")
+    if any(_optional(one, "login_page") is None for one in doors):
+        return ("A door on this instance signs people in without a page of its "
+                "own: this deployment identifies a request on its way in, at a "
+                "proxy or an identity provider. Open the application itself "
+                "rather than this address and it will take you the way it "
+                "expects.")
+    return ("Every door this instance has is configured and none of them can "
+            "take a credential right now — a door whose credential has not "
+            "resolved answers 404 until it does. Nobody can sign in while that "
+            "holds, so the answer is not on any page here: the instance wrote "
+            "which door and why into its startup output, on the machine where "
+            "it runs.")
 
 
 def login_response(name: str = "") -> ResponseReturnValue:

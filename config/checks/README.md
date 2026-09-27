@@ -44,6 +44,9 @@ the Python class behind `type:` — is
 | `show_when_quiet` | `true` when this node's **quiet lines are still information** — an inventory whose list is read *because* everything is fine. The dense dashboard then keeps its full box and never folds it behind *+N more*. `nodes.yaml` overrides it; must be a real boolean (`"false"` in quotes fails the load rather than reading as *on*) | unstated |
 | `frequency` | how often to run — `30s`, `15m`, `2h`, `1d`, or a number of seconds | `15m` |
 | `timeout` | per-run timeout (same duration format) | `30s` |
+| `series_keep` | how many readings of each thing the check reads — a URL, a host — it keeps as that thing's **history**, the oldest dropped first, and a restart keeps them. A whole number; `0` keeps none, and there is no deployment-wide default, because where a history is wanted is a choice per check. What every history together may weigh is bounded by `series_limit` in `settings.yaml` | `0` |
+| `measures` | which fields of what the check read its node **draws** as a curve, over the readings `series_keep` keeps — each field by the dotted name its record list shows (`response_ms`, `timing.total_ms`), mapped to its **unit** or to `{unit, label}`. A unit is free text; `ms` and `s` are written as spans (`1.9 s`). A type may declare its own — `http` draws `response_ms` in `ms` — and this block merges over them per field: naming a field takes it whole, `field: null` draws it no more, and every field it does not name keeps the type's. A block of another shape refuses the start, naming the file | the type's |
+| `reading_cap` | how many of those readings — the newest — the node's page lists beneath its curves; every one is on its **History** page. A whole number, `0` the curves alone; a bad value refuses the start, naming the file | `reading_cap` in `settings.yaml` (10) |
 
 A non-`OK` result always carries a reason. A failed or timed-out run becomes
 `ERROR` (ADR-0040 / ADR-0001).

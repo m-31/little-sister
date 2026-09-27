@@ -10,15 +10,56 @@ output as a single leaf), both shared so the family behaves consistently.
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
 from little_sister import values
-from little_sister.checks.base import Check, CheckError, CheckResult, code, plain
+from little_sister.checks.base import (
+    Check,
+    CheckError,
+    CheckResult,
+    Measurement,
+    code,
+    plain,
+)
+from little_sister.checks.output import (
+    captured_output,
+    output_reading,
+    output_record_bytes,
+)
 from little_sister.checks.ssh.connection import RemoteResult, SshConnection
 from little_sister.checks.ssh.metrics import oneline, strip_ssh_notices
+from little_sister.reasons import clip
 from little_sister.status import StatusCode
+
+#: What the free-text fields of an SSH record are clipped to — **characters
+#: first, then bytes** (:func:`~little_sister.reasons.clip`), because a record is
+#: weighed as `json.dumps` writes it and a German or Japanese error message costs
+#: six bytes a character there. Clipping in bytes as well is what makes the
+#: declaration below a ceiling that can never be exceeded, so the seam cannot
+#: refuse a reading at runtime.
+TRANSPORT_TEXT_CHARS = 300
+TRANSPORT_TEXT_BYTES = 320
+NOTICE_CHARS = 200
+NOTICE_BYTES = 220
+
+#: How much of ssh's stderr a **debug** run keeps in its record, so the
+#: ``debug stderr:`` line can be rebuilt from the reading rather than from a
+#: `RemoteResult` the grading is not allowed to see (ADR-0086). It was 800
+#: characters while it lived only in a reason; a record is kept per reading and
+#: shares its 2 KB with whatever else the check read — a host's volumes — so the
+#: diagnostic line is the thing that gives way, not the measurement.
+DEBUG_STDERR_CHARS = 300
+DEBUG_STDERR_BYTES = 320
+
+#: What one transport half is expected — and guaranteed — to need, in the bytes
+#: the seam counts: the keys and syntax (~64), an `exit_code` (~20), the longer of
+#: `error` and `detail` (never both), and a `notice`. A **debug** run adds its
+#: clipped stderr and that key.
+TRANSPORT_RECORD_BYTES = 64 + 20 + TRANSPORT_TEXT_BYTES + NOTICE_BYTES
+DEBUG_RECORD_BYTES = 16 + DEBUG_STDERR_BYTES
 
 DEFAULT_MAX_CHARS = 1000
 
@@ -40,7 +81,13 @@ class SshCheckBase(Check):
                  port: int | None = None, sudo: bool = False,
                  identity_file: str | None = None, debug: bool = False,
                  options: tuple[str, ...] = (), **kwargs: Any) -> None:
-        super().__init__(**kwargs)
+        # The **host** is the object every check in this family reads, whichever
+        # of them it is: `/hosts/nas/system` measures `nas01`. Not `user@host:port`
+        # — that is how we got there, and a login moved to another account is the
+        # same machine — and not the node's path, which is the deployment's label.
+        # Two methods on one host are still two series, because a series is keyed
+        # by the check as well as the object.
+        super().__init__(subject=host, **kwargs)
         self.host = host
         self.user = user
         self.port = port
@@ -93,52 +140,145 @@ class SshCheckBase(Check):
             "port": str(self.port) if self.port else None,
         }
 
-    def _connection_failure(self, result: RemoteResult) -> str | None:
-        """A reason when ssh couldn't deliver usable output — a dead transport
-        (timeout / spawn) or a non-zero exit — else ``None``. The advisory banner
-        is stripped so it doesn't crowd out the real error."""
+    def _transport_record(self, result: RemoteResult) -> dict[str, Any]:
+        """How the connection itself went, as the part of a record every check in
+        this family reads (ADR-0086).
+
+        It is the measurement's half of what ``_connection_failure`` below used to
+        read off a live :class:`RemoteResult`: the grading never sees one, because
+        a `RemoteResult` is the check's working state and is gone by the time a
+        series is graded again. So what the sentences need is kept, and nothing
+        else — the raw stdout stays inside the check.
+
+        ``exit_code`` is always there and stands as ``None`` when ssh never
+        completed, which is the null-not-absent rule (ADR-0085 decision 3). The
+        three that follow are present **only where there was one**, because a null
+        reason on every healthy reading would lengthen every record for nothing:
+        ``error`` where the transport died, ``detail`` where it answered with a
+        non-zero exit, ``notice`` where ssh flagged an advisory. The advisory
+        banner is stripped out of ``detail`` so it does not crowd out the real
+        error.
+        """
+        record: dict[str, Any] = {"exit_code": result.exit_code}
         if result.error is not None:
-            return result.error
-        if result.exit_code != 0:
-            detail = oneline(strip_ssh_notices(result.stderr)
-                             or result.stdout) or "no output"
-            return (f"ssh to {self._target} failed "
-                    f"(exit {result.exit_code}): {detail}")
+            record["error"] = clip(result.error, chars=TRANSPORT_TEXT_CHARS,
+                                   budget=TRANSPORT_TEXT_BYTES)
+        elif result.exit_code != 0:
+            # What the host said about the failure, and **only where it said
+            # something**: *no output* is a sentence a grading writes when the
+            # record is silent, not a reading. Storing it would make "the host
+            # printed nothing" indistinguishable from "the host printed the words
+            # no output", and would hide the `exit code N` fallback a command
+            # check falls back to.
+            detail = oneline(strip_ssh_notices(result.stderr) or result.stdout)
+            if detail:
+                record["detail"] = clip(detail, chars=TRANSPORT_TEXT_CHARS,
+                                        budget=TRANSPORT_TEXT_BYTES)
+        if result.notice:
+            record["notice"] = clip(result.notice, chars=NOTICE_CHARS,
+                                    budget=NOTICE_BYTES)
+        if self.debug:
+            record["ssh_stderr"] = clip(
+                oneline(result.stderr, DEBUG_STDERR_CHARS),
+                chars=DEBUG_STDERR_CHARS, budget=DEBUG_STDERR_BYTES)
+        return record
+
+    def _transport_record_bytes(self) -> int:
+        """What the transport half of one record needs, in the JSON it is measured
+        in (ADR-0075) — a **ceiling that cannot be exceeded**, because every
+        free-text field above is clipped in the same bytes this counts.
+
+        That is worth stating, because ADR-0075 asks for an estimate of a normal
+        run and not a bound: a type declaring its `timeout_seconds` there would
+        refuse deployments that work. The difference is the clip. A bound nothing
+        enforces is a guess about the worst case and is pessimistic; a bound the
+        measurement enforces is the exact answer, and declaring anything smaller
+        would be declaring a number the check itself can beat.
+
+        Shared, because every check in this family carries that half and none of
+        them should have to re-derive the same number (F28)."""
+        return TRANSPORT_RECORD_BYTES + (
+            DEBUG_RECORD_BYTES if self.debug else 0)
+
+    def _connection_failure(self, record: Mapping[str, Any]) -> str | None:
+        """A reason when ssh couldn't deliver usable output — a dead transport
+        (timeout / spawn) or a non-zero exit — else ``None``. Read out of the
+        record, so the same sentence comes back from a reading this process did
+        not take."""
+        error = record.get("error")
+        if error is not None:
+            return str(error)
+        exit_code = record.get("exit_code")
+        if exit_code != 0:
+            detail = str(record.get("detail") or "no output")
+            return f"ssh to {self._target} failed (exit {exit_code}): {detail}"
         return None
 
-    def _debug_reason(self, result: RemoteResult,
-                      metrics: dict[str, str] | None = None) -> list[str]:
+    def _debug_lines(self, record: Mapping[str, Any]) -> list[str]:
         """When ``debug`` is set, extra reason lines exposing the raw (unstripped)
         ssh stderr, the exit code and any ``debug_*`` lines a script emitted — so a
-        missing warning or odd metric can be diagnosed from the dashboard."""
+        missing warning or odd metric can be diagnosed from the dashboard.
+
+        Rebuilt from the record rather than from the run, like every other line
+        this family writes. The stderr rides under ``ssh_stderr`` and not under a
+        ``debug`` name, so a script that emits a ``debug_*`` key of its own can
+        never collide with it."""
         if not self.debug:
             return []
-        if result.exit_code is None:
+        if record.get("exit_code") is None:
             return ["debug: ssh did not complete (timeout or spawn failure)"]
-        lines = [f"debug: exit={result.exit_code}",
-                 f"debug stderr: {plain(oneline(result.stderr, 800)) or '(empty)'}"]
-        lines += [f"debug {plain(key)}: {plain(value)}"
-                  for key, value in sorted((metrics or {}).items())
+        stderr = plain(str(record.get("ssh_stderr") or ""))
+        lines = [f"debug: exit={record['exit_code']}",
+                 f"debug stderr: {stderr or '(empty)'}"]
+        lines += [f"debug {plain(key)}: {plain(str(value))}"
+                  for key, value in sorted(record.items())
                   if key.startswith("debug")]
         return lines
 
-    def _output_result(self, result: RemoteResult, *, capture: str,
-                       max_chars: int, keep: str) -> CheckResult:
+    def _output_measurement(self, result: RemoteResult, *, capture: str,
+                            max_chars: int, keep: str) -> Measurement:
+        """A command/script run, as a reading: how the connection went, plus the
+        captured output clipped **once** — to ``max_chars``, then into the byte
+        budget a record has (`checks/output.py` says why the second bound is in
+        bytes, and why one clip rather than two).
+
+        The output stands as ``None`` where ssh never delivered any, so every
+        reading of one of these checks has the same shape."""
+        record = self._transport_record(result)
+        record["output"] = (
+            None if result.error is not None
+            else captured_output(result.stdout, result.stderr, capture=capture,
+                                 max_chars=max_chars, keep=keep))
+        return Measurement(record=record)
+
+    def _output_result(self, record: Mapping[str, Any]) -> CheckResult:
         """A command/script outcome as a single leaf: OK on exit 0 (reason = the
         captured output), ERROR otherwise. A successful run still **WARN**s when ssh
-        flagged an advisory (e.g. a non-post-quantum key exchange)."""
-        if result.error is not None:
-            return CheckResult(StatusCode.ERROR, [plain(result.error)])
+        flagged an advisory (e.g. a non-post-quantum key exchange).
+
+        Read out of the record, so the same sentence comes back from a reading
+        this process did not take."""
+        exit_code, output, failure = output_reading(record)
+        if failure:
+            return CheckResult(StatusCode.ERROR, [plain(failure)])
         # The captured remote output is untrusted — fence it (ADR-0018).
-        captured = _shorten(_capture(result, capture), max_chars, keep)
-        if result.exit_code == 0:
-            reasons = [code(captured)] if captured else []
-            if result.notice:
-                return CheckResult(StatusCode.WARN, [*reasons, plain(result.notice)])
+        if exit_code == 0:
+            reasons = [code(output)] if output else []
+            notice = record.get("notice")
+            if notice:
+                return CheckResult(StatusCode.WARN,
+                                   [*reasons, plain(str(notice))])
             return CheckResult(StatusCode.OK, reasons)
-        detail = (code(captured) if captured
-                  else plain(oneline(result.stderr)) or f"exit code {result.exit_code}")
+        detail = (code(output) if output
+                  else plain(str(record.get("detail") or ""))
+                  or f"exit code {exit_code}")
         return CheckResult(StatusCode.ERROR, [detail])
+
+    def _output_record_bytes(self, max_chars: int) -> int:
+        """The transport half and the captured output together — a ceiling that
+        cannot be exceeded, because both halves are clipped in these same bytes
+        (ADR-0075)."""
+        return self._transport_record_bytes() + output_record_bytes(max_chars)
 
 
 class SshScriptCheck(SshCheckBase):
@@ -198,21 +338,6 @@ class SshScriptCheck(SshCheckBase):
             args.append("debug")
         return self.connection.run_script(self.script_path, self.interpreter, args)
 
-
-def _capture(result: RemoteResult, which: str) -> str:
-    if which == "stdout":
-        text = result.stdout
-    elif which == "stderr":
-        text = result.stderr
-    else:
-        text = (result.stdout or "") + (result.stderr or "")
-    return text.strip()
-
-
-def _shorten(text: str, max_chars: int, keep: str) -> str:
-    if len(text) <= max_chars:
-        return text
-    return text[:max_chars] if keep == "head" else text[-max_chars:]
 
 
 def _find_default_script(base_dir: Path, name: str) -> Path | None:

@@ -134,7 +134,7 @@ class Outcomes:
 
     ``configured`` is every check this engine runs, ``completed`` those that have
     stored a result at least once — a secret-pinned check included, since it
-    stores its ``ERROR`` without ever calling ``run()`` — and ``erroring`` those
+    stores its ``ERROR`` without ever calling ``measure()`` — and ``erroring`` those
     whose **last** stored result was an ``ERROR``.
     """
 
@@ -193,11 +193,13 @@ class Readiness:
     def __init__(self, *, doors: Callable[[], bool],
                  trust: Callable[[], TrustStore],
                  first_pass: Callable[[], bool],
-                 outcomes: Callable[[], Outcomes | None]) -> None:
+                 outcomes: Callable[[], Outcomes | None],
+                 lost: Callable[[], str | None] = lambda: None) -> None:
         self._doors = doors
         self._trust = trust
         self._first_pass = first_pass
         self._outcomes = outcomes
+        self._lost = lost
         self._latched = False
 
     def answer(self) -> Answer:
@@ -237,6 +239,19 @@ class Readiness:
                 "this instance connects to over TLS can be verified — every "
                 "check that reads an https address will fail on the certificate "
                 "rather than on the subject",
+                code=StatusCode.ERROR))
+        holder = self._lost()
+        if holder is not None:
+            # ADR-0090 decision 7: said where the instance is watched, not only in
+            # the log. It does not clear — a holder that lost the lease runs no
+            # check and writes nothing again in this process — and a restart is the
+            # way back.
+            lines.append(Entry(
+                "saves",
+                f"this instance runs no more checks and saves nothing: the state "
+                f"directory's lease is held by {holder}, and what it shows is the "
+                f"last view it had — a restart takes the lease again, or finds who "
+                f"holds it",
                 code=StatusCode.ERROR))
         outcomes = self._outcomes()
         if outcomes is not None and outcomes.all_erroring:

@@ -82,6 +82,7 @@ def test_the_promise_block_parses_into_modules_and_names() -> None:
     assert set(SURFACE) == {
         "little_sister.checks",
         "little_sister.fetch",
+        "little_sister.process",
         "little_sister.reasons",
         "little_sister.spans",
         "little_sister.status",

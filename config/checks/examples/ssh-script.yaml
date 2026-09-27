@@ -12,6 +12,8 @@ type: ssh-script
 path: /myhost-check         # absolute node path (ADR-0016)
 frequency: 5m                # how often to run
 timeout: 30s                 # per-run timeout
+# series_keep: 60            # readings kept per subject as its history (default 0: keep none)
+# reading_cap: 10            # of those, the newest its page lists (default: settings.yaml's)
 
 # --- connection (same fields as ssh-connect) -------------------------------
 host: my-ssh-alias           # SSH target — a ~/.ssh/config alias or hostname/FQDN

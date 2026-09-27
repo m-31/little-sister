@@ -1,0 +1,17 @@
+# Live-demo check (Mode 2) — see tests/demo_check.py and docs/testing-the-gui.md.
+# The demo's **refused records** (ADR-0093): one run reads three repositories, and
+# twice a cycle a provider's answer breaks the seam for one of them — a time without
+# its offset, a record past `record_limit`. Each costs its own reading and nothing
+# else: the node says which and why at WARN, the instance holds a line on
+# /little-sister/runtime, and /system marks the record it saw *refused*.
+type: demo
+path: /ci/workflows
+title: Workflows
+about: |
+  The latest CI run of three repositories, read in one run (a *synthetic* demo
+  node). Now and then one repository's record is refused: the node says which and
+  why while the others keep reporting.
+scenario: workflows
+frequency: 5s
+period: 120s
+series_keep: 40

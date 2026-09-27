@@ -14,7 +14,8 @@
 # truncates and gunicorn rewrites. `--any-instance` widens it to any gunicorn on the
 # port, and every refusal a gunicorn caused says so.
 #
-#   * Our gunicorn on either port -> stop it gracefully (TERM, then KILL).
+#   * Our gunicorn on either port -> stop it, and wait for every process of it: the
+#                                    grace and five seconds, then KILL what is left.
 #   * Nothing of ours, port free  -> nothing to do (exit 0); clears a stale pidfile.
 #   * Another checkout's instance -> refuse, and name `--any-instance`.
 #   * Anything else on the port   -> refuse to touch it and exit non-zero.
@@ -79,7 +80,7 @@ if ! own_instance "$master"; then
 elif [ "$target" != "$PORT" ]; then
   echo "${NAME} is serving on :${target}, not :${PORT}; stopping it anyway."
 fi
-stop_master "$master"
+stop_instance "$master"
 if [ -n "$(listeners_on "$target")" ]; then
   echo "ERROR: something is still listening on :${target} after stop." >&2
   exit 1

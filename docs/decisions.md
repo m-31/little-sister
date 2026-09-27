@@ -13,8 +13,9 @@
 
 One process — `gunicorn --workers 1 --threads N` — with the engine running the checks
 on background threads over a single in-memory status tree and event log. A single
-worker is a hard constraint; the engine starts once, after the fork, with daemon threads
-and per-check timeouts. → [record](adr/0001-in-process-threaded-engine.md)
+worker is a hard constraint; the engine starts once, after the fork, at the server's
+start through the hooks module the library ships, and a stop abandons a run in flight
+rather than waiting for it; every check keeps a timeout of its own. → [record](adr/0001-in-process-threaded-engine.md)
 
 ### ADR-0002 — Synchronizing the shared state
 
@@ -332,8 +333,9 @@ have not reported. `Status.get_status_code()` implements this and nothing else.
 
 `ERROR`, decided by the engine — never a skipped update or a stale `OK` — with the
 reason `check error: <message>` escaped like any untrusted string and, by default and
-globally, a second reason carrying the innermost frames as an inert code block. A check
-whose secret references failed is `ERROR` without ever running.
+globally, a second reason carrying the innermost frames as an inert code block. A
+measurement that raised also leaves an error reading against the check's declared
+object; a check whose secret references failed is `ERROR` without ever running.
 → [record](adr/0040-what-a-failing-check-becomes.md)
 
 ### ADR-0041 — Maintenance is a contribution rule, not a value
@@ -568,9 +570,9 @@ itself the first resolution, so no ordering could avoid the warning.
 Three layers: memory; `var/state/`, JSON files read at startup — `maintenance.json`
 (moved from `var/`, a clean break), `events.json`, and the notes and series files as
 they are built — written through for pins, kept at most once per `state_interval` and
-at graceful shutdown for the rest, always by temp file and `os.replace`; and packages
-behind two seams, a store per record and a **keeper** that mirrors the directory
-(S3 first). A failure never refuses to start and is a line on `/little-sister`: a load
+at the stop's one save for the rest, by temp file and `os.replace`, by the one process
+holding the directory's lease; and packages behind two seams, a store per record and a
+**keeper** that mirrors the directory (S3 first). A failure never refuses to start and is a line on `/little-sister`: a load
 that failed at ERROR while the process runs, a save that failed at WARN until one
 succeeds. → [record](adr/0071-what-a-restart-keeps-is-a-directory-of-files.md)
 
@@ -593,8 +595,8 @@ once; `503 {"waiting_for": [...]}` from the closed vocabulary `doors` / `trust` 
 `first-pass` until then. It **latches**, so no later failure withdraws a serving
 instance and takes its explaining page with it. An engine switched off is ready, one
 that could not load its configuration never is. Ungated, `no-store`, outside the JSON
-API; the rollout's two silent failures are `readiness.trust` (ERROR) and
-`readiness.all-erroring` (WARN). → [record](adr/0073-a-readiness-answer-beside-health.md)
+API; `readiness.trust` (ERROR) and `readiness.all-erroring` (WARN) are the rollout's two
+silent failures, and `readiness.saves` (ERROR) a lost state-directory lease. → [record](adr/0073-a-readiness-answer-beside-health.md)
 
 ### ADR-0074 — This instance has a name, and the library owns it
 
@@ -730,10 +732,10 @@ An entry gains **`subject`** — the source's identifier for the entity the line
 for, which a slug cannot be split back into and which nothing may be pinned by — and
 **`data`**, the record of what the check read beside the sentence it wrote. `text` does
 not move, and neither field declares members. Typed: `at`, `started`, `ended` at any
-depth, offset-bearing ISO-8601 or null, converted to UTC at the seam. The `CheckResult`
-seam refuses a record whole — not a mapping, a non-time under a timed name, or over
-`record_limit` bytes (default 2 KB) — and stores the JSON read back.
-→ [record](adr/0082-a-line-carries-what-it-is-about-and-what-it-read.md)
+depth, offset-bearing ISO-8601 or null, converted to UTC at the seam. The seam refuses a
+record — not a mapping, a non-time under a timed name, or over `record_limit` bytes
+(default 2 KB) — at the cost of its line, not the run (ADR-0093), and stores the JSON
+read back. → [record](adr/0082-a-line-carries-what-it-is-about-and-what-it-read.md)
 
 ### ADR-0083 — A node may wait before it escalates
 
@@ -762,8 +764,100 @@ ends say so, and the envelope carries `shielded_by` (spec 2.4.0).
 A **measure is a projection over the record**, chosen when it is drawn, not a typed field
 declared at the seam — the footing grading and rendering already have. The unit belongs
 to the projection, so a wrong one costs an axis label and not a poisoned series. A check
-run reads **one object** and the result is **one record**: nodes, children and lines are
-derived from it, so the record belongs to the `CheckResult`, and a line carries one only
-where the object has no node. Every measurement names its object, because a node path is
-the deployment's editorial label. The `http` check times the endpoint, not our run.
+run reads **one object** and the result is **one record** — nodes, children and lines are
+derived from it — held by a `Measurement` (ADR-0086); a line carries one only where the
+object has no node. A measurement that is to have a history names its object, since a
+node path is the deployment's label. The `http` check times the endpoint, not our run.
 → [record](adr/0085-a-measure-is-read-out-of-a-record.md)
+
+### ADR-0086 — A check measures, and then grades what it measured
+
+`run()` becomes **`measure()`**, which reads the world and hands back a record per
+object, and **`grade(measurements, now)`**, which answers the codes and the texts as one
+`CheckResult`. The grading is **pure over (record, configuration, now)**, so the series
+can ask it again over old records; a record is not the check's working state, and free
+text entering one is clipped once and **in bytes**, making `expected_record()` a ceiling
+the seam cannot exceed. A check declares its **object** at construction, the engine
+writes the failure record when a measurement raises, and `Measurement` holds both.
+→ [record](adr/0086-a-check-measures-and-grades.md)
+
+### ADR-0087 — A check keeps its subjects' readings, and an identity keeps each event once
+
+A **series** is a subject's records over time, keyed by the check — its **type and its
+mount** — and the **subject**. An **identity** replaces the kept record of its event, a
+**state** the newest record while it holds, and neither appends. Retention is
+`series_keep`, a **count** in the check's own YAML, default **0**; order is the record's
+own `at`, else first seen. A kept reading carries the **code and the sentence as they
+stood**, and `series.json` keeps it across a restart. `series_limit` bounds all of them
+in bytes, evicting the one written to longest ago at ERROR; a **projection** past it is
+a WARN from the first tick. → [record](adr/0087-a-check-keeps-its-subjects-readings.md)
+
+### ADR-0088 — A stop ends at its save
+
+The engine stops at gunicorn's `worker_exit`, through a hooks module loaded with
+`--config python:little_sister.gunicorn_hooks` (`atexit` the backstop), abandons the runs
+in flight on a pool the interpreter does not join, ends what they started, and makes one
+final save with nothing written after it. Keep-alive is off; the grace is one value,
+`GRACEFUL_TIMEOUT` (30 s); `stop.sh` waits for every process it read before the TERM;
+and a container names its stop timeout beside the grace.
+→ [record](adr/0088-a-stop-ends-at-its-save.md)
+
+### ADR-0089 — A process a check starts ends with it
+
+`little_sister.process.run` is promised, `fetch`'s counterpart: a group of its own,
+`/dev/null` for stdin, a bound, both streams read under a cap, the group ended at the
+bound and at the stop, and an answer that says how the process ended. The library's
+`command` and `ssh` and `little-sister-aws`'s login use it, and an `ssh` run's remote
+command ends with its connection through a wrapper that signals only a group it leads or
+one `setsid` gave the command, with the script on stdin ahead of the hang-up line and a
+command line of at most 1,024 bytes.
+→ [record](adr/0089-a-process-a-check-starts-ends-with-it.md)
+
+### ADR-0090 — One state directory, one writer
+
+A lease file beside `var/state/`, beating every 10 s and lapsing at 30 s, with a kernel
+lock for the machine the kernel sees: under one kernel the lock decides, across kernels
+the heartbeat. A process that cannot take it restores, runs and saves nothing; a start
+refuses rather than waits; a holder that loses it stops its engine and its writes,
+serves its last view, and says so on the readiness node.
+→ [record](adr/0090-one-state-directory-one-writer.md)
+
+### ADR-0091 — An import is not an instance
+
+Importing the application builds it and writes nothing. The server's start takes the
+lease, opens the log with what the import logged, resolves the settings' references and
+starts the engine; a start the lease refuses halts the server naming the holder, and a
+server without the start says so while `/health` stays `200`. `LITTLE_SISTER_ENGINE=0`
+stays for a server without an engine, and the epoch does not move.
+→ [record](adr/0091-an-import-is-not-an-instance.md)
+
+### ADR-0092 — A check declares its measures, and the node that stands for a subject shows its series
+
+`measures:` in a check's YAML maps a record field's dotted name to its unit, merged per
+field over the `measure_defaults` its type declares (`null` removes one), as `subnodes:`
+is. A unit is free text; `ms` and `s` are written through `format_span`, `B` through
+`format_weight`. A point sits on its series' own clock, to scale, in the configured
+timezone; a null is a marked break, a hole wider than the freshness tolerance a plain one.
+The node that stands for the subject shows the curves and its newest `reading_cap`
+readings (10, in `settings.yaml` and optionally per check); its History page has them all.
+→ [record](adr/0092-a-check-declares-its-measures.md)
+
+### ADR-0093 — A record the seam refuses costs its line, not the run
+
+Any of the four refusals costs the line or the reading the record belongs to, never the
+run. A line keeps its text and code and carries **`refused`**, the reason, beside a null
+`data` (spec 2.6.0). A refused reading is not graded: its series keeps the engine's
+failure record, and the node a `WARN` line in the node's own form — a run with no
+reading left stands as one that raised. The instance holds a `WARN` for each, the seam
+raises as before outside the engine's runs, and `/system` counts the refused as seen.
+→ [record](adr/0093-a-record-the-seam-refuses-costs-its-line.md)
+
+### ADR-0094 — A restart is no transition, and the instance's own node records the gap
+
+A node's first reading after a restart is compared with what the restored log last
+recorded for it: the same reading keeps its period, any other — `UNDEFINED` included —
+changes from the old code, and a pin the log already holds writes nothing at its replay.
+A change seen across a restart is not marked. `/little-sister` alone records the gap,
+closed at the later of the stop's `stopped_at` stamp and the lease's last beat. On
+`/history`, a container's current `UNDEFINED` is no row, as on its Time card.
+→ [record](adr/0094-a-restart-is-no-transition.md)

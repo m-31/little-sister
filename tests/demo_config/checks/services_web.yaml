@@ -1,0 +1,25 @@
+# Live-demo check (Mode 2) — see tests/demo_check.py and docs/testing-the-gui.md.
+# Synthetic: no real system is probed; the `demo` type replays a scenario on a loop.
+#
+# The `latency` scenario records what an `http` check does — a status and a response
+# time — so its node stands for the site it names and shows the series it keeps: the
+# response-time curve and the newest readings (ADR-0092). Every three minutes the
+# site fails a few requests (marked breaks) and one run hangs for 45 seconds (a plain
+# break: nothing is read, and the node goes stale meanwhile).
+type: demo
+path: /services/web
+title: Public website
+about: |
+  The public **website** (a *synthetic* demo node). Its response time is kept as
+  a series and drawn on this node's page; the whole series is on its History page.
+scenario: latency
+subject: https://www.example.org
+frequency: 4s
+timeout: 60s
+period: 180s
+series_keep: 150
+reading_cap: 8
+# The `demo` type declares no measures of its own, so the deployment names the one
+# it wants drawn — the same block that relabels or removes a type's defaults.
+measures:
+  response_ms: {unit: ms, label: Response time}

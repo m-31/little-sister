@@ -1,24 +1,31 @@
-{#- The node's own facts — time, what the run found, what it ran with — as the
-    **one** block both pages render (ADR-0044 decision 8, questions §4.8 answered:
-    the container gets the detail page it never had, built by reuse rather than as
-    a second surface).
+{#- The node's own facts — time, what the run read, what it found, what it ran
+    with — as the **one** block both pages render (ADR-0044 decision 8, questions
+    §4.8 answered: the container gets the detail page it never had, built by reuse
+    rather than as a second surface).
 
     The leaf detail page owned all of this and the container owned none of it:
     `/status/<branch>` is a dashboard *of the children*, so a container's `config`
     was stored by two checks in the tree and rendered by nothing, and its run facts
     had nowhere to land. Same partial on both pages, so the two can no longer drift.
 
-    Three cards, in the order a reader wants them: **when** it ran, **what it
-    found** (`report` — the run's outputs), **what it ran with** (`config` — its
-    inputs). Report before config on purpose: the outputs are why you opened the
-    page, the inputs are the reference beside them. Both are Markdown through the
-    hardened renderer (ADR-0018) — checks author them with `config_markdown()`, and
-    rendering that bullet list as literal text was a leftover from before the
-    renderer landed.
+    Five cards, in the order a reader wants them: **when** it ran, **what it read**
+    (`record` — the reading, where the run kept one, ADR-0085), **what it has read
+    over time** (the series, where the node stands for a subject that keeps one,
+    ADR-0092), **what it found** (`report` — the run's outputs), **what it ran with**
+    (`config` — its inputs). Report before config on purpose: the outputs are why you
+    opened the page, the inputs are the reference beside them. Those two are Markdown
+    through the hardened renderer (ADR-0018) — checks author them with
+    `config_markdown()`, and rendering that bullet list as literal text was a
+    leftover from before the renderer landed. The record is data, not Markdown, and
+    is shown in the one list a line's record is shown in (`_record_list.html`).
 
     Context: ``node`` (a StatusSnapshot), ``branch`` (its path, for the history
-    link) and ``since`` (the start of the current own-status period, or None).
+    link), ``since`` (the start of the current own-status period, or None) and
+    ``series`` (what the node's subject read over time, empty where it stands for
+    none — and allowed to be absent, for a caller that has no engine to ask).
     Never included by the kiosk, which keeps none of this. -#}
+{%- from '_record_list.html' import record_list %}
+{%- from '_series.html' import curve, readings_table %}
 <div class="card mb-3">
     <div class="card-body">
         <h3 class="h6 text-muted text-uppercase">Time</h3>
@@ -30,10 +37,14 @@
 
             The period is bounded by the **own**-status event log, so it names the
             own status: on a container the rolled-up code is a statement about the
-            children, and the children are on the same page saying it themselves. -#}
+            children, and the children are on the same page saying it themselves. A
+            container that declares nothing has no own status for a period to name —
+            its `UNDEFINED` is the roll-up's to skip, and its page heads with what it
+            rolls up to — so it states the observation, as a node with no transition
+            of its own does. A leaf's `UNDEFINED` is its own, and keeps its period. -#}
         {% if node.timestamp is none %}
             <p class="mb-1 text-muted">Not yet observed.</p>
-        {% elif since %}
+        {% elif since and not (node.own_code.name == 'UNDEFINED' and node.children) %}
             <p class="mb-1">
                 Status <strong>{{ node.own_code.name.lower() }}</strong>
                 from {{ since | localtime }} until {{ node.timestamp | localtime }}
@@ -117,9 +128,9 @@
 
 {% if node.record %}
 {#- **What this run measured** (ADR-0085): the reading the node's code, lines and
-    children are derived from, and the object it was taken on. Untyped rendering, the
-    same `record_fields` the entry records use — nothing here reads what a name means,
-    so one place decides what a field is.
+    children are derived from, and the object it was taken on. The same list the
+    entry records are shown in, so one place decides what a field is and one says
+    how it reads: its times in the configured timezone, everything else as stored.
 
     A card above says what the node *is now*; this says what was *read*. It is data and
     never a claim: anything that should alarm is a reason. -#}
@@ -129,14 +140,39 @@
         {%- if node.subject %}
         <p class="mb-2 text-muted">On <code>{{ node.subject }}</code></p>
         {%- endif %}
-        <dl class="reason-record small text-muted mb-0">
-            {%- for name, value in node.record | record_fields %}
-            <dt>{{ name }}</dt><dd>{{ value }}</dd>
-            {%- endfor %}
-        </dl>
+        {{ record_list(node.record, "mb-0") }}
     </div>
 </div>
 {% endif %}
+
+{%- for view in (series if series is defined else ()) %}
+{#- **What it has read over time** (ADR-0092 decision 6): the node stands for a
+    subject whose check keeps its readings, so the page shows them — a curve for each
+    measure the check is drawn by, and the newest readings as a table, as many as
+    `reading_cap` says. Every one of them is on the History page, which is not polled;
+    this card is, on a branch page, so it carries no more rows than the cap. -#}
+<div class="card mb-3 ls-series">
+    <div class="card-body">
+        <h3 class="h6 text-muted text-uppercase">Readings</h3>
+        {%- for c in view.curves %}
+        {{ curve(c) }}
+        {%- endfor %}
+        {%- if view.rows %}
+        {{ readings_table(view) }}
+        {%- endif %}
+        {%- set noun = "reading" if view.kept == 1 else "readings" %}
+        <p class="small text-muted mb-0">
+        {%- if not view.rows -%}
+            {{ view.kept }} {{ noun }} kept — every one is on the <a href="{{ url_for('history', path=branch) }}">History page</a>.
+        {%- elif view.rows | length < view.kept -%}
+            The newest {{ view.rows | length }} of {{ view.kept }} {{ noun }} kept — every one is on the <a href="{{ url_for('history', path=branch) }}">History page</a>.
+        {%- else -%}
+            {{ view.kept }} {{ noun }} kept.
+        {%- endif -%}
+        </p>
+    </div>
+</div>
+{%- endfor %}
 
 {% if node.report %}
 {#- What the run **found** (ADR-0044 decision 6) — the roster, the scope, the

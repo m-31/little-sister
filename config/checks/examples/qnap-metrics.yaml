@@ -16,6 +16,8 @@ path: /mynas                # absolute node path (ADR-0016)
 # description:               # leave unset when sharing a host node with the `host-metrics` check
 frequency: 5m                # how often to run
 timeout: 30s                 # per-run timeout
+# series_keep: 60            # readings kept per subject as its history (default 0: keep none)
+# reading_cap: 10            # of those, the newest its page lists (default: settings.yaml's)
 
 # --- connection (same fields as the ssh check) -----------------------------
 host: mynas-ssh-alias        # SSH target — ~/.ssh/config alias or hostname/FQDN

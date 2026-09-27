@@ -10,6 +10,7 @@ from unittest import TestCase, mock
 from little_sister.checks import CheckError
 from little_sister.checks.ssh.macos_memory import MacosMemoryCheck
 from little_sister.status import StatusCode
+from tests.running import SSH_RUN, finished, run_check
 
 MEMORY_SAMPLE = (
     "os=Darwin\npressure_level=1\nfree_pct=62\n"
@@ -40,10 +41,10 @@ class MacosMemoryCheckTests(TestCase):
 
     def _run(self, directory, stdout, *, returncode=0, stderr="", **extra):
         check = self._check(directory, **extra)
-        completed = subprocess.CompletedProcess([], returncode, stdout, stderr)
-        with mock.patch("little_sister.checks.ssh.connection.subprocess.run",
+        completed = finished(stdout, returncode, stderr)
+        with mock.patch(SSH_RUN,
                         return_value=completed):
-            return check.run()
+            return run_check(check)
 
     def _kids(self, result):
         return {child.name: child for child in result.children}

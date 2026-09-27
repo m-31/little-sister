@@ -13,6 +13,12 @@ too); the repo's own ``config`` follows with the checks, settings, links and act
 That order *is* the single-file user override: ``users`` is the one aspect that does
 not layer — the first root declaring it wins whole (ADR-0031) — so a developer's own
 git-ignored ``config/users/`` can never decide what the suite logs in as.
+
+Nothing here switches the engine off, and nothing has to: importing the application
+is not an instance (ADR-0091). The suite imports it and never starts it, so every test
+begins with no engine and the banner that says it was never started; a test that
+wants another state sets it, and one that starts the application does so in a child
+interpreter of its own (``test_start.py``, ``test_gunicorn_hooks.py``).
 """
 
 import os
@@ -28,6 +34,7 @@ from little_sister.keeper import forget_keeper
 from little_sister.link_probe import forget_probe_results
 from little_sister.links import forget_cached_links
 from little_sister.local_login import use_local
+from little_sister.process import forget_stop
 from little_sister.self_report import forget_contributors
 from little_sister.slots import forget_fillers
 
@@ -39,7 +46,6 @@ os.environ.setdefault(
     "LITTLE_SISTER_CONFIG_DIR",
     os.pathsep.join((_USERS_ROOT, os.path.join(_REPO_ROOT, "config"))),
 )
-os.environ.setdefault("LITTLE_SISTER_ENGINE", "0")
 os.environ.setdefault("SECRET_KEY", "test-key")
 
 
@@ -66,7 +72,10 @@ def _forget_process_caches():
     registers would otherwise ride every later test's heartbeat; and the keeper
     (:func:`little_sister.keeper.forget_keeper`), the one seam whose leftover
     registration would have a later test's state layer writing into somebody
-    else's store. The identity doors
+    else's store. The instance's stop
+    (:func:`little_sister.process.forget_stop`) is one more: after an engine's stop
+    no process starts in this interpreter (ADR-0088), which in a test suite would
+    be every later test's command check. The identity doors
     (:func:`little_sister.identity.forget_doors`) are the sharpest case of it: a
     door one test registers decides *who every later test is*, and a default one
     makes ``/login`` somebody else's page (ADR-0069). They are also the one registry
@@ -86,4 +95,5 @@ def _forget_process_caches():
     forget_doors()
     forget_contributors()
     forget_keeper()
+    forget_stop()
     use_local()

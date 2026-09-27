@@ -1,7 +1,7 @@
 # ADR-0085 — A measure is read out of a record, not declared into it
 
 - **Status:** Accepted
-- **Date:** 2026-09-19
+- **Date:** 2026-09-27 (accepted 2026-09-19)
 - **Related:** [ADR-0082](0082-a-line-carries-what-it-is-about-and-what-it-read.md)
   (the record this reads from, and the `subject` this finally uses),
   [ADR-0042](0042-entries-carry-their-own-code.md) (why the line carries no code),
@@ -10,7 +10,9 @@
   [ADR-0024](0024-dashboard-layout.md) (the density rule that made a healthy line
   free), [ADR-0063](0063-declining-the-density-trade.md) (the lever a deployment has
   where it is not), [ADR-0075](0075-a-check-declares-what-it-costs.md) (the cost this
-  declares), [ADR-0058](0058-transport-policy-vocabulary.md) (this check's readings)
+  declares), [ADR-0058](0058-transport-policy-vocabulary.md) (this check's readings),
+  [ADR-0086](0086-a-check-measures-and-grades.md) (the `Measurement` that holds the
+  record, and the object a check declares)
 - **Register:** [`../decisions.md`](../decisions.md)
 - **Contract:** [`../api/openapi.yaml`](../api/openapi.yaml) — a node's `subject` and
   `record`, from 2.5.0.
@@ -54,8 +56,10 @@ a thing somebody fixes.
 
 A check run reads **one object**, and the result is **one record**. What the check then
 writes — a node, a subtree of children, a line — is *derived* from that reading. So the
-record belongs to the `CheckResult`, and a line carries one only where the object has no
-node of its own.
+record belongs to a **`Measurement`**, which `measure()` hands to `grade()` and the engine
+places on the node ([ADR-0086](0086-a-check-measures-and-grades.md) decisions 1–3) —
+`CheckResult` carries neither a subject nor a record — and a line carries one only where
+the object has no node of its own.
 
 The case that decides it is a host-metrics check: one SSH call, one script, one flat
 reading, out of which the check builds `ssh`, `disk`, `memory`, `cpu` and `load`. There
@@ -69,11 +73,25 @@ it is a line, and `Entry.data` carries its record there. That is the special cas
 it is the one a check has to name itself in: a line's `subject` says which thing in the
 world it is about.
 
-**Every measurement names its object**, node or no node, because the node's path does
-not: the path is the deployment's label for where a node hangs, and it is editorial.
-`/hosts/web01` measures `web01.example`, `/hosts/nas/system` measures `nas01`, and a
-rate-limit check learns its object only from the answer. An identity that is not written
-down at the reading cannot be added to the history afterwards.
+**Every measurement that is to have a history names its object**, node or no node,
+because the node's path does not: the path is the deployment's label for where a node
+hangs, and it is editorial. `/hosts/web01` measures `web01.example`, `/hosts/nas/system`
+measures `nas01`, and a rate-limit check learns its object only from the answer. An
+identity that is not written down at the reading cannot be added to the history
+afterwards — and the word carrying that argument is *history*. A measurement has two
+jobs: it is `grade()`'s input, because the grading may read only records, and it is the
+stuff of a series, and the subject serves only the second. A pull request's line has to
+be built from a measurement for the grading to be pure, and the pull request needs no
+subject until somebody wants its history — the rule a derived slug already follows: no
+identity, no history. The first check to read several objects, little-sister-github's
+`github` type, names the workflow on its branch on its `actions` lines and nothing yet
+on its other aspects' readings ([ADR-0086](0086-a-check-measures-and-grades.md)
+decision 2).
+
+The object is declared by the **check**, at construction, out of its own
+configuration, so that a check which *raises* can still be recorded against the thing
+it failed to reach — which makes decision 3's *a failed reading is a reading* the
+engine's duty rather than an author's (ADR-0086 decisions 4–5).
 
 ### 3. What is measured is the subject, and only when it answered
 

@@ -9,7 +9,6 @@ from datetime import UTC, datetime, timedelta
 from unittest import TestCase, mock
 from zoneinfo import ZoneInfo
 
-os.environ.setdefault("LITTLE_SISTER_ENGINE", "0")
 os.environ.setdefault("SECRET_KEY", "test-key")
 
 from little_sister import app as app_module

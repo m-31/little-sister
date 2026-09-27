@@ -1,6 +1,6 @@
 [project]
 name = "little-sister"
-version = "0.3.17"
+version = "0.3.18"
 description = "Self-hosted status monitoring — checks are plain Python, from a homelab to a team"
 authors = [
     { name = "Michael Meyling" }

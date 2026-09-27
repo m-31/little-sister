@@ -24,8 +24,6 @@ from types import FunctionType
 from typing import Any
 from unittest import TestCase
 
-# Import the app with the background engine disabled (no threads/network).
-os.environ.setdefault("LITTLE_SISTER_ENGINE", "0")
 os.environ.setdefault("SECRET_KEY", "test-key")
 
 from flask import redirect, request, session
@@ -105,6 +103,19 @@ class LocalForm(Recorder):
     def submit_login(self):
         identity.sign_in(Identity(name=request.form["username"], admin=True))
         return redirect("/status")
+
+
+class Shut(LocalForm):
+    """Registered, with a page of its own, and unable to take a credential.
+
+    The system-admin door whose password has not resolved is the live one: it is
+    registered so that `/system` can say *configured but unavailable*, and answers
+    404 meanwhile (ADR-0069 §5). It is the state the shut login page is about, and
+    it is the opposite of a door that has no page at all.
+    """
+
+    def enterable(self) -> bool:
+        return False
 
 
 class RedirectFlow(Recorder):
@@ -668,6 +679,104 @@ class ChoosingAtLoginTests(_DeploymentCase):
         self.assertEqual(gated.status_code, 302)
         self.assertEqual(gated.headers["Location"], RedirectFlow.AUTHORIZE)
 
+    def test_a_chooser_with_nothing_to_offer_says_so(self):
+        """The page a locked-out operator was actually left with: the brand, the
+        tagline, and a `for` loop that never ran. Measured on a developer machine
+        whose deployment took both its doors' credentials from a parameter store
+        it could not reach — the state was diagnosed at startup, on `/ready` and
+        on `/system`, and the one surface the person was standing in front of said
+        nothing."""
+        identity.choose_at_login()
+
+        page = self.client.get(identity.LOGIN_PATH)
+
+        self.assertEqual(page.status_code, 200)
+        body = page.get_data(as_text=True)
+        self.assertIn("no identity door registered", body)
+        self.assertNotIn('class="btn', body)
+
+    def test_an_empty_register_and_a_shut_door_are_different_sentences(self):
+        """They need different actions: nothing registered means somebody has to
+        add a line; a door registered and unable to take a credential means
+        something has to resolve."""
+        _from_package("deployment_x")("system-admin", Shut("system-admin"),
+                                      default=True)
+        identity.choose_at_login()
+
+        body = self.client.get(identity.LOGIN_PATH).get_data(as_text=True)
+
+        self.assertIn("none of them can take a credential", body)
+        self.assertNotIn("no identity door registered", body)
+
+    def test_a_door_with_no_page_of_its_own_is_not_called_shut(self):
+        """The third state, and the reason there are three. A provider that
+        verifies a header performs no login here at all, and a redirect flow with
+        no `login_page` starts somewhere else — neither is broken and neither is
+        waiting for anything to resolve. The reader is on the wrong address, and
+        telling them a credential cannot be taken would send them looking for a
+        fault that is not there."""
+        _from_package("balancer")("header", SignedHeader(), default=True)
+        identity.choose_at_login()
+
+        body = self.client.get(identity.LOGIN_PATH).get_data(as_text=True)
+
+        self.assertIn("without a page of its own", body)
+        self.assertNotIn("take a credential", body)
+        self.assertNotIn("no identity door registered", body)
+
+    def test_a_door_that_admits_people_elsewhere_outranks_a_shut_one(self):
+        """A deployment behind a proxy that also carries a system-admin door for
+        when the proxy is bypassed. The shut door is real, but it is not the whole
+        story, so the page must not say that nobody can get in."""
+        _from_package("balancer")("header", SignedHeader(), default=True)
+        _from_package("deployment_x")("system-admin", Shut("system-admin"))
+        identity.choose_at_login()
+
+        body = self.client.get(identity.LOGIN_PATH).get_data(as_text=True)
+
+        self.assertIn("without a page of its own", body)
+        self.assertNotIn("Nobody can sign in", body)
+
+    def test_the_shut_page_names_no_door_and_no_reason(self):
+        """*Which* door and *why* is `/system`'s, and `/system` is behind an admin
+        session on purpose (ADR-0069 §5). This page is open to anybody, so it says
+        that there is no way in and where the answer is — not a status report on a
+        misconfigured instance to whoever asks."""
+        _from_package("deployment_x")("system-admin", Shut("system-admin"),
+                                      default=True, label="Company SSO")
+        identity.choose_at_login()
+
+        body = self.client.get(identity.LOGIN_PATH).get_data(as_text=True)
+
+        self.assertNotIn("system-admin", body)
+        self.assertNotIn("Company SSO", body)
+
+    def test_the_shut_page_offers_no_page_that_nobody_can_open(self):
+        """Reported on 2026-09-24 against the first version of this page, which
+        ended *an administrator's /system page says which door, and why*. Reaching
+        `/system` needs an admin session, and the shut state is exactly the state
+        in which no door can issue one — the system-admin door included, which is
+        the door this state is usually about. The instance wrote the answer at
+        startup instead, where the person who can fix it can read it."""
+        _from_package("deployment_x")("system-admin", Shut("system-admin"),
+                                      default=True)
+        identity.choose_at_login()
+
+        body = self.client.get(identity.LOGIN_PATH).get_data(as_text=True)
+
+        self.assertNotIn("/system", body)
+        self.assertIn("startup output", body)
+
+    def test_a_chooser_with_a_door_says_nothing_about_being_shut(self):
+        local_login.use_local()
+        identity.choose_at_login()
+
+        body = self.client.get(identity.LOGIN_PATH).get_data(as_text=True)
+
+        self.assertIn('class="btn', body)
+        self.assertNotIn("no identity door registered", body)
+        self.assertNotIn("cannot take a credential", body)
+
     def test_a_doors_own_route_starts_its_flow_so_the_page_is_not_a_loop(self):
         # The trap this shape exists to avoid: were the chooser something a
         # provider returned from `login_page()`, both routes that reach that method
@@ -735,10 +844,6 @@ class OfferedDoorTests(_DeploymentCase):
                          self.client.get(identity.LOGIN_PATH).get_data(as_text=True))
 
     def test_a_door_that_says_it_cannot_be_entered_is_not_offered(self):
-        class Shut(LocalForm):
-            def enterable(self) -> bool:
-                return False
-
         _from_package("deployment_x")("keycloak", RedirectFlow(), default=True)
         _from_package("deployment_x")("closed", Shut("closed"))
         claimed = identity.door("closed")
@@ -947,7 +1052,7 @@ class MissingDoorTests(_DeploymentCase):
         self.assertEqual(signed_in.headers["Location"], "/status")
         self.assertEqual(self.client.get("/events").status_code, 200)
 
-    def test_no_default_but_a_chooser_says_the_instance_is_still_usable(self):
+    def test_no_default_but_a_chooser_still_lands_an_unidentified_request(self):
         # The same omission on an installation where it costs less: `/login` is a
         # page we serve, so an unidentified request has somewhere to land. The line
         # still asks for the missing `default=True` — nothing says which door this
@@ -961,6 +1066,25 @@ class MissingDoorTests(_DeploymentCase):
         self.assertIn("'keycloak'", message)
         self.assertIn("default=True", message)
         self.assertNotIn("nowhere to be sent", message)
+
+    def test_the_startup_line_does_not_call_the_instance_usable(self):
+        # It said so until 2026-09-24 and could not check it. This function knows
+        # what is *registered*; whether any of those doors can take a credential is
+        # `Door.enterable`, asked per request and allowed to probe — so an instance
+        # whose every door is shut got a warning calling it usable, a few lines from
+        # the note saying the system-admin door had not resolved. A startup line that
+        # overstates its knowledge is worse than a shorter one.
+        class Shut(Offered):
+            def enterable(self) -> bool:
+                return False
+
+        _from_package("deployment_x")("keycloak", Shut())
+        identity.choose_at_login()
+        with self.assertLogs("little_sister", level="WARNING") as caught:
+            identity.announce_doors()
+        message = "\n".join(caught.output)
+        self.assertNotIn("usable", message)
+        self.assertIn("default=True", message)
 
     def test_an_unidentified_request_is_refused_where_no_door_exists_at_all(self):
         # Not a redirect to a login page that is itself a 404: nothing can take a
@@ -1066,7 +1190,6 @@ def _start(script: str, root: Path) -> subprocess.CompletedProcess:
     """Run *script* as its own process against a configuration root of its own."""
     environment = os.environ.copy()
     environment["LITTLE_SISTER_CONFIG_DIR"] = str(root)
-    environment["LITTLE_SISTER_ENGINE"] = "0"
     environment["SECRET_KEY"] = "identity-doors"
     environment.pop("LITTLE_SISTER_USERS", None)
     return subprocess.run([sys.executable, "-c", script], cwd=_REPO,

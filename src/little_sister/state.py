@@ -3,11 +3,12 @@
 Three layers hold what this process wants to survive a restart. **Memory** is
 where the application works (ADR-0001/0002). **This layer** is memory serialized
 to JSON files under ``var/state/`` and read back at startup, so an instance
-initializes with what it had — the maintenance pins, the event log, and whatever
-joins them later. **Packages** sit behind two seams outside it: a store that
-speaks to a service per record, and a :mod:`~little_sister.keeper` — a file store
-such as S3 that loads every file here at startup and saves copies periodically
-without knowing what any of them means. Nothing that is a service enters the core.
+initializes with what it had — the maintenance pins, the event log, the series,
+and whatever joins them later. **Packages** sit behind two seams outside it: a
+store that speaks to a service per record, and a :mod:`~little_sister.keeper` — a
+file store such as S3 that loads every file here at startup and saves copies
+periodically without knowing what any of them means. Nothing that is a service
+enters the core.
 
 Two write disciplines, one atomic write. A file is **written through** by the
 code that owns it — a pin is written when it changes, so a crash a minute later
@@ -59,7 +60,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from little_sister.codes import StatusCode
 from little_sister.keeper import (
@@ -72,6 +73,9 @@ from little_sister.keeper import (
 from little_sister.logger import logger
 from little_sister.reasons import Entry
 from little_sister.spans import coarse_span
+
+if TYPE_CHECKING:
+    from little_sister.lease import Lease
 
 #: Fixed runtime path, relative to the working directory a deployment is started
 #: from (ADR-0020) and git-ignored; not env-overridable, like the maintenance file
@@ -87,6 +91,11 @@ MAINTENANCE_FILE = "maintenance.json"
 
 #: The event log (ADR-0001), kept periodically; node history is derived from it.
 EVENTS_FILE = "events.json"
+
+#: The series (ADR-0087), kept periodically: every subject's kept readings, so a
+#: restarted instance shows yesterday's records and a keeper carries them with
+#: the rest.
+SERIES_FILE = "series.json"
 
 #: What a half-written file is called while it is being written. Excluded from the
 #: mirror a keeper carries: what is not yet a state file is not state.
@@ -192,10 +201,37 @@ class StateLayer:
         #: Why the keeper's last ``tick`` raised; cleared by the next one that
         #: returns. A tick that *declines* is not this — it is the keeper's own line.
         self._keeper_tick_error = ""
+        #: The directory's lease, once the server's start has taken it (ADR-0090):
+        #: asked before every write, and let go after the stop's one save.
+        self._lease: Lease | None = None
+        #: Set by the stop's one save (ADR-0088 decision 3): nothing writes the
+        #: directory after it.
+        self._closed = False
 
     @property
     def directory(self) -> Path:
         return self._directory
+
+    def hold(self, lease: Lease) -> None:
+        """Write under ``lease`` from now on: every write asks it first, and a layer
+        whose lease was taken writes nothing more (ADR-0090 decision 7). The stop
+        releases it after its one save."""
+        self._lease = lease
+
+    @property
+    def lost(self) -> str | None:
+        """Who holds the directory now, once the lease this layer writes under was
+        taken from it (ADR-0090 decision 7) — the engine asks on every tick, and
+        runs no more checks from then on. ``None`` while the lease is its own, and
+        for a layer that holds none."""
+        return self._lease.lost if self._lease is not None else None
+
+    def _may_write(self) -> bool:
+        """Whether this layer may still write the directory: not after the stop's
+        one save, and not once the lease it holds is no longer its own."""
+        if self._closed:
+            return False
+        return self._lease is None or self._lease.still_ours()
 
     def path(self, name: str) -> Path:
         """Where state file ``name`` lives."""
@@ -239,7 +275,10 @@ class StateLayer:
         """Write ``payload`` as state file ``name`` now — the write-through
         discipline — atomically. A failure is logged and recorded, never raised:
         the state stays in memory for the session, and the heartbeat says the
-        file is behind until a later write succeeds."""
+        file is behind until a later write succeeds. After the stop, or once the
+        lease is lost, nothing is written and the answer is ``False``."""
+        if not self._may_write():
+            return False
         return self._write_text(name, _dumps(payload))
 
     def keep(self, name: str, producer: Callable[[], object], *,
@@ -295,6 +334,8 @@ class StateLayer:
         written. Then the keeper: its tick, the adoption where that tick is a
         takeover (ADR-0077), and the saves it takes."""
         with self._swap_lock:
+            if not self._may_write():
+                return
             self._flush()
 
     def _flush(self) -> None:
@@ -335,18 +376,27 @@ class StateLayer:
         self._taking = wanted
 
     def shutdown(self) -> None:
-        """The graceful end: the last flush, then the keeper's ``close`` — after the
-        last save so what a lease covered has landed before it is given up. A
-        process that is killed sends neither, which is the case every keeper
-        survives on its own."""
+        """The graceful end — the stop's one save (ADR-0088 decision 3): the last
+        flush, then the keeper's ``close``, after the last save so what a lease
+        covered has landed before it is given up; then the layer closes, so that
+        nothing writes the directory after it, and the directory's lease is let go
+        (ADR-0090). A process that is killed does none of it, which is the case
+        every keeper and the lease survive on their own. A second call does
+        nothing."""
+        if self._closed:
+            return
         self.flush()
         registration = registered_keeper()
-        if registration is None:
-            return
-        try:
-            close_keeper(registration.keeper)
-        except Exception:
-            logger.exception("state: the %s keeper failed to close", registration.name)
+        if registration is not None:
+            try:
+                close_keeper(registration.keeper)
+            except Exception:
+                logger.exception("state: the %s keeper failed to close",
+                                 registration.name)
+        with self._swap_lock:
+            self._closed = True
+        if self._lease is not None:
+            self._lease.release()
 
     def _tick_keeper(self) -> bool:
         """Give the keeper its interval and ask whether it takes saves now.
@@ -803,6 +853,9 @@ class StateLayer:
         holds what was live. A ``.bak`` whose name matches no registered file is
         listed and left alone. Answers the sentence the action shows."""
         with self._swap_lock:
+            if not self._may_write():
+                return ("nothing was taken back: this instance no longer writes "
+                        "its state")
             with self._lock:
                 names = [name for name in self._files
                          if name + BACKUP_SUFFIX in self._stamps]

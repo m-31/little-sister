@@ -15,6 +15,7 @@ from pathlib import Path
 from unittest import TestCase
 
 from little_sister.codes import StatusCode
+from little_sister.lease import Lease
 from little_sister.reasons import Entry
 from little_sister.state import BACKUP_SUFFIX, EVENTS_FILE, StateLayer
 
@@ -189,6 +190,75 @@ class KeptFileTests(TestCase):
             state.flush()
             self.assertEqual(state.lines(), ())
             self.assertEqual(json.loads(state.path("a.json").read_text()), {"a": 1})
+
+
+class OneWriterTests(TestCase):
+    """What the layer does with the directory's lease (ADR-0090) and after the stop's
+    one save (ADR-0088 decision 3)."""
+
+    def _held(self, directory: str) -> tuple[StateLayer, Lease]:
+        where = Path(directory) / "var" / "state"
+        state = StateLayer(where)
+        lease = Lease(where, mark="me:1:t:a", kernel="kernel-A", sleep=lambda _: None)
+        lease.take()
+        state.hold(lease)
+        return state, lease
+
+    def test_a_layer_whose_lease_was_taken_writes_nothing_more(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state, lease = self._held(directory)
+            self.assertTrue(state.write("pins.json", {"a": 1}))
+            (Path(directory) / "var" / "state.lease").write_text(json.dumps(
+                {"mark": "thief:2:t:b", "host": "elsewhere", "pid": 2}))
+            self.assertFalse(state.write("pins.json", {"a": 2}))
+            self.assertEqual(json.loads(state.path("pins.json").read_text()), {"a": 1})
+            state.keep("kept.json", lambda: {"b": 1})
+            state.flush()
+            self.assertFalse(state.path("kept.json").exists())
+            self.assertIn("thief:2:t:b", lease.lost or "")
+            lease.release()
+
+    def test_the_layer_says_who_holds_the_directory_once_its_lease_was_taken(self):
+        # What the engine asks on every tick, to stop running checks as well as
+        # writing them down (ADR-0090 decision 7).
+        with tempfile.TemporaryDirectory() as directory:
+            state, lease = self._held(directory)
+            self.assertIsNone(state.lost)
+            (Path(directory) / "var" / "state.lease").write_text(json.dumps(
+                {"mark": "thief:2:t:b", "host": "elsewhere", "pid": 2}))
+            self.assertFalse(state.write("pins.json", {"a": 2}))
+            self.assertIn("thief:2:t:b on elsewhere, pid 2", state.lost or "")
+            lease.release()
+
+    def test_a_layer_without_a_lease_has_none_to_lose(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertIsNone(StateLayer(directory).lost)
+
+    def test_the_stop_saves_once_releases_the_lease_and_nothing_writes_after_it(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state, _ = self._held(directory)
+            held = {"n": 1}
+            state.keep("kept.json", lambda: dict(held))
+            state.shutdown()
+            self.assertEqual(json.loads(state.path("kept.json").read_text()), {"n": 1})
+            lease = json.loads((Path(directory) / "var" / "state.lease").read_text())
+            self.assertEqual(lease["state"], "released")
+            held["n"] = 2
+            state.flush()
+            self.assertFalse(state.write("late.json", {"late": True}))
+            self.assertEqual(json.loads(state.path("kept.json").read_text()), {"n": 1})
+            self.assertFalse(state.path("late.json").exists())
+            state.shutdown()          # a second stop writes nothing either
+            self.assertEqual(json.loads(state.path("kept.json").read_text()), {"n": 1})
+
+    def test_a_layer_without_a_lease_still_writes_until_its_stop(self):
+        """A layer nobody handed a lease to — every test's, and a server's before the
+        start — writes as it always did; only the stop closes it."""
+        with tempfile.TemporaryDirectory() as directory:
+            state = StateLayer(directory)
+            self.assertTrue(state.write("pins.json", {"a": 1}))
+            state.shutdown()
+            self.assertFalse(state.write("pins.json", {"a": 2}))
 
 
 class LinesTests(TestCase):

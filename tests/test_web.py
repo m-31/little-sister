@@ -1,15 +1,17 @@
+import html
 import json
 import os
 import re
 import tempfile
 import unittest
+from collections.abc import Sequence
 from dataclasses import replace
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest import TestCase, mock
 
-# Import the app with the background engine disabled (no threads/network).
-os.environ.setdefault("LITTLE_SISTER_ENGINE", "0")
+from little_sister.checks import Measurement
+
 os.environ.setdefault("SECRET_KEY", "test-key")
 
 from little_sister import (
@@ -26,12 +28,12 @@ from little_sister import (
     watch_lines,
 )
 from little_sister import app as app_module
-from little_sister.checks import code
-from little_sister.checks.base import registered_types
+from little_sister.checks import Check, code
+from little_sister.checks.base import CheckResult, registered_types
 from little_sister.config_dir import aspect_owner, forget_aspects, register_aspect
 from little_sister.copy_action import copy_context
 from little_sister.origins import package_origin
-from little_sister.reasons import Entry
+from little_sister.reasons import RECORD_TIMESTAMP_KEYS, Entry
 from little_sister.status import HEARTBEAT_PATH, StatusCode
 from little_sister.tree import StatusTree
 from little_sister.users import AvatarFile
@@ -228,6 +230,21 @@ class WebTests(TestCase):
         self.assertIn("Configuration", body)
         self.assertIn("http://example", body)
 
+    def test_the_node_facts_read_when_what_was_read_found_and_ran_with(self):
+        # the four cards of `_node_facts.html`, in the order its header gives them:
+        # when it ran, what it read, what it found, what it ran with
+        self._login()
+        self.tree.upsert("/svc/api", StatusCode.OK, "200 in 412 ms",
+                         config="- **url:** http://example",
+                         report="- one endpoint answered",
+                         subject="http://example",
+                         record={"status": 200, "response_ms": 412})
+        body = self.client.get("/status/svc/api").get_data(as_text=True)
+        cards = ["Time", "Measured", "Report", "Configuration"]
+        headings = re.findall(
+            r'<h3 class="h6 text-muted text-uppercase">([^<]+)</h3>', body)
+        self.assertEqual([h for h in headings if h in cards], cards)
+
     def test_about_shown_on_detail_page(self):
         self._login()
         self.tree.upsert("/svc/api", StatusCode.OK)
@@ -267,8 +284,9 @@ class WebTests(TestCase):
         self.assertNotIn("to escalate", page)
 
     def test_record_shown_on_detail_page_as_dotted_names(self):
-        # the record reaches the node's own page (backlog #32): a plain list, no
-        # name read for its meaning, dotted the way the field is addressed
+        # the record reaches the node's own page (backlog #32): a list of names
+        # and values, dotted the way the field is addressed. How a time in it
+        # reads is RecordTimeTests'.
         self._login()
         self.tree.upsert("/ci", StatusCode.ERROR, [
             Entry("build", "CI: failed", code=StatusCode.ERROR,
@@ -277,15 +295,36 @@ class WebTests(TestCase):
         ], members=True)
         body = self.client.get("/status/ci").get_data(as_text=True)
         self.assertIn("reason-record", body)
-        self.assertIn("completed.at", body)
-        self.assertIn("2026-09-19T09:12:00Z", body)
-        self.assertIn(">41<", body)
+        rows = _record_rows(body)
+        self.assertEqual([name for name, _ in rows],
+                         ["workflow", "run_number", "completed.at"])
+        self.assertIn(("run_number", "41"), rows)
 
     def test_a_line_without_a_record_renders_no_record_block(self):
         self._login()
         self.tree.upsert("/db", StatusCode.ERROR, "boom")
         body = self.client.get("/status/db").get_data(as_text=True)
         self.assertNotIn("reason-record", body)
+
+    def test_a_refused_record_is_said_where_the_record_would_be(self):
+        # ADR-0093 decision 2: the line stands as its grading wrote it, and the
+        # node's own page says in the record's place that it was refused and why —
+        # escaped like any other data, since a why can quote the refused value
+        self._login()
+        self.tree.upsert("/ci", StatusCode.ERROR, [
+            Entry("build", "CI: failed", code=StatusCode.ERROR,
+                  refused="it is 2,811 bytes and the limit is 2,048"),
+            Entry("deploy", "deploy: passed", code=StatusCode.OK,
+                  refused="'at' names a time, and '<b>x</b>' is not one with an "
+                          "offset"),
+            Entry("lint", "lint: passed", code=StatusCode.OK),
+        ], members=True)
+        body = self.client.get("/status/ci").get_data(as_text=True)
+        self.assertEqual(body.count("Record refused"), 2)
+        self.assertIn("it is 2,811 bytes and the limit is 2,048", body)
+        self.assertNotIn("<b>x</b>", body)
+        self.assertIn("&lt;b&gt;x&lt;/b&gt;", body)
+        self.assertEqual(_record_rows(body), [])
 
     def test_record_values_are_escaped_like_any_other_data(self):
         # the escaping the check no longer has to get right itself (ADR-0018):
@@ -1283,6 +1322,32 @@ class WebTests(TestCase):
         self.assertIn("Until", body)
         self.assertIn("error", body)
 
+    def test_a_container_that_declares_nothing_has_no_current_history_row(self):
+        # ADR-0094 decision 5, the Time card's rule: a node that declares nothing above
+        # nodes that report has no own status for a period to name, so its history
+        # ends with the last period that named one, and says since when
+        self._login()
+        self.tree.upsert("/aws/account", StatusCode.OK, "scope: 1 account")
+        self.tree.upsert("/aws/account/eu", StatusCode.OK)
+        self.tree.upsert("/aws/account", StatusCode.UNDEFINED, "scope: 1 account")
+        body = self.client.get("/history/aws/account").get_data(as_text=True)
+        rows = body.split("<tbody>")[1].split("</tbody>")[0]
+        self.assertEqual(rows.count("<tr"), 1)
+        self.assertIn(">ok<", rows)
+        self.assertNotIn(">undefined<", rows)
+        self.assertIn("Declares nothing of its own since", body)
+
+    def test_a_leaf_keeps_its_undefined_history_row(self):
+        # a leaf's UNDEFINED is its own reading, as on its Time card
+        self._login()
+        self.tree.upsert("/db", StatusCode.OK)
+        self.tree.upsert("/db", StatusCode.UNDEFINED, "no data")
+        body = self.client.get("/history/db").get_data(as_text=True)
+        rows = body.split("<tbody>")[1].split("</tbody>")[0]
+        self.assertEqual(rows.count("<tr"), 2)
+        self.assertIn(">undefined<", rows)
+        self.assertNotIn("Declares nothing of its own", body)
+
     def test_events_page(self):
         self._login()
         self.tree.upsert("/jenkins/security", StatusCode.ERROR, "CBP failed")
@@ -1559,8 +1624,18 @@ class WebTests(TestCase):
 
     def test_no_banner_when_engine_ok(self):
         self._login()
-        body = self.client.get("/status").get_data(as_text=True)
+        with mock.patch.object(app_module, "engine_error", None):
+            body = self.client.get("/status").get_data(as_text=True)
         self.assertNotIn("Engine not started", body)
+
+    def test_a_server_that_never_started_names_the_missing_flag(self):
+        # The state an imported application is in until the server's start runs —
+        # a gunicorn line without the hooks module stays in it (ADR-0091 decision 5).
+        self._login()
+        with mock.patch.object(app_module, "engine_error", app_module.NOT_STARTED):
+            body = self.client.get("/status").get_data(as_text=True)
+        self.assertIn("Engine not started", body)
+        self.assertIn("--config python:little_sister.gunicorn_hooks", body)
 
     def test_engine_error_not_on_login_page(self):
         # the login page is standalone — the reason must not leak pre-login
@@ -1646,6 +1721,21 @@ class WebTests(TestCase):
                       expected_record=1_024, record_bytes=612),))
         self.assertIn("1,024 B record", body)
         self.assertIn("(612 B seen)", body)
+        self.assertNotIn("floor", body)
+
+    def test_system_says_when_the_floor_raised_a_declared_record(self):
+        # the effective size is what startup compared, and the type's own number
+        # stays visible beside it, so the page neither over-claims nor hides it
+        from little_sister.engine import CheckInfo
+        self._login()
+        body = self._system_body((
+            CheckInfo(path="/svc/a", type_name="small", frequency_seconds=60,
+                      running=False, running_since=None, running_seconds=None,
+                      next_run_at="2026-07-20T13:52:00+00:00",
+                      next_in_seconds=60.0, last_run_at=None,
+                      elapsed_seconds=None, expected_record=331,
+                      stated_record=64),))
+        self.assertIn("331 B record (floor; declares 64 B)", body)
 
     def test_system_measures_a_record_nobody_declared(self):
         # the measurement stands on its own: a record no type estimated is still
@@ -1660,6 +1750,20 @@ class WebTests(TestCase):
                       elapsed_seconds=None, record_bytes=612),))
         self.assertIn("(612 B seen)", body)
         self.assertNotIn("B record", body)
+
+    def test_system_marks_a_seen_record_the_seam_refused_for_its_weight(self):
+        # ADR-0093 decision 6: the heaviest record the run produced, refused ones
+        # included — a declaration failing is what this column exists to show
+        from little_sister.engine import CheckInfo
+        self._login()
+        body = self._system_body((
+            CheckInfo(path="/svc/a", type_name="github", frequency_seconds=60,
+                      running=False, running_since=None, running_seconds=None,
+                      next_run_at="2026-07-20T13:52:00+00:00",
+                      next_in_seconds=60.0, last_run_at=None,
+                      elapsed_seconds=None, expected_record=1_024,
+                      record_bytes=2_811, record_refused=True),))
+        self.assertIn("(2,811 B seen, refused)", body)
 
     def test_system_says_what_each_check_is_reached_through(self):
         # the graph on one page (backlog #38 A): *how many* checks one
@@ -3398,6 +3502,157 @@ class CodedReasonLineTests(TestCase):
 
 
 
+def _record_rows(body: str) -> list[tuple[str, str]]:
+    """Every name and value the page's record lists show, as a reader reads them:
+    the text of each ``<dt>`` and of the ``<dd>`` beside it, in page order, with
+    the tags stripped and the entities unescaped."""
+    rows: list[tuple[str, str]] = []
+    for block in re.findall(r'<dl class="reason-record[^"]*">(.*?)</dl>', body,
+                            re.S):
+        for name, value in re.findall(r"<dt>(.*?)</dt><dd>(.*?)</dd>", block,
+                                      re.S):
+            rows.append((html.unescape(re.sub(r"<[^>]+>", "", name)),
+                         html.unescape(re.sub(r"<[^>]+>", "", value))))
+    return rows
+
+
+class RecordTimeTests(TestCase):
+    """A record's times on its node's page: the names the seam types — `at`,
+    `started` and `ended`, at any depth (ADR-0082 decision 2) — read in the
+    configured timezone and `time_format`, and every other value is shown as it
+    was stored. The values are the ones the plan's sentences are about: the UTC
+    string a Lambda function's line in `little-sister-aws` shows today, and a
+    batch job's nested `created.at`."""
+
+    #: A Lambda function's own time, as the seam stores it.
+    STORED = "2026-09-22T10:38:00Z"
+
+    def setUp(self):
+        self.tree = StatusTree()
+        self._original = app_module.status_tree
+        app_module.status_tree = self.tree
+        self.client = app_module.app.test_client()
+        self.client.post("/login",
+                         data={"username": "pan", "password": "12345678"})
+        # The configuration the sentences are read against, stated rather than
+        # inherited: Berlin is on summer time in September, so 10:38 UTC is 12:38.
+        settings = self._settings("Europe/Berlin", "%Y-%m-%d %H:%M:%S")
+        settings.start()
+        self.addCleanup(settings.stop)
+
+    def tearDown(self):
+        app_module.status_tree = self._original
+
+    @staticmethod
+    def _settings(zone: str, fmt: str):
+        # `local_time` reads the configuration at the call, from its module
+        return mock.patch("little_sister.config.config",
+                          replace(app_module.config, timezone=zone,
+                                  time_format=fmt))
+
+    def _page(self, data: dict) -> str:
+        """The page of a node whose one line carries ``data`` — a Lambda
+        function's line, as `little-sister-aws` writes it."""
+        self.tree.upsert("/aws/lambda", StatusCode.OK, [
+            Entry("resize-images", "resize-images: no errors, last run 2h ago",
+                  StatusCode.OK, subject="resize-images", data=data),
+        ], members=True)
+        response = self.client.get("/status/aws/lambda")
+        self.assertEqual(response.status_code, 200)
+        return response.get_data(as_text=True)
+
+    def test_a_carried_lines_time_reads_in_the_configured_zone(self):
+        body = self._page({"name": "resize-images", "errors": 0,
+                           "at": self.STORED})
+        self.assertEqual(_record_rows(body),
+                         [("name", "resize-images"), ("errors", "0"),
+                          ("at", "2026-09-22 12:38:00")])
+        # what was stored stays in the page, as the instant's machine form
+        self.assertIn('<dt>at</dt><dd><time datetime="2026-09-22T10:38:00Z">'
+                      '2026-09-22 12:38:00</time></dd>', body)
+
+    def test_the_zone_and_the_format_are_the_configured_ones(self):
+        with self._settings("America/New_York", "%d.%m.%Y %H:%M"):
+            body = self._page({"at": self.STORED})
+        self.assertEqual(_record_rows(body), [("at", "22.09.2026 06:38")])
+
+    def test_a_nested_created_at_reads_in_the_configured_zone_too(self):
+        # a batch job's run, as `little-sister-aws` keeps it: its creation
+        # nested under `created`, its own times at the top
+        body = self._page({"queue": "nightly", "name": "reindex",
+                           "created": {"at": "2026-09-22T10:38:00Z"},
+                           "started": "2026-09-22T10:40:00Z",
+                           "ended": "2026-09-22T11:05:00Z",
+                           "at": "2026-09-22T11:05:00Z"})
+        self.assertEqual(_record_rows(body),
+                         [("queue", "nightly"), ("name", "reindex"),
+                          ("created.at", "2026-09-22 12:38:00"),
+                          ("started", "2026-09-22 12:40:00"),
+                          ("ended", "2026-09-22 13:05:00"),
+                          ("at", "2026-09-22 13:05:00")])
+
+    def test_every_name_the_seam_types_reads_as_an_instant(self):
+        # the page reads the seam's own list, so the two cannot disagree about
+        # which names are times
+        for name in sorted(RECORD_TIMESTAMP_KEYS):
+            with self.subTest(name=name):
+                self.assertEqual(_record_rows(self._page({name: self.STORED})),
+                                 [(name, "2026-09-22 12:38:00")])
+
+    def test_a_value_under_any_other_name_is_shown_as_it_was_stored(self):
+        # the type is the name's, never the value's: a time-shaped string under
+        # a name the seam does not type stays as the check wrote it, and so does
+        # a list, times inside it included
+        body = self._page({"deadline": self.STORED, "errors": 0,
+                           "log_note": None, "retried": True,
+                           "runs": [{"at": self.STORED}]})
+        self.assertEqual(_record_rows(body),
+                         [("deadline", "2026-09-22T10:38:00Z"), ("errors", "0"),
+                          ("log_note", "null"), ("retried", "true"),
+                          ("runs", '[{"at": "2026-09-22T10:38:00Z"}]')])
+
+    def test_a_null_under_a_timed_name_is_shown_as_it_was_stored(self):
+        # *this run has not ended*: the seam keeps the null, and the page says
+        # what the record holds
+        body = self._page({"started": "2026-09-22T10:40:00Z", "ended": None})
+        self.assertEqual(_record_rows(body),
+                         [("started", "2026-09-22 12:40:00"), ("ended", "null")])
+
+    def test_a_time_the_zone_cannot_hold_is_shown_as_it_was_stored(self):
+        # the seam accepts any instant UTC can hold, and the last half hour of
+        # the year 9999 in UTC is the year 10000 in Berlin
+        body = self._page({"at": "9999-12-31T23:30:00Z"})
+        self.assertEqual(_record_rows(body), [("at", "9999-12-31T23:30:00Z")])
+
+    def test_so_is_one_before_the_first_year_in_the_zone(self):
+        # the other edge: the first half hour of the year 1 in UTC is the year 0
+        # in New York
+        with self._settings("America/New_York", "%Y-%m-%d %H:%M:%S"):
+            body = self._page({"at": "0001-01-01T00:30:00Z"})
+        self.assertEqual(_record_rows(body), [("at", "0001-01-01T00:30:00Z")])
+
+    def test_what_is_not_a_time_with_an_offset_is_shown_as_it_was_stored(self):
+        # the seam lets none of these through, and the page does not guess: a
+        # naive stamp is an instant only to whoever wrote it
+        body = self._page({"at": "2026-09-22T10:38:00", "started": "soon",
+                           "ended": 1758537480})
+        self.assertEqual(_record_rows(body),
+                         [("at", "2026-09-22T10:38:00"), ("started", "soon"),
+                          ("ended", "1758537480")])
+
+    def test_the_measured_record_reads_its_times_the_same_way(self):
+        # the node's own record goes through the same filter and the same macro
+        self.tree.upsert("/web/shop", StatusCode.OK, "200 in 412 ms",
+                         subject="https://shop.example",
+                         record={"status": 200, "response_ms": 412,
+                                 "at": self.STORED})
+        body = self.client.get("/status/web/shop").get_data(as_text=True)
+        self.assertIn("Measured", body)
+        self.assertEqual(_record_rows(body),
+                         [("status", "200"), ("response_ms", "412"),
+                          ("at", "2026-09-22 12:38:00")])
+
+
 class TopmostTimeTests(TestCase):
     """The observation time shows on the topmost node visible in the current view
     and is suppressed below where it would be identical (ADR-0044; ADR-0027 as
@@ -3825,6 +4080,105 @@ class NodeFactsTests(TestCase):
         self.assertEqual(response.status_code, 200)
         history = self.client.get("/history/system/alpha")
         self.assertEqual(history.status_code, 200)
+
+
+class ContainerHeadTests(TestCase):
+    """The head of the page of a node that declares nothing of its own.
+
+    A node that declares `UNDEFINED` is a container: the roll-up skips its code
+    (ADR-0039), its card on the parent's page shows what it rolls up to, and a kept
+    reading records the same (ADR-0087 decision 8). One that carries a sentence —
+    the scope an `aws` check states above its accounts — headed its own page gray
+    and *undefined*, the word hide-idle reads as never reported, while the dashboard
+    drew the same node green. It heads with what its card shows now, and the Time
+    card under it bounds no period of a status the node never had. A node that
+    declares a code of its own heads with that code, as it always did.
+    """
+
+    SCOPE = "1 account, 1 account/region pair in scope"
+
+    def setUp(self):
+        self.tree = StatusTree()
+        self._original = app_module.status_tree
+        app_module.status_tree = self.tree
+        self.client = app_module.app.test_client()
+        self.client.post("/login",
+                         data={"username": "pan", "password": "12345678"})
+
+    def tearDown(self):
+        app_module.status_tree = self._original
+
+    def _estate(self, account=StatusCode.OK):
+        """What the `aws` check writes: a root that declares nothing and states its
+        scope, above an account that reports."""
+        self.tree.set_check_mount("/cloud/aws")
+        self.tree.upsert("/cloud/aws", StatusCode.UNDEFINED, self.SCOPE)
+        self.tree.upsert("/cloud/aws/live", account)
+
+    def _page(self, branch="cloud/aws"):
+        return self.client.get(f"/status/{branch}").get_data(as_text=True)
+
+    def _head(self, branch="cloud/aws"):
+        """The head's classes, its cue's code and its status word."""
+        head = self._page(branch).split('class="status-node viewed-head ', 1)[1]
+        cue = re.search(r"status-cue--([a-z]+)", head)
+        word = re.search(r'viewed-head__state">'
+                         r'(?:<span class="status-card__time">[^<]*</span>)?'
+                         r"([a-z]+)", head)
+        assert cue is not None and word is not None
+        return head.split('"', 1)[0], cue.group(1), word.group(1)
+
+    def test_a_node_that_declares_nothing_heads_with_what_it_rolls_up_to(self):
+        self._estate()
+        self.assertEqual(self._head(), ("s-ok dim", "ok", "ok"))
+        self.assertIn(self.SCOPE, self._page())
+
+    def test_a_red_account_turns_the_head_red_and_pale(self):
+        # Pale, as the node's card on the dashboard is: the color is its
+        # account's, and the account is right below it, vivid — the culprit.
+        self._estate(StatusCode.ERROR)
+        self.assertEqual(self._head(), ("s-error dim", "error", "error"))
+
+    def test_with_every_account_pinned_the_head_reads_maintenance(self):
+        self._estate()
+        self.tree.set_maintenance(
+            "/cloud/aws/live", "cutover",
+            expires_at=datetime.now() + timedelta(days=1), set_by="pan")
+        self.assertEqual(self._head(),
+                         ("s-maintenance dim", "maintenance", "maintenance"))
+
+    def test_with_nothing_below_reporting_it_still_says_undefined(self):
+        # The roll-up of nothing is nothing: here the word is true, and it is
+        # the node's own, so it is not pale.
+        self._estate(StatusCode.UNDEFINED)
+        self.assertEqual(self._head(), ("s-undefined", "undefined", "undefined"))
+
+    def test_a_node_that_declares_a_code_heads_with_its_own(self):
+        # Unchanged: a verdict of its own is what the head says, and the red child
+        # right below it says the rest — the `github` check's coverage node.
+        self.tree.set_check_mount("/quality/github")
+        self.tree.upsert("/quality/github", StatusCode.OK, "3 repositories")
+        self.tree.upsert("/quality/github/actions", StatusCode.ERROR, "red")
+        self.assertEqual(self._head("quality/github"), ("s-ok", "ok", "ok"))
+
+    def test_the_time_card_bounds_no_period_of_a_status_it_never_had(self):
+        # A root that declared OK and declares nothing now — an `aws` check's,
+        # across its conversion — has that transition in its log, and the card
+        # bounded it as "Status undefined from … until …" under a green head.
+        self._estate()
+        self.tree.upsert("/cloud/aws", StatusCode.OK, self.SCOPE)
+        self.tree.upsert("/cloud/aws", StatusCode.UNDEFINED, self.SCOPE)
+        body = self._page()
+        self.assertIn("Observed ", body)
+        self.assertNotIn("Status <strong>", body)
+
+    def test_a_leaf_that_declares_nothing_keeps_its_period(self):
+        # A leaf's UNDEFINED is its own state — nothing reported — and it has a
+        # period like any other.
+        self.tree.upsert("/svc/api", StatusCode.OK)
+        self.tree.upsert("/svc/api", StatusCode.UNDEFINED)
+        body = self._page("svc/api")
+        self.assertIn("Status <strong>undefined</strong>", body)
 
 
 class BoxStateTests(TestCase):
@@ -4571,7 +4925,11 @@ class SystemPageDeclaredCostTests(TestCase):
         class _Declaring(Check):
             type_name = "declaring"
 
-            def run(self) -> CheckResult:
+            def measure(self) -> Sequence[Measurement]:
+                return ()
+
+            def grade(self, measurements: Sequence[Measurement],
+                      now: datetime) -> CheckResult:
                 return CheckResult(StatusCode.OK)
 
             def expected_cost(self) -> float:
@@ -4617,3 +4975,256 @@ class SystemPageDeclaredCostTests(TestCase):
         row = self._render().split("/status/estate")[1].split("</tr>")[0]
         self.assertIn("1m 30s", row)
         self.assertIn("1,200 entries", row)
+
+
+def _reading_rows(body: str) -> list[list[str]]:
+    """Every row of the page's readings tables, as a reader reads it: the text of
+    each cell, the tags stripped and the entities unescaped, a cue read by its
+    accessible name."""
+    rows: list[list[str]] = []
+    for table in re.findall(r'<table class="[^"]*\bls-readings\b[^"]*">(.*?)</table>',
+                            body, re.S):
+        body_part = table.split("<tbody>", 1)[1]
+        for row in re.findall(r"<tr[^>]*>(.*?)</tr>", body_part, re.S):
+            cells = []
+            for cell in re.findall(r"<td[^>]*>(.*?)</td>", row, re.S):
+                cue = re.search(r'aria-label="([^"]+)"', cell)
+                text = html.unescape(re.sub(r"<[^>]+>", "", cell)).strip()
+                cells.append(cue.group(1) if cue and not text else text)
+            rows.append(cells)
+    return rows
+
+
+def _curves(body: str) -> list[str]:
+    """Each curve's SVG on the page, whole."""
+    return re.findall(r'<svg class="ls-curve__plot".*?</svg>', body, re.S)
+
+
+class SubjectSeriesTests(TestCase):
+    """The node that stands for a subject shows its series (ADR-0092 decision 6),
+    read against the plan's sentence for it: the check's page shows its newest
+    readings and a response-time curve, a failed reading is a marked gap in it and a
+    stretch without readings a plain one, and every kept reading is on its History
+    page.
+
+    The check is the plan's: an `http` check every three minutes that keeps a day
+    of one site. Its series is written into the store the engine reads, the way
+    the engine writes it, and the node is left as the newest run left it."""
+
+    URL = "https://www.example.org"
+    PATH = "/web/site"
+    T0 = datetime(2026, 9, 26, 15, 0, tzinfo=UTC)
+    #: Twelve readings three minutes apart, the seventh a request that failed;
+    #: then an hour in which nothing was read — the machine asleep — and three more.
+    MINUTES = (0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 93, 96, 99)
+    FAILED = 18
+
+    def setUp(self):
+        self.tree = StatusTree()
+        self._saved = (app_module.status_tree, app_module.engine)
+        self.addCleanup(self._restore)
+        app_module.status_tree = self.tree
+        settings = mock.patch(
+            "little_sister.config.config",
+            replace(app_module.config, timezone="Europe/Berlin",
+                    time_format="%Y-%m-%d %H:%M:%S"))
+        settings.start()
+        self.addCleanup(settings.stop)
+        self.client = app_module.app.test_client()
+        self.client.post("/login",
+                         data={"username": "pan", "password": "12345678"})
+
+    def _restore(self):
+        app_module.status_tree, app_module.engine = self._saved
+
+    def _deploy(self, **config):
+        """The check, its kept readings, and its node as the newest run left it."""
+        from little_sister.checks.http import HttpCheck
+        from little_sister.engine import Engine
+        from little_sister.series import MemoryStore, SeriesKey, SeriesRecord
+        check = HttpCheck.from_config(
+            {"type": "http", "path": self.PATH, "url": self.URL,
+             "frequency": "3m", "series_keep": 480, **config}, Path("."))
+        store = MemoryStore()
+        for minute in self.MINUTES:
+            failed = minute == self.FAILED
+            response_ms = None if failed else 400 + minute
+            record = ({"status": None, "response_ms": None, "error": "timed out"}
+                      if failed else {"status": 200, "response_ms": response_ms})
+            said = ("request failed: timed out" if failed
+                    else f"HTTP 200 in {response_ms} ms")
+            store.add(SeriesKey("http", self.PATH, self.URL),
+                      SeriesRecord(record, self.T0 + timedelta(minutes=minute),
+                                   code=StatusCode.ERROR if failed else StatusCode.OK,
+                                   texts=(said,)),
+                      keep=480)
+        app_module.engine = Engine([check], self.tree, series=store)
+        self.tree.upsert(self.PATH, StatusCode.OK,
+                         [Entry("response", "HTTP 200 in 499 ms")],
+                         frequency_seconds=180, subject=self.URL,
+                         record={"status": 200, "response_ms": 499})
+        return check
+
+    def _page(self, path=None):
+        response = self.client.get(f"/status{path or self.PATH}")
+        self.assertEqual(response.status_code, 200)
+        return response.get_data(as_text=True)
+
+    def _time(self, minute):
+        """A reading's time as the page writes it: Berlin, on summer time."""
+        moment = self.T0 + timedelta(minutes=minute, hours=2)
+        return moment.strftime("%Y-%m-%d %H:%M:%S")
+
+    def test_the_page_shows_a_response_time_curve(self):
+        self._deploy()
+        body = self._page()
+        curve, = _curves(body)
+        self.assertIn("Response time", body.split('<svg class="ls-curve__plot"')[0]
+                      .rsplit('<figure class="ls-curve"', 1)[1])
+        self.assertIn('role="img"', curve)
+        self.assertIn(self._time(0), curve)       # the time axis, in Berlin
+        self.assertIn(self._time(99), curve)
+
+    def test_and_its_newest_readings_newest_first(self):
+        self._deploy()
+        rows = _reading_rows(self._page())
+        self.assertEqual(len(rows), 10)           # reading_cap, 10 by default
+        newest = sorted(self.MINUTES, reverse=True)[:10]
+        self.assertEqual([row[0] for row in rows],
+                         [self._time(minute) for minute in newest])
+
+    def test_a_row_is_the_reading_as_it_stood(self):
+        # the time on the series' clock, the code as a cue, a column per field as
+        # the record list writes it, and the sentence
+        self._deploy()
+        body = self._page()
+        self.assertIn('<th scope="col">status</th><th scope="col">response_ms</th>'
+                      '<th scope="col">error</th>', body)
+        rows = _reading_rows(body)
+        self.assertEqual(rows[0], [self._time(99), "ok", "200", "499", "",
+                                   "HTTP 200 in 499 ms"])
+        failed, = (row for row in rows if row[0] == self._time(self.FAILED))
+        self.assertEqual(failed, [self._time(self.FAILED), "error", "null", "null",
+                                  "timed out", "request failed: timed out"])
+
+    def test_a_failed_reading_is_a_marked_gap_in_it(self):
+        self._deploy()
+        curve, = _curves(self._page())
+        self.assertEqual(
+            len(re.findall(r'<line class="ls-curve__none"[^>]*/>', curve)), 1)
+        titles = re.findall(r"<title>(.*?)</title>", curve)
+        self.assertIn(f"{self._time(self.FAILED)} · no value", titles)
+        # three stretches of line: before the failure, after it, and after the
+        # hour nothing was read — which breaks it with no mark of its own
+        self.assertEqual(len(re.findall(r'<path class="ls-curve__line"', curve)), 3)
+
+    def test_a_stretch_without_readings_is_a_plain_one(self):
+        self._deploy()
+        body = self._page()
+        self.assertEqual(len(re.findall(r'class="ls-curve__none"',
+                                        _curves(body)[0])), 1)
+        self.assertIn("1 stretch without readings", body)
+        self.assertIn("1 without a value", body)
+
+    def test_every_kept_reading_is_on_its_history_page(self):
+        self._deploy()
+        response = self.client.get(f"/history{self.PATH}")
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        rows = _reading_rows(body)
+        self.assertEqual([row[0] for row in rows],
+                         [self._time(minute)
+                          for minute in sorted(self.MINUTES, reverse=True)])
+        # beneath its status periods
+        self.assertLess(body.index("<th>Since</th>"), body.index("ls-readings"))
+        self.assertEqual(_curves(body), [])
+
+    def test_the_setting_caps_the_rows(self):
+        self._deploy()
+        with mock.patch.object(app_module, "config",
+                               replace(app_module.config, reading_cap=3)):
+            rows = _reading_rows(self._page())
+        self.assertEqual(len(rows), 3)
+
+    def test_the_checks_own_cap_wins(self):
+        self._deploy(reading_cap=5)
+        with mock.patch.object(app_module, "config",
+                               replace(app_module.config, reading_cap=3)):
+            rows = _reading_rows(self._page())
+        self.assertEqual(len(rows), 5)
+
+    def test_a_cap_of_zero_leaves_the_curve_alone_and_every_reading_to_history(
+            self):
+        self._deploy(reading_cap=0)
+        body = self._page()
+        self.assertEqual(_reading_rows(body), [])
+        self.assertEqual(len(_curves(body)), 1)
+        self.assertIn(f'15 readings kept — every one is on the '
+                      f'<a href="/history{self.PATH}">History page</a>', body)
+        self.assertEqual(len(_reading_rows(
+            self.client.get(f"/history{self.PATH}").get_data(as_text=True))),
+            len(self.MINUTES))
+
+    def test_the_page_says_how_many_it_shows_of_how_many_kept(self):
+        self._deploy()
+        body = self._page()
+        self.assertIn("newest 10 of 15 readings", body)
+
+    def test_a_measure_the_deployment_took_back_draws_no_curve(self):
+        self._deploy(measures={"response_ms": None})
+        body = self._page()
+        self.assertEqual(_curves(body), [])
+        self.assertEqual(len(_reading_rows(body)), 10)
+
+    def test_a_node_that_stands_for_no_subject_shows_no_series(self):
+        self._deploy()
+        self.tree.upsert("/web/other", StatusCode.OK, frequency_seconds=180)
+        body = self._page("/web/other")
+        self.assertNotIn("ls-readings", body)
+        self.assertEqual(_curves(body), [])
+
+    def test_a_check_that_keeps_no_series_shows_none(self):
+        self._deploy(series_keep=0)
+        body = self._page()
+        self.assertNotIn("ls-readings", body)
+        self.assertEqual(_curves(body), [])
+
+    def test_without_an_engine_there_is_no_series_to_show(self):
+        self._deploy()
+        app_module.engine = None
+        body = self._page()
+        self.assertNotIn("ls-readings", body)
+
+    def test_a_polled_branch_page_carries_at_most_the_cap(self):
+        # a node standing for a subject with children of its own renders the same
+        # facts on its branch page, and the poll fragment renders them again
+        from little_sister.engine import Engine
+        from little_sister.series import MemoryStore, SeriesKey, SeriesRecord
+
+        class _Host(Check):
+            type_name = "probe-host"
+
+            def measure(self):
+                return ()
+
+            def grade(self, measurements, now):
+                return CheckResult(StatusCode.OK)
+
+        check = _Host(path="/hosts/nas", subject="nas1", series_keep=40,
+                      frequency_seconds=60, measures={"load": ""})
+        store = MemoryStore()
+        for minute in range(30):
+            store.add(SeriesKey("probe-host", "/hosts/nas", "nas1"),
+                      SeriesRecord({"load": minute / 10},
+                                   self.T0 + timedelta(minutes=minute),
+                                   code=StatusCode.OK, texts=("load fine",)),
+                      keep=40)
+        app_module.engine = Engine([check], self.tree, series=store)
+        self.tree.upsert("/hosts/nas", StatusCode.OK, frequency_seconds=60,
+                         subject="nas1", record={"load": 2.9})
+        self.tree.upsert("/hosts/nas/disk", StatusCode.OK, frequency_seconds=60)
+        for query in ("", "?fragment=1"):
+            with self.subTest(query=query):
+                body = self._page(f"/hosts/nas{query}")
+                self.assertEqual(len(_reading_rows(body)), 10)
+                self.assertEqual(len(_curves(body)), 1)

@@ -84,7 +84,6 @@ class _Case(TestCase):
 
     def _environment(self) -> dict[str, str]:
         environment = os.environ.copy()
-        environment["LITTLE_SISTER_ENGINE"] = "0"
         environment["LITTLE_SISTER_CONFIG_DIR"] = "config"
         # The point of the exercise: everything this installation needs comes from
         # the `.env` `setup.sh` wrote, so the process is given none of it.

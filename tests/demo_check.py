@@ -33,15 +33,25 @@ prose node whose reason lists look alike and behave differently.
 declares its own verdict plus a ``running`` flag, the check emits **no code of its
 own** (the seam derives it), healthy lines are emitted on purpose — the per-aspect
 choice a deployment makes — and the failed build's retry runs in italic while the
-line stays red, which is the whole design in one line.
+line stays red, which is the whole design in one line. Its build line also carries
+its run's **record** (ADR-0082), the way a GitHub ``actions`` line does: the run it
+last completed under a nested ``completed.at``, and the run in flight with its
+``started`` beside a null ``ended`` — so the leaf page shows a line's times, in the
+configured timezone, while the demo runs.
+
+``workflows`` reads **several subjects in one run**, as a provider type does, and is
+where the demo shows what a record the seam refuses costs (ADR-0093): twice a cycle
+one repository's answer breaks the seam, and it costs that reading and nothing else.
 
 Dev-only: lives under ``tests/`` and never ships in the package.
 """
 from __future__ import annotations
 
+import math
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -51,13 +61,41 @@ from little_sister.checks import (
     CheckError,
     CheckResult,
     Entry,
+    Measurement,
     config_markdown,
     parse_duration,
     register,
 )
+from little_sister.reasons import slug
 from little_sister.status import StatusCode
 
 _DEFAULT_PERIOD = 60.0
+
+#: The one scenario whose reading is not the clock but a site's answer (ADR-0092):
+#: what `http` records — a status and a response time, both null where the request
+#: failed — so its node stands for the site its config names, and the series the
+#: check keeps is drawn as a response-time curve. Its cycle carries the three things
+#: the curve tells apart: a stretch in which every request fails (a marked break),
+#: one run that hangs past the node's tolerance before it answers (a plain break —
+#: nothing is read meanwhile, and the node goes stale), and the noise between.
+LATENCY = "latency"
+#: Where in its cycle the site fails every request, and where the one run hangs.
+_LATENCY_FAILING = (0.30, 0.37)
+_LATENCY_HANG = (0.60, 0.63)
+_LATENCY_HANG_SECONDS = 45.0
+
+#: The scenario that reads **several subjects in one run** (ADR-0093): the latest CI
+#: run of three repositories, each its own reading, each graded into the line that
+#: carries it. Twice a cycle a provider's answer breaks the seam for one of them —
+#: ``octo/web``'s time comes without its offset, and ``octo/docs`` carries a log past
+#: ``record_limit`` — and each costs its own reading and nothing else: the node says
+#: which and why at WARN, the instance holds a line on its runtime node, and
+#: ``/system`` marks the record it saw *refused*. The two stretches overlap, so for a
+#: while both are refused at once and the third repository is graded alone.
+WORKFLOWS = "workflows"
+_REPOSITORIES = ("octo/api", "octo/web", "octo/docs")
+_WORKFLOWS_NAIVE = (0.25, 0.60)
+_WORKFLOWS_HEAVY = (0.45, 0.85)
 
 # scenario name -> phase function: (elapsed-within-period, period) -> CheckResult.
 Scenario = Callable[[float, float], CheckResult]
@@ -195,7 +233,8 @@ def _reviews(t: float, period: float) -> CheckResult:
 
 
 @_scenario("pipelines")
-def _pipelines(t: float, period: float) -> CheckResult:
+def _pipelines(t: float, period: float,
+               at: datetime | None = None) -> CheckResult:
     """Coded entry lines (ADR-0042): each workflow carries its own verdict and the
     node derives — this scenario returns **no code of its own**, dogfooding the
     seam. ``web-build`` walks the design's one-line arc across the cycle: passed →
@@ -206,30 +245,58 @@ def _pipelines(t: float, period: float) -> CheckResult:
     ring cue). Healthy lines are emitted deliberately — the per-aspect choice
     ADR-0042 leaves to a deployment — and the list obeys the three-tier ordering
     rule (non-OK, then in-flight, then healthy and idle), so the failures stay
-    above the ``reason_cap`` fold."""
+    above the ``reason_cap`` fold.
+
+    ``at`` is the reading's own time. Given it, the build line carries its run's
+    record, its times counted from it — a completed run at the point of the cycle
+    its text says, a run in flight started where its *running …s* began — so the
+    grading stays a function of the reading. Without it the lines carry none."""
     f = t / period
+
+    def run(number: int, completed: float, running: int | None = None,
+            started: float = 0.0) -> dict[str, Any] | None:
+        """The build's record: run ``number`` completed at that fraction of the
+        cycle, and run ``running`` in flight since ``started``."""
+        if at is None:
+            return None
+        # whole seconds, as a source's own clock would write them
+        cycle = (at - timedelta(seconds=t)).replace(microsecond=0)
+        record: dict[str, Any] = {
+            "workflow": "build", "branch": "main", "run_number": number,
+            "completed": {"at": (cycle + timedelta(
+                seconds=round(completed * period))).isoformat()}}
+        if running is not None:
+            record["running"] = {
+                "run_number": running,
+                "started": (cycle + timedelta(
+                    seconds=round(started * period))).isoformat(),
+                "ended": None}
+        return record
+
     if f < 0.2:
         build = Entry("web-build",
                       "web (main) / build: passed in 8m14s (#4215)",
-                      StatusCode.OK)
+                      StatusCode.OK, data=run(4215, -0.1))
     elif f < 0.35:
         build = Entry("web-build",
                       f"web (main) / build: passed in 8m14s \u00b7 #4216 "
                       f"running {int((f - 0.2) * period)}s",
-                      StatusCode.OK, running=True)
+                      StatusCode.OK, running=True,
+                      data=run(4215, -0.1, running=4216, started=0.2))
     elif f < 0.5:
         build = Entry("web-build",
                       "web (main) / build: failed after 8m21s (#4216)",
-                      StatusCode.ERROR)
+                      StatusCode.ERROR, data=run(4216, 0.35))
     elif f < 0.8:
         build = Entry("web-build",
                       f"web (main) / build: failed after 8m21s \u00b7 #4217 "
                       f"running {int((f - 0.5) * period)}s",
-                      StatusCode.ERROR, running=True)
+                      StatusCode.ERROR, running=True,
+                      data=run(4216, 0.35, running=4217, started=0.5))
     else:
         build = Entry("web-build",
                       "web (main) / build: passed in 9m01s (#4217)",
-                      StatusCode.OK)
+                      StatusCode.OK, data=run(4217, 0.8))
     gate = (Entry("deploy-gate", "deploy (main) / gate: waiting for approval",
                   StatusCode.WARN)
             if 0.3 <= f < 0.9 else
@@ -463,15 +530,18 @@ class DemoCheck(Check):
     def _extra_from_config(cls, config: dict[str, Any],
                            base_dir: Path) -> dict[str, Any]:
         scenario = str(config.get("scenario", "escalate"))
-        if scenario not in SCENARIOS:
-            known = ", ".join(sorted(SCENARIOS))
+        if scenario not in SCENARIOS and scenario not in (LATENCY, WORKFLOWS):
+            known = ", ".join(sorted({*SCENARIOS, LATENCY, WORKFLOWS}))
             raise CheckError(
                 f"unknown demo scenario {scenario!r} (known: {known})")
         period = parse_duration(config.get("period"), int(_DEFAULT_PERIOD))
         if period <= 0:
             raise CheckError("demo 'period' must be positive")
+        # `subject` is this type's to read, as a URL is `http`'s: the object a
+        # scenario that reads one names, so its readings have a series (ADR-0087).
         return {"scenario": scenario, "period": float(period),
-                "entries": values.flag(config, "entries")}
+                "entries": values.flag(config, "entries"),
+                "subject": str(config.get("subject", ""))}
 
     def config_summary(self) -> str:
         summary = {"scenario": self.scenario, "period": f"{int(self._period)}s"}
@@ -479,9 +549,101 @@ class DemoCheck(Check):
             summary["entries"] = "true"
         return config_markdown(summary)
 
-    def run(self) -> CheckResult:
+    def measure(self) -> Measurement | Sequence[Measurement]:
+        """Where this check is in its cycle — which is the whole of what it
+        reads, because the world it watches is the clock (ADR-0086).
+
+        No `subject`: this check has no object out there to name, and a made-up
+        one would be worse than none. `at` is when it read the clock — the
+        reading's own time, which the page shows in the configured timezone and the
+        `pipelines` lines take their own times from.
+        """
+        if self.scenario == LATENCY:
+            return self._answer()
+        if self.scenario == WORKFLOWS:
+            return self._workflows()
+        return Measurement(record={
+            "elapsed_seconds": round(
+                (time.monotonic() - self._start) % self._period, 3),
+            "period_seconds": self._period,
+            "at": datetime.now(UTC).isoformat()})
+
+    def _answer(self) -> Measurement:
+        """The `latency` scenario's reading: a site's status and response time at
+        this point of its cycle — or none of either where every request fails, and,
+        once a cycle, after a hang no reading is taken through."""
         elapsed = (time.monotonic() - self._start) % self._period
-        result = SCENARIOS[self.scenario](elapsed, self._period)
+        phase = elapsed / self._period
+        if _LATENCY_HANG[0] <= phase < _LATENCY_HANG[1]:
+            time.sleep(_LATENCY_HANG_SECONDS)
+        if _LATENCY_FAILING[0] <= phase < _LATENCY_FAILING[1]:
+            return Measurement(record={"status": None, "response_ms": None,
+                                       "error": "timed out"})
+        response_ms = round(190 + 70 * math.sin(2 * math.pi * phase)
+                            + 18 * math.sin(elapsed * 1.7))
+        return Measurement(record={"status": 200, "response_ms": response_ms})
+
+    def _workflows(self) -> list[Measurement]:
+        """The `workflows` scenario's readings: one per repository, its latest CI
+        run and when it completed, as a provider answers — including, at two
+        stretches of the cycle, the two ways that answer breaks the seam."""
+        elapsed = (time.monotonic() - self._start) % self._period
+        phase = elapsed / self._period
+        now = datetime.now(UTC).replace(microsecond=0)
+        readings: list[Measurement] = []
+        for index, repository in enumerate(_REPOSITORIES):
+            completed = now - timedelta(minutes=3 + 7 * index)
+            record: dict[str, Any] = {
+                "repository": repository, "workflow": "CI", "branch": "main",
+                "run_number": 120 + index, "conclusion": "success",
+                "completed": {"at": completed.isoformat()}}
+            if (repository == "octo/web"
+                    and _WORKFLOWS_NAIVE[0] <= phase < _WORKFLOWS_NAIVE[1]):
+                record["completed"] = {
+                    "at": completed.replace(tzinfo=None).isoformat()}
+            if (repository == "octo/docs"
+                    and _WORKFLOWS_HEAVY[0] <= phase < _WORKFLOWS_HEAVY[1]):
+                record["log"] = "\n".join(
+                    f"step {step}: uploaded artifact {step} of 90"
+                    for step in range(1, 91))
+            readings.append(Measurement(record=record, subject=repository))
+        return readings
+
+    def grade(self, measurements: Sequence[Measurement],
+              now: datetime) -> CheckResult:
+        """The scenario, read off that one number — and so a demonstration of the
+        seam as well as of a dashboard: hand this grading yesterday's record and
+        it answers what it answered yesterday."""
+        if self.scenario == WORKFLOWS:
+            # one line per repository that was read, carrying its reading
+            return CheckResult(reason=[
+                Entry(slug(reading.subject, "ci"),
+                      f"{reading.subject} (main) / CI: passed "
+                      f"(#{reading.record['run_number']})",
+                      StatusCode.OK, subject=reading.subject,
+                      data=dict(reading.record))
+                for reading in measurements])
+        record = measurements[0].record
+        if self.scenario == LATENCY:
+            # graded as `http` grades its answer: from the record alone
+            if record.get("status") is None:
+                reason = record.get("error") or "no answer"
+                return CheckResult(StatusCode.ERROR, [Entry(
+                    "response", f"request failed: {reason}")])
+            return CheckResult(StatusCode.OK, [Entry(
+                "response",
+                f"HTTP {record['status']} in {record['response_ms']} ms")])
+        elapsed = float(record.get("elapsed_seconds") or 0.0)
+        if self.scenario == "pipelines":
+            # The one scenario whose lines carry records with times of their own,
+            # counted from the reading's so that yesterday's record still grades
+            # to yesterday's answer.
+            stamp = record.get("at")
+            result = _pipelines(elapsed, self._period,
+                                datetime.fromisoformat(stamp)
+                                if isinstance(stamp, str) else None)
+        else:
+            result = SCENARIOS[self.scenario](elapsed, self._period)
         if self.entries and not result.members:
             # `replace` re-runs `__post_init__`, which is where the reason list is
             # keyed — so this is the same normalization the check would have got by

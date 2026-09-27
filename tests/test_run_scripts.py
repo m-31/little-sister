@@ -8,6 +8,11 @@ verifies what they are talking to. Every one of those is a sentence somebody cou
 quietly reverse in shell, where neither `mypy` nor `ruff` is watching — and one of
 them already had been, in a comment claiming a verification the code does not do.
 
+The **stop** (ADR-0088) is the third: one grace, handed to gunicorn with keep-alive
+off and the hooks module that starts and stops the engine, and a `stop.sh` that waits
+for every process of the instance rather than for its master alone. What gunicorn does
+with those flags is asked of a real gunicorn serving a stand-in application.
+
 The functions are exercised by sourcing `lib.sh` in a real `bash`, because that is
 what the scripts do and because a re-implementation in Python would be a test of the
 re-implementation.
@@ -549,6 +554,62 @@ os.rename(ready + ".tmp", ready)   # atomic: the file exists only once it is who
 time.sleep(300)
 """
 
+#: The same listener with **one worker**: it forks a child after binding, as the
+#: gunicorn master forks its workers, and the child shares the listening socket and
+#: stays until its master is gone. It reports its pid third, once the child exists.
+_LISTENER_WITH_A_WORKER = """
+import os, socket, sys, time
+ready, where = sys.argv[-1], sys.argv[-2]
+os.chdir(where)
+s = socket.socket()
+s.bind(("127.0.0.1", 0))
+s.listen(1)
+port = s.getsockname()[1]
+if os.fork():
+    os._exit(0)
+os.setsid()
+master = os.getpid()
+worker = os.fork()
+if worker == 0:
+    while os.getppid() == master:
+        time.sleep(0.05)
+    os._exit(0)
+with open(ready + ".tmp", "w") as handle:
+    handle.write("%d %d %d" % (port, master, worker))
+os.rename(ready + ".tmp", ready)
+time.sleep(300)
+"""
+
+
+#: A master whose worker **outlives it**, as the orphan did (ADR-0088): once its master
+#: is gone the worker closes the listening socket -- gunicorn's leaves its loop and
+#: closes its own at the TERM, so the port no longer shows it -- and stays on for
+#: ``LINGER`` seconds, or for good with a negative one.
+_LISTENER_WITH_A_LINGERING_WORKER = """
+import os, socket, sys, time
+ready, where, linger = sys.argv[-1], sys.argv[-2], float(os.environ["LINGER"])
+os.chdir(where)
+s = socket.socket()
+s.bind(("127.0.0.1", 0))
+s.listen(1)
+port = s.getsockname()[1]
+if os.fork():
+    os._exit(0)
+os.setsid()
+master = os.getpid()
+worker = os.fork()
+if worker == 0:
+    while os.getppid() == master:
+        time.sleep(0.05)
+    s.close()
+    time.sleep(linger if linger >= 0 else 300)
+    os._exit(0)
+with open(ready + ".tmp", "w") as handle:
+    handle.write("%d %d %d" % (port, master, worker))
+os.rename(ready + ".tmp", ready)
+time.sleep(300)
+"""
+
 
 def _alive(pid: int) -> bool:
     try:
@@ -595,7 +656,8 @@ def _instance_words(checkout: Path) -> list[str]:
 
 @contextlib.contextmanager
 def _listening(*, checkout: Path | None = None, ours: bool = True,
-               words: list[str] | None = None):
+               words: list[str] | None = None, worker: bool = False,
+               linger: float | None = None):
     """A listener that looks like a gunicorn serving *checkout* when *ours*.
 
     It **runs in that directory**, which is what identifies it: the default is this
@@ -605,16 +667,21 @@ def _listening(*, checkout: Path | None = None, ours: bool = True,
 
     Yields ``(port, pid)``: the port because the listener picks its own, and the pid
     so a test can ask whether the script stopped it -- or, for something that is not
-    ours, whether it correctly did not.
+    ours, whether it correctly did not. With *worker* it is a master with one forked
+    child, and yields ``(port, pid, worker)``; with *linger* too, and the worker stays
+    that many seconds after its master is gone.
     """
     where = checkout or _REPO
     marker = words if words is not None else (
         _instance_words(where) if ours else ["something-else"])
     with tempfile.TemporaryDirectory() as scratch:
         ready = Path(scratch) / "bound"
-        subprocess.run([sys.executable, "-c", _LISTENER, *marker,
+        script = (_LISTENER_WITH_A_LINGERING_WORKER if linger is not None
+                  else _LISTENER_WITH_A_WORKER if worker else _LISTENER)
+        subprocess.run([sys.executable, "-c", script, *marker,
                         str(where), str(ready)],
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                       env={**os.environ, "LINGER": str(linger)},
                        check=True, timeout=30)
         # Wait for the bind rather than sleeping a guessed amount: an `lsof` that ran
         # first would make a test pass for the wrong reason.
@@ -627,12 +694,14 @@ def _listening(*, checkout: Path | None = None, ours: bool = True,
         # and its completeness are one event. Polling `exists()` on a file being
         # written would see it empty -- which it did, the first time this was tried
         # by hand outside the suite.
-        port, pid = (int(part) for part in ready.read_text().split())
+        numbers = [int(part) for part in ready.read_text().split()]
+    port, pid = numbers[0], numbers[1]
     try:
-        yield port, pid
+        yield (port, pid, numbers[2]) if len(numbers) > 2 else (port, pid)
     finally:
-        if _alive(pid):
-            os.kill(pid, 9)
+        for started in numbers[1:]:
+            if _alive(started):
+                os.kill(started, 9)
 
 
 class OtherPortTests(TestCase):
@@ -810,12 +879,42 @@ class StopScriptTests(TestCase):
             'APP="little_sister.app:app"\n',
             encoding="utf-8")
 
-    def _stop(self, *flags: str) -> subprocess.CompletedProcess[str]:
+    def _stop(self, *flags: str, **environment: str
+              ) -> subprocess.CompletedProcess[str]:
         env = os.environ.copy()
-        for name in _TLS_ENVIRONMENT:
+        for name in (*_TLS_ENVIRONMENT, "GRACEFUL_TIMEOUT"):
             env.pop(name, None)
+        env.update(environment)
         return subprocess.run(["./stop.sh", *flags], cwd=self.root, env=env,
                               capture_output=True, text=True, timeout=120)
+
+    def test_it_waits_for_a_worker_that_outlives_its_master(self):
+        # The orphan (ADR-0088): the master leaves at the TERM, and its worker stays
+        # on, no longer listening, until what it was waiting on ends. A stop that
+        # returned with the master let a start come up beside it.
+        with _listening(checkout=self.root, linger=1.5) as (plain, master, worker):
+            self._install(plain, _free_ports(1)[0])
+            completed = self._stop()
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertFalse(_alive(master))
+            self.assertFalse(_alive(worker), "stop.sh returned while the worker ran")
+            self.assertNotIn("KILL", completed.stderr)
+
+    def test_what_outlives_the_grace_is_killed_and_named(self):
+        # Bounded by the grace and the margin the master needs after its own KILL;
+        # past that, whatever it read before the TERM is ended, and said.
+        with _listening(checkout=self.root, linger=-1) as (plain, master, worker):
+            self._install(plain, _free_ports(1)[0])
+            started = time.monotonic()
+            completed = self._stop(GRACEFUL_TIMEOUT="0")
+            took = time.monotonic() - started
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertFalse(_alive(worker), "the worker was left running")
+            self.assertIn("KILL", completed.stderr)
+            self.assertIn(f"PID {worker}", completed.stderr)
+            self.assertNotIn(f"PID {master}:", completed.stderr)
+        self.assertGreaterEqual(took, 4.5, "it did not wait out the margin")
+        self.assertLess(took, 30, "the bound is the grace and five seconds")
 
     def test_it_stops_a_tls_instance_without_being_told_it_is_one(self):
         # The defect, end to end. `./stop.sh` with no flag used to look at the plain
@@ -903,3 +1002,334 @@ class StopScriptTests(TestCase):
             self.assertEqual(completed.returncode, 0, completed.stderr)
             self.assertIn("not running", completed.stdout)
             self.assertTrue(_alive(pid), "it stopped somebody else's process")
+
+
+class GraceTests(TestCase):
+    """The grace is one value, written down in `lib.sh` (ADR-0088 decision 8)."""
+
+    def test_it_is_gunicorns_own_default_written_down(self):
+        completed = _bash('printf "%s\\n" "$GRACEFUL_TIMEOUT"')
+        self.assertEqual(completed.stdout.strip(), "30", completed.stderr)
+
+    def test_an_installation_raises_it_the_way_it_raises_the_worker_timeout(self):
+        completed = _bash('printf "%s\\n" "$GRACEFUL_TIMEOUT"', GRACEFUL_TIMEOUT="45")
+        self.assertEqual(completed.stdout.strip(), "45", completed.stderr)
+
+
+def _start_script() -> str:
+    return (_REPO / "start.sh").read_text(encoding="utf-8")
+
+
+def _gunicorn_line() -> str:
+    """`start.sh`'s gunicorn command, from `nohup gunicorn` to the `&` that
+    backgrounds it."""
+    found = re.search(r"^nohup gunicorn .*?&[ \t]*$", _start_script(),
+                      re.MULTILINE | re.DOTALL)
+    assert found, "start.sh no longer launches gunicorn with `nohup gunicorn`"
+    return found.group(0)
+
+
+class GunicornLineTests(TestCase):
+    """What `start.sh` hands gunicorn (ADR-0088 decisions 5, 7 and 8, ADR-0091)."""
+
+    def test_it_passes_the_grace(self):
+        self.assertIn('--graceful-timeout "${GRACEFUL_TIMEOUT}"', _gunicorn_line())
+
+    def test_it_turns_keep_alive_off(self):
+        self.assertIn("--keep-alive 0", _gunicorn_line())
+
+    def test_it_loads_the_hooks_module_that_starts_and_stops_the_engine(self):
+        self.assertIn("--config python:little_sister.gunicorn_hooks",
+                      _gunicorn_line())
+
+    def test_a_start_stops_the_old_instance_the_way_stop_sh_does(self):
+        # So a start never comes up beside a process of the old instance.
+        self.assertIn('stop_instance "$restart_master"', _start_script())
+
+
+#: A WSGI application that answers with its own pid, so a test knows which process is
+#: the worker, and says how long its answer is, so a kept-alive connection can be read
+#: to its end without closing.
+_STAND_IN = """
+import os
+
+def app(environ, start_response):
+    body = str(os.getpid()).encode()
+    start_response("200 OK", [("Content-Type", "text/plain"),
+                              ("Content-Length", str(len(body)))])
+    return [body]
+"""
+
+
+class KeepAliveTests(TestCase):
+    """An idle connection does not hold the stop (ADR-0088 decision 7), asked of a real
+    gunicorn serving a stand-in application with the flags `start.sh` passes.
+
+    The client is a browser's: it keeps a connection between two requests whenever the
+    server lets it, and closes it when the answer says ``Connection: close``.
+    """
+
+    def _serve(self, directory: Path,
+               *flags: str) -> tuple[subprocess.Popen[bytes], int]:
+        (directory / "stand_in.py").write_text(_STAND_IN, encoding="utf-8")
+        log = directory / "gunicorn.log"
+        with log.open("wb") as output:
+            server = subprocess.Popen(
+                [sys.executable, "-m", "gunicorn", "--workers", "1", "--threads", "8",
+                 *flags, "--bind", "127.0.0.1:0", "stand_in:app"],
+                cwd=directory, stdout=output, stderr=subprocess.STDOUT,
+                start_new_session=True)
+        self.addCleanup(self._end, server)
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline and server.poll() is None:
+            found = re.search(r"Listening at: http://127\.0\.0\.1:(\d+)",
+                              log.read_text(encoding="utf-8", errors="replace"))
+            if found:
+                return server, int(found.group(1))
+            time.sleep(0.05)
+        self.fail(f"gunicorn did not listen: {log.read_text(errors='replace')}")
+
+    @staticmethod
+    def _end(server: subprocess.Popen[bytes]) -> None:
+        if server.poll() is None:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(server.pid, 9)
+        server.wait(timeout=10)
+
+    def _request(self, port: int, *, honors_close: bool) -> int:
+        """One request, read to the end of its answer; answers the worker's pid. The
+        connection is left open and idle -- a page between two polls -- unless the
+        answer said ``Connection: close`` and the client *honors_close*."""
+        client = socket.create_connection(("127.0.0.1", port), timeout=5)
+        self.addCleanup(client.close)
+        client.sendall(b"GET / HTTP/1.1\r\nHost: test\r\n\r\n")
+        answer = b""
+        while b"\r\n\r\n" not in answer:
+            answer += client.recv(4096)
+        head, _, body = answer.partition(b"\r\n\r\n")
+        said = re.search(rb"(?i)content-length: *(\d+)", head)
+        assert said is not None, head
+        while len(body) < int(said.group(1)):
+            body += client.recv(4096)
+        if honors_close and re.search(rb"(?i)connection: *close", head):
+            client.close()
+        return int(body)
+
+    def _worker_leaves(self, *flags: str, honors_close: bool = True) -> float:
+        """How long after the TERM the worker is gone."""
+        with tempfile.TemporaryDirectory() as directory:
+            server, port = self._serve(Path(directory), *flags)
+            worker = self._request(port, honors_close=honors_close)
+            started = time.monotonic()
+            server.send_signal(15)
+            deadline = started + 60
+            while _alive(worker) and time.monotonic() < deadline:
+                time.sleep(0.01)
+            return time.monotonic() - started
+
+    def test_with_the_flags_start_passes_the_worker_leaves_within_a_second(self):
+        took = self._worker_leaves("--graceful-timeout", "30", "--keep-alive", "0",
+                                   "--config", "python:little_sister.gunicorn_hooks")
+        self.assertLess(took, 1.0)
+
+    def test_a_client_that_keeps_its_end_open_costs_the_close_not_the_grace(self):
+        # gunicorn's graceful close waits a moment for the client's side to close, so
+        # a client that ignores `Connection: close` holds the worker for that moment
+        # (2 s in 26.2.0) -- and never for the grace.
+        took = self._worker_leaves("--graceful-timeout", "30", "--keep-alive", "0",
+                                   honors_close=False)
+        self.assertLess(took, 5.0)
+
+    def test_with_keep_alive_on_an_idle_connection_holds_the_grace_out(self):
+        """The measurement ADR-0088 recorded, repeated on every run. When this fails,
+        gunicorn has started to close an idle connection at the TERM, and keep-alive
+        can come back (decision 7)."""
+        took = self._worker_leaves("--graceful-timeout", "3")
+        self.assertGreater(took, 2.0, "gunicorn now closes an idle keep-alive "
+                           "connection at the TERM: keep-alive can come back "
+                           "(ADR-0088 decision 7)")
+
+
+@skipUnless(shutil.which("lsof"), "memory.sh finds an instance with lsof")
+class MemoryScriptTests(TestCase):
+    """`./memory.sh` end to end: it measures the instance `stop.sh` would stop -- the
+    master and the workers it forked -- and keeps every measurement as a row, so that
+    a run measured at its start and a day later can be read back as a column."""
+
+    HEADER = ("time,port,master_pid,master_kib,worker_pids,worker_kib,total_kib,"
+              "master_up")
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        root = Path(self.directory.name)
+        for script in ("memory.sh", "lib.sh"):
+            shutil.copy(_REPO / script, root / script)
+        (root / "memory.sh").chmod(0o755)
+        (root / "var").mkdir()
+        self.root = root
+        self.rows = root / "var" / "memory.csv"
+        self._install(*_free_ports(2))
+
+    def _install(self, plain: int, tls: int) -> None:
+        self.plain, self.tls = plain, tls
+        (self.root / "instance.sh").write_text(
+            'NAME="little-sister"\n'
+            f"PORT={plain}\n"
+            f"TLS_PORT={tls}\n"
+            'APP="little_sister.app:app"\n',
+            encoding="utf-8")
+
+    def _measure(self, *flags: str) -> subprocess.CompletedProcess[str]:
+        env = os.environ.copy()
+        for name in _TLS_ENVIRONMENT:
+            env.pop(name, None)
+        return subprocess.run(["./memory.sh", *flags], cwd=self.root, env=env,
+                              capture_output=True, text=True, timeout=120)
+
+    def test_it_measures_the_master_and_the_worker_it_forked(self):
+        # The worker is where an instance's memory is -- the engine, the tree and the
+        # series live in it -- so a master alone would measure the wrong process.
+        with _listening(checkout=self.root, worker=True) as (plain, master, worker):
+            self._install(plain, _free_ports(1)[0])
+            completed = self._measure()
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn(f"master {master} ", completed.stdout)
+        self.assertIn(f"worker {worker} ", completed.stdout)
+        self.assertIn("resident", completed.stdout)
+        header, row = self.rows.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(header, self.HEADER)
+        (_, port, master_pid, master_kib, worker_pids, worker_kib, total_kib,
+         _) = row.split(",")
+        self.assertEqual((port, master_pid, worker_pids),
+                         (str(plain), str(master), str(worker)))
+        self.assertGreater(int(worker_kib), 0)
+        self.assertEqual(int(total_kib), int(master_kib) + int(worker_kib))
+
+    def test_every_run_adds_a_row_under_the_one_header(self):
+        with _listening(checkout=self.root) as (plain, _):
+            self._install(plain, _free_ports(1)[0])
+            for _ in range(2):
+                completed = self._measure()
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+        lines = self.rows.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(lines[0], self.HEADER)
+        self.assertEqual(len(lines), 3)
+        self.assertNotIn(self.HEADER, lines[1:])
+
+    def test_nothing_running_is_nothing_to_measure_and_leaves_no_row(self):
+        completed = self._measure()
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("nothing to measure", completed.stderr)
+        self.assertIn(str(self.plain), completed.stderr)
+        self.assertIn(str(self.tls), completed.stderr)
+        self.assertFalse(self.rows.exists())
+
+    def test_a_stranger_on_our_port_is_refused_and_not_measured(self):
+        with _listening(ours=False) as (plain, _):
+            self._install(plain, _free_ports(1)[0])
+            completed = self._measure()
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("refusing to measure it", completed.stderr)
+        self.assertFalse(self.rows.exists())
+
+    def test_another_checkout_s_instance_is_measured_only_with_the_flag(self):
+        elsewhere = self.root / "other-checkout"
+        elsewhere.mkdir()
+        with _listening(checkout=elsewhere) as (plain, pid):
+            self._install(plain, _free_ports(1)[0])
+            refused = self._measure()
+            taken = self._measure("--any-instance")
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("--any-instance", refused.stderr)
+        self.assertEqual(taken.returncode, 0, taken.stderr)
+        self.assertIn("did not start", taken.stdout)
+        self.assertIn(f"master {pid} ", taken.stdout)
+
+    def _sampler_pid(self) -> int | None:
+        path = self.root / "var" / "memory.pid"
+        return int(path.read_text(encoding="utf-8")) if path.exists() else None
+
+    def _rows(self) -> list[str]:
+        if not self.rows.exists():
+            return []
+        return self.rows.read_text(encoding="utf-8").splitlines()[1:]
+
+    def _stop_the_sampler_at_the_end(self) -> None:
+        """A sampler a failed assertion left behind would measure all night."""
+        def stop() -> None:
+            pid = self._sampler_pid()
+            if pid is not None and _alive(pid):
+                os.kill(pid, 9)
+        self.addCleanup(stop)
+
+    def test_in_the_background_it_adds_a_row_every_period_until_stopped(self):
+        self._stop_the_sampler_at_the_end()
+        with _listening(checkout=self.root) as (plain, _):
+            self._install(plain, _free_ports(1)[0])
+            started = self._measure("--background", "--every", "1")
+            self.assertEqual(started.returncode, 0, started.stderr)
+            self.assertIn("in the background", started.stdout)
+            sampler = self._sampler_pid()
+            assert sampler is not None
+            deadline = time.monotonic() + 15
+            while time.monotonic() < deadline and len(self._rows()) < 2:
+                time.sleep(0.1)
+            self.assertGreaterEqual(len(self._rows()), 2, "a row, and no second")
+            stopped = self._measure("--stop")
+        self.assertEqual(stopped.returncode, 0, stopped.stderr)
+        self.assertIn(f"PID {sampler}", stopped.stdout)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and _alive(sampler):
+            time.sleep(0.05)
+        self.assertFalse(_alive(sampler), "the sampler was left running")
+        self.assertIsNone(self._sampler_pid())
+
+    def test_a_second_background_run_is_refused_while_one_measures(self):
+        self._stop_the_sampler_at_the_end()
+        with _listening(checkout=self.root) as (plain, _):
+            self._install(plain, _free_ports(1)[0])
+            first = self._measure("--background", "--every", "60")
+            second = self._measure("--background")
+            self._measure("--stop")
+        self.assertEqual(first.returncode, 0, first.stderr)
+        self.assertNotEqual(second.returncode, 0)
+        self.assertIn("already measuring in the background", second.stderr)
+
+    def test_nothing_running_starts_nothing_in_the_background(self):
+        # Said here, where somebody is reading, rather than into a log at night.
+        completed = self._measure("--background")
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("nothing to measure", completed.stderr)
+        self.assertIsNone(self._sampler_pid())
+
+    def test_stop_leaves_a_process_that_is_not_its_sampler_alone(self):
+        # A stale file names a number somebody else may have since; this test's own
+        # process is as good a somebody else as any.
+        (self.root / "var" / "memory.pid").write_text(f"{os.getpid()}\n",
+                                                     encoding="utf-8")
+        completed = self._measure("--stop")
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("Nothing is measuring", completed.stdout)
+        self.assertIsNone(self._sampler_pid())
+
+    def test_a_measurement_that_finds_nothing_does_not_end_the_loop(self):
+        # An instance restarted in the night is measured again once it is back, so a
+        # measurement that finds nothing running is said and the next one is taken.
+        env = os.environ.copy()
+        for name in _TLS_ENVIRONMENT:
+            env.pop(name, None)
+        with self.assertRaises(subprocess.TimeoutExpired) as ended:
+            subprocess.run(["./memory.sh", "--every", "1"], cwd=self.root, env=env,
+                           capture_output=True, text=True, timeout=2.5)
+        said = ended.exception.stderr or ""
+        if isinstance(said, bytes):
+            said = said.decode("utf-8", "replace")
+        self.assertGreaterEqual(said.count("nothing to measure"), 2, said)
+
+    def test_every_takes_whole_seconds(self):
+        for value in ("soon", "0", "1.5"):
+            with self.subTest(value=value):
+                completed = self._measure("--every", value)
+                self.assertEqual(completed.returncode, 2, completed.stderr)
+                self.assertIn("whole seconds", completed.stderr)

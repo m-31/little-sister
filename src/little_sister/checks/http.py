@@ -1,6 +1,9 @@
 """HTTP(S) health check."""
 from __future__ import annotations
 
+import json
+from collections.abc import Sequence
+from datetime import datetime
 from pathlib import Path
 from time import perf_counter
 from typing import Any
@@ -9,10 +12,12 @@ from little_sister.checks.base import (
     Check,
     CheckError,
     CheckResult,
+    Measurement,
     config_markdown,
     plain,
     register,
 )
+from little_sister.checks.output import FAILURE_BYTES, failure_text
 from little_sister.fetch import fetch
 from little_sister.reasons import Entry
 from little_sister.status import StatusCode
@@ -25,10 +30,21 @@ from little_sister.transport import RemoteError
 #: one every poll, as the number in it moves.
 RESPONSE_SLUG = "response"
 
-#: What one record of this check costs, declared for the startup sum (ADR-0075): a
-#: status and a duration, with room. Measured at 36 bytes for a three-digit status
-#: and a four-digit time; the declaration is the ceiling, not the average.
-RECORD_BYTES = 64
+#: What one record of this check costs, declared for the startup sum (ADR-0075) —
+#: a **ceiling**, which it can be because nothing in either shape is unbounded. The
+#: failed reading is the larger one: its two nulls and its keys, as `json.dumps`
+#: writes them, plus the error at the most :func:`failure_text` lets it cost —
+#: `FAILURE_BYTES`, which already counts the string's own quotes, so the skeleton's
+#: empty `""` comes off. An answered reading is a status and a duration, some forty
+#: bytes, and fits under it with room.
+RECORD_BYTES = (len(json.dumps({"status": None, "response_ms": None, "error": ""}))
+                - len('""') + FAILURE_BYTES)
+
+#: What this check's readings are drawn by, declared for the library to merge a
+#: deployment's `measures:` over (ADR-0092): the response time, in milliseconds —
+#: which the page writes as a span, so 1,850 reads `1.9 s`. `status` is not here: it
+#: is a code, and a curve of codes is a mistake a deployment can still make itself.
+MEASURES = {"response_ms": {"unit": "ms", "label": "Response time"}}
 
 
 def _flag(value: object, field: str) -> bool:
@@ -56,7 +72,10 @@ class HttpCheck(Check):
     # once, where the config is read.
     def __init__(self, *, url: str, expected_status: set[int],
                  follow_redirects: bool, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
+        # The URL **is** the object this check reads, so it is what the reading is
+        # about — not the node's path, which is the deployment's label for where
+        # the node hangs and may be renamed without the endpoint moving.
+        super().__init__(subject=url, measure_defaults=MEASURES, **kwargs)
         self.url = url
         self.expected_status = expected_status
         self.follow_redirects = follow_redirects
@@ -91,7 +110,14 @@ class HttpCheck(Check):
             "redirects": "followed" if self.follow_redirects else "reported",
         })
 
-    def run(self) -> CheckResult:
+    def measure(self) -> Measurement:
+        """Read the endpoint: the status it answered with, and how long it took.
+
+        This half touches the world and decides nothing. What it hands back is
+        one reading of one object — the URL — and every path through it produces
+        the **same shape**, so a curve over the series draws a real gap from a
+        null instead of inferring one from a key that is not there.
+        """
         try:
             # **The endpoint is the subject of this measurement**, so a failure to
             # answer is the reading rather than an obstacle to it — which is why this
@@ -150,40 +176,56 @@ class HttpCheck(Check):
             # giving up: that is the timeout's number, not the endpoint's, and under
             # `response_ms` it would seed a series with values that are not the thing
             # it measures.
-            return CheckResult(
-                StatusCode.ERROR,
-                [Entry(RESPONSE_SLUG, f"request failed: {plain(str(error))}")],
-                subject=self.url,
-                record={"status": None, "response_ms": None,
-                        "error": plain(str(error))})
-        if status in self.expected_status:
-            return self._read(StatusCode.OK, status, elapsed_ms)
-        expected = ", ".join(str(s) for s in sorted(self.expected_status))
-        return self._read(StatusCode.ERROR, status, elapsed_ms,
-                          note=f" (expected {expected})")
+            #
+            # The reason rides beside them, and **only where there was one**: carried
+            # as a null on every successful reading it would lengthen every record for
+            # nothing, since a projection treats a missing key as an empty one
+            # (ADR-0085 decision 3, which is why this one key is the exception to the
+            # null-not-absent rule above it).
+            # The message goes in **raw**: a record's values are escaped where they
+            # are rendered, so folding it through `plain()` here would store the
+            # escaping and show it (`&amp;`, a literal `\_`). The line below is
+            # where it is folded into Markdown, which is the one place it has to be.
+            #
+            # And **clipped once, in bytes** (ADR-0086 decision 7): it is free text
+            # entering a record, and an error can carry a URL, a server's body or a
+            # stack of causes. Unclipped it made `RECORD_BYTES` a hope rather than
+            # a ceiling; the grading writes the line from exactly this text.
+            return Measurement(record={"status": None, "response_ms": None,
+                                       "error": failure_text(str(error))})
+        # `response_ms` names its unit because a record renders as its keys (ADR-0082's
+        # untyped rendering), so the name is what a reader sees; a **curve's** unit
+        # belongs to the projection that draws it, not here.
+        return Measurement(record={"status": status, "response_ms": elapsed_ms})
 
-    def _read(self, code: StatusCode, status: int, elapsed_ms: int,
-              note: str = "") -> CheckResult:
-        """One reading of this endpoint: the measurement at the **run**, and the
-        sentence that retells it.
+    def grade(self, measurements: Sequence[Measurement],
+              now: datetime) -> CheckResult:
+        """Say what that reading means: a code, and the sentence that retells it.
 
-        The record hangs on the result rather than on the line, because this check
-        reads **one object and its node stands for it** — the line is a rendering,
-        not the thing measured (ADR-0085). `subject` is the URL rather than the node
-        path, since the path is the deployment's label and may be moved or renamed.
+        Pure over the record and this check's own `expected_status` — nothing here
+        looks at the world, or at anything `measure` left behind, which is what
+        lets the same verdict be reached again later over a record out of the
+        series. `measure` above always hands back exactly one reading.
 
         The line carries **no code of its own**: with a single line the node's own
         reading is already the verdict, and a coded entry beside a declared result
         code is the shape `CheckResult` refuses (ADR-0042).
-
-        `response_ms` names its unit because a record renders as its keys (ADR-0082's
-        untyped rendering), so the name is what a reader sees; a **curve's** unit
-        belongs to the projection that draws it, not here.
         """
+        record = measurements[0].record
+        status = record.get("status")
+        if status is None:
+            reason = plain(str(record.get("error") or "no answer"))
+            return CheckResult(
+                StatusCode.ERROR,
+                [Entry(RESPONSE_SLUG, f"request failed: {reason}")])
+        elapsed_ms = record.get("response_ms")
+        note = ""
+        if status not in self.expected_status:
+            expected = ", ".join(str(s) for s in sorted(self.expected_status))
+            note = f" (expected {expected})"
         return CheckResult(
-            code, [Entry(RESPONSE_SLUG, f"HTTP {status}{note} in {elapsed_ms} ms")],
-            subject=self.url,
-            record={"status": status, "response_ms": elapsed_ms})
+            StatusCode.OK if not note else StatusCode.ERROR,
+            [Entry(RESPONSE_SLUG, f"HTTP {status}{note} in {elapsed_ms} ms")])
 
     def expected_entries(self) -> int:
         """One line, always: this check reads one endpoint (ADR-0075)."""

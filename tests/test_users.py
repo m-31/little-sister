@@ -187,7 +187,6 @@ class RetiredOverrideTests(TestCase):
         environment = os.environ.copy()
         environment["LITTLE_SISTER_CONFIG_DIR"] = os.pathsep.join(
             (str(_FIXTURE_ROOT), str(_REPO / "config")))
-        environment["LITTLE_SISTER_ENGINE"] = "0"
         environment["SECRET_KEY"] = "retired-override"
         # Deliberately a *usable* file: the refusal is not "that path is broken", it
         # is "this name no longer decides anything and must not look as if it does".

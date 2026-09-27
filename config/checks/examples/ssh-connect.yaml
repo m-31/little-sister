@@ -12,6 +12,8 @@ type: ssh-connect
 path: /myhost               # absolute node path (ADR-0016)
 frequency: 1m                # how often to run
 timeout: 10s                 # per-run timeout
+# series_keep: 60            # readings kept per subject as its history (default 0: keep none)
+# reading_cap: 10            # of those, the newest its page lists (default: settings.yaml's)
 
 # --- connection ------------------------------------------------------------
 host: my-ssh-alias           # SSH target — a ~/.ssh/config alias or hostname/FQDN

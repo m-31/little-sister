@@ -8,12 +8,15 @@ such as a non-post-quantum key exchange.
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from little_sister.checks.base import (
     CheckError,
     CheckResult,
+    Measurement,
     config_markdown,
     register,
 )
@@ -51,7 +54,19 @@ class RemoteCommandCheck(SshCheckBase):
                                 "command": self.command,
                                 "capture": self.capture})
 
-    def run(self) -> CheckResult:
-        result = self.connection.run(self.command)
-        return self._output_result(result, capture=self.capture,
-                                   max_chars=self.max_chars, keep=self.keep)
+    def measure(self) -> Measurement:
+        """Run the command on the host and keep what it said. The **host** is the
+        object — the command is how this check reads it, the way an `http` check's
+        object is its URL and not `GET`."""
+        return self._output_measurement(
+            self.connection.run(self.command), capture=self.capture,
+            max_chars=self.max_chars, keep=self.keep)
+
+    def grade(self, measurements: Sequence[Measurement],
+              now: datetime) -> CheckResult:
+        """OK on exit 0, ERROR otherwise, WARN on an ssh advisory — all of it out
+        of the record. `measure` above always hands back exactly one reading."""
+        return self._output_result(measurements[0].record)
+
+    def expected_record(self) -> int:
+        return self._output_record_bytes(self.max_chars)

@@ -4,15 +4,18 @@ A check determines the status of one thing and returns a :class:`CheckResult`.
 Subclasses register a ``type`` name; the loader instantiates them from YAML
 (see ``loader.py``). Config fields common to every check: ``path``, ``name``,
 ``description``, ``frequency``, ``timeout`` (project.md §2.5), plus the
-optional failure retry — ``retry_interval`` / ``retry_attempts`` (ADR-0033).
+optional failure retry — ``retry_interval`` / ``retry_attempts`` (ADR-0033) —
+the series' retention, ``series_keep`` (ADR-0087), and what the series is drawn by
+and how much of it the node shows, ``measures`` / ``reading_cap`` (ADR-0092).
 """
 from __future__ import annotations
 
 import abc
 import inspect
 import sys
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -22,16 +25,25 @@ from little_sister.checks.metadata import (
     parse_subnodes,
     resolve_text,
 )
+from little_sister.checks.output import failure_text
 from little_sister.errors import CheckError as CheckError
 from little_sister.errors import ConfigError
 from little_sister.limits import RECORD_LIMIT
+from little_sister.measures import (
+    Measure,
+    MeasureError,
+    read_measures,
+    resolve_measures,
+)
 from little_sister.origins import release_of
 from little_sister.reasons import (
     ReasonEntry,
     ReasonError,
     ReasonInput,
+    RecordRefused,
     check_subject,
     derive_code,
+    marked,
     normalize,
     normalize_record,
 )
@@ -104,14 +116,20 @@ class CheckResult:
     Neither moves anything: ``text`` is what every surface still shows, and neither
     declares members, because data about a claim is not a claim.
 
-    The record is validated **here**, at this seam, and refused whole: it must be a
-    mapping that serializes to JSON, its JSON must weigh no more than this
-    deployment's ``record_limit`` bytes (``settings.yaml``, defaulting to
+    The record is validated **here**, at this seam: it must be a mapping that
+    serializes to JSON, its JSON must weigh no more than this deployment's
+    ``record_limit`` bytes (``settings.yaml``, defaulting to
     :data:`~little_sister.limits.RECORD_LIMIT`), and a value under a name the
     surfaces read as a time
     (:data:`~little_sister.reasons.RECORD_TIMESTAMP_KEYS`) must be an ISO-8601
     string with an offset, or null. A check hands over a record it read; shaping it
     to fit is the check's job, and a refusal says the size and names the field.
+
+    **A refusal raises here**, as a :class:`CheckError`, wherever a result is built
+    — a check's own tests, a fixture, a script — so an author meets it where the
+    record is built. Only inside a run the engine drives is it marked instead
+    (ADR-0093): the line keeps its text and its code, its ``data`` is ``None`` and
+    ``Entry.refused`` says why, and the rest of the result stands.
 
     (``subject`` here is the *entity a line is about*, which is not the node-level
     ``about`` below — that one is prose describing what a node *is*.)
@@ -195,19 +213,6 @@ class CheckResult:
     order: int = 0
     show_when_quiet: bool | None = None
     entries: bool = False
-    #: **What this run measured, and what it read about it** (ADR-0085). A check
-    #: run reads one object and the result is one record; the nodes, children and
-    #: lines it writes are derived from that reading. ``subject`` is the object's
-    #: own identifier — the host it reached, the URL it fetched — because the node
-    #: path is the deployment's label and is editorial, and an identity not written
-    #: down at the reading cannot be added to the history afterwards. ``record`` is
-    #: what was read, validated and bounded at this seam exactly as an entry's is.
-    #:
-    #: A check that reads **several** objects puts each one's measurement on the
-    #: child that stands for it; where an object has no node at all — a repository,
-    #: a load-test run — it is a line, and :attr:`Entry.data` carries it there.
-    subject: str = ""
-    record: Mapping[str, Any] | None = None
     #: Derived in :meth:`__post_init__` — the one internal form (ADR-0036).
     reason_entries: tuple[ReasonEntry, ...] = field(
         init=False, default=(), repr=False, compare=False)
@@ -231,16 +236,6 @@ class CheckResult:
             raise CheckError(str(error)) from error
         object.__setattr__(self, "reason_entries", entries)
         object.__setattr__(self, "members", members)
-        # The run's own measurement, through the same seam and the same limit as a
-        # line's: a record is a record wherever it hangs, and a check author who
-        # learns one rule should not meet a second.
-        try:
-            check_subject(self.subject, "a result's subject")
-            if self.record is not None:
-                object.__setattr__(self, "record", normalize_record(
-                    self.record, limit=_record_limit()))
-        except ReasonError as error:
-            raise CheckError(str(error)) from error
         # The ADR-0042 seam: a node with coded entries declares no code of its
         # own — every claim it makes is attributable to a line — and declaring
         # both is refused rather than silently resolved, the way a check YAML
@@ -277,6 +272,102 @@ class CheckResult:
         return [entry.text for entry in self.reason_entries]
 
 
+@dataclass(frozen=True)
+class Measurement:
+    """One reading of one object: what was read, and the object it was read from.
+
+    This is what :meth:`Check.measure` hands back and what :meth:`Check.grade`
+    reads, and it is the **only** place an object and its reading live. A check
+    run reads one object and the result is one record; the node, the children and
+    the lines the grading then writes are *derived* from that reading, never
+    beside it (ADR-0085 as ADR-0086 restates it).
+
+    ``record`` is what was read — validated and bounded here, through the same
+    seam and the same ``record_limit`` as a line's, because a record is a record
+    wherever it hangs and an author who learns one rule should not meet a second.
+    It is **data and never a claim**: anything that should alarm is the grading's
+    to say. A value the check could not read stands as ``None`` rather than being
+    left out, so every reading of one check has one shape and a curve draws a real
+    gap from a null instead of inferring one from an absence (ADR-0085 decision 3).
+    What must **not** cross into it is the check's working state: the raw answer —
+    a 150-finding page, an unshortened log — stays inside the check, and what is
+    kept is what is worth keeping.
+
+    ``subject`` is the object's own identifier. A check declares its object at
+    construction out of its own configuration (:attr:`Check.subject`), and the
+    engine falls back to that only for the **one** measurement it places — a run
+    that handed back exactly one. Among several, an empty subject means *no
+    subject*: a reading of no named object, which has no series (ADR-0085
+    decision 2, ADR-0086 decision 4). A check states it here where the
+    object is known only from an **answer** — a rate-limit check that asks the API
+    whose token it holds, because the rate-limit endpoint never says, and names one
+    account's budget for one resource. It is deliberately not the node's path:
+    the path is the deployment's label for where a node hangs and may be renamed
+    or moved, while the reading is about a thing in the world, and an identity not
+    written down at the reading cannot be added to the history afterwards.
+
+    ``identity`` says whether this reading is a **new record** of its subject or
+    one the subject's series already keeps (ADR-0087). Empty — the common case —
+    appends: every reading of a response time or a load average really is a new
+    one. Set, it names the **event** the reading is of, where the source keeps the
+    history — the run that was read, a job's id — and a record of that identity
+    already in the kept window is replaced wherever it stands, so the same
+    finished run re-read on the next poll stays one record. It is a field beside
+    the subject rather than a key in the record for the reason the subject is one:
+    the record is the check's own vocabulary, and a reserved name would take one
+    away from it. It counts only where there is a series, and a reading with no
+    subject has none; like the subject it is bounded and free of control
+    characters, because the series keeps it.
+
+    ``state`` is the other answer, for an object whose source keeps no event for
+    it — a workflow switched off, a queue, a finding that stands — and no
+    *last-changed* field that moves with its state either: the state the object
+    is in, spelled from the few fields that constitute it, the switch or the
+    status, and never from the whole record. It is compared with the **newest**
+    record of the series alone, where an identity is found anywhere in the
+    window: the same state replaces that record, and a different one appends — a
+    return to an earlier state included — so an unchanged state is one record,
+    every change is the next, and the newest record is the state the object is
+    in. A measurement names an identity or a state, never both, and a state is
+    bounded and free of control characters as an identity is.
+
+    ``refused`` is the seam's, never the check's. A record the seam refuses raises
+    a :class:`CheckError` wherever a measurement is built — so an author meets it in
+    the tests — except inside a run the engine drives (ADR-0093). There the reading
+    is marked instead: ``refused`` says why, and ``record`` is the failure record the
+    engine writes for a check that raised, naming the refusal, because that is what
+    its series keeps. The engine keeps a marked reading out of the grading and says
+    on the node which subject's record was refused. A refused subject, identity or
+    state still raises everywhere: they name a reading rather than carry one.
+    """
+    record: Mapping[str, Any]
+    subject: str = ""
+    identity: str = ""
+    state: str = ""
+    refused: str = ""
+
+    def __post_init__(self) -> None:
+        try:
+            check_subject(self.subject, "a measurement's subject")
+            check_subject(self.identity, "a measurement's identity")
+            check_subject(self.state, "a measurement's state")
+        except ReasonError as error:
+            raise CheckError(str(error)) from error
+        try:
+            record = normalize_record(self.record, limit=_record_limit())
+        except RecordRefused as error:
+            refusal = marked(error)
+            if refusal is None:
+                raise CheckError(str(error)) from error
+            record = {"error": failure_text(f"record refused: {refusal.why}")}
+            object.__setattr__(self, "refused", refusal.why)
+        object.__setattr__(self, "record", record)
+        if self.identity and self.state:
+            raise CheckError(
+                "a measurement names the event it is of or the state it is in, "
+                f"never both: identity {self.identity!r}, state {self.state!r}")
+
+
 CHECK_TYPES: dict[str, type[Check]] = {}
 
 #: The **check API epoch** (ADR-0051). It bumps only when the check-authoring
@@ -288,8 +379,17 @@ CHECK_TYPES: dict[str, type[Check]] = {}
 #: **v2** opened when the subnode-metadata helpers left the surface — the library
 #: reads the whole ``subnodes:`` block now and a type only declares (ADR-0025), so
 #: ``parse_subnodes`` / ``resolve_text`` / ``expand_tokens`` have no external
-#: caller left. Every plugin says ``require_api(2)``.
-API_VERSION = 2
+#: caller left.
+#:
+#: **v3** opened when ``run()`` was split into :meth:`Check.measure` and
+#: :meth:`Check.grade` (ADR-0086). No name left the surface — :class:`Measurement`
+#: joined it — but the one method every check type implements was replaced by two,
+#: and ``CheckResult`` lost ``subject`` and ``record``, which a measurement now
+#: carries alone. A type written for v2 cannot be adapted at runtime: it would
+#: still declare a code from a world it re-reads inside the grading, which is the
+#: one failure the split exists to make impossible. Every plugin says
+#: ``require_api(3)``.
+API_VERSION = 3
 
 
 def require_api(version: int, *, by: str = "") -> None:
@@ -470,8 +570,8 @@ class Check(abc.ABC):
     """Base class for all checks.
 
     A check knows where it writes in the tree (``path``), how often it runs
-    (``frequency_seconds``), how long to wait (``timeout_seconds``) and how to
-    produce a result (:meth:`run`).
+    (``frequency_seconds``), how long to wait (``timeout_seconds``), how to read
+    the world (:meth:`measure`) and what that reading means (:meth:`grade`).
     """
 
     type_name: ClassVar[str] = ""
@@ -488,7 +588,12 @@ class Check(abc.ABC):
                  retry_interval_seconds: int | None = None,
                  retry_attempts: int | None = None,
                  escalate_after: int | None = None,
-                 depends_on: str | None = None) -> None:
+                 depends_on: str | None = None,
+                 series_keep: int = 0,
+                 reading_cap: int | None = None,
+                 measures: Mapping[str, object] | None = None,
+                 measure_defaults: Mapping[str, object] | None = None,
+                 subject: str = "") -> None:
         # The check's full, absolute node path (ADR-0016); `name` is the last segment.
         self.path = join_path(path)
         self.description = description
@@ -556,8 +661,51 @@ class Check(abc.ABC):
         # shape. `None` is every check today: nothing is shielded unless somebody
         # says what reaches it.
         self.depends_on = None if depends_on is None else join_path(depends_on)
+        # How many readings of each subject this check keeps as its **series**,
+        # oldest out (ADR-0087). A count and only a count, from the check's own
+        # YAML: where a history is wanted is an editorial choice per check, so
+        # there is no deployment-wide default to inherit, and `0` — the default —
+        # is no series at all. The engine reads it per run; a type never sets it.
+        self.series_keep = series_keep
+        # **What those readings are drawn by** (ADR-0092): the measures this type
+        # declares — `measure_defaults`, what a field of its record means and in
+        # which unit — with the deployment's `measures:` block, which
+        # `_parse_common` read for every type, merged over them per field. Resolved
+        # here and once, like the subnode labels above, so the page reads the
+        # answer and never the two blocks. A declaration of another shape refuses
+        # the load like any configuration error, though it comes from code.
+        try:
+            self.measures: dict[str, Measure] = resolve_measures(
+                read_measures(measures, where="measures"),
+                read_measures(measure_defaults, where="measure_defaults",
+                              removals=False))
+        except MeasureError as error:
+            raise CheckError(str(error)) from error
+        # How many of a subject's readings the node that stands for it shows
+        # (ADR-0092 decision 7): this check's own answer, or `None` to leave
+        # `settings.yaml`'s `reading_cap` in force — resolved by the page, the way
+        # the engine resolves the retry fields.
+        self.reading_cap = reading_cap
+        # **The object this check reads**, declared here and not later (ADR-0086).
+        # Unlike every other field above it is not parsed from the YAML by
+        # `_parse_common`: it comes out of the *type's* own configuration — a
+        # `url`, a `host`, a file path — so the type passes it up, and a type
+        # whose object is knowable only from the answer leaves it empty and states
+        # it on the `Measurement` instead.
+        #
+        # At construction, because the engine needs a name for the object when the
+        # check **raises**: there is no measurement then, and an identity not
+        # written down at the reading cannot be added to the history afterwards.
+        # It is also why this cannot be a per-run value — a subject that moved
+        # between runs would silently split one series in two.
+        try:
+            check_subject(subject, "a check's subject")
+        except ReasonError as error:
+            raise CheckError(str(error)) from error
+        self.subject = subject
         # Failures from resolve-at-construction secret references (ADR-0023):
-        # non-empty ⇒ the engine pins this check to ERROR and never calls run().
+        # non-empty ⇒ the engine pins this check to ERROR and never calls
+        # measure().
         self.secret_errors: list[str] = []
 
     @property
@@ -658,7 +806,7 @@ class Check(abc.ABC):
         a credential pasted where its reference belongs must fail the grammar
         rather than be looked up and echoed. Call this from
         ``__init__`` / ``_extra_from_config`` and keep the value — never
-        resolve during :meth:`run` (cloud stores bill per read; rotation is a
+        resolve during :meth:`measure` (cloud stores bill per read; rotation is a
         restart).
 
         A **malformed** reference raises :class:`CheckError`, so the load fails
@@ -667,7 +815,7 @@ class Check(abc.ABC):
         well-formed reference
         that **fails to resolve** (store unreachable, secret absent) is
         recorded in ``secret_errors`` and returns ``""`` — the engine then pins
-        this check to a visible ERROR without ever calling :meth:`run`.
+        this check to a visible ERROR without ever calling :meth:`measure`.
         """
         try:
             return secrets.resolve(reference)
@@ -678,8 +826,53 @@ class Check(abc.ABC):
             return ""
 
     @abc.abstractmethod
-    def run(self) -> CheckResult:
-        """Perform the check. A non-OK result must carry a reason (§2.7)."""
+    def measure(self) -> Measurement | Sequence[Measurement]:
+        """**Read the world.** One :class:`Measurement` per object this run read —
+        one of them, or a sequence where the run reads several (ADR-0086).
+
+        This half touches the world and nothing else: it makes the request, runs
+        the command, parses the answer into numbers, and hands back what is worth
+        keeping. It decides **no** status and writes **no** text — those are
+        :meth:`grade`'s, and the split exists so that they can be decided again
+        later over a record this process did not produce.
+
+        A run that **failed** to read its object still measured something — that it
+        could not get there, and why — so it records the attempt, with the values
+        it could not get standing as ``None`` beside the reason (ADR-0085
+        decision 3). A run that measured nothing at all returns an empty sequence,
+        and the node's last reading is cleared rather than left to be read as
+        today's.
+
+        The engine does **not** bound this: Python cannot kill a thread, so a hung
+        `measure()` occupies a pool worker until it returns, and
+        ``self.timeout_seconds`` is a budget you enforce. An exception out of here
+        becomes an `ERROR` on the node **and** a failure record naming this check's
+        object, which the engine builds itself (ADR-0040 as ADR-0086 extends it).
+        """
+
+    @abc.abstractmethod
+    def grade(self, measurements: Sequence[Measurement],
+              now: datetime) -> CheckResult:
+        """**Say what it means.** The codes and the texts, as one
+        :class:`CheckResult` — the same tree a check has always returned.
+
+        ``measurements`` is what :meth:`measure` handed back, normalized to a
+        sequence: **the objects of one run**, one entry per object and never one
+        object twice. Mapping each record to the node, the child or the line that
+        stands for it is this method's work, because a record that becomes a line
+        is an ``Entry`` under a node and nothing the engine could place for you.
+
+        **It must be pure over ``(record, configuration, now)``.** Read the
+        records, read the fields this type parsed at construction, read the clock
+        it is given — and nothing else. Not an attribute :meth:`measure` left
+        behind, not the clock directly, not the world again. The reason is not
+        tidiness: a later phase grades **old** records out of a series, when the
+        process that took them is long gone, and a grading that leans on anything
+        else returns something quietly wrong rather than failing.
+
+        ``now`` is an aware UTC instant, given rather than taken for the same
+        reason: a grading that called the clock itself could not be replayed.
+        """
 
     # --- construction from config ---
 
@@ -882,6 +1075,15 @@ def _parse_common(config: dict[str, Any]) -> dict[str, Any]:
         "retry_attempts": _parse_retry_attempts(config.get("retry_attempts")),
         "escalate_after": _parse_escalate_after(config.get("escalate_after")),
         "depends_on": _parse_depends_on(config.get("depends_on")),
+        # The series' retention (ADR-0087), read for every type like the fields
+        # above: a count, `0` when absent. Junk and a negative number fail the
+        # load, because a history silently switched off is found out a week later.
+        "series_keep": _parse_series_keep(config.get("series_keep")),
+        # What the series is drawn by and how much of it the node shows (ADR-0092),
+        # beside the count they are about. A block of another shape and a cap that
+        # is not a whole number fail the load, as a bad count does.
+        "measures": _parse_measures(config.get("measures")),
+        "reading_cap": _parse_reading_cap(config.get("reading_cap")),
     }
 
 
@@ -929,6 +1131,49 @@ def _parse_retry_attempts(value: object) -> int | None:
     if attempts < 0:
         raise CheckError(f"retry_attempts must be >= 0, got {value!r}")
     return attempts
+
+
+def _parse_series_keep(value: object) -> int:
+    """How many readings of each subject this check keeps as its series
+    (ADR-0087): ``0`` — no series at all — when absent, otherwise a whole number
+    and never a negative one. Junk fails the load like any typo, and a boolean is
+    junk: ``true`` is not a count."""
+    if value is None:
+        return 0
+    try:
+        count = int(str(value).strip())
+    except ValueError as exc:
+        raise CheckError(f"invalid series_keep: {value!r}") from exc
+    if count < 0:
+        raise CheckError(f"series_keep must be >= 0, got {value!r}")
+    return count
+
+
+def _parse_measures(value: object) -> dict[str, Measure | None]:
+    """The check's ``measures:`` block (ADR-0092): field name to measure, and
+    ``None`` for a field it takes back from the type's defaults. Another shape
+    fails the load, naming the field where there is one."""
+    try:
+        return read_measures(value, where="measures")
+    except MeasureError as error:
+        raise CheckError(str(error)) from error
+
+
+def _parse_reading_cap(value: object) -> int | None:
+    """How many of a subject's readings this check's node shows (ADR-0092
+    decision 7): ``None`` (absent) leaves ``settings.yaml``'s ``reading_cap`` in
+    force; otherwise a whole number, ``0`` showing the curves alone. Unlike the
+    setting, which is logged and replaced, a bad value here fails the load, as a
+    bad ``series_keep`` beside it does — and a boolean is junk."""
+    if value is None:
+        return None
+    try:
+        count = int(str(value).strip())
+    except ValueError as exc:
+        raise CheckError(f"invalid reading_cap: {value!r}") from exc
+    if count < 0:
+        raise CheckError(f"reading_cap must be >= 0, got {value!r}")
+    return count
 
 
 #: The unit suffixes :func:`parse_duration` reads, each a fixed number of seconds.

@@ -126,23 +126,30 @@ what that run read about it. Additive. This is where a measurement now lives: a 
 that reads one object records it on the node that stands for it, and only an object with
 no node of its own carries its record on a line instead.
 
+**2.6.0 adds `refused` to an entry** — why the server refused that line's record, where
+it did, in the sentence the server's own page shows, with `data` null beside it; null on
+every other line. Additive. The line stands as its check graded it, so its text and code
+mean what they always did: only the record is missing, and `refused` is what says so
+rather than leaving a client to believe the check carried none.
+
 Decode defensively all the same: tolerate unknown fields and any child order, and
 treat an absent `run` as *nothing answers for this node* rather than as an error.
 
 ## The golden envelope
 
-[`openapi.yaml`](openapi.yaml) says what the envelope *may* contain;
-`envelope-2.json` beside it is one envelope that contains all of it — a node with a
-`run` and one without, a run on a schedule carrying `frequency_seconds` and
-`stale_after_seconds` and one carrying neither, entries addressable and prose, an entry
-carrying `subject` and `data` and one carrying neither, a record carrying the typed
+[`openapi.yaml`](openapi.yaml) says what the envelope *may* contain; `envelope-2.json`
+beside it is one envelope that contains all of it — a node with a `run` and one without,
+a run on a schedule carrying `frequency_seconds` and `stale_after_seconds` and one
+carrying neither, entries addressable and prose, an entry carrying `subject` and `data`,
+one carrying neither and one whose record was `refused`, a record carrying the typed
 `at` / `started` / `ended` keys at two depths, a `maintenance` pin and a null, and the
 `instance` block. It carries **both** shapes of `contribution`: the pin's, which
 *withholds* a node and reports `code: null`, and a damped node's, which *transforms* one
 — the node reads ERROR, the parent counted OK, and `contribution.code` is that OK. Those
 two are deliberately both here: before damping every rule withheld, so a fixture with
-only the null would quietly teach a client that `contribution` means *not counted*. It is **generated from the server's own
-API** and a test holds the server to it, so it cannot quietly stop being true.
+only the null would quietly teach a client that `contribution` means *not counted*. It
+is **generated from the server's own API** and a test holds the server to it, so it
+cannot quietly stop being true.
 
 Which means it has an obligation attached. A field added to the served snapshot is added
 to this contract in the same change — and it makes this artifact stale in that same

@@ -32,16 +32,15 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 # Import the fixtures as a package module whether run as a script or under pytest.
 sys.path.insert(0, str(_REPO_ROOT))
 
-# The app loads the user list and (unless disabled) starts the engine at import
-# (ADR-0020); point it at the committed fixture root and disable the engine so
-# importing is side-effect-free — the same path-list tests/conftest.py builds, set
-# here too so this stays runnable as a script (the cwd `config/` has no committed
-# user list — `config/users/` is git-ignored).
+# The app loads the user list at import (ADR-0020); point it at the committed
+# fixture root — the same path-list tests/conftest.py builds, set here too so this
+# stays runnable as a script (the cwd `config/` has no committed user list —
+# `config/users/` is git-ignored). The import starts nothing (ADR-0091), and each
+# fixture installs the engine error its page shows.
 os.environ.setdefault(
     "LITTLE_SISTER_CONFIG_DIR",
     os.pathsep.join((str(_REPO_ROOT / "tests" / "fixtures" / "config"),
                      str(_REPO_ROOT / "config"))))
-os.environ.setdefault("LITTLE_SISTER_ENGINE", "0")
 os.environ.setdefault("SECRET_KEY", "ui-harness")
 
 from flask import render_template, session  # noqa: E402
@@ -53,6 +52,7 @@ from little_sister.app import (  # noqa: E402
     _maintenance_rows,
     _maintenance_view,
     _node_meta_map,
+    _series_views,
     _split_heartbeat,
     app,
 )
@@ -93,6 +93,10 @@ def render_page(fixture: Fixture) -> str:
     path = f"/status/{fixture.branch}" if fixture.branch else "/status"
     previous_error = app_module.engine_error
     app_module.engine_error = fixture.engine_error
+    # The series the node's facts show come from the engine, as on a live page; a
+    # fixture that has one lends it for the render, and every other has none.
+    previous_engine = app_module.engine
+    app_module.engine = fixture.engine() if fixture.engine is not None else None
     try:
         with app.test_request_context(path):
             session["username"] = "harness"
@@ -138,9 +142,13 @@ def render_page(fixture: Fixture) -> str:
                 since=None,
                 focus="",
                 focus_orphan=None,
+                # What the node read over time (ADR-0092), where it stands for a
+                # subject a fixture's engine keeps.
+                series=_series_views(node) if fixture.branch else (),
             )
     finally:
         app_module.engine_error = previous_error
+        app_module.engine = previous_engine
 
 
 def render_copy_page() -> str:

@@ -14,7 +14,12 @@ returning it rather than by raising.
 import http.client
 import socket
 import ssl
+import subprocess
+import sys
+import tempfile
+import textwrap
 import threading
+import time
 import urllib.error
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -24,6 +29,7 @@ from little_sister import link_probe
 from little_sister.icons import Icon, IconFile
 from little_sister.links import Group, Link, LinksConfig, ProbeSettings
 from little_sister.transport import Fault, RemoteError
+from tests.running import subprocess_env
 
 
 def config_with(*links_, **probe):
@@ -785,6 +791,43 @@ class DeadlineTests(TestCase):
                 self.assertIsNot(link_probe.start_pass(config), done)
                 self.held.set()
 
+    def test_the_instance_s_stop_abandons_the_pass_in_flight(self):
+        """ADR-0088 decision 6: at the stop a pass is abandoned the way it is at its
+        own deadline, and no pass starts after it."""
+        url = "https://wedged.example.org/"
+        config = self.config_for(url)
+        with mock.patch.object(link_probe, "_request", self.wedging(url)):
+            link_probe.start_pass(config)
+            self.assertTrue(_eventually_set(self.started, url))
+            link_probe.stop_probing()
+            self.assertFalse(link_probe.is_running())
+            self.assertTrue(link_probe.start_pass(config).is_set(),
+                            "a pass started after the stop")
+            self.held.set()
+        self.assertNotIn(url, link_probe.results())
+
+    def test_a_pass_in_flight_does_not_hold_the_interpreter_s_exit(self):
+        script = textwrap.dedent("""
+            import threading, time
+            from datetime import datetime
+            from little_sister import link_probe
+            link_probe._request = lambda url, method: threading.Event().wait()
+            current = link_probe._Pass(generation=1, done=threading.Event(),
+                                       started_at=datetime.now(), deadline=60.0)
+            threading.Thread(target=link_probe._sweep, daemon=True,
+                             args=(current, ("https://wedged.example.org/",),
+                                   frozenset())).start()
+            time.sleep(1.0)
+            print("leaving", flush=True)
+            """)
+        with tempfile.TemporaryDirectory() as directory:
+            started = time.monotonic()
+            done = subprocess.run([sys.executable, "-c", script], cwd=directory,
+                                  env=subprocess_env(),
+                                  capture_output=True, text=True, timeout=20)
+        self.assertIn("leaving", done.stdout, done.stderr[-3000:])
+        self.assertLess(time.monotonic() - started, 6.0)
+
     def test_what_answered_is_kept_and_what_did_not_says_so(self):
         # Three fates, and only the middle one is new: answered keeps its verdict,
         # started-and-unfinished gets *no answer* — which is not a death, because
@@ -974,3 +1017,13 @@ class GenerationTests(TestCase):
                 with self.assertLogs("little_sister", level="WARNING"):
                     self.assertTrue(link_probe.refresh_now(config, deadline=5))
         self.assertEqual(set(link_probe.results()), {"https://a.example.org/"})
+
+
+def _eventually_set(started: dict, url: str, seconds: float = 5.0) -> bool:
+    """Whether a probe of ``url`` has started within ``seconds``."""
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        if url in started and started[url].is_set():
+            return True
+        time.sleep(0.01)
+    return False

@@ -1,7 +1,7 @@
 # ADR-0075 — A check declares what it costs, and startup adds it up
 
 - **Status:** Accepted
-- **Date:** 2026-09-20 (accepted 2026-09-05)
+- **Date:** 2026-09-27 (accepted 2026-09-05)
 - **Related:** [ADR-0072](0072-the-instance-reports-on-itself.md) (the lines the
   engine already carries about itself, and the limits they measure against — this
   record turns two of those limits into settings and gives them a second reader),
@@ -14,7 +14,11 @@
   stops the engine and leaves the pages up),
   [ADR-0033](0033-budgeted-failure-retry.md) (the other place a check's period is
   spent faster than its `frequency` says, and the reason the sums are a lower bound
-  rather than a schedule)
+  rather than a schedule), [ADR-0085](0085-a-measure-is-read-out-of-a-record.md) and
+  [ADR-0086](0086-a-check-measures-and-grades.md) (the record a check carries, and the
+  failure record that floors its declaration),
+  [ADR-0093](0093-a-record-the-seam-refuses-costs-its-line.md) (a refused record costs
+  its line, not the run)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -68,6 +72,14 @@ disagree by editing the library.
    the numbers it declared — and for the record limit, the types whose every record
    would be refused at the seam on its first run.
 
+   What is compared against `record_limit` is the declared record **raised to a
+   floor**: the most the failure record the engine writes for a check that raised can
+   weigh ([ADR-0086](0086-a-check-measures-and-grades.md) decision 5). Any check may
+   raise, so a declaration smaller than that record would be a ceiling the engine
+   itself could break. Only a type that declares a record is raised — one that declares
+   none is still not compared at all — and its own `expected_record()` is untouched.
+   The worker and entry sums are unaffected.
+
 3. **Only what is declared is summed, so the sums are a lower bound.** A silent check
    contributes nothing. This is exactly enough for a refusal — a configuration whose
    declared part alone does not fit cannot fit at all — and deliberately not enough for
@@ -118,17 +130,36 @@ disagree by editing the library.
 
 8. **The declared figures stand beside the measured ones on `/system`** — the sums
    against the limits, and per check the declared cost and entry count beside the wall
-   time of its last run, the declared record beside the largest one that run actually
-   carried. An estimate decays as an estate grows, and an estimate nobody can compare
-   against a measurement decays invisibly.
+   time of its last run, the declared record — raised to the floor of decision 2, with
+   the type's own number beside it where the two differ — beside the heaviest record
+   that run **produced**, the ones the seam refused included, since a refused record
+   costs its line or its reading rather than the run
+   ([ADR-0093](0093-a-record-the-seam-refuses-costs-its-line.md) decision 6). The page
+   marks it *refused* where that heaviest one was refused for its weight: that is the
+   declaration failing, which is what this comparison exists to show. A record refused
+   for a bad time counts at its size, and one that does not serialize not at all. An
+   estimate decays as an estate grows, and an estimate nobody can compare against a
+   measurement decays invisibly.
 
 ## Consequences
 
-- **The library's own built-in types declare nothing**, and that is the honest state:
-  an `http` or `file` check costs a fraction of a second and holds a handful of
-  entries, and a sum built from such estimates would be noise. The mechanism is for
-  the types that read an estate — where the number is large, computable from the
-  configuration, and worth refusing on.
+- **The library's own built-in types declare no cost**, and only `http` declares
+  entries — one line. That is the honest state: an `http` or `file` check costs a
+  fraction of a second and holds a handful of entries, and a sum built from such
+  estimates would be noise. The mechanism is for the types that read an estate —
+  where the number is large, computable from the configuration, and worth refusing
+  on. **A record size is another matter**: since a check carries a record
+  ([ADR-0085](0085-a-measure-is-read-out-of-a-record.md),
+  [ADR-0086](0086-a-check-measures-and-grades.md)), a clipped record's worst case is
+  computable and exact, so most built-ins declare it — `http` (368 bytes) and `file`
+  (357), each its failed reading's worst case; `command`, from `max_chars`;
+  `ssh-connect`, the SSH transport's own fields (624 bytes, more with `debug`);
+  `ssh-command` and `ssh-script`, the transport plus the output `max_chars` allows;
+  `macos-memory`, the transport plus its readings and a share per watched process;
+  and `host-metrics`, the transport plus its readings and a share per listed volume —
+  except under `disk_path: all`, where the host decides how many filesystems it has
+  and the check declares nothing. `qnap-metrics` declares nothing, since a NAS decides
+  how many bays it has.
 - **A deployment can be refused by a package it upgraded.** A plugin that starts
   declaring, or an estate that grew, can turn a working configuration into a refused
   one. The refusal names the checks and their numbers, and the answer — more workers,

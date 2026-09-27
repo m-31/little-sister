@@ -57,19 +57,30 @@
     reports **own** status, not the roll-up — the children are directly below and say
     that themselves. Rendered as a `status-node` so it takes the same fill and ink as
     any box, and kept **inside `#status-grid`** so it refreshes on the ~10s poll; the
-    maintenance card stays outside, deliberately, because it holds an open form. -#}
+    maintenance card stays outside, deliberately, because it holds an open form.
+
+    **A node that declares nothing is the exception.** Its `UNDEFINED` is a
+    container's, which the roll-up skips (ADR-0039), and not a status: one that carries
+    a sentence — an `aws` check's root states its scope above its accounts — headed its
+    page gray and *undefined*, the word hide-idle reads as never reported, under a
+    dashboard that drew the same node green. So it heads with what it rolls up to,
+    pale as its card is where its children show, because the culprit is right below;
+    that is also the code a kept reading records for it (ADR-0087 decision 8). A
+    roll-up of nothing is `UNDEFINED`, the node's own again, and says so. -#}
 {% macro viewed_head(node, reason_cap) -%}
 {%- if node.maintenance_entry or node.reason or node.stale
        or node.own_code.name != 'UNDEFINED' %}
-<div class="status-node viewed-head s-{{ node.own_code | status_slug }}">
+{%- set rolled = node.own_code.name == 'UNDEFINED' and node.code.name != 'UNDEFINED' %}
+{%- set head_code = node.code if rolled else node.own_code %}
+<div class="status-node viewed-head s-{{ head_code | status_slug }}{% if rolled %} dim{% endif %}">
     <div class="status-node__self" data-path="{{ node.path }}">
-        {{ status_cue(node.own_code) }}<span class="status-node__name">{{ node.name }}</span>
+        {{ status_cue(head_code) }}<span class="status-node__name">{{ node.name }}</span>
         {%- if node.stale %} <span class="status-stale">stale{% if not node.children %} · {{ node.age_seconds | elapsed }} ago{% endif %}</span>{% endif %}
         {#- The head is the topmost visible node of this view, so the observation
             time shows here and the cards below suppress an identical one
             (ADR-0044): seven aspect cards repeating one check's run time invite a
             reader to think the seven were checked separately. -#}
-        <span class="viewed-head__state">{{ card_time(node) }}{{ node.own_code.name.lower() }}{{ reported_suffix(node) }}</span>
+        <span class="viewed-head__state">{{ card_time(node) }}{{ head_code.name.lower() }}{{ reported_suffix(node) }}</span>
         {{ pin_banner(node) }}{{ reason_block(node, reason_cap) }}
     </div>
 </div>

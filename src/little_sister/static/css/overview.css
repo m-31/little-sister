@@ -1176,6 +1176,81 @@ body[data-ls-card-state="below"] .status-card__state {
 }
 .reason-record dt { font-weight: 400; }
 .reason-record dd { margin: 0; overflow-wrap: anywhere; }
+/* Where the seam refused the record (ADR-0093): the sentence saying why, in the
+   record's place — layout only, like the list it stands in for. */
+.reason-refused {
+    margin: 0.25rem 0 0;
+    overflow-wrap: anywhere;
+}
+
+/* A subject's series on the node that stands for it (ADR-0092): the curves of its
+   measures and the table of its readings, in the Readings card.
+
+   The drawing is shown at one to one and scales down to a narrow card, never up, so
+   its words keep their size. Every ink is a token `tests/test_contrast.py` measures
+   on the card surface Bootstrap paints: the line and its dots in the body ink, a
+   reading without a value in the danger ink — the links page's *does not answer*,
+   which is what a failed request says — and the axes' words in the muted ink. The
+   grid is the hairline, recessive on purpose; the data is what may be loud. The
+   dots' ring is the card's own surface, so a dot on the line stays a dot. */
+.ls-curve { margin: 0 0 1rem; }
+.ls-curve__head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.1rem 0.75rem;
+    margin-bottom: 0.25rem;
+}
+.ls-curve__title { font-weight: 600; }
+.ls-curve__summary { color: var(--ls-muted); font-size: 0.875em; }
+.ls-curve__key { white-space: nowrap; }
+.ls-curve__swatch { vertical-align: -0.1em; }
+/* Scaled to the card, but never below 30rem: under that the axes' words would
+   shrink past reading, so a card narrower than that — a phone — scrolls the drawing
+   sideways inside itself, as `.table-responsive` does the readings beneath it. */
+.ls-curve__frame { overflow-x: auto; }
+.ls-curve__plot {
+    display: block;
+    min-width: 30rem;
+    max-width: 100%;
+    height: auto;
+}
+.ls-curve__grid { stroke: var(--ls-line); stroke-width: 1; }
+.ls-curve__line {
+    fill: none;
+    stroke: var(--ls-ink);
+    stroke-width: 2;
+    stroke-linejoin: round;
+    stroke-linecap: round;
+}
+.ls-curve__dot {
+    fill: var(--ls-ink);
+    stroke: var(--bs-card-bg, var(--bs-body-bg));
+    stroke-width: 2;
+}
+.ls-curve__none { stroke: var(--ls-danger-ink); stroke-width: 2; }
+.ls-curve__tick,
+.ls-curve__time,
+.ls-curve__unit {
+    fill: var(--ls-muted);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+}
+/* The pointer's layer: transparent, and a faint wash of the ink over the reading
+   it has found — the only response the drawing gives, with no script to give it. */
+.ls-curve__hover rect { fill: transparent; }
+.ls-curve__hover rect:hover { fill: color-mix(in srgb, var(--ls-ink) 8%, transparent); }
+/* The readings keep their natural width and scroll sideways in their card where it
+   is narrower (`.table-responsive`): breaking a value anywhere would fold every row
+   into a column of characters before the scroll ever began. */
+.ls-readings {
+    font-size: 0.875rem;
+    font-variant-numeric: tabular-nums;
+    margin-bottom: 0.5rem;
+}
+/* The cue column takes the cue's width and no more, so it stays beside the time
+   it qualifies rather than floating in a share of the table. */
+.ls-readings .ls-readings__cue { width: 1%; }
 
 .reason-pin { position: relative; }
 .reason-pin > summary {

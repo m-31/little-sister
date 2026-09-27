@@ -6,11 +6,11 @@ and held to it by `tests/test_contract_fixture.py`. A client that decodes this f
 decodes every optional shape `schema_version` 2 has: a node with and without a
 `run`, a run on a schedule carrying `frequency_seconds` and `stale_after_seconds` and
 one carrying neither, entries addressable and prose, an entry carrying `subject` and
-`data` and one carrying neither, a record with the typed ``at`` / ``started``
-/ ``ended`` keys at two depths, a `maintenance` pin and a null, the envelope's own
-`instance` block, and **both** shapes of `contribution` — the pin's, which
-withholds and reports a null code, and a damped node's, which transforms: the
-node reads ERROR, the parent counted OK, and `contribution.code` is that OK.
+`data`, one carrying neither and one whose record was `refused`, a record with the typed
+``at`` / ``started`` / ``ended`` keys at two depths, a `maintenance` pin and a null, the
+envelope's own `instance` block, and **both** shapes of `contribution` — the pin's,
+which withholds and reports a null code, and a damped node's, which transforms: the node
+reads ERROR, the parent counted OK, and `contribution.code` is that OK.
 
 **A field added to the envelope makes this artifact stale in the same change.** ADR-0080
 decision 1 says a field added to the snapshot is added to the contract in that change;

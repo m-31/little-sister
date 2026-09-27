@@ -11,6 +11,13 @@ Two histories are kept:
   / :meth:`StatusTree.restore_events`, ADR-0071); and
 - per-node **status history** — derived from the event log for one path
   (:meth:`StatusTree.history`).
+
+**A restart is no transition** (ADR-0094): a node's first write after one is compared
+with what the restored log last recorded for it, not with the ``UNDEFINED`` a restart
+leaves, and the instance's own node alone records the gap
+(:meth:`StatusTree.close_unobserved`), from when the old process was last alive
+(:func:`last_alive`) — which the stop's one save writes into the log
+(:meth:`StatusTree.note_stop`).
 """
 from __future__ import annotations
 
@@ -34,6 +41,7 @@ from little_sister.status import (
     StatusCode,
     effective_code,
     join_path,
+    leaf_name,
     on_same_line,
     split_path,
     worst_of,
@@ -118,6 +126,10 @@ class ReasonLine:
     #: the node's own page renders it, and the line template, the grading seam and
     #: the series are each built on it later.
     data: dict[str, Any] | None = None
+    #: Why the seam refused this line's record, where it did — ``data`` is then
+    #: ``None`` — and empty everywhere else (ADR-0093). The line itself stands as its
+    #: grading wrote it; the node's page says this where the record would be.
+    refused: str = ""
 
     @property
     def quiet(self) -> bool:
@@ -395,6 +407,70 @@ def events_from_payload(payload: object) -> list[Event]:
     return events
 
 
+def stopped_at_of(payload: object) -> str | None:
+    """The moment the stop's one save stamped into a state file's payload
+    (:meth:`StatusTree.note_stop`), or ``None`` where it carries none — a log an
+    interval wrote, a process that crashed, a file written before the stamp existed —
+    or one that is not a local time the way the tree stamps its events (ADR-0094
+    decision 4)."""
+    if not isinstance(payload, Mapping):
+        return None
+    value = payload.get("stopped_at")
+    if not isinstance(value, str):
+        return None
+    try:
+        moment = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return value if moment.tzinfo is None else None
+
+
+def last_alive(stopped_at: str | None, lease_beat: float | None) -> str | None:
+    """When the old process was **last alive**, the start of the gap the instance's
+    own node records (ADR-0094 decision 4): the later of the stop's stamp and the
+    lease's last write before this process took it, as a local time the way the
+    tree stamps its events — or ``None`` where neither is known.
+
+    The later wins because each can be the stale one: a stop's stamp stays in the
+    log until the next process's first save, so a process that crashed before that
+    left an older stop's stamp behind; and the lease is not carried by a keeper, so
+    a fresh disk has none. The log's own last save is not asked at all — a kept
+    file is written only when it changed, so on a quiet night it is hours old.
+    """
+    moments = [datetime.fromisoformat(stopped_at)] if stopped_at else []
+    if lease_beat is not None:
+        moments.append(datetime.fromtimestamp(lease_beat))
+    return max(moments).isoformat() if moments else None
+
+
+def _last_readings(events: Iterable[Event]
+                   ) -> tuple[dict[str, StatusCode], dict[str, StatusCode]]:
+    """What a restored log last recorded per path: the node's last **reading**, which
+    its first write after the restart is compared with, and what it last **showed**,
+    which a replayed pin is (ADR-0094 decisions 1 and 2).
+
+    The reading passes over an admin's pin set — an unmarked event to
+    ``MAINTENANCE``, which moves what a node shows and not what it read — taking the
+    reading the set left under it instead. A check that itself reported
+    ``MAINTENANCE`` looks the same in the log, and its first reading after a restart
+    is then a transition from the reading before, where none was owed: the log does
+    not tell the two apart, and the case is too rare to earn a field that would.
+    What a node showed is the code of its current period, as
+    :meth:`StatusTree.history` reads it: the last event no rule hid from the display.
+    """
+    read: dict[str, StatusCode] = {}
+    shown: dict[str, StatusCode] = {}
+    for event in events:
+        if event.suppressed_by not in HIDES_THE_READING:
+            shown[event.path] = event.new
+        if event.new is StatusCode.MAINTENANCE and not event.suppressed_by:
+            if event.old is not StatusCode.MAINTENANCE:
+                read[event.path] = event.old
+            continue
+        read[event.path] = event.new
+    return read, shown
+
+
 @dataclass(frozen=True)
 class _Damped:
     """One node's damping state: what it published upward, the worse code it is
@@ -432,6 +508,15 @@ class StatusTree:
         self._lock = threading.RLock()
         self._root = Status(path="/", name=root_name)
         self._events: deque[Event] = deque(maxlen=event_log_size)
+        # What the restored log last recorded per path (ADR-0094): the reading a
+        # node's first write after a restart is compared with, consumed by that
+        # write, and what the node last showed, which a replayed pin continues.
+        self._restored_reading: dict[str, StatusCode] = {}
+        self._restored_shown: dict[str, StatusCode] = {}
+        # The moment of the stop, once the stop has come (ADR-0094 decision 4): the
+        # log's producer writes it beside the events, so the stop's one save is the
+        # one save that carries it.
+        self._stopped_at: str | None = None
         # Maintenance side-table: path -> entry, kept in sync with each node's
         # ``maintenance`` bool and written through to ``maintenance_store`` on every
         # change (ADR-0014). No store (the default) means in-memory only.
@@ -579,6 +664,11 @@ class StatusTree:
             if record is not None or subject is not None:
                 node.record = record
             old = node.code
+            if node.timestamp is None:
+                # The node's first write in this process: compared with what the
+                # restored log last recorded for it, not with the `UNDEFINED` a
+                # restart leaves (ADR-0094 decision 1).
+                old = self._restored_reading.pop(node.path, old)
             held = len(node.reason_entries)
             node.update(code, reason, members)
             self._entry_count += len(node.reason_entries) - held
@@ -785,7 +875,7 @@ class StatusTree:
         with self._lock:
             for entry_path, entry in entries.items():
                 if not entry.is_expired(moment):
-                    self._apply_maintenance(entry_path, entry)
+                    self._apply_maintenance(entry_path, entry, replay=True)
             for key, entry in (entry_pins or {}).items():
                 if not entry.is_expired(moment):
                     self._entry_maintenance[key] = entry
@@ -970,8 +1060,27 @@ class StatusTree:
     def events_payload(self) -> dict[str, Any]:
         """The event log as the state layer keeps it (ADR-0071): copied under the
         lock, serialized outside it. The producer the layer calls on the
-        scheduler tick."""
-        return {"events": [event.to_dict() for event in self.recent_events()]}
+        scheduler tick.
+
+        Once the stop has come (:meth:`note_stop`) it carries the moment of the
+        stop beside the events, as ``stopped_at`` — new state, so the stop's one
+        save writes the log even where no event changed, and the interval writes
+        before it still skip an unchanged one (ADR-0094 decision 4)."""
+        with self._lock:
+            stopped_at = self._stopped_at
+        payload: dict[str, Any] = {
+            "events": [event.to_dict() for event in self.recent_events()]}
+        if stopped_at is not None:
+            payload["stopped_at"] = stopped_at
+        return payload
+
+    def note_stop(self, when: str | None = None) -> None:
+        """Say that the stop has come, before its one save (ADR-0088): the log that
+        save writes carries ``when`` — now, by default, as the tree stamps its events
+        — so the next process knows when this one stopped watching (ADR-0094
+        decision 4). Thread-safe."""
+        with self._lock:
+            self._stopped_at = when or datetime.now().isoformat()
 
     def adopt_events(self, payload: object) -> None:
         """The event log's ``restore`` direction (ADR-0077): an adopted file's
@@ -986,11 +1095,42 @@ class StatusTree:
         anything has written — keeping the bound: with more events than the log
         holds, the oldest are dropped. Nodes are untouched; a restored event
         describes a node the next run will write again, and history reads it from
-        then on. Returns how many were kept."""
+        then on. Returns how many were kept.
+
+        **A restart is no transition** (ADR-0094 decision 1): what the log last
+        recorded for each path is kept, and a node's **first** write in this
+        process is compared with it rather than with the ``UNDEFINED`` a restart
+        leaves — the same reading keeps its period, any other one changes from the
+        old code. A node written already keeps comparing with its own code, which
+        is what an adopted log in a running process meets (ADR-0077)."""
         with self._lock:
             self._events.clear()
             self._events.extend(events)
+            self._restored_reading, self._restored_shown = _last_readings(
+                self._events)
             return len(self._events)
+
+    def close_unobserved(self, path: str, since: str, reason: str) -> bool:
+        """End the restored period of the node at ``path`` at ``since``, with an
+        event to ``UNDEFINED`` whose reason is ``reason`` — the instance's own node,
+        where the old process stopped watching (ADR-0094 decision 4). Its first
+        write in this process is then a transition from ``UNDEFINED``, and its
+        history reads the gap between.
+
+        Writes nothing, and answers ``False``, where the restored log holds no
+        reading of the node, or one of ``UNDEFINED`` already: there is no period to
+        end. Only the node named is closed — the gap is said once. Thread-safe."""
+        key = join_path(path)
+        with self._lock:
+            reading = self._restored_reading.get(key)
+            if reading is None or reading is StatusCode.UNDEFINED:
+                return False
+            self._events.append(Event(
+                path=key, name=leaf_name(key), old=reading,
+                new=StatusCode.UNDEFINED, reason=(reason,), timestamp=since))
+            self._restored_reading[key] = StatusCode.UNDEFINED
+            self._restored_shown[key] = StatusCode.UNDEFINED
+            return True
 
     def history(self, path: str) -> list[StatusPeriod]:
         """The status history of the node at ``path`` — one period per status it
@@ -1119,7 +1259,8 @@ class StatusTree:
             return DAMPING_RULE
         return ""
 
-    def _apply_maintenance(self, path: str, entry: MaintenanceEntry) -> None:
+    def _apply_maintenance(self, path: str, entry: MaintenanceEntry, *,
+                           replay: bool = False) -> None:
         """Pin a node and record its entry, emitting a transition on change — and on
         an **edit**, which the code alone cannot see.
 
@@ -1134,11 +1275,20 @@ class StatusTree:
         and an extended window or a rewritten reason would leave no trace anywhere.
         A changed reason or expiry therefore emits too; a re-submit that changes
         neither does not, so a double-click is not history (ADR-0014).
+
+        A **replay** at startup compares with what the restored log last showed for
+        the node (ADR-0094 decision 2): a pin whose `MAINTENANCE` period the log
+        holds continues it and writes nothing; one the log no longer holds records
+        its set, from the reading the log last recorded.
         """
         node = self._ensure_node(path)
         previous = self._maintenance.get(node.path)
         # What the node was showing: its existing pin, or the reading it reported.
         old = StatusCode.MAINTENANCE if previous is not None else node.code
+        if replay and previous is None and node.timestamp is None:
+            old = (StatusCode.MAINTENANCE
+                   if self._restored_shown.get(node.path) is StatusCode.MAINTENANCE
+                   else self._restored_reading.get(node.path, old))
         node.maintenance = True
         self._maintenance[node.path] = entry
         edited = previous is not None and not previous.same_pin_as(entry)
@@ -1352,7 +1502,8 @@ class StatusTree:
             ReasonLine(entry.slug, entry.text,
                        pins.get((node.path, entry.slug)) if node.members else None,
                        code=entry.code, running=entry.running,
-                       subject=entry.subject, data=entry.data)
+                       subject=entry.subject, data=entry.data,
+                       refused=entry.refused)
             for entry in node.reason_entries)
         # Own status is now a **derived** value: the entries are virtual children,
         # and a node whose members are all pinned has nothing left reporting.

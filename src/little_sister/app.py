@@ -2,11 +2,12 @@ import atexit
 import json
 import os
 import re
-from collections.abc import Mapping
+import threading
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from secrets import token_hex
+from typing import Literal
 from urllib.parse import parse_qs, urlencode, urlsplit
 
 from flask import (
@@ -59,20 +60,31 @@ from little_sister.copy_status import (
     format_node_markdown,
     format_reason_markdown,
 )
+from little_sister.curves import Curve, draw
 from little_sister.dashboard_layout import dashboard_layout
 from little_sister.engine import Engine, EngineInfo, create_engine
 from little_sister.errors import ConfigError
 from little_sister.icons import known_names, read_icon
 from little_sister.instance import this_instance
 from little_sister.keeper import registered_keeper
+from little_sister.lease import Lease, LeaseRefused
+from little_sister.limits import format_weight
 from little_sister.links import LINKS_ASPECT, current_links
-from little_sister.logger import logger
+from little_sister.logger import logger, open_log_file
 from little_sister.maintenance import MaintenanceEntry, MaintenanceStore
 from little_sister.nodes import load_nodes, resolve_metadata, run_consistency_pass
 from little_sister.origins import PackageOrigin, package_origin
 from little_sister.paths import shown_path
+from little_sister.reasons import RECORD_TIMESTAMP_KEYS, record_leaves
 from little_sister.render import render_markdown, render_markdown_inline
-from little_sister.secrets import SecretError, registered_resolvers, resolve_setting
+from little_sister.secrets import (
+    SecretError,
+    check_reference,
+    looks_like_reference,
+    registered_resolvers,
+    resolve_setting,
+)
+from little_sister.series import Placed
 from little_sister.spans import (
     coarse_span,
     format_duration,
@@ -80,10 +92,16 @@ from little_sister.spans import (
     format_tolerance,
     local_time,
 )
-from little_sister.state import EVENTS_FILE, StateLayer
+from little_sister.state import EVENTS_FILE, SERIES_FILE, StateLayer
 from little_sister.status import HEARTBEAT_PATH, StatusCode, on_same_line
 from little_sister.titles import Labeled, label_parts, shown_title
-from little_sister.tree import StatusSnapshot, events_from_payload, status_tree
+from little_sister.tree import (
+    StatusSnapshot,
+    events_from_payload,
+    last_alive,
+    status_tree,
+    stopped_at_of,
+)
 from little_sister.users import read_avatar
 
 app = Flask(import_name=__name__)
@@ -596,6 +614,16 @@ def _elapsed(seconds: float | None) -> str:
     return format_span(seconds)
 
 
+@app.template_filter("weight")
+def _weight(size: int) -> str:
+    """A weight in bytes — what the series hold, their ceiling — as
+    :func:`little_sister.limits.format_weight` writes it: ``812 B``, ``1.6 KiB``,
+    ``8.0 MiB``. A name for the template, not a second implementation: the same
+    figure stands in the engine's own `series` lines, and the system page names
+    it the same way."""
+    return format_weight(size)
+
+
 def _format_local(moment: datetime, fmt: str | None = None) -> str:
     """Format a datetime in the configured timezone and ``time_format``
     (config/settings.yaml); ``fmt`` overrides the format (never the timezone) for
@@ -618,38 +646,152 @@ def _format_local(moment: datetime, fmt: str | None = None) -> str:
     return local_time(moment, fmt)
 
 
-@app.template_filter("record_fields")
-def _record_fields(value: object) -> list[tuple[str, str]]:
-    """An entry's record, flattened into dotted name and value, for the plain list
-    the node's own page shows.
+@dataclass(frozen=True)
+class _RecordField:
+    """One row of a record as its node's page lists it (``_record_list.html``).
 
-    Deliberately **untyped rendering**: nothing here reads what a name means, so a
-    time shows as the UTC string the seam stored. Rendering a known name in the
-    viewer's own zone is the next slice's, and doing half of it here would leave
-    two places deciding what a field is.
+    ``kind`` is how the page shows the value, and :func:`_record_fields` is the one
+    place that decides it. ``text`` is what the row reads; ``stored`` is the value
+    as the record holds it — the same text on a ``plain`` row, and on an
+    ``instant`` the UTC string the seam stored, which the page keeps as the
+    ``datetime`` of the row's ``<time>``.
+    """
+    name: str
+    kind: Literal["instant", "plain"]
+    text: str
+    stored: str
+
+
+@app.template_filter("record_fields")
+def _record_fields(value: object) -> list[_RecordField]:
+    """A record — a line's, or the one its node measured — flattened into dotted
+    names and values for the list the node's own page shows, each with the **kind**
+    the page shows it as.
+
+    **The one place a field's kind is decided**: the rest of the typed rendering
+    extends this walk rather than adding a second one. The kind is the field's own
+    **key**'s, wherever in the record it stands — ``created.at`` is a time as much as
+    ``at`` is — and never its value's, and the keys are the seam's:
+    :data:`~little_sister.reasons.RECORD_TIMESTAMP_KEYS`, ``at``, ``started`` and
+    ``ended``, read here rather than copied, so the page and the seam that enforces
+    the vocabulary cannot disagree about it.
+
+    A value under one of those names is an **instant** and reads in the configured
+    timezone and ``time_format``, as every other time on the page does (ADR-0006).
+    No age stands beside it (ADR-0082 decision 5): a check that grades on an age says
+    it in its own sentence. Whatever else stands under a timed name is shown as it
+    was stored, like every value under any other name: a null (*this run has not
+    ended*), a time the configured zone cannot hold — the seam accepts any instant
+    UTC can, and the last half hour of the year 9999 in UTC is the year 10000 in
+    Berlin — and a string without an offset, which the seam never lets through and
+    the page does not guess at.
 
     The name is dotted because that is how a record is addressed everywhere else
     (``completed.at``), so what a reader inspects and what they would later write
-    are spelled the same. A list is shown as its JSON rather than exploded into
-    ``field[0]``, ``field[1]``; every other value that is not text is shown as its
-    JSON too, so a boolean reads ``true`` and an absent value ``null`` instead of
-    in Python's spelling. The values are escaped by the template like any other
-    data (ADR-0018) — which is the escaping the check no longer has to get right
-    itself.
+    are spelled the same — and the names come out of
+    :func:`~little_sister.reasons.record_leaves`, the one walk a measure is read
+    through as well (ADR-0092), so a field listed here is the field ``measures:``
+    names. A list is shown as its JSON rather than exploded into
+    ``field[0]``, ``field[1]``, a time inside one included; every other value that
+    is not text is shown as its JSON too, so a boolean reads ``true`` and an absent
+    value ``null`` instead of in Python's spelling. The values are escaped by the
+    template like any other data (ADR-0018) — which is the escaping the check no
+    longer has to get right itself.
     """
-    rows: list[tuple[str, str]] = []
-
-    def walk(item: object, path: str) -> None:
-        if isinstance(item, Mapping):
-            for key, below in item.items():
-                walk(below, f"{path}.{key}" if path else str(key))
-        elif isinstance(item, str):
-            rows.append((path, item))
-        else:
-            rows.append((path, json.dumps(item)))
-
-    walk(value, "")
+    rows: list[_RecordField] = []
+    for path, key, item in record_leaves(value):
+        stored = item if isinstance(item, str) else json.dumps(item)
+        shown = _record_instant(item) if key in RECORD_TIMESTAMP_KEYS else None
+        rows.append(_RecordField(path, "plain", stored, stored) if shown is None
+                    else _RecordField(path, "instant", shown, stored))
     return rows
+
+
+def _record_instant(value: object) -> str | None:
+    """A value under a timed name in the configured zone and format, where it is an
+    ISO-8601 string carrying an offset that zone can hold — the form the seam
+    stores every time in — and ``None`` for anything the page shows as stored."""
+    if not isinstance(value, str):
+        return None
+    try:
+        moment = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if moment.tzinfo is None:
+        return None
+    try:
+        return _format_local(moment)
+    except OverflowError:
+        return None
+
+
+@dataclass(frozen=True)
+class _ReadingRow:
+    """One kept reading as a row of its node's readings table (ADR-0092 decision 6):
+    its place on the series' clock — as the page writes a time, and in UTC for the
+    row's ``<time>`` — the code it stood with, the sentence as it stood, and its
+    record's fields by name, each as the record list shows it."""
+    at: str
+    stored: str
+    code: StatusCode | None
+    texts: tuple[str, ...]
+    fields: dict[str, _RecordField]
+
+
+@dataclass(frozen=True)
+class _SeriesView:
+    """A subject's series as a page shows it: the curves of its check's measures,
+    the readings the page lists — newest first — with a column for every field
+    they carry, and how many the series keeps in all."""
+    subject: str
+    curves: tuple[Curve, ...]
+    columns: tuple[str, ...]
+    rows: tuple[_ReadingRow, ...]
+    kept: int
+
+
+def _series_views(node: StatusSnapshot | None, *,
+                  every: bool = False) -> tuple[_SeriesView, ...]:
+    """The series the node stands for, as its page shows them (ADR-0092 decision
+    6): a curve for each of its check's measures and the newest readings, as many as
+    ``reading_cap`` says — the check's own where it states one, and
+    ``settings.yaml``'s otherwise — or, ``every``, what the History page shows:
+    every kept reading and no curve.
+
+    Only where the node **stands for a subject** — the engine placed a reading on
+    it, so it carries the object that reading was of — and only where a check
+    mounted there keeps a series; nothing at all where no engine runs. A hole is
+    measured against the tolerance the node's own freshness is judged by, so a
+    stretch that did not make the node stale does not break its line either.
+    """
+    if engine is None or node is None or not node.subject:
+        return ()
+    views: list[_SeriesView] = []
+    for kept in engine.series_at(node.path, node.subject):
+        cap = (kept.check.reading_cap if kept.check.reading_cap is not None
+               else config.reading_cap)
+        newest = kept.readings[::-1]
+        rows = tuple(_reading_row(reading)
+                     for reading in (newest if every else newest[:cap]))
+        curves = () if every else tuple(
+            draw(measure, kept.readings, tolerance=node.stale_after_seconds)
+            for measure in kept.check.measures.values())
+        views.append(_SeriesView(
+            subject=node.subject, curves=curves,
+            columns=tuple(dict.fromkeys(name for row in rows for name in row.fields)),
+            rows=rows, kept=len(kept.readings)))
+    return tuple(views)
+
+
+def _reading_row(reading: Placed) -> _ReadingRow:
+    """One reading as its table row: the fields through :func:`_record_fields`, the
+    one place a field's kind is decided, so a time in it reads in the configured
+    zone and everything else as it was stored."""
+    return _ReadingRow(
+        at=_format_local(reading.at),
+        stored=reading.at.astimezone(UTC).isoformat().replace("+00:00", "Z"),
+        code=reading.record.code, texts=reading.record.texts,
+        fields={field.name: field for field in _record_fields(reading.record.data)})
 
 
 def _copy_style() -> TimeStyle:
@@ -999,10 +1141,11 @@ def _maintenance_rows(node_pins: list[_MaintenancePin],
 
 
 # Session signing key (ADR-0003): an explicit SECRET_KEY wins — its value may
-# itself be a secret reference (`scheme://address`, ADR-0023) —
+# itself be a secret reference (`scheme://address`, ADR-0023), which the server's
+# start resolves (ADR-0091) —
 # otherwise a random per-start key: secure by default, at the price of sessions
 # resetting on restart (one worker, ADR-0001, so no cross-worker key skew). A
-# malformed reference (unknown scheme) raises and fails startup loudly; an
+# malformed reference (unknown scheme) fails the import loudly; an
 # unresolvable one degrades to the random key with a warning — the dashboard
 # must come up even while the secret store is down.
 def _session_key() -> str:
@@ -1023,7 +1166,22 @@ def _session_key() -> str:
     return token_hex(32)
 
 
-app.secret_key = _session_key()
+def _at_start(name: str) -> bool:
+    """Whether the setting ``name`` is a reference, which the server's start resolves
+    rather than the import (ADR-0091 decision 8): a reference reaches a store, and an
+    import is not an instance. A malformed one is refused here, since saying so
+    reaches nothing."""
+    value = os.environ.get(name, "")
+    if not looks_like_reference(value):
+        return False
+    check_reference(value)
+    return True
+
+
+#: Whether ``SECRET_KEY`` waits for the start. Until then a random key stands in, and
+#: an application nobody starts keeps it — its banner says why.
+_SECRET_KEY_AT_START = _at_start("SECRET_KEY")
+app.secret_key = token_hex(32) if _SECRET_KEY_AT_START else _session_key()
 
 
 class _TransportSecureSession(SecureCookieSessionInterface):
@@ -1112,9 +1270,10 @@ identity.announce_doors()
 announce_aspects()
 
 # API tokens for the JSON backend (ADR-0008): "name=token,name2=token2" — set
-# directly, or as a value that is itself a secret reference (ADR-0023).
+# directly, or as a value that is itself a secret reference (ADR-0023), which the
+# server's start resolves (ADR-0091).
 # Unresolvable ⇒ no tokens (the API rejects all requests until restart)
-# rather than a crash-loop; a malformed reference still fails startup loudly.
+# rather than a crash-loop; a malformed reference still fails the import loudly.
 def _api_token_setting() -> str:
     try:
         return resolve_setting(os.environ.get("LITTLE_SISTER_API_TOKENS", ""))
@@ -1126,46 +1285,152 @@ def _api_token_setting() -> str:
         return ""
 
 
-api_tokens = parse_api_tokens(_api_token_setting())
+_API_TOKENS_AT_START = _at_start("LITTLE_SISTER_API_TOKENS")
+api_tokens: dict[str, str] = ({} if _API_TOKENS_AT_START
+                              else parse_api_tokens(_api_token_setting()))
 
 
-# Start the monitoring engine once, in this (post-fork) process. Disable with
+#: The engine's error until the server's start has run (ADR-0091 decision 5): what an
+#: imported application says on every page until something starts it — and all a
+#: gunicorn line without the hooks module ever says. The flag is the whole fix.
+NOT_STARTED = ("this server imported the application and never started it: gunicorn "
+               "starts it with --config python:little_sister.gunicorn_hooks on its "
+               "command line, and the development server is "
+               "python -m little_sister.app")
+
+# The monitoring engine, which the server's start builds and starts (ADR-0091) —
+# once, in the process that serves, and never at the import. Disable it with
 # LITTLE_SISTER_ENGINE=0. A bad check *config* is non-fatal — the web app still
 # serves behind the banner below; an unusable configuration *tree* is not caught
-# here at all and stops the process (ConfigError, ADR-0031).
+# at all and stops the start (ConfigError, ADR-0031).
 engine: Engine | None = None
-# Why the engine did not start: the ``CheckError`` reason when the checks config
-# failed to load; ``None`` on success and on the deliberate
-# ``LITTLE_SISTER_ENGINE=0`` disable. Feeds the header banner so a config typo
-# doesn't take monitoring down with only a log line to show for it; persists
-# until a restart with fixed config.
-engine_error: str | None = None
+# Why there is no engine: :data:`NOT_STARTED` until the start has run, then the
+# ``CheckError`` reason when the checks config failed to load; ``None`` with an
+# engine and where a server was started with ``LITTLE_SISTER_ENGINE=0``. Feeds the
+# header banner so a config typo doesn't take monitoring down with only a log line
+# to show for it; persists until a restart with fixed config.
+engine_error: str | None = NOT_STARTED
 #: The state layer this process runs on (ADR-0071), kept here so an action on a
 #: ``/little-sister`` child can be followed by a flush (ADR-0076 decision 6);
 #: ``None`` where no engine runs, which is also every test that does not set one.
 state_layer: StateLayer | None = None
+#: The state directory's lease (ADR-0090), once the start has taken it: the readiness
+#: node asks it whether this instance still saves, and the stop lets it go.
+lease: Lease | None = None
+_start_lock = threading.Lock()
+_started = False
+_stopped = False
 
 
-def _start_engine_once() -> None:
-    global engine, engine_error, state_layer
-    if engine is not None:
-        return
-    if os.environ.get("LITTLE_SISTER_ENGINE", "1").lower() in ("0", "false", "no"):
-        logger.info("engine disabled via LITTLE_SISTER_ENGINE")
-        return
-    state = state_layer = StateLayer(interval_seconds=config.state_interval)
+def _engine_switched_off() -> bool:
+    return os.environ.get("LITTLE_SISTER_ENGINE", "1").lower() in ("0", "false", "no")
+
+
+def _resolve_settings() -> None:
+    """The start's half of the two settings that may be references (ADR-0091
+    decision 8): resolved here, where an instance begins."""
+    global api_tokens
+    if _SECRET_KEY_AT_START:
+        app.secret_key = _session_key()
+    if _API_TOKENS_AT_START:
+        api_tokens = parse_api_tokens(_api_token_setting())
+
+
+def start() -> None:
+    """The server's start (ADR-0091): what makes this imported application an
+    instance — once, in the process that serves, and never at the import.
+
+    gunicorn reaches it through :mod:`little_sister.gunicorn_hooks`'s
+    ``post_worker_init``, right after the worker's import and before it serves; the
+    development server from ``__main__``, before ``app.run``. In order: the state
+    directory's lease (ADR-0090), first, so that a process it refuses has touched
+    nothing in the directory, its log file included; the log file, which begins with
+    what the import logged; the settings that are references; then the engine, built
+    from the checks' configuration, restored and started — with ``atexit`` as the
+    backstop of :func:`stop`. A server started with ``LITTLE_SISTER_ENGINE=0`` takes
+    no lease and builds no engine. A second call does nothing.
+
+    :raises LeaseRefused: another process holds the state directory. Logged first,
+        naming the holder, to stderr: the log file there is the holder's. Under
+        gunicorn it is the worker's boot error, which halts the server.
+    """
+    global _started, engine_error
+    with _start_lock:
+        if _started:
+            return
+        _started = True
+        if _engine_switched_off():
+            open_log_file()
+            _resolve_settings()
+            engine_error = None
+            logger.info("engine disabled via LITTLE_SISTER_ENGINE")
+        else:
+            state = StateLayer(interval_seconds=config.state_interval)
+            held = Lease(state.directory, mark=this_instance().mark)
+            try:
+                how = held.take()
+            except LeaseRefused as refused:
+                logger.error("start: %s — this process restores, runs and saves "
+                             "nothing, and does not serve", refused)
+                raise
+            try:
+                _start_engine(state, held, how)
+            except BaseException:
+                held.release()
+                raise
+        atexit.register(stop, trigger="atexit")
+
+
+#: How the start came by the lease (ADR-0090), in words that cannot be read as the
+#: lease's own state: a lease taken from a released one is held.
+_TAKEN = {"free": "a free directory", "released": "a lease its holder released",
+          "gone": "a holder that is gone", "lapsed": "a holder whose lease had lapsed"}
+
+
+def _start_engine(state: StateLayer, held: Lease, how: str) -> None:
+    """The start once the lease is this process's: the log, the settings, and the
+    engine — built, restored and started."""
+    global engine, engine_error, state_layer, lease
+    lease = held
+    state.hold(held)
+    open_log_file()
+    logger.info("state: took the lease on %s, from %s", state.directory,
+                _TAKEN.get(how, how))
+    _resolve_settings()
+    state_layer = state
     try:
-        engine = create_engine(state=state)
+        built = create_engine(state=state)
     except CheckError as error:
         engine_error = str(error)
         # Log only, on purpose: with no engine there is no tick to read a
         # self-report line on, and the dashboard's stale beat is the report.
         logger.warning("engine not started: %s", error)
         return
-    _restore_state(engine, state)
-    _seed_node_metadata(engine)
-    engine.start()
-    atexit.register(engine.stop)
+    engine_error = None
+    _restore_state(built, state)
+    _restore_series(built, state)
+    _seed_node_metadata(built)
+    engine = built
+    built.start()
+
+
+def stop(*, trigger: str = "a call") -> None:
+    """The instance's stop (ADR-0088): the links probe's pass abandoned, then the
+    engine's stop — the runs in flight abandoned, one save, the lease let go — or,
+    where the start built no engine, the lease let go. gunicorn reaches it through
+    :mod:`little_sister.gunicorn_hooks`'s ``worker_exit``, with ``atexit`` as the
+    backstop, and ``trigger`` says which in the engine's one line. A second call
+    does nothing, and says nothing."""
+    global _stopped
+    with _start_lock:
+        if _stopped:
+            return
+        _stopped = True
+    link_probe.stop_probing()
+    if engine is not None:
+        engine.stop(trigger=trigger)
+    elif lease is not None:
+        lease.release()
 
 
 @app.context_processor
@@ -1207,10 +1472,12 @@ def _engine_state() -> str:
     """This process's engine, as one word from :data:`ENGINE_STATES` (ADR-0066).
 
     ``disabled`` and ``failed`` are both "no engine" and are deliberately not one
-    word: the first is a deployment saying ``LITTLE_SISTER_ENGINE=0`` and getting
+    word: the first is a server started with ``LITTLE_SISTER_ENGINE=0`` and getting
     exactly what it asked for, the second is a configuration this instance could not
-    load. Reporting them the same would make a deliberate quiet indistinguishable
-    from a broken one, which is the confusion this whole application exists to remove.
+    load — or a server that never started the engine at all, whose gunicorn line is
+    missing the hooks module (ADR-0091). Reporting them the same would make a
+    deliberate quiet indistinguishable from a broken one, which is the confusion this
+    whole application exists to remove.
     """
     if engine is not None:
         return "running"
@@ -1324,6 +1591,11 @@ def _seed_node_metadata(engine: Engine) -> None:
     run_consistency_pass(engine.checks, metadata)
 
 
+#: The reason the instance's own node gives for the gap a restart leaves in its
+#: history (ADR-0094 decision 4).
+NOT_RUNNING = "the instance was not running"
+
+
 def _restore_state(engine: Engine, state: StateLayer) -> None:
     """Initialize the tree with what the state layer kept (ADR-0071) — once,
     post-fork before the engine runs.
@@ -1336,10 +1608,15 @@ def _restore_state(engine: Engine, state: StateLayer) -> None:
 
     Then the event log: put back what the last process wrote, so the events page
     and every node's history start where they left off, and register the log as a
-    kept file so this process writes it on the tick. Then maintenance: attach the
-    store, replay non-expired pins — whose transitions append to the restored log,
-    as this process's first events — and reap any whose path no configured check
-    covers (ADR-0014). The layer itself is the first self-report contributor: a
+    kept file so this process writes it on the tick. A restart is no transition of a
+    subject's (ADR-0094), and the instance's own node records the gap: its restored
+    period closes when the old process was last alive — the later of the stamp its
+    stop's one save wrote into the log and the lease's last beat before this process
+    took it — so ``/little-sister``'s history reads the time nothing watched. Then
+    maintenance: attach the store, replay non-expired pins — whose transitions append
+    to the restored log, as this process's first events, where the log does not hold
+    the pin already (ADR-0094) — and reap any whose path no configured check covers
+    (ADR-0014). The layer itself is the first self-report contributor: a
     load that failed here, or a save that fails later, is a line on the heartbeat.
     A failure never refuses to start — the layer reports it and the state starts
     empty.
@@ -1364,6 +1641,12 @@ def _restore_state(engine: Engine, state: StateLayer) -> None:
         else:
             logger.info("state: restored %d event(s) from %s", restored,
                         state.path(EVENTS_FILE))
+            since = last_alive(stopped_at_of(payload),
+                               lease.previous_beat if lease is not None else None)
+            if since is not None and status_tree.close_unobserved(
+                    HEARTBEAT_PATH, since, NOT_RUNNING):
+                logger.info("state: %s was not running from %s until this start",
+                            HEARTBEAT_PATH, since)
     state.keep(EVENTS_FILE, status_tree.events_payload,
                restore=status_tree.adopt_events)
     store = MaintenanceStore(state, tree=status_tree)
@@ -1376,8 +1659,9 @@ def _restore_state(engine: Engine, state: StateLayer) -> None:
                     len(reaped), ", ".join(sorted(reaped)))
     self_report.register_contributor(
         "state", state.lines, title="State", report=state.report,
-        about="What a restart keeps — the maintenance pins and the event log under "
-              "`var/state/` — and whether it was restored, written and, where a "
+        about="What a restart keeps — the maintenance pins, the event log and the "
+              "series under `var/state/` — and whether it was restored, written and, "
+              "where a "
               "keeper is registered, carried off the machine (ADR-0071); and what "
               "a takeover set aside as `.bak`, which *take the backups* swaps back "
               "(ADR-0077).")
@@ -1385,7 +1669,33 @@ def _restore_state(engine: Engine, state: StateLayer) -> None:
                                 state.take_backups)
 
 
-_start_engine_once()
+def _restore_series(engine: Engine, state: StateLayer) -> None:
+    """Put back the series the last process kept, and keep writing them
+    (ADR-0087) — once, post-fork, before the engine runs.
+
+    After :func:`_restore_state`, which has already fetched what a keeper holds, so
+    an instance on a fresh machine comes up with the series the old one wrote. The
+    file is read whole or not at all: one of another shape is a load failure, a
+    line on the ``state`` child for the life of the process, and the series start
+    empty. What it holds is put back as it was written; this configuration's
+    retention meets it on the engine's first tick, whose sweep drops a series no
+    configured check keeps and holds the rest to their counts and the ceiling.
+
+    Registered as a kept file with the store's own ``restore`` as its other
+    direction, so a keeper's takeover adopts the store's copy (ADR-0077) and a
+    backup swapped back replaces the series the same way.
+    """
+    payload = state.read(SERIES_FILE)
+    if payload is not None:
+        try:
+            engine.series.restore(payload)
+        except ValueError as error:
+            state.report_load_failure(SERIES_FILE, str(error))
+        else:
+            logger.info("state: restored %d series from %s",
+                        sum(used.series for used in engine.series.usage().values()),
+                        state.path(SERIES_FILE))
+    state.keep(SERIES_FILE, engine.series.payload, restore=engine.series.restore)
 
 
 #: The machine's trust store, measured **once** here and never again (ADR-0073).
@@ -1399,12 +1709,13 @@ def _first_pass_done() -> bool:
     """Whether there is a first pass to wait for and the engine has finished it.
 
     The two ways to have no engine are not one answer (ADR-0066 §2 draws the same
-    line for ``/health``). A deployment that said ``LITTLE_SISTER_ENGINE=0`` has
+    line for ``/health``). A server started with ``LITTLE_SISTER_ENGINE=0`` has
     **no pass to wait for** and is ready at once — a deliberate quiet is not a
     thing to keep traffic away from. A configuration this instance could not load
-    leaves an engine that will never run one, and that instance never becomes
-    ready: it serves, its banner explains itself to whoever opens it, and a
-    balancer with a working instance beside this one sends traffic there.
+    leaves an engine that will never run one, and so does a server that never
+    started it (ADR-0091); that instance never becomes ready: it serves, its banner
+    explains itself to whoever opens it, and a balancer with a working instance
+    beside this one sends traffic there.
     """
     if engine is not None:
         return engine.outcomes.first_pass
@@ -1417,19 +1728,23 @@ def _check_outcomes() -> readiness.Outcomes | None:
     return engine.outcomes if engine is not None else None
 
 
-#: This instance's readiness (ADR-0073), and the contributor that carries its two
+#: This instance's readiness (ADR-0073), and the contributor that carries its
 #: lines to ``/little-sister``. Registered here rather than in the
-#: import-before-app block because two of the three conditions are only settled
-#: once that block and the engine start have both run.
+#: import-before-app block, and asked each time: two of the three conditions are
+#: only settled once that block has run and the server's start has started the
+#: engine, and the lease the start takes is what says whether this instance still
+#: saves (ADR-0090).
 instance_readiness = readiness.Readiness(
     doors=lambda: bool(identity.registered_doors()),
     trust=lambda: trust_store,
     first_pass=_first_pass_done,
-    outcomes=_check_outcomes)
+    outcomes=_check_outcomes,
+    lost=lambda: lease.lost if lease is not None else None)
 self_report.register_contributor(
     "readiness", instance_readiness.lines, title="Readiness",
     about="Whether this instance can be sent traffic — what `/ready` answers, and "
-          "the two silent failures of a first rollout as lines (ADR-0073).")
+          "the two silent failures of a first rollout as lines (ADR-0073) — and "
+          "whether it still saves what it observes (ADR-0090).")
 # What this process learned at startup and cannot undo — a setting it could not
 # honor, a door that is shut — noted into `self_report.startup` wherever it was
 # learned, and read here under one name (ADR-0072 §7).
@@ -1601,6 +1916,10 @@ def status(branch: str = "") -> ResponseReturnValue:
         copy_rich = render_markdown(copy_markdown)
         return render_template('check.html', username=user.name,
                                firstname=user.firstname, node=node,
+                               # What the node read over time, where it stands
+                               # for a subject (ADR-0092): its curves and its
+                               # newest readings.
+                               series=_series_views(node),
                                # Which checks are reached **through** this one: the
                                # other end of a shield, and the only place the cost
                                # of one is visible before it is paid.
@@ -1619,6 +1938,9 @@ def status(branch: str = "") -> ResponseReturnValue:
     # None on the overview root, which is nobody's node.
     branch_periods = status_tree.history(branch) if branch and node else []
     since = branch_periods[-1].since if branch_periods else None
+    # The same series block as the leaf page's, from the unfiltered node: the poll
+    # renders it again, so a polled page carries at most `reading_cap` rows.
+    series = _series_views(node) if branch else ()
     # Lift the engine self-heartbeat into the status strip (ADR-0024) before filtering,
     # so it shows there always — never as a card, never hidden by hide-ok.
     node, heartbeat = _split_heartbeat(node)
@@ -1651,7 +1973,7 @@ def status(branch: str = "") -> ResponseReturnValue:
     rendered_at = _format_local(now)
     if request.args.get('fragment'):
         body = render_template('_status_grid.html', node=node, branch=branch,
-                               since=since,
+                               since=since, series=series,
                                # The poll fragment renders the same node block as
                                # the page, so it needs the same facts — without
                                # this the dependent count would vanish ten seconds
@@ -1672,6 +1994,7 @@ def status(branch: str = "") -> ResponseReturnValue:
         node_meta = _node_meta_map(node) | _node_meta_map(heartbeat)
         body = render_template('status.html', username=user.name,
                                firstname=user.firstname, node=node,
+                               series=series,
                                dependents=(status_tree.dependents(branch)
                                            if branch else ()),
                                branch=branch, since=since, max_depth=depth,
@@ -1710,9 +2033,23 @@ def history(path: str) -> ResponseReturnValue:
     user = identity.signed_in()
     node = status_tree.snapshot(path)
     periods = list(reversed(status_tree.history(path)))
+    # A node that declares nothing above nodes that report has no own status for a
+    # period to name — the Time card's rule, with its test: its `UNDEFINED` is a
+    # container's, and its page heads with what its children roll up to. So its
+    # current period is not a row; the table ends with the last one that named a
+    # status, and a line says since when (ADR-0094 decision 5). A leaf's
+    # `UNDEFINED` is its own reading and keeps its row, as does one in the past.
+    quiet_since: str | None = None
+    if (node is not None and node.own_code is StatusCode.UNDEFINED and node.children
+            and periods and periods[0].code is StatusCode.UNDEFINED):
+        quiet_since = periods.pop(0).since
     return render_template('history.html', username=user.name,
                            firstname=user.firstname, node=node,
-                           branch=path, periods=periods)
+                           branch=path, periods=periods,
+                           declares_nothing_since=quiet_since,
+                           # Every reading the series keeps, beneath the periods
+                           # (ADR-0092 decision 6): the page is not polled.
+                           series=_series_views(node, every=True))
 
 
 _DEFAULT_MAINTENANCE_SECONDS = 7 * 24 * 3600   # hard fallback if config is unusable
@@ -2671,5 +3008,12 @@ def favicon() -> ResponseReturnValue:
 
 
 if __name__ == '__main__':
-    # use_reloader=False so the engine isn't started twice in dev.
+    # The development server's start (ADR-0091); gunicorn's is the hooks module's.
+    # A refusal has already said whose the state directory is.
+    try:
+        start()
+    except LeaseRefused:
+        raise SystemExit(1) from None
+    # use_reloader=False: the reloader runs this module again in a child process,
+    # and that would be a second start beside this one.
     app.run(debug=True, use_reloader=False)

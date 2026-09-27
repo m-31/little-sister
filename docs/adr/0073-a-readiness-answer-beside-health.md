@@ -1,7 +1,7 @@
 # ADR-0073 — A readiness answer beside `/health`, and it latches
 
 - **Status:** Accepted
-- **Date:** 2026-09-20 (accepted 2026-09-05)
+- **Date:** 2026-09-27 (accepted 2026-09-05)
 - **Related:** [ADR-0066](0066-health-answers-liveness-and-says-almost-nothing.md)
   (the liveness route this one stands beside, and whose bound on an ungated route it
   inherits), [ADR-0067](0067-the-run-scripts-can-serve-tls.md) §6 (the probe path,
@@ -11,7 +11,10 @@
   the same argument one scale up),
   [ADR-0069](0069-identity-comes-from-outside-and-one-account-does-not.md) (the
   doors, and the instance that registered none),
-  [ADR-0072](0072-the-instance-reports-on-itself.md) (the seam the two lines ride)
+  [ADR-0072](0072-the-instance-reports-on-itself.md) (the seam the lines ride),
+  [ADR-0091](0091-an-import-is-not-an-instance.md) (the server's start, which starts the
+  engine), [ADR-0090](0090-one-state-directory-one-writer.md) (the lease whose loss is
+  the third line)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -107,7 +110,10 @@ rolling onto it, and the instances already serving go on serving.
   certificate, not how many it has counted. A store that could not be measured at all
   is **not** reported as empty and does not hold readiness back: refusing to serve
   over a measurement that failed is a guess with a load balancer behind it.
-- **`first-pass`** — the engine has run every configured check once. A secret-pinned
+- **`first-pass`** — the engine has started and run every configured check once. It
+  starts at the server's start, not at the import
+  ([ADR-0091](0091-an-import-is-not-an-instance.md)), so a server that never starts it —
+  a gunicorn line without the library's hooks — never becomes ready. A secret-pinned
   check counts: it stores its `ERROR` without ever calling `run()`
   ([ADR-0023](0023-secret-references.md)), and a pass that waited for it would never
   end. A configuration holding no checks has completed its empty pass and is ready —
@@ -144,12 +150,13 @@ the wrong thing.
 [ADR-0066](0066-health-answers-liveness-and-says-almost-nothing.md) §4 makes, for
 the same audience.
 
-### 5. The two rollout failures are lines on `/little-sister`
+### 5. The two rollout failures, and a lost lease, are lines on `/little-sister`
 
 A route a machine reads is not where a person looks, so both failures from the
-Context are also lines on the instance's own node, through the seam every contributor
-uses ([ADR-0072](0072-the-instance-reports-on-itself.md)) — recorded state read on
-the tick, pinnable as `readiness.<slug>`, clearing when their condition does.
+Context are also lines on the instance's own node, beside a third, through the seam
+every contributor uses ([ADR-0072](0072-the-instance-reports-on-itself.md)) —
+recorded state read on the tick, pinnable as `readiness.<slug>`, clearing when their
+condition does, the third excepted.
 
 - **`readiness.trust`, at `ERROR`** — *the machine's trust store holds no CA
   certificates*. A defect **here**, fixed by rebuilding the image, and the sentence
@@ -168,6 +175,12 @@ the tick, pinnable as `readiness.<slug>`, clearing when their condition does.
   It needs **more than one** check: with a single one, *every check is erroring* says
   nothing that check's own node does not, and a line that adds nothing is one
   somebody learns to skip.
+- **`readiness.saves`, at `ERROR`** — *this instance runs no more checks and saves
+  nothing*, from the moment the state directory's lease was taken from this instance
+  and it stopped its engine and its writes
+  ([ADR-0090](0090-one-state-directory-one-writer.md) decision 7). It is recorded
+  state, read like the other two, but its condition lasts for the life of the process:
+  a holder that lost the lease never runs a check again, and a restart is the way back.
 
 Neither line is the readiness answer, and the reasons an instance did not become
 ready are deliberately not lines: they are the startup log and `/system`, where a

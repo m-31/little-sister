@@ -25,6 +25,7 @@ from little_sister.limits import (
     ENTRY_LIMIT,
     MEMORY_SHARE,
     RECORD_LIMIT,
+    SERIES_LIMIT,
 )
 from little_sister.logger import logger
 from little_sister.state import DEFAULT_STATE_INTERVAL
@@ -35,6 +36,7 @@ DEFAULT_MAINTENANCE_EXPIRY = "7d"
 DEFAULT_REASON_CAP = 6
 DEFAULT_BRANCH_CAP = 3
 DEFAULT_MAINTENANCE_CAP = 5
+DEFAULT_READING_CAP = 10
 
 #: Consecutive worse readings before a node escalates, unless somebody says
 #: otherwise. **One** is deliberate: it is exactly today's behavior, so the counter
@@ -89,6 +91,12 @@ class Config:
     # branch_cap, plumbed to the full page and the ?fragment swap. A non-negative int
     # (0 sends every pin straight to the /maintenance page).
     maintenance_cap: int = DEFAULT_MAINTENANCE_CAP
+    # A subject's newest readings the node that stands for it shows, beneath its
+    # curves (ADR-0092): the count-cap sibling of the three above, and the one a
+    # check may state for itself (`reading_cap` in its own YAML wins). A
+    # non-negative int; 0 shows the curves alone and leaves every reading to the
+    # node's History page, which always lists them all.
+    reading_cap: int = DEFAULT_READING_CAP
     # Show a failing check's **stack trace** on its node, not just the exception
     # message (ADR-0040). On by default: this is an operator dashboard, and
     # a deployment where the log is awkward to reach — a container, someone else's
@@ -152,6 +160,14 @@ class Config:
     # A positive integer; default 2,048, which leaves a composed record room to
     # grow and refuses a raw row from a provider's API.
     record_limit: int = RECORD_LIMIT
+    # What every series together may weigh, in the bytes of the JSON the series
+    # file keeps their readings in (ADR-0087): past it the series written to
+    # longest ago is evicted and the engine's `series` line is red, from 80 % of
+    # it that line is amber, and a configuration whose series would need more at
+    # today's estate is the `series.projection` line. A positive integer;
+    # default 8 MiB, since the series file a keeper carries every interval binds
+    # long before memory does.
+    series_limit: int = SERIES_LIMIT
     # How many consecutive readings of a worse code a node needs before it
     # publishes that code to its parent (backlog #38 B). A positive integer;
     # default 1, which publishes at once and is what every deployment had before
@@ -215,6 +231,22 @@ def _valid_maintenance_cap(value: object) -> int:
         return DEFAULT_MAINTENANCE_CAP
     if cap < 0:
         logger.warning("config: maintenance_cap %d is negative; using 0", cap)
+        return 0
+    return cap
+
+
+def _valid_reading_cap(value: object) -> int:
+    """Coerce the readings cap (ADR-0092) to a non-negative int; a bad or
+    negative value falls back to the default (``0`` shows the curves alone). A
+    check's own ``reading_cap`` is read by the check, and refuses the load instead."""
+    try:
+        cap = int(str(value).strip())
+    except ValueError:
+        logger.warning("config: reading_cap %r is not an integer; using %d",
+                       value, DEFAULT_READING_CAP)
+        return DEFAULT_READING_CAP
+    if cap < 0:
+        logger.warning("config: reading_cap %d is negative; using 0", cap)
         return 0
     return cap
 
@@ -346,6 +378,24 @@ def _valid_record_limit(value: object) -> int:
     return limit
 
 
+def _valid_series_limit(value: object) -> int:
+    """Coerce the series' ceiling (ADR-0087) to a positive int of bytes; a bad or
+    non-positive value falls back to the default with a warning. Zero would evict
+    every series on the tick after it was written, which is a history switched off
+    by a setting that reads like a size."""
+    try:
+        limit = int(str(value).strip())
+    except ValueError:
+        logger.warning("config: series_limit %r is not an integer; using %d",
+                       value, SERIES_LIMIT)
+        return SERIES_LIMIT
+    if limit < 1:
+        logger.warning("config: series_limit %d is not positive; using %d",
+                       limit, SERIES_LIMIT)
+        return SERIES_LIMIT
+    return limit
+
+
 def _valid_memory_share(value: object) -> float:
     """Coerce the resident-memory share to a fraction in ``(0, 1]``; anything
     else falls back to the default with a warning. A share above one would be a
@@ -428,6 +478,8 @@ def load_config(path: str | Path | None = None, *,
         branch_cap=_valid_branch_cap(data.get("branch_cap", DEFAULT_BRANCH_CAP)),
         maintenance_cap=_valid_maintenance_cap(
             data.get("maintenance_cap", DEFAULT_MAINTENANCE_CAP)),
+        reading_cap=_valid_reading_cap(
+            data.get("reading_cap", DEFAULT_READING_CAP)),
         retry_interval=values.text(data, "retry_interval", default=""),
         retry_attempts=_valid_retry_attempts(
             data.get("retry_attempts", DEFAULT_RETRY_ATTEMPTS)),
@@ -445,24 +497,27 @@ def load_config(path: str | Path | None = None, *,
             data.get("memory_share", MEMORY_SHARE)),
         record_limit=_valid_record_limit(
             data.get("record_limit", RECORD_LIMIT)),
+        series_limit=_valid_series_limit(
+            data.get("series_limit", SERIES_LIMIT)),
         escalate_after=_valid_escalate_after(
             data.get("escalate_after", DEFAULT_ESCALATE_AFTER)),
     )
     if sources:
         logger.info(
             "config: loaded %s — timezone=%s, time_format=%r, reason_cap=%d, "
-            "branch_cap=%d, maintenance_cap=%d, maintenance_default_expiry=%s, "
+            "branch_cap=%d, maintenance_cap=%d, reading_cap=%d, "
+            "maintenance_default_expiry=%s, "
             "retry_interval=%s, retry_attempts=%d, card_status_line=%s, "
             "dashboard_columns=%s, state_interval=%d, max_workers=%d, "
             "entry_limit=%d, memory_share=%s, record_limit=%d, "
-            "escalate_after=%d",
+            "series_limit=%d, escalate_after=%d",
             ", ".join(str(source.resolve()) for source in sources),
             cfg.timezone, cfg.time_format, cfg.reason_cap, cfg.branch_cap,
-            cfg.maintenance_cap, cfg.maintenance_default_expiry,
+            cfg.maintenance_cap, cfg.reading_cap, cfg.maintenance_default_expiry,
             cfg.retry_interval or "off", cfg.retry_attempts,
             cfg.card_status_line, cfg.dashboard_columns, cfg.state_interval,
             cfg.max_workers, cfg.entry_limit, cfg.memory_share,
-            cfg.record_limit, cfg.escalate_after)
+            cfg.record_limit, cfg.series_limit, cfg.escalate_after)
     return cfg
 
 

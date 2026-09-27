@@ -9,12 +9,14 @@ nominal frequency; ``/system`` says when a slot is a retry slot.
 
 import os
 import tempfile
+from collections.abc import Sequence
 from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from unittest import TestCase, mock
 
-os.environ.setdefault("LITTLE_SISTER_ENGINE", "0")
+from little_sister.checks import Measurement
+
 os.environ.setdefault("SECRET_KEY", "test-key")
 
 from little_sister import app as app_module
@@ -33,7 +35,11 @@ class _Probe(Check):
         super().__init__(**kwargs)   # type: ignore[arg-type]
         self.result = CheckResult(StatusCode.ERROR, ["down"])
 
-    def run(self) -> CheckResult:
+    def measure(self) -> Sequence[Measurement]:
+        return ()
+
+    def grade(self, measurements: Sequence[Measurement],
+              now: datetime) -> CheckResult:
         return self.result
 
 

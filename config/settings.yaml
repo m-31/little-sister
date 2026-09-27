@@ -38,6 +38,12 @@ branch_cap: 3
 # every pin straight to the /maintenance page).
 maintenance_cap: 5
 
+# The newest readings a node shows beneath its curves, where it stands for a thing a
+# check keeps a history of (`series_keep`, ADR-0092); every one is on the node's
+# History page. A non-negative integer; default 10 (0 shows the curves alone). A
+# check may state its own `reading_cap`, which wins for that check.
+reading_cap: 10
+
 # Where a dashboard card's status cluster (time, cue and status word) sits relative
 # to its title. `beside` is the library default: compact host walls keep one-line
 # heads whenever they fit. Omitting the key leaves an unconfigured deployment's
@@ -84,8 +90,8 @@ retry_interval: 0
 # default 2.
 retry_attempts: 2
 
-# How often the kept state files under var/state/ — the event log, and what joins
-# it — are written (ADR-0071): at most once per this many seconds, on the scheduler
+# How often the kept state files under var/state/ — the event log and the series —
+# are written (ADR-0071): at most once per this many seconds, on the scheduler
 # tick, and once more at graceful shutdown, so an unclean shutdown loses at most
 # this much. Maintenance pins are written through as they change and never wait on
 # it. A positive integer; default 60.
@@ -119,12 +125,24 @@ memory_share: 0.5
 # check read about one subject, and the default is drawn where a composed record
 # ends and a payload dump begins: a few hundred bytes for the first records written
 # by hand, several kilobytes for a single raw row from a provider's API. An
-# over-heavy record fails its whole check, loudly, with the size in the line — so
-# raising this is how a deployment answers a refusal it disagrees with, and the
-# other answer is a check that hands over less. A check type that *declares* what one
+# over-heavy record costs its own line or reading and never the run: the node says
+# which and why, with the size, and so does /little-sister/runtime — so raising this
+# is how a deployment answers a refusal it disagrees with, and the other answer is a
+# check that hands over less. A check type that *declares* what one
 # of its records needs (`expected_record()`) is measured against this at startup and
 # named there instead, before it has run at all. A positive integer; default 2048.
 record_limit: 2048
+
+# What every series together may weigh (ADR-0087), counted in the bytes of the JSON
+# the series file keeps each reading in — the way `record_limit` counts one record.
+# A check keeps a series only where its own `series_keep:` says so; past this, the
+# series written to longest ago is evicted whole, and the engine's `series` line
+# says so in red. Its `series.projection` line says in amber, on the first tick,
+# when this configuration would need more than this at today's estate — hours
+# before a slowly filling series gets there. The file binds before memory does: it
+# is rewritten whole every interval a series changed, about thirteen mebibytes at
+# the default, and a keeper carries each copy. A positive integer; default 8388608.
+series_limit: 8388608
 
 # How many consecutive readings of a **worse** code a node needs before it publishes
 # that code to the level above it. The leaf itself is honest from the first failure —

@@ -41,9 +41,16 @@ hosts, a 12- and a 100-linked-reason eruption, a 200-line `code()` reason, a
 15-leaf host, a depth-8 tree, over-long names/titles/`about`, a
 live+stale+idle+maintenance mix, graduated reason counts (cap boundaries), the
 empty engine-down tree, the engine-start failure banner (a `Fixture` with
-`engine_error` set renders the header alert over the empty grid), and an admin
+`engine_error` set renders the header alert over the empty grid), an admin
 member-leaf page carrying rendered node/entry maintenance explanations plus their
-closed editors. A second,
+closed editors, a leaf page whose lines and measured record carry times — read
+in the configured zone, beside a null, a time-shaped value under an untyped name and
+a time past the calendar, which are shown as stored — and a subject's **series** twice
+([ADR-0092](adr/0092-a-check-declares-its-measures.md)): an `http` leaf with eight hours
+of response times, a burst of failed requests and one alone marked in the curve's lane,
+an hour and a half asleep left plain, and the newest ten readings beneath; and a host
+branch whose two measures are two curves, one of them in `%`. A `Fixture` with an
+`engine` lends the page the engine its series is read from. A second,
 **realistic-wall** tier embeds the extremes in a
 populated overview (all content synthetic): an 80-root mixed wall (root scale), a
 multi-front incident wall (eruption + trace + stale/idle/maintenance at once), an
@@ -66,18 +73,31 @@ neighbors, a node ageing into **stale**, a popover surviving a fragment swap,
 the freshness line escalating into the outage banner (stop the server and wait
 out six polls).
 `tests/demo_wsgi.py` is a dev WSGI wrapper that registers a scripted `demo` check
-type and starts the engine against a demo tree — dogfooding the same public
-`CHECK_TYPES` seam a real deployment uses (see
-[`implementing-checks.md`](implementing-checks.md) §4):
+type and the login list's door, and points the application at a demo tree —
+dogfooding the same public seams a real deployment uses (see
+[`implementing-checks.md`](implementing-checks.md) §4). Importing it starts nothing:
+the server's start runs the engine, so gunicorn needs the hooks module on its line
+like any instance, and the development server calls the start itself:
 
 ```bash
-uv run gunicorn -w1 --threads 8 tests.demo_wsgi:app     # then http://localhost:8000
+uv run gunicorn -w1 --threads 8 --config python:little_sister.gunicorn_hooks \
+    tests.demo_wsgi:app                                  # then http://localhost:8000
 # or the Flask dev server:
 uv run python tests/demo_wsgi.py
 ```
 
-It stays on **8000** while an instance serves on 8888, so the demo and a real instance
-can run side by side rather than fighting for one port.
+It stays on **8000** while an instance serves on 8888, and it keeps what a restart
+keeps — its state directory, the lease on it, its log — in `var/demo/` rather than in
+the checkout's own `var/`, so the demo and a real instance of this checkout can run
+side by side rather than fighting for one port or one state directory, whose lease
+admits one writer ([ADR-0090](adr/0090-one-state-directory-one-writer.md)).
+`LITTLE_SISTER_DEMO_DIR` names another directory; `test_demo_check.py` uses it to
+start the demo where it writes nothing into the checkout. Stop it and start it again to
+see what a restart does to a history
+([ADR-0094](adr/0094-a-restart-is-no-transition.md)): a node reading what it read
+before keeps its period across the restart, `/events` gains an event only for a node
+whose reading changed, and `/history/little-sister` shows the gap — *undefined, the
+instance was not running*, from the stop until the first beat.
 
 Log in with the committed fixture user **`pan` / `12345678`**. Use a single worker:
 the engine and the status tree live in-process.
@@ -127,7 +147,30 @@ time:
   ([ADR-0042](adr/0042-entries-carry-their-own-code.md)): each line declares its
   own verdict, the check declares no node code at all, and one build walks the
   whole arc in a cycle — passed, a rerun in italic on a passing job, failed,
-  the retry running *while the line stays red*, recovered.
+  the retry running *while the line stays red*, recovered. That build line carries
+  its run's record, so the leaf page shows a line's times in the configured zone —
+  the completed run's `completed.at`, and a run in flight's `running.started` beside
+  a null `running.ended` — and every demo node's *Measured* card shows its reading's
+  own `at`.
+- **latency** — a site's answer, recorded as `http` records one: a status and a
+  response time, both null where the request failed. `/services/web` keeps it as a
+  series and declares its one measure in its YAML (`measures:`), so its page shows the
+  **Readings** card ([ADR-0092](adr/0092-a-check-declares-its-measures.md)): the
+  response-time curve and the newest eight readings, every one on its History page.
+  Each three-minute cycle fails a few requests — marked in the curve's lane, the
+  retry making them several — and hangs one run for 45 seconds: nothing is read
+  meanwhile, the node goes stale, and the curve breaks there with no mark. Watch a
+  cycle go by, then compare the two breaks.
+- **workflows** — three repositories' latest CI runs, read in **one run** the way a
+  provider type reads its subjects, each graded into the line that carries it. Twice
+  in each two-minute cycle a provider's answer breaks the seam — `octo/web`'s time
+  comes without its offset, `octo/docs` carries a log past `record_limit` — and each
+  costs its own reading and nothing else
+  ([ADR-0093](adr/0093-a-record-the-seam-refuses-costs-its-line.md)): `/ci/workflows`
+  turns amber with a line naming the repository and why, ahead of the healthy one;
+  `/little-sister/runtime` holds a line for each; and `/system` marks the record it
+  saw *refused* while the heavy one is in. Where the two stretches overlap, `octo/api`
+  is graded alone.
 
 ### Members, and the two slug promises
 

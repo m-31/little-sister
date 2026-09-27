@@ -1,8 +1,10 @@
 """File-freshness check: OK while a file keeps being updated."""
 from __future__ import annotations
 
+import json
 import os
-import time
+from collections.abc import Sequence
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -10,15 +12,28 @@ from little_sister.checks.base import (
     Check,
     CheckError,
     CheckResult,
+    Measurement,
     coerce_code,
     config_markdown,
     parse_duration,
     plain,
     register,
 )
+from little_sister.checks.output import FAILURE_BYTES, failure_text
 from little_sister.status import StatusCode
 
 DEFAULT_MAX_AGE_SECONDS = 1200   # 20 minutes
+
+#: What one record of this check costs, declared for the startup comparison
+#: (ADR-0075) — a **ceiling**. The failed read is the larger shape: `modified.at`
+#: standing as a null beside the reason, as `json.dumps` writes them, plus the
+#: reason at the most :func:`failure_text` lets it cost — `FAILURE_BYTES`, which
+#: already counts the string's own quotes, so the skeleton's empty `""` comes off.
+#: The reason names the file and the OS error, and a path is as long as somebody
+#: made it, which is why it is clipped rather than trusted. A read that succeeded
+#: is one ISO-8601 instant with its offset, some fifty bytes.
+RECORD_BYTES = (len(json.dumps({"modified": {"at": None}, "error": ""}))
+                - len('""') + FAILURE_BYTES)
 
 
 @register("file")
@@ -32,7 +47,10 @@ class FileFreshnessCheck(Check):
 
     def __init__(self, *, file_path: str, max_age_seconds: int,
                  stale_code: StatusCode, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
+        # The file **is** the object this check reads — the local twin of the
+        # `http` check's URL. Not the node's path, which is where the deployment
+        # chose to hang the node and says nothing about which file went stale.
+        super().__init__(subject=file_path, **kwargs)
         self.file_path = file_path
         self.max_age_seconds = max_age_seconds
         self.stale_code = stale_code
@@ -61,21 +79,62 @@ class FileFreshnessCheck(Check):
             "stale code": self.stale_code.name.lower(),
         })
 
-    def run(self) -> CheckResult:
+    def measure(self) -> Measurement:
+        """Read the file's modification time, and nothing about whether it is old.
+
+        How old is too old is `max_age` — configuration, read by the grading —
+        and *how old* is a fact about `now`, which the grading is handed. Neither
+        belongs here, and this is the clearest case in the library of why: this
+        half must produce the same record whenever it is replayed, and an age
+        would be stale the moment it was written.
+
+        The time carries an **offset**: `at` is a name the surfaces read as an
+        instant, and the seam converts it to UTC. A naive stamp is an instant
+        only to whoever wrote it.
+        """
         try:
             mtime = os.path.getmtime(self.file_path)
         except FileNotFoundError:
-            return CheckResult(
-                StatusCode.ERROR, [f"file not found: {plain(self.file_path)}"])
+            # The failure names the file, because a series of failures that does
+            # not is a column of "could not read" nobody can act on. Raw, not
+            # `plain()`-ed: a record's values are escaped where they are rendered,
+            # and the grading folds this one into Markdown itself. Clipped once, in
+            # bytes, like any free text entering a record (ADR-0086 decision 7):
+            # the path is as long as somebody made it.
+            return Measurement(record={
+                "modified": {"at": None},
+                "error": failure_text(f"file not found: {self.file_path}")})
         except OSError as error:
-            return CheckResult(StatusCode.ERROR,
-                               [f"cannot read file: {plain(str(error))}"])
-        age = time.time() - mtime
+            return Measurement(record={
+                "modified": {"at": None},
+                "error": failure_text(f"cannot read file: {error}")})
+        return Measurement(record={
+            "modified": {"at": datetime.fromtimestamp(
+                mtime, tz=UTC).isoformat()}})
+
+    def grade(self, measurements: Sequence[Measurement],
+              now: datetime) -> CheckResult:
+        """Is that reading fresh enough? Pure over the record, `max_age` and the
+        clock it is given — which is exactly the three this seam promises, and why
+        this check can be graded again next year over a record out of the series.
+
+        `measure` above always hands back exactly one reading.
+        """
+        record = measurements[0].record
+        moment = record.get("modified", {}).get("at")
+        if moment is None:
+            failure = str(record.get("error") or "cannot read file")
+            return CheckResult(StatusCode.ERROR, [plain(failure)])
+        age = (now - datetime.fromisoformat(moment)).total_seconds()
         if age <= self.max_age_seconds:
             return CheckResult(StatusCode.OK)
         return CheckResult(self.stale_code, [
             f"stale: last changed {_format_age(age)} ago "
             f"(max {_format_age(self.max_age_seconds)})"])
+
+    def expected_record(self) -> int:
+        """A timestamp and, on a bad read, a short reason (ADR-0075)."""
+        return RECORD_BYTES
 
 
 def _format_age(seconds: float) -> str:

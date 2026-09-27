@@ -66,10 +66,11 @@ TEST_CA_SUBJECT_HASH = "56f8c844"
 
 
 def _readiness(*, doors: bool = True, trust: TrustStore = FULL,
-               first_pass: bool = True,
-               outcomes: Outcomes | None = None) -> Readiness:
+               first_pass: bool = True, outcomes: Outcomes | None = None,
+               lost: str | None = None) -> Readiness:
     return Readiness(doors=lambda: doors, trust=lambda: trust,
-                     first_pass=lambda: first_pass, outcomes=lambda: outcomes)
+                     first_pass=lambda: first_pass, outcomes=lambda: outcomes,
+                     lost=lambda: lost)
 
 
 class VocabularyTests(TestCase):
@@ -323,6 +324,19 @@ class LineTests(TestCase):
         self.assertEqual([line.slug for line in lines], ["all-erroring"])
         self.assertEqual(lines[0].code, StatusCode.WARN)
         self.assertIn("12", lines[0].text)
+
+    def test_a_lost_lease_is_an_error_line_naming_who_holds_the_directory(self):
+        """Losing the lease is said where the instance is watched, not only in the
+        log (ADR-0090 decision 7): no more checks, no more saves, the last view."""
+        lines = _readiness(lost="them:2:t:b on elsewhere, pid 2").lines()
+        self.assertEqual(len(lines), 1)
+        self.assertEqual(lines[0].code, StatusCode.ERROR)
+        self.assertIn("runs no more checks and saves nothing", lines[0].text)
+        self.assertIn("the last view it had", lines[0].text)
+        self.assertIn("them:2:t:b on elsewhere, pid 2", lines[0].text)
+
+    def test_a_held_lease_says_nothing(self):
+        self.assertEqual(_readiness(lost=None).lines(), ())
 
     def test_the_erroring_line_clears_when_one_check_recovers(self):
         self.assertEqual(_readiness(outcomes=Outcomes(12, 12, 11)).lines(), ())

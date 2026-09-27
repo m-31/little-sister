@@ -56,7 +56,7 @@ info:
 
     See `docs/api/README.md` (linked below) for auth, `curl` examples and how tokens
     are provisioned.
-  version: 2.5.0
+  version: 2.6.0
   contact:
     name: little-sister
     url: https://github.com/m-31/little-sister
@@ -455,6 +455,14 @@ components:
             - {"repository": "acme/widget", "workflow": "CI", "branch": "main",
                "verdict": "failure", "run_number": 41,
                "completed": {"at": "2026-09-19T09:12:00Z"}}
+        refused:
+          description: >-
+            Why the server refused this line's record, where it did — `data` is then
+            null — in the sentence the server's own page shows; null on every other
+            line. The line itself stands as the check graded it: its text and its code
+            are the check's, and only the record is missing.
+          type: ["string", "null"]
+          examples: ["it is 2,811 bytes and the limit is 2,048"]
         maintenance:
           description: The pin on this entry, or null when it is not pinned.
           oneOf:
@@ -467,6 +475,7 @@ components:
         - running
         - subject
         - data
+        - refused
         - maintenance
 
     Run:

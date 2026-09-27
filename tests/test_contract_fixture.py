@@ -14,9 +14,8 @@ import json
 import os
 from datetime import UTC, datetime
 from pathlib import Path
-from unittest import TestCase
+from unittest import TestCase, mock
 
-os.environ.setdefault("LITTLE_SISTER_ENGINE", "0")
 os.environ.setdefault("SECRET_KEY", "test-key")
 
 from little_sister import app as app_module
@@ -76,6 +75,12 @@ def build_scene(tree: StatusTree) -> None:
                             "ended": "2026-09-18T06:12:04Z"}}),
         Entry("1001-workflow-77", "acme/api / nightly: disabled manually",
               code=StatusCode.WARN),
+        # **A refused record** (2.6.0): the line stands as its grading wrote it,
+        # its record is null, and `refused` says why — the one shape of the field
+        # that is not null.
+        Entry("1001-workflow-9-main", "acme/api (main) / Deploy: passed (#12)",
+              code=StatusCode.OK, subject="1001",
+              refused="it is 2,811 bytes and the limit is 2,048"),
     ])
     # A branch that answers for nothing itself: `run` is absent here.
     tree.upsert("/platform/actions/acme-api", StatusCode.OK)
@@ -116,7 +121,11 @@ def envelope_from(tree: StatusTree) -> dict:
     app_module.status_tree = tree
     app_module.api_tokens = {"tester": TOKEN}
     client = app_module.app.test_client()
-    answer = client.get("/status", headers=JSON_HEADERS)
+    # The envelope a server with no engine answers (`disabled`): this suite imports
+    # the application and never starts it (ADR-0091), and the artifact is not about
+    # that.
+    with mock.patch.object(app_module, "engine_error", None):
+        answer = client.get("/status", headers=JSON_HEADERS)
     assert answer.status_code == 200, answer.status_code
     body: dict = answer.get_json()
     return body
@@ -207,6 +216,12 @@ class GoldenEnvelopeTests(TestCase):
         self.assertIsNone(shielded["contribution"]["code"])
         self.assertEqual(shielded["code"], "ERROR")
         self.assertTrue(any(node["shielded_by"] is None for node in nodes))
+        # 2.6.0's `refused`: a line whose record the seam refused carries a null
+        # record and the reason beside it, and every other line carries null.
+        refused, = [item for item in items if item["refused"]]
+        self.assertIsNone(refused["data"])
+        self.assertTrue(refused["subject"])
+        self.assertTrue(any(item["refused"] is None for item in items))
         # The typed keys of a record, at any depth.
         record, = [item["data"] for item in items if item["data"]]
         self.assertIn("at", record)

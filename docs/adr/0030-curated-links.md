@@ -1,7 +1,7 @@
 # ADR-0030 — Curated links come from a deployment-supplied file
 
 - **Status:** Accepted
-- **Date:** 2026-08-23 (accepted 2026-08-01)
+- **Date:** 2026-09-27 (accepted 2026-08-01)
 - **Related:** [ADR-0031](0031-deployment-config-directory.md) (the `config/` directory
   and its layering, which this file is an aspect of),
   [ADR-0015](0015-check-discovery-union.md) (the path-list underneath it),
@@ -14,7 +14,8 @@
   strip this deliberately does not disturb),
   [ADR-0028](0028-design-tokens-and-themes.md) (themes the icons must survive),
   [ADR-0029](0029-per-user-presentation-preferences.md) (`DARK_THEMES` → `bs_theme`,
-  the seam the icon variants ride).
+  the seam the icon variants ride), [ADR-0088](0088-a-stop-ends-at-its-save.md) (the
+  stop that abandons a pass in flight).
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -268,6 +269,11 @@ three broken-image glyphs, all of them internal hosts.
    held every later answer out of the store until it finished. That is harmless while a
    pass always completes, and load-bearing the moment one may not — "keep what came
    back" is the whole promise of a deadline.
+
+   **The instance's stop is a deadline as well.** A pass in flight when the instance
+   stops is abandoned the way it is at its own deadline, and its probes run on a pool the
+   interpreter does not join, so a pass never holds the process after its save
+   ([ADR-0088](0088-a-stop-ends-at-its-save.md) decision 6).
 
 Local icon files make this aspect a **directory**, so the example below is
 `config/links/links.yaml` with its files in `config/links/icons/`. A flat

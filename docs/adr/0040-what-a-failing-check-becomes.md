@@ -1,7 +1,7 @@
 # ADR-0040 — What a failing check becomes
 
 - **Status:** Accepted
-- **Date:** 2026-08-02 (decided 2026-08-01 as part of
+- **Date:** 2026-09-27 (accepted 2026-08-02; decided 2026-08-01 as part of
   [ADR-0004](0004-status-aggregation-semantics.md); lifted into its own record by the
   split that ADR-0032 promised)
 - **Supersedes:** [ADR-0004](0004-status-aggregation-semantics.md)'s *A check that
@@ -10,7 +10,8 @@
   [ADR-0018](0018-markdown-rendering.md) (why the message is escaped),
   [ADR-0024](0024-dashboard-layout.md) (`reason_cap`, which clamps the trace),
   [ADR-0008](0008-json-output-api.md) (the envelope carries it with no schema change),
-  [ADR-0023](0023-secret-references.md) (the one check that fails without running)
+  [ADR-0023](0023-secret-references.md) (the one check that fails without running),
+  [ADR-0086](0086-a-check-measures-and-grades.md) (the two methods a check runs as)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -25,8 +26,10 @@ not the same kind of decision as how a parent accumulates.
 A check is not trusted to fail gracefully, so the **engine** decides what a failure
 means in status terms.
 
-1. **Any** exception out of `run()`, a timeout, or a `run()` returning something other
-   than a `CheckResult` becomes **`ERROR`** on the check's own node — never a skipped
+1. **Any** exception out of either half of a run — `measure()` or `grade()`
+   ([ADR-0086](0086-a-check-measures-and-grades.md)) — a timeout, or a grading returning
+   something other than a `CheckResult` becomes **`ERROR`** on the check's own node —
+   never a skipped
    update, and never a stale `OK` left in place. "Unknown" is not an option:
    `UNDEFINED` means *not reported yet*
    ([ADR-0039](0039-status-rollup-semantics.md) rule 2), and a check that raised
@@ -50,9 +53,14 @@ means in status terms.
    clamps it on the dashboard, the detail page shows it whole, and the JSON envelope
    carries it with no schema change.
 
+Where the **measurement** is what raised, the engine also writes the reading —
+`{"error": …}` against the object the check declared — so a check that could not get
+there leaves a record saying so instead of a hole. A grading that raised over a reading
+that succeeded keeps that reading.
+
 A check whose **secret references** failed to resolve at construction is a different
-case: it is pinned to `ERROR` without ever running and is never retried until restart
-([ADR-0023](0023-secret-references.md)).
+case, and records nothing, because it never went: it is pinned to `ERROR` without ever
+running and is never retried until restart ([ADR-0023](0023-secret-references.md)).
 
 ## Consequences
 

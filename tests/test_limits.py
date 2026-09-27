@@ -10,6 +10,7 @@ from unittest import TestCase
 from unittest.mock import patch
 
 from little_sister import limits as limits_module
+from little_sister.engine import FAILURE_RECORD_BYTES
 from little_sister.limits import (
     AMBER_SHARE,
     ENTRY_LIMIT,
@@ -438,7 +439,8 @@ class CapacityTests(TestCase):
 
     def _capacity(self, checks, *, workers=4, entry_limit=100):
         return capacity(checks, max_workers=workers,
-                        limits=Limits(entry_limit=entry_limit))
+                        limits=Limits(entry_limit=entry_limit),
+                        record_floor=FAILURE_RECORD_BYTES)
 
     def test_a_declared_load_that_fits_refuses_and_warns_nothing(self):
         fits = self._capacity([_declaring("/a", cost=30.0, frequency=60, entries=10)])
@@ -516,7 +518,8 @@ class DeclaredRecordTests(TestCase):
     def _capacity(self, checks, *, record_limit=2_048):
         return capacity(checks, max_workers=4,
                         limits=Limits(entry_limit=100,
-                                      record_limit=record_limit))
+                                      record_limit=record_limit),
+                        record_floor=FAILURE_RECORD_BYTES)
 
     def test_a_record_declaration_alone_is_read(self):
         # a type that estimates nothing else still declares something
@@ -565,6 +568,47 @@ class DeclaredRecordTests(TestCase):
         self.assertEqual(quiet.refusals(), ())
         self.assertEqual(quiet.warnings(), ())
 
+    # --- the engine's failure record is a floor (ADR-0086 decision 5) --------
+
+    def test_a_declaration_below_the_floor_is_compared_at_the_floor(self):
+        """Any check may raise, and the record the engine then writes for it can
+        weigh `FAILURE_RECORD_BYTES`; a type declaring less is held to that, and
+        what it said itself is kept beside it for the page."""
+        self.assertLess(64, FAILURE_RECORD_BYTES)
+        declared, = declared_costs([_declaring("/a", record=64)],
+                                   record_floor=FAILURE_RECORD_BYTES)
+        self.assertEqual(declared.record_bytes, FAILURE_RECORD_BYTES)
+        self.assertEqual(declared.record_stated, 64)
+
+    def test_the_floor_is_what_the_limit_is_compared_against(self):
+        # a record_limit between the two numbers: the type's own 64 would fit,
+        # the record the engine can write for it does not
+        refused = self._capacity([_declaring("/a", record=64)],
+                                 record_limit=FAILURE_RECORD_BYTES - 1)
+        said, = refused.refusals()
+        self.assertIn("/a", said)
+        self.assertIn(f"{FAILURE_RECORD_BYTES:,}", said)
+
+    def test_a_declaration_above_the_floor_is_unchanged(self):
+        declared, = declared_costs([_declaring("/a", record=900)],
+                                   record_floor=FAILURE_RECORD_BYTES)
+        self.assertEqual(declared.record_bytes, 900)
+        self.assertIsNone(declared.record_stated)
+
+    def test_a_declaration_at_the_floor_is_the_types_own(self):
+        declared, = declared_costs([_declaring("/a", record=FAILURE_RECORD_BYTES)],
+                                   record_floor=FAILURE_RECORD_BYTES)
+        self.assertEqual(declared.record_bytes, FAILURE_RECORD_BYTES)
+        self.assertIsNone(declared.record_stated)
+
+    def test_a_type_that_declares_no_record_stays_undeclared(self):
+        """The library makes no claim a type did not make: a check declaring a
+        cost but no record is not given the floor as a record size."""
+        declared, = declared_costs([_declaring("/a", cost=5.0)],
+                                   record_floor=FAILURE_RECORD_BYTES)
+        self.assertIsNone(declared.record_bytes)
+        self.assertIsNone(declared.record_stated)
+
     def test_a_declaration_the_library_cannot_read_is_a_silence(self):
         # a type's estimate is code the library does not own (ADR-0075 decision 4):
         # never a reason a monitoring process cannot start
@@ -583,12 +627,14 @@ class CapacityLineTests(TestCase):
 
     def _near_the_workers(self):
         return capacity([_declaring("/a", cost=210.0, frequency=60)],
-                        max_workers=4, limits=Limits(entry_limit=100))
+                        max_workers=4, limits=Limits(entry_limit=100),
+                        record_floor=FAILURE_RECORD_BYTES)
 
     def test_a_load_that_fits_quietly_says_nothing(self):
         report = _report(capacity=capacity(
             [_declaring("/a", cost=60.0, frequency=60)],
-            max_workers=4, limits=Limits(entry_limit=100)))
+            max_workers=4, limits=Limits(entry_limit=100),
+            record_floor=FAILURE_RECORD_BYTES))
         report.observe(0.0, entries=0, waiting=[], late=[])
         self.assertEqual(_slugs(report), [])
 

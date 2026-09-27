@@ -1,7 +1,7 @@
 # ADR-0082 — A line carries what it is about and what it read
 
 - **Status:** Accepted
-- **Date:** 2026-09-19
+- **Date:** 2026-09-27 (accepted 2026-09-19)
 - **Related:** [ADR-0036](0036-addressable-reasons.md) (the entry, and the rule that
   it is not a node), [ADR-0042](0042-entries-carry-their-own-code.md) (the entry's
   own claim, and the value object this extends),
@@ -13,7 +13,10 @@
   sentence to the renderer's field), [ADR-0006](0006-config-file-and-timezones.md)
   (why a record's time carries an offset and the node's need not),
   [ADR-0075](0075-a-check-declares-what-it-costs.md) (declare-and-measure, the shape
-  a later limit negotiation would take)
+  a later limit negotiation would take),
+  [ADR-0093](0093-a-record-the-seam-refuses-costs-its-line.md) (a refused record costs
+  its line or its reading, never the run), [ADR-0085](0085-a-measure-is-read-out-of-a-record.md)
+  (the node's measured record, shown beside the line's)
 - **Register:** [`../decisions.md`](../decisions.md)
 - **Contract:** [`../api/openapi.yaml`](../api/openapi.yaml) — `Entry`, from 2.1.0.
 
@@ -117,7 +120,7 @@ a dashboard rather than from the construction that made it. Enforcing it later i
 also the expensive order — once records exist, turning the check on converts
 working checks into failing ones.
 
-### 3. The seam refuses, and it refuses whole
+### 3. The seam refuses, and a refusal costs the line, not the run
 
 The record is validated where the outside world enters, in `CheckResult`, and a
 violation is a `CheckError` — which is to say a red node naming the check
@@ -125,12 +128,18 @@ violation is a `CheckError` — which is to say a red node naming the check
 Four things are checked: it is a mapping, it serializes to JSON, it is not too
 heavy, and a timed name carries a time.
 
-**The whole result falls**, not the offending line. A check with forty entries, one
-of which carries a bad record, reports the failure and nothing else. That is a real
-cost and it is chosen: dropping the record and keeping the line would leave a
-reader believing the check had none, which is the same reasoning that refuses a
-result declaring both a code and coded entries. Shaping a record to fit is the
-check's job, and the refusal says which field and how many bytes.
+**A refused record costs the line or the reading it belongs to, never the run**
+([ADR-0093](0093-a-record-the-seam-refuses-costs-its-line.md)). The first check to read
+many subjects in one run showed why the whole result cannot fall: one subject's
+record, heavy with names a provider bounds only at 255 bytes, took every aspect's
+reading with it on every poll, and a refusal comes from data as readily as from a
+check's code. What a whole-result refusal guarded stays guarded — a reader must never
+believe a check carried no record when it did. So a line whose record is refused
+stands and carries, beside the record, that it was refused and why; the node's page
+and the instance say it too; and a check author still meets the refusal where the
+record is built, because the seam raises everywhere but inside the engine's own runs.
+Shaping a record to fit is the check's job, and the refusal says which field and how
+many bytes.
 
 **What is stored is the JSON read back**, not the mapping that was handed over. A
 snapshot is read outside the lock ([ADR-0002](0002-rlock-snapshot-synchronization.md)),
@@ -195,6 +204,21 @@ deal to answer a question nobody asked of it. And it is not rendered on a card: 
 node's own page shows it, as a plain list of dotted names and values, which is the
 surface a reader reaches when the line is not enough.
 
+That list reads decision 2's names. A value under `at`, `started` or `ended`, at any
+depth, is shown in the configured `timezone` and `time_format`, as every other time is
+([ADR-0006](0006-config-file-and-timezones.md)); everything else as it was stored — a
+null, a time the zone cannot hold (the seam accepts any instant UTC can, and the last
+half hour of the year 9999 in UTC is the year 10000 in Berlin), and a time-shaped value
+under a name decision 2 does not type, since the type is the name's and never the
+value's. One filter decides a field's kind, reading decision 2's set rather than a copy
+of it, and both records the page shows go through it: a line's, and the one its node
+measured ([ADR-0085](0085-a-measure-is-read-out-of-a-record.md)). **No age stands
+beside a time.** The curves the series draws need none, a check that grades on an age
+says so in its own sentence, as [ADR-0060](0060-a-line-makes-no-claim.md) decision 5
+has a carried reading do, and an age written by a page that is not polled would be
+wrong a minute later. The envelope carries a record's times in UTC, and a client
+renders them as it chooses.
+
 ## Consequences
 
 - **The envelope gains two fields and stays at `schema_version` 2.** The spec's
@@ -246,8 +270,13 @@ surface a reader reaches when the line is not enough.
   runtime refusal ever proves too blunt: a type states what one record needs, and
   startup refuses against the deployment's number instead of the first run doing it
   fifteen minutes later.
-- **Dropping the over-heavy record and keeping the line.** Quieter and wrong: a
-  reader would believe the check carried no record, and nothing would say otherwise.
+- **Dropping the over-heavy record and keeping the line, silently.** Quieter and
+  wrong: a reader would believe the check carried no record, and nothing would say
+  otherwise. Decision 3 keeps the line too, and differs in exactly that — the line, the
+  node's page and the instance say the record was refused and why.
+- **The whole result falls**, not the offending line. Chosen at first, for the reason
+  above, and reversed by [ADR-0093](0093-a-record-the-seam-refuses-costs-its-line.md)
+  once one subject's record was seen taking a many-subject check down on every poll.
 - **Counting the limit in fields, or in depth.** Neither is what a record costs.
   Depth is left unbounded on purpose: deeply nested and small is ugly to render and
   harmless, and a second limit needs a second justification.

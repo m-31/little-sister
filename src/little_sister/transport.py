@@ -2,7 +2,7 @@
 
 Four questions face every check that reads a remote service, and until this module
 existed each of them answered all four for itself (ADR-0058): how long may **one
-request** take, what bounds **the whole run** when one ``run()`` asks fifty times,
+request** take, what bounds **the whole run** when one ``measure()`` asks fifty times,
 what is worth **asking again**, and what a failure **means**.
 
 What lives here is the *policy*, not the transport. There is **no I/O** in this
@@ -124,11 +124,11 @@ class DeadlineExceeded(Exception):
 class Deadline:
     """When this run must stop, and how much of it is left.
 
-    A check builds one from its own ``timeout_seconds`` at the top of ``run()``, and
-    that is what makes `timeout:` a bound rather than a wish: the engine does not
-    bound ``run()`` and never claimed to (architecture.md §4.6), so a check that
-    spends the value as a socket timeout has one budget per request and none at all
-    for the run.
+    A check builds one from its own ``timeout_seconds`` at the top of
+    ``measure()``, and that is what makes `timeout:` a bound rather than a wish: the
+    engine does not bound ``measure()`` and never claimed to (architecture.md
+    §4.6), so a check that spends the value as a socket timeout has one budget per
+    request and none at all for the run.
 
     ``clock`` is injected so a test can drive a budget without spending one, and so
     the whole run reads **one** clock — mixing wall and monotonic time makes the

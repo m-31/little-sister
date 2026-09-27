@@ -40,6 +40,12 @@ until now threw away once it had written its sentence. Both are optional, both a
 invisible until something renders them, and neither makes a line a member: they are
 data about a claim, not a claim.
 
+**A record the seam refuses costs its line, never the run** (ADR-0093). The seam is
+strict by default — a refusal raises, so a check author meets it where the record is
+built — and only inside a run the engine drives, through :func:`lenient_records`, does
+it mark a refused record instead of raising: the line keeps its text and its code, its
+record is null, and ``refused`` says why.
+
 **Where a declared slug comes from** is the check's to answer, and there are two
 answers here: :func:`derived_slug` hashes the text, for a check with nothing
 better, and :func:`slug` joins identifiers the provider already owns, for a check
@@ -50,7 +56,9 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any
@@ -92,18 +100,20 @@ ENTRY_CODES = frozenset({
 #: checked; what a provider mints is its own business.
 MAX_SUBJECT_LENGTH = MAX_SLUG_LENGTH
 
-#: The record keys the surfaces read as an **instant** — to be rendered in the
-#: viewer's timezone and as an age. Recognized at **any depth**, because a record
-#: is a tree and a time nested under ``completed`` is as much a time as one at the
-#: top. The value is an ISO-8601 string carrying an offset, or ``None``; it is
-#: converted to UTC here, at the check's seam, and never re-stamped afterwards.
+#: The record keys the surfaces read as an **instant** — the node's own page shows
+#: each in the configured timezone, and reads this set, never a copy of it, to know
+#: which they are. Recognized at **any depth**, because a record is a tree and a
+#: time nested under ``completed`` is as much a time as one at the top. The value
+#: is an ISO-8601 string carrying an offset, or ``None``; it is converted to UTC
+#: here, at the check's seam, and never re-stamped afterwards.
 #:
 #: Nothing else is typed. A name earns a type when a surface does something with
 #: it that it could not do without one, and today exactly one thing qualifies: a
 #: time cannot be shown in somebody's own zone unless the reader knows it is a
-#: time. A measurement — a number with a unit — is the next candidate and is
-#: deliberately not here: its reader is the series that draws it, and the shape a
-#: measurement takes is that phase's to settle with a curve in front of it.
+#: time. A measurement — a number with a unit — is not here either, and that was
+#: settled with a curve in front of it: which fields are measured, and in which
+#: unit, is **declared** in the check's configuration and never read off a key's
+#: name (ADR-0092), because a name cannot carry the unit the axis needs.
 RECORD_TIMESTAMP_KEYS = frozenset({"at", "started", "ended"})
 
 
@@ -116,14 +126,89 @@ class ReasonError(ValueError):
     construction."""
 
 
+class RecordRefused(ReasonError):
+    """A record the seam refuses: not a mapping, not JSON, heavier than the limit,
+    or carrying something that is not a time under a timed name.
+
+    ``str()`` is the message a check author meets where the record is built, and it
+    names the field or the bytes. ``why`` is the same refusal said in a sentence
+    short enough to stand where the record would have been — on the node's page,
+    beside a null ``data`` in the envelope, in the instance's line — for the run the
+    engine drives, where a refusal is marked rather than raised (ADR-0093).
+    ``size`` is what the refused record weighs as JSON, ``None`` where it does not
+    serialize, and ``heavy`` says the weight is why.
+    """
+
+    def __init__(self, message: str, *, why: str, size: int | None = None,
+                 heavy: bool = False) -> None:
+        super().__init__(message)
+        self.why = why
+        self.size = size
+        self.heavy = heavy
+
+
+@dataclass(frozen=True)
+class Refusal:
+    """A record the seam refused inside a run and marked rather than raised: why,
+    in the sentence that stands where the record would have been, what it weighed
+    as JSON (``None`` where it does not serialize), and whether the weight is why —
+    which is what ``/system`` needs to put a refused record beside a declaration
+    (ADR-0093 decision 6)."""
+
+    why: str
+    size: int | None
+    heavy: bool = False
+
+
+#: The refusals of the run in progress, or ``None`` where the seam is strict —
+#: which is everywhere but inside a run the engine drives (ADR-0093 decision 5).
+#: A context variable, so the run is lenient on its own thread and nowhere else: a
+#: thread a check starts itself begins with a context of its own and judges its
+#: records strictly, unless the interpreter starts a thread from its starter's.
+_LENIENT: ContextVar[list[Refusal] | None] = ContextVar(
+    "little_sister_lenient_records", default=None)
+
+
+@contextmanager
+def lenient_records(into: list[Refusal] | None = None) -> Iterator[list[Refusal]]:
+    """The seam, lenient for the duration: a refused record is **marked** instead
+    of raised, and what was marked is collected in the list this yields — ``into``,
+    where the caller keeps one across two calls, as the engine does around
+    ``measure()`` and ``grade()``.
+
+    The engine's alone to open (ADR-0093 decision 5). Only the engine carries what a
+    mark costs — the node's line, the instance's ``WARN``, ``refused`` in the
+    envelope — so a check, a test suite or a script meets the refusal as it always
+    did, as a raise where the record is built.
+    """
+    refusals: list[Refusal] = [] if into is None else into
+    token = _LENIENT.set(refusals)
+    try:
+        yield refusals
+    finally:
+        _LENIENT.reset(token)
+
+
+def marked(error: RecordRefused) -> Refusal | None:
+    """The refusal as a mark, noted for the run in progress — or ``None`` where the
+    seam is strict, and the caller raises as it always did."""
+    refusals = _LENIENT.get()
+    if refusals is None:
+        return None
+    refusal = Refusal(error.why, error.size, error.heavy)
+    refusals.append(refusal)
+    return refusal
+
+
 def check_subject(value: str, what: str) -> None:
     """Refuse a subject that cannot travel — too long, or carrying a control
     character. Raises :class:`ReasonError`.
 
-    Shared by the two places a measurement names its object: an entry's
-    ``subject``, and a ``CheckResult``'s, where the object has a node of its own
-    (ADR-0085). Only the length and the control characters are checked; what a
-    provider mints is its own business.
+    Shared by every place an object, an event or a state is named: an entry's
+    ``subject``, a check's and a measurement's (ADR-0086), and a measurement's
+    ``identity`` — the event its record is of in the subject's series — or its
+    ``state`` (ADR-0087). Only the length and the control characters are
+    checked; what a provider mints is its own business.
     """
     if len(value) > MAX_SUBJECT_LENGTH:
         raise ReasonError(
@@ -166,6 +251,13 @@ class Entry:
     Neither declares **members**: a record is data, not a claim, so prose that
     carries one stays prose and keeps the node pin as its unit of suppression.
 
+    ``refused`` is the seam's, never the check's: where the record was refused
+    inside a run the engine drives, ``data`` is ``None`` and this says why, in the
+    sentence the node's page shows where the record would be (ADR-0093). The line
+    itself stands as the grading wrote it — its claim was made over readings that
+    passed — and a field beside the record, rather than a key inside it, keeps the
+    record the check's own vocabulary.
+
     ``code`` is the entry's **own status** — the verdict of the workflow this line
     stands for, the severity of this finding. ``None`` (the default) means the
     entry carries its node's code, which is every entry that existed before
@@ -185,6 +277,7 @@ class Entry:
     running: bool = False
     subject: str = ""
     data: dict[str, Any] | None = None
+    refused: str = ""
 
     def __post_init__(self) -> None:
         check_subject(self.subject, "an entry's subject")
@@ -343,6 +436,66 @@ def derive_code(entries: Sequence[Entry]) -> StatusCode:
     return StatusCode.OK
 
 
+def clip(text: str, *, chars: int, budget: int, keep: str = "head") -> str:
+    """Shorten free text **once**, so that one string is both what a record keeps
+    and what the line says about it.
+
+    Two bounds, in this order. ``chars`` is the deployment's — how much captured
+    output it asked to see. ``budget`` is the record's, in the **bytes the seam
+    measures**, and it is the one that is easy to get wrong: a record is weighed
+    as ``json.dumps`` writes it, which escapes to ASCII, so one character is one
+    byte only while the text is ASCII. Measured against a 2 KB ``record_limit``,
+    1000 characters come to 1014 bytes of ASCII, 2014 when every one of them is a
+    newline, and 6014 in umlauts or CJK — three times over. A check that clipped
+    by characters alone would therefore be refused at the seam on every run the
+    moment a log line carried an accent, which is the failure a declaration is
+    supposed to prevent rather than cause.
+
+    Clipping **once** is what keeps the line rebuildable from the record: clip
+    twice, to different lengths, and the sentence a grading writes today can no
+    longer be written from the reading it is stored beside. The visible cost is
+    honest — with non-ASCII output the line shows less than ``chars`` asked for —
+    and it beats a check that goes red every run.
+
+    ``keep`` says which end survives — ``"head"`` or ``"tail"`` — and **both**
+    bounds cut from the same one, because a tail kept by characters and then
+    trimmed at the front by bytes would be neither end of anything.
+
+    No ellipsis: this is the same shortening the capture options have always done,
+    and a marker here would end up inside a fenced block of somebody's log.
+    """
+    if chars <= 0:
+        return ""
+    kept = _end(text, chars, keep)
+    if _json_bytes(kept) <= budget:
+        return kept
+    # The longest piece that fits, by bisection: the encoded length is
+    # non-decreasing in the length, so the answer is exact and the search costs a
+    # handful of encodes rather than one per character.
+    low, high = 0, len(kept)
+    while low < high:
+        middle = (low + high + 1) // 2
+        if _json_bytes(_end(kept, middle, keep)) <= budget:
+            low = middle
+        else:
+            high = middle - 1
+    return _end(kept, low, keep)
+
+
+def _end(text: str, length: int, keep: str) -> str:
+    """``length`` characters off whichever end ``keep`` names."""
+    if length >= len(text):
+        return text
+    return text[:length] if keep == "head" else text[len(text) - length:]
+
+
+def _json_bytes(text: str) -> int:
+    """What one string costs inside a record, in the bytes the limit counts —
+    the same encoding :func:`normalize_record` weighs, spelled the same way so
+    the two cannot drift."""
+    return len(json.dumps(text).encode("utf-8"))
+
+
 def _record_instant(value: object, where: str) -> str | None:
     """One value under a :data:`RECORD_TIMESTAMP_KEYS` name, as UTC — or ``None``.
 
@@ -353,7 +506,9 @@ def _record_instant(value: object, where: str) -> str | None:
     An **offset is required**. A naive stamp is an instant only to whoever wrote
     it; the node's own timestamp may be naive-local because one process owns it
     (ADR-0006), but a record's time comes from somebody else's clock and travels
-    to a viewer in a third zone.
+    to a viewer in a third zone. And the offset can carry an instant at the edge of
+    the calendar past it — the first hour of the year 1 at +01:00 is the year 0 in
+    UTC — which is refused as a time too, never raised as ``OverflowError``.
     """
     if value is None:
         return None
@@ -363,10 +518,42 @@ def _record_instant(value: object, where: str) -> str | None:
         except ValueError:
             moment = None
         if moment is not None and moment.tzinfo is not None:
-            return moment.astimezone(UTC).isoformat().replace("+00:00", "Z")
-    raise ReasonError(
+            try:
+                return moment.astimezone(UTC).isoformat().replace("+00:00", "Z")
+            except OverflowError:
+                raise RecordRefused(
+                    f"record field {where!r} names a time that lies outside the "
+                    f"years 1 to 9999 once it is read in UTC: {value!r}",
+                    why=f"{_shown(where)} names a time, and {_shown(value)} lies "
+                        f"outside the years 1 to 9999 in UTC") from None
+    raise RecordRefused(
         f"record field {where!r} names a time, so its value must be an ISO-8601 "
-        f"string carrying an offset, or null: {value!r}")
+        f"string carrying an offset, or null: {value!r}",
+        why=f"{_shown(where)} names a time, and {_shown(value)} is not one with an "
+            f"offset")
+
+
+#: How much of a name or a value a refusal's sentence quotes. The sentence stands
+#: where the record would have been and travels in the envelope, so a two-kilobyte
+#: value under a timed name must not make it two kilobytes long.
+SHOWN_CHARS = 40
+
+
+def _shown(value: object) -> str:
+    """A name or a value as a refusal's sentence quotes it: its ``repr``, cut to
+    :data:`SHOWN_CHARS` with an ellipsis where it was longer."""
+    text = repr(value)
+    return text if len(text) <= SHOWN_CHARS else f"{text[:SHOWN_CHARS - 1]}…"
+
+
+def _raw_size(data: object) -> int | None:
+    """What a refused record weighs as JSON, as it was handed over — ``None`` where
+    it does not serialize at all. Only a refusal asks; a record that passes is
+    weighed once, by :func:`normalize_record`, in the bytes the limit counts."""
+    try:
+        return len(json.dumps(data, allow_nan=False).encode("utf-8"))
+    except (TypeError, ValueError):
+        return None
 
 
 def _walked(value: object, path: str) -> object:
@@ -403,28 +590,66 @@ def normalize_record(data: object, *, limit: int) -> dict[str, Any]:
     is stored exactly what a client will receive — a tuple arrives as a list, a
     non-string key as a string — rather than something that merely serializes to it.
 
-    An over-heavy record refuses the **whole result**, loudly, the way a
-    declared-and-derived code does: a silently dropped record would be believed
-    missing. The check author meets it on the first run, with the size in the
-    message, and shapes the record to fit.
+    A record it refuses raises :class:`RecordRefused`, whose message names the
+    field or the bytes, so the check author shapes the record to fit where it is
+    built. What the refusal costs is the caller's: everywhere but inside a run the
+    engine drives it is a raise, and inside one it costs the line or the reading the
+    record belongs to and never the run (ADR-0093) — a record silently dropped
+    would be believed missing, so a refused one always says why.
     """
     if not isinstance(data, Mapping):
-        raise ReasonError(
-            f"an entry's record must be a mapping of fields, not "
-            f"{type(data).__name__}")
+        name = type(data).__name__
+        raise RecordRefused(
+            f"an entry's record must be a mapping of fields, not {name}",
+            why=f"it is {'an' if name[:1] in 'aeiouAEIOU' else 'a'} {name}, not a "
+                f"mapping of fields",
+            size=_raw_size(data))
+    # Walked outside the handler below: a bad time is a `ReasonError`, which is a
+    # `ValueError`, and inside it read as a record that "must be JSON-serializable".
+    # Its record counts at the size it was handed over at (ADR-0093 decision 6).
     try:
-        encoded = json.dumps(_walked(data, ""), allow_nan=False)
+        walked = _walked(data, "")
+    except RecordRefused as error:
+        error.size = _raw_size(data)
+        raise
+    try:
+        encoded = json.dumps(walked, allow_nan=False)
     except (TypeError, ValueError) as error:
-        raise ReasonError(
-            f"an entry's record must be JSON-serializable: {error}") from error
+        raise RecordRefused(
+            f"an entry's record must be JSON-serializable: {error}",
+            why=f"it does not serialize to JSON: {error}") from error
     size = len(encoded.encode("utf-8"))
     if size > limit:
-        raise ReasonError(
+        raise RecordRefused(
             f"an entry's record is {size:,} bytes and the limit is {limit:,}: a "
             f"record is what the check read about one subject, never a payload "
-            f"dump")
+            f"dump",
+            why=f"it is {size:,} bytes and the limit is {limit:,}",
+            size=size, heavy=True)
     record: dict[str, Any] = json.loads(encoded)
     return record
+
+
+def record_leaves(record: object) -> Iterator[tuple[str, str, object]]:
+    """Every field of a record by the name a reader addresses it with: its
+    **dotted** path through the mappings above it (``completed.at``), the field's
+    own key (``at``), and the value, in the record's order.
+
+    **The one walk** both readers of a field's name go through: the record list a
+    node's page shows (``_record_list.html``) and the measure a curve reads out of
+    the record (ADR-0092), so that what a reader sees listed is what they write in
+    ``measures:``. A list is a leaf, never exploded into ``field[0]``, and so is
+    every other value that is not a mapping; an empty mapping has no fields.
+    """
+    def walk(item: object, path: str, key: str) -> Iterator[tuple[str, str, object]]:
+        if isinstance(item, Mapping):
+            for below_key, below in item.items():
+                name = str(below_key)
+                yield from walk(below, f"{path}.{name}" if path else name, name)
+            return
+        yield path, key, item
+
+    yield from walk(record, "", "")
 
 
 def _check_declared(slug: str) -> str:
@@ -467,6 +692,21 @@ def _keyed(pairs: Sequence[tuple[str, str]]) -> tuple[Entry, ...]:
     return _dedupe([Entry(slug, text) for slug, text in pairs])
 
 
+def _through_the_seam(item: Entry, limit: int) -> Entry:
+    """One line's record through the seam: the copy the tree holds, or — where the
+    seam refuses it inside a run the engine drives — the line without it, saying
+    why (ADR-0093 decision 2). Outside a run the refusal raises, as it always did."""
+    if item.data is None:
+        return item
+    try:
+        return replace(item, data=normalize_record(item.data, limit=limit))
+    except RecordRefused as error:
+        refusal = marked(error)
+        if refusal is None:
+            raise
+        return replace(item, data=None, refused=refusal.why)
+
+
 def normalize(reason: ReasonInput, entries: bool = False, *,
               record_limit: int | None = None) -> tuple[tuple[Entry, ...], bool]:
     """Normalize any accepted reason form into ``(entries, members)``.
@@ -484,7 +724,9 @@ def normalize(reason: ReasonInput, entries: bool = False, *,
 
     ``record_limit`` turns record validation on and is what the ``CheckResult``
     seam passes; without it records travel as handed over, which is right for the
-    internal callers that re-normalize entries this function already built.
+    internal callers that re-normalize entries this function already built. A record
+    it refuses raises, except inside a run the engine drives, where the line keeps
+    everything but its record and says why it lost it (ADR-0093).
     """
     if reason is None:
         return (), False
@@ -504,10 +746,7 @@ def normalize(reason: ReasonInput, entries: bool = False, *,
         for item in typed:
             _check_declared(item.slug)
         if record_limit is not None:
-            typed = [
-                item if item.data is None else replace(
-                    item, data=normalize_record(item.data, limit=record_limit))
-                for item in typed]
+            typed = [_through_the_seam(item, record_limit) for item in typed]
         deduped = _dedupe(typed)
         members = entries or any(
             item.code is not None or item.running for item in deduped)

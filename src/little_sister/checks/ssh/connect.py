@@ -7,12 +7,19 @@ warning every SSH check built on the transport carries.
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from little_sister.checks.base import CheckResult, config_markdown, plain, register
+from little_sister.checks.base import (
+    CheckResult,
+    Measurement,
+    config_markdown,
+    plain,
+    register,
+)
 from little_sister.checks.ssh.base import SshCheckBase
-from little_sister.checks.ssh.metrics import oneline, strip_ssh_notices
 from little_sister.status import StatusCode
 
 
@@ -28,21 +35,35 @@ class ConnectCheck(SshCheckBase):
     def config_summary(self) -> str:
         return config_markdown(self._connection_fields())
 
-    def run(self) -> CheckResult:
-        result = self.connection.run("true")
-        if result.error is not None:
-            return CheckResult(StatusCode.ERROR,
-                               [plain(result.error), *self._debug_reason(result)])
-        if result.exit_code != 0:
-            detail = oneline(strip_ssh_notices(result.stderr)
-                             or result.stdout) or "no output"
+    def measure(self) -> Measurement:
+        """Open the connection and run a trivial ``true``. What is read is how the
+        connection itself went, which for this check is the whole reading: the
+        host is the object, and failing to answer *is* the measurement."""
+        return Measurement(
+            record=self._transport_record(self.connection.run("true")))
+
+    def grade(self, measurements: Sequence[Measurement],
+              now: datetime) -> CheckResult:
+        """Reachable, reachable-with-an-advisory, or not — read out of the record
+        and out of this check's own connection fields, and nothing else."""
+        record = measurements[0].record
+        debug = self._debug_lines(record)
+        error = record.get("error")
+        if error is not None:
+            return CheckResult(StatusCode.ERROR, [plain(str(error)), *debug])
+        if record.get("exit_code") != 0:
+            detail = str(record.get("detail") or "no output")
             return CheckResult(
                 StatusCode.ERROR,
-                [f"cannot reach {plain(self._target)}: {plain(detail)}",
-                 *self._debug_reason(result)])
+                [f"cannot reach {plain(self._target)}: {plain(detail)}", *debug])
         reasons = [f"{plain(self.host)} reachable"]
-        if result.notice:
-            reasons.append(plain(result.notice))
-        reasons += self._debug_reason(result)
-        return CheckResult(StatusCode.WARN if result.notice else StatusCode.OK,
+        notice = record.get("notice")
+        if notice:
+            reasons.append(plain(str(notice)))
+        reasons += debug
+        return CheckResult(StatusCode.WARN if notice else StatusCode.OK,
                            reasons)
+
+    def expected_record(self) -> int:
+        """Just the transport half: this check reads nothing else (ADR-0075)."""
+        return self._transport_record_bytes()

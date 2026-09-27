@@ -40,6 +40,15 @@
                     {% for door in doors %}
                     <a class="btn btn-{% if not door.default %}outline-{% endif %}primary"
                        href="{{ door.route }}">{{ door.label }}</a>
+                    {%- else %}
+                    {#- Nothing to offer. Without this the page is a heading over an
+                        empty list, which is what a locked-out operator was left with:
+                        the brand, the tagline and no word about why there is no
+                        button. The sentence is built in `identity._no_way_in`, where
+                        the two states — nothing registered, versus everything
+                        registered and none of it able to take a credential — can be
+                        told apart. -#}
+                    <p class="text-center text-body-secondary mb-0">{{ shut }}</p>
                     {% endfor %}
                 </div>
             </div>

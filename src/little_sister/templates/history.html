@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
+    {% from '_series.html' import readings_table %}
     {% set page_title = 'History' %}
     {% include '_header.html' %}
 
@@ -29,6 +30,22 @@
                 {% endfor %}
             </tbody>
         </table>
+        {#- A node that declares nothing above nodes that report has no own status for
+            a period to name (ADR-0094 decision 5, the Time card's rule): the table
+            ends where it stopped declaring, and this says so. -#}
+        {%- if declares_nothing_since %}
+        <p class="small text-muted">Declares nothing of its own since {{ declares_nothing_since | localtime }}: its page heads with what its children roll up to.</p>
+        {%- endif %}
+
+        {#- Every reading the node's subject kept (ADR-0092 decision 6), beneath its
+            status periods and in the same table its page shows the newest of: this
+            page is not polled, so it carries them all, and no curve — the node's own
+            page draws those. -#}
+        {%- for view in series %}
+        <h2 class="h5 mt-4 mb-2">Readings</h2>
+        <p class="small text-muted mb-2">All {{ view.kept }} {{ "reading" if view.kept == 1 else "readings" }} kept of <code>{{ view.subject }}</code>, newest first.</p>
+        {{ readings_table(view) }}
+        {%- endfor %}
     </div>
 
 {% include '_page_end.html' %}

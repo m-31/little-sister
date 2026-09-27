@@ -12,7 +12,8 @@ from __future__ import annotations
 
 import os
 import unittest
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import FunctionType
@@ -20,7 +21,7 @@ from typing import Any
 from unittest import TestCase, mock
 
 from little_sister import secrets
-from little_sister.checks import CheckError, CheckResult, load_checks
+from little_sister.checks import CheckError, CheckResult, Measurement, load_checks
 from little_sister.checks.base import CHECK_TYPES, Check, parse_secret_refs
 from little_sister.engine import Engine
 from little_sister.secrets import register_resolver, same_secret
@@ -76,8 +77,12 @@ class _SecretCheck(Check):
                            base_dir: Path) -> dict[str, Any]:
         return {"token": str(config.get("token", TOKEN_REF))}
 
-    def run(self) -> CheckResult:
+    def measure(self) -> Sequence[Measurement]:
         self.ran = True
+        return ()
+
+    def grade(self, measurements: Sequence[Measurement],
+              now: datetime) -> CheckResult:
         return CheckResult(StatusCode.OK)
 
 
@@ -166,6 +171,34 @@ class ResolveTests(_IsolatedCase):
         secrets.register_resolver("fake", lambda address: "first")
         secrets.register_resolver("fake", lambda address: "second")
         self.assertEqual(secrets.resolve("fake://x"), "second")
+
+
+class CheckReferenceTests(_IsolatedCase):
+    """A setting the import reads and the server's start resolves (ADR-0091 decision
+    8): the import refuses what :func:`~little_sister.secrets.resolve` would refuse
+    before it reaches anything, and reaches nothing itself."""
+
+    def test_a_well_formed_reference_passes_and_nothing_is_asked(self):
+        asked: list[str] = []
+        secrets.register_resolver("fake", lambda address: asked.append(address) or "v")
+        secrets.check_reference("fake://team/token")
+        self.assertEqual(asked, [])
+
+    def test_an_unknown_scheme_is_refused_as_resolve_refuses_it(self):
+        secrets.register_resolver("fake", lambda address: "v")
+        with self.assertRaises(secrets.UnknownSchemeError) as checked:
+            secrets.check_reference("aws-sm://team/token")
+        with self.assertRaises(secrets.UnknownSchemeError) as resolved:
+            secrets.resolve("aws-sm://team/token")
+        self.assertEqual(str(checked.exception), str(resolved.exception))
+
+    def test_a_reference_without_an_address_is_refused(self):
+        with self.assertRaises(secrets.UnknownSchemeError):
+            secrets.check_reference("env://  ")
+
+    def test_a_value_that_is_no_reference_is_refused(self):
+        with self.assertRaises(secrets.UnknownSchemeError):
+            secrets.check_reference("s3cr3t")
 
 
 class RegistrySeamTests(_IsolatedCase):

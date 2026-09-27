@@ -9,6 +9,7 @@ from little_sister.config import (
     DEFAULT_BRANCH_CAP,
     DEFAULT_MAINTENANCE_CAP,
     DEFAULT_MAX_WORKERS,
+    DEFAULT_READING_CAP,
     DEFAULT_STATE_INTERVAL,
     DEFAULT_TIMEZONE,
     ENTRY_LIMIT,
@@ -101,6 +102,42 @@ class ConfigTests(TestCase):
             path = Path(directory) / "settings.yaml"
             path.write_text("maintenance_cap: -3\n")
             self.assertEqual(load_config(path).maintenance_cap, 0)
+
+    def test_reading_cap_is_ten_by_default(self):
+        # how many of a subject's readings its node shows (ADR-0092 decision 7)
+        self.assertEqual(DEFAULT_READING_CAP, 10)
+        cfg = load_config(Path(tempfile.gettempdir()) / "ls-no-such-config.yaml")
+        self.assertEqual(cfg.reading_cap, 10)
+
+    def test_reads_reading_cap(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.yaml"
+            path.write_text("reading_cap: 25\n")
+            self.assertEqual(load_config(path).reading_cap, 25)
+
+    def test_a_reading_cap_of_zero_is_kept(self):
+        # 0 shows the curves alone and leaves every reading to the History page
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.yaml"
+            path.write_text("reading_cap: 0\n")
+            self.assertEqual(load_config(path).reading_cap, 0)
+
+    def test_invalid_reading_cap_is_logged_and_defaulted(self):
+        # a setting is logged and replaced, as every display cap's is (ADR-0006);
+        # it is the check's own key that refuses the start
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.yaml"
+            path.write_text("reading_cap: plenty\n")
+            with self.assertLogs("little_sister", level="WARNING") as logged:
+                self.assertEqual(load_config(path).reading_cap,
+                                 DEFAULT_READING_CAP)
+            self.assertIn("reading_cap", "\n".join(logged.output))
+
+    def test_negative_reading_cap_clamped_to_zero(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.yaml"
+            path.write_text("reading_cap: -4\n")
+            self.assertEqual(load_config(path).reading_cap, 0)
 
     def test_card_status_line_defaults_beside(self):
         cfg = load_config(Path(tempfile.gettempdir()) / "ls-no-such-config.yaml")

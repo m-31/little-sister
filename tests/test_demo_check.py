@@ -10,19 +10,31 @@ harness they believe works.
 """
 from __future__ import annotations
 
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import textwrap
 from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
-from unittest import TestCase
+from unittest import TestCase, mock
 
-from little_sister import slots
+from little_sister import self_report, slots
 from little_sister.actions import PLACEMENTS, load_actions
 from little_sister.checks import load_checks
-from little_sister.checks.base import CheckError, CheckResult, parse_duration
+from little_sister.checks.base import (
+    CheckError,
+    CheckResult,
+    Measurement,
+    parse_duration,
+)
 from little_sister.config import load_config
+from little_sister.engine import Engine
 from little_sister.links import load_links
 from little_sister.nodes import NodeMeta, load_nodes, resolve_metadata
-from little_sister.reasons import DERIVED_PREFIX
+from little_sister.reasons import DERIVED_PREFIX, Entry
 from little_sister.status import (
     HEARTBEAT_PATH,
     StatusCode,
@@ -35,8 +47,10 @@ from little_sister.titles import shown_title
 from little_sister.tree import StatusTree
 from tests.demo_check import SCENARIOS, DemoCheck
 from tests.demo_extension import REASON_BUDGET, review_action
+from tests.running import run_check, subprocess_env
 
 _DEMO_CONFIG_DIR = Path(__file__).resolve().parent / "demo_config"
+_REPO_ROOT = Path(__file__).resolve().parent.parent
 _DEMO_PACKAGE = "tests.demo_extension"
 
 
@@ -248,12 +262,12 @@ class EntriesKnobTests(TestCase):
     def test_off_by_default(self):
         check = DemoCheck(path="/x", scenario="audit", period=120.0)
         self.assertFalse(check.entries)
-        self.assertFalse(check.run().members)
+        self.assertFalse(run_check(check).members)
         self.assertNotIn("entries", check.config_summary())
 
     def test_it_turns_a_prose_scenario_into_members(self):
         check = DemoCheck(path="/x", scenario="audit", period=120.0, entries=True)
-        result = check.run()
+        result = run_check(check)
         self.assertTrue(result.members)
         self.assertTrue(all(e.slug.startswith(DERIVED_PREFIX)
                             for e in result.reason_entries))
@@ -263,8 +277,8 @@ class EntriesKnobTests(TestCase):
         # `reviews` already said it in the stronger form; the knob cannot add to it
         # and must not re-key it.
         keyed = DemoCheck(path="/x", scenario="reviews", period=90.0, entries=True)
-        self.assertTrue(keyed.run().members)
-        self.assertFalse([e for e in keyed.run().reason_entries
+        self.assertTrue(run_check(keyed).members)
+        self.assertFalse([e for e in run_check(keyed).reason_entries
                           if e.slug.startswith(DERIVED_PREFIX)])
 
     def test_it_is_read_from_the_config(self):
@@ -284,6 +298,204 @@ class EntriesKnobTests(TestCase):
         late_slugs = [e.slug for e in late.reason_entries]
         self.assertLess(len(early_slugs), len(late_slugs))
         self.assertEqual(late_slugs[:len(early_slugs)], early_slugs)
+
+
+class PipelinesRecordTests(TestCase):
+    """The build line of ``pipelines`` carries its run's record: the demo's one
+    line whose own times the leaf page reads in the configured timezone
+    (testing-the-gui.md, Mode 2). Its times are counted from the reading's, and
+    they reach the tree the way any check's do — through the seam, in UTC."""
+
+    def _build(self, fraction: float) -> Entry:
+        check = DemoCheck(path="/ci/pipelines", scenario="pipelines", period=60.0)
+        # a reading taken at 10:38 in a zone two hours east of UTC
+        read = Measurement(record={"elapsed_seconds": fraction * 60,
+                                   "period_seconds": 60.0,
+                                   "at": "2026-09-22T10:38:00+02:00"})
+        result = run_check(check, measurements=[read])
+        return next(e for e in result.reason_entries if e.slug == "web-build")
+
+    def test_a_run_in_flight_carries_its_start_and_no_end(self):
+        # fifteen seconds into the retry: the text says so, and the record says
+        # when that was, beside the run the build last completed
+        build = self._build(0.75)
+        self.assertIn("#4217 running 15s", build.text)
+        self.assertEqual(build.data, {
+            "workflow": "build", "branch": "main", "run_number": 4216,
+            "completed": {"at": "2026-09-22T08:37:36Z"},
+            "running": {"run_number": 4217, "started": "2026-09-22T08:37:45Z",
+                        "ended": None}})
+
+    def test_a_finished_run_carries_when_it_completed(self):
+        build = self._build(0.9)
+        self.assertEqual(build.data, {
+            "workflow": "build", "branch": "main", "run_number": 4217,
+            "completed": {"at": "2026-09-22T08:37:54Z"}})
+
+    def test_the_other_lines_carry_none(self):
+        check = DemoCheck(path="/ci/pipelines", scenario="pipelines", period=60.0)
+        result = run_check(check)
+        self.assertEqual([e.slug for e in result.reason_entries if e.data],
+                         ["web-build"])
+
+
+class LatencyScenarioTests(TestCase):
+    """The ``latency`` scenario records what ``http`` does (ADR-0092): its node
+    stands for a site and shows the series its check keeps — the demo's one curve
+    (testing-the-gui.md, Mode 2), with a marked break, a plain one and the noise
+    between on every cycle."""
+
+    def _check(self) -> DemoCheck:
+        check, = (check for check in load_checks(_DEMO_CONFIG_DIR)
+                  if check.path == "/services/web")
+        assert isinstance(check, DemoCheck)
+        return check
+
+    def test_it_stands_for_its_site_and_draws_its_response_time(self):
+        check = self._check()
+        self.assertEqual(check.subject, "https://www.example.org")
+        self.assertGreater(check.series_keep, 0)
+        self.assertEqual(check.measures["response_ms"].unit, "ms")
+        self.assertEqual(check.measures["response_ms"].label, "Response time")
+
+    def test_it_is_graded_as_http_grades_an_answer(self):
+        check = self._check()
+        failed = run_check(check, measurements=[Measurement(record={
+            "status": None, "response_ms": None, "error": "timed out"})])
+        self.assertEqual(failed.code, StatusCode.ERROR)
+        self.assertEqual(failed.reason_texts, ["request failed: timed out"])
+        answered = run_check(check, measurements=[Measurement(record={
+            "status": 200, "response_ms": 212})])
+        self.assertEqual(answered.code, StatusCode.OK)
+        self.assertEqual(answered.reason_texts, ["HTTP 200 in 212 ms"])
+
+    def test_its_cycle_fails_hangs_and_answers(self):
+        # the three things the curve tells apart, where the cycle puts them
+        check = self._check()
+        with mock.patch("tests.demo_check.time") as clock:
+            clock.monotonic.return_value = check._start + 0.33 * check._period
+            self.assertIsNone(check.measure().record["response_ms"])
+            clock.monotonic.return_value = check._start + 0.10 * check._period
+            self.assertIsInstance(check.measure().record["response_ms"], int)
+            clock.sleep.assert_not_called()
+            clock.monotonic.return_value = check._start + 0.61 * check._period
+            check.measure()
+            clock.sleep.assert_called_once_with(45.0)
+
+
+class WorkflowsScenarioTests(TestCase):
+    """The ``workflows`` scenario reads three repositories in one run, and twice a
+    cycle one repository's answer breaks the seam (ADR-0093): the demo's live look
+    at a record that costs its reading and nothing else."""
+
+    def setUp(self) -> None:
+        self_report.runtime.forget()
+        self.addCleanup(self_report.runtime.forget)
+
+    def _check(self) -> DemoCheck:
+        check, = (check for check in load_checks(_DEMO_CONFIG_DIR)
+                  if check.path == "/ci/workflows")
+        assert isinstance(check, DemoCheck)
+        return check
+
+    def test_outside_the_two_stretches_every_repository_is_graded(self):
+        check = self._check()
+        with mock.patch("tests.demo_check.time") as clock:
+            clock.monotonic.return_value = check._start + 0.10 * check._period
+            readings = check.measure()
+        assert not isinstance(readings, Measurement)
+        self.assertEqual([reading.subject for reading in readings],
+                         ["octo/api", "octo/web", "octo/docs"])
+        result = run_check(check, measurements=readings)
+        self.assertEqual(result.stored_code, StatusCode.OK)
+        self.assertEqual([entry.subject for entry in result.reason_entries],
+                         ["octo/api", "octo/web", "octo/docs"])
+
+    def test_outside_a_run_each_refusal_raises_where_the_record_is_built(self):
+        # what the type's own tests would meet: the seam is strict by default
+        check = self._check()
+        for phase in (0.30, 0.70):
+            with self.subTest(phase=phase), \
+                    mock.patch("tests.demo_check.time") as clock:
+                clock.monotonic.return_value = check._start + phase * check._period
+                with self.assertRaises(CheckError):
+                    check.measure()
+
+    def test_in_a_run_each_refusal_costs_its_reading_and_nothing_else(self):
+        # where both stretches overlap, two readings are refused and the third
+        # is graded alone
+        check = self._check()
+        tree = StatusTree()
+        engine = Engine([check], tree)
+        with mock.patch("tests.demo_check.time") as clock:
+            clock.monotonic.return_value = check._start + 0.50 * check._period
+            engine.run_once()
+        node = tree.snapshot("/ci/workflows")
+        assert node is not None
+        self.assertEqual(node.reported_code, StatusCode.WARN)
+        self.assertEqual([line.slug for line in node.reasons],
+                         ["refused-octo-web", "refused-octo-docs", "octo-api-ci"])
+        info, = engine.info().checks
+        self.assertTrue(info.record_refused)
+        self.assertEqual(len([line for line in self_report.runtime.lines()
+                              if "/ci/workflows" in line.text]), 2)
+
+
+class DemoServerTests(TestCase):
+    """The wrapper as Mode 2 serves it (testing-the-gui.md): imported the way
+    gunicorn's worker imports it, with none of this suite's configuration, the
+    committed fixture user signs in, and the server's start runs the demo's engine
+    in the demo's own directory. In an interpreter of its own, because the import
+    registers a door, a check type and slot fillers and moves the process into that
+    directory, and a started engine takes a lease there — none of which may reach
+    this suite's process or the checkout."""
+
+    SCRIPT = textwrap.dedent("""
+        import json, os
+        import tests.demo_wsgi as demo
+        from little_sister import app as application
+        client = demo.app.test_client()
+        before = client.get("/status")
+        client.post("/login", data={"username": "pan", "password": "12345678"})
+        after = client.get("/status").status_code
+        application.start()
+        try:
+            engine = client.get("/health").get_json()["engine"]
+            error = application.engine_error
+        finally:
+            application.stop()
+        print(json.dumps({"before": [before.status_code, before.location],
+                          "after": after, "engine": engine, "error": error,
+                          "cwd": os.getcwd()}))
+    """)
+
+    def test_pan_signs_in_and_the_start_runs_the_engine_in_the_demos_directory(
+            self):
+        with (tempfile.TemporaryDirectory() as started,
+              tempfile.TemporaryDirectory() as home):
+            env = subprocess_env()
+            env.pop("LITTLE_SISTER_CONFIG_DIR")     # the demo names its own roots
+            env.pop("LITTLE_SISTER_ENGINE", None)
+            env["LITTLE_SISTER_DEMO_DIR"] = home
+            env["PYTHONPATH"] = os.pathsep.join(
+                filter(None, (str(_REPO_ROOT), env.get("PYTHONPATH"))))
+            done = subprocess.run([sys.executable, "-c", self.SCRIPT], cwd=started,
+                                  env=env, capture_output=True, text=True,
+                                  timeout=120)
+            self.assertEqual(done.returncode, 0, done.stderr[-3000:])
+            said = json.loads(done.stdout.strip().splitlines()[-1])
+            # a stranger is sent to the door, and pan comes in through it
+            status, door = said["before"]
+            self.assertEqual(status, 302)
+            self.assertTrue(door.startswith("/login"), door)
+            self.assertEqual(said["after"], 200)
+            # the demo's own configuration loaded, and its engine ran
+            self.assertEqual(said["engine"], "running")
+            self.assertIsNone(said["error"])
+            # ... in the demo's directory, and nowhere else
+            self.assertEqual(Path(said["cwd"]).resolve(), Path(home).resolve())
+            self.assertTrue((Path(home) / "var" / "state.lease").is_file())
+            self.assertEqual(list(Path(started).iterdir()), [])
 
 
 class DemoConfigTests(TestCase):
@@ -416,7 +628,7 @@ class DemoFillerTests(TestCase):
 class DemoCheckTests(TestCase):
     def test_run_returns_a_result(self):
         check = DemoCheck(path="/x", scenario="escalate", period=60.0)
-        self.assertIsInstance(check.run(), CheckResult)
+        self.assertIsInstance(run_check(check), CheckResult)
 
     def test_unknown_scenario_is_rejected(self):
         with self.assertRaises(CheckError):
@@ -427,12 +639,13 @@ class DemoCheckTests(TestCase):
         # the WSGI wrapper registers `demo` before this runs; importing DemoCheck
         # above did the same. Every config in the demo dir must load cleanly.
         checks = load_checks(_DEMO_CONFIG_DIR)
-        self.assertEqual(len(checks), 9)
+        self.assertEqual(len(checks), 11)
         self.assertTrue(all(isinstance(c, DemoCheck) for c in checks))
         self.assertEqual({c.path for c in checks},
-                         {"/services/api", "/ci/nightly", "/ci/pipelines",
-                          "/ci/reviews", "/network/vpn", "/storage/backup",
-                          "/hosts/nas", "/security/audit", "/security/wiz"})
+                         {"/services/api", "/services/web", "/ci/nightly",
+                          "/ci/pipelines", "/ci/reviews", "/ci/workflows",
+                          "/network/vpn", "/storage/backup", "/hosts/nas",
+                          "/security/audit", "/security/wiz"})
 
     def test_dropped_child_ages_to_stale(self):
         # the mechanism the `silent` scenario relies on: a child omitted from a
