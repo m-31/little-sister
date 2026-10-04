@@ -12,7 +12,7 @@ description: Command exits 0
 frequency: 15m               # how often to run
 timeout: 30s                 # per-run timeout
 # series_keep: 60            # readings kept per subject as its history (default 0: keep none)
-# reading_cap: 10            # of those, the newest its page lists (default: settings.yaml's)
+# reading_cap: 10            # of those, the newest its Series view lists (default: settings.yaml's)
 
 # --- command ---------------------------------------------------------------
 command: bash check-disk-space.sh   # a shell string, or a list (argv) e.g. ["df", "-h", "/"] (required)

@@ -1,7 +1,7 @@
 """The built-in **copy** chip: one reason line, handed over on its own.
 
-`/copy` hands over the tree and a leaf's detail page hands over the node; the
-finding an operator is actually opening a ticket about is one line of one node,
+`/copy` hands over the tree and a node's Copy view the node; the finding an
+operator is actually opening a ticket about is one line of one node,
 and until this chip existed that was the one thing they had to retype.
 
 **Why it is a slot filler and not a control of its own.** The place a per-line
@@ -24,8 +24,8 @@ link costs the length of a URL.
 **Where it does not appear.** Where a node's reasons are **prose** — a failure
 message and its stack trace are one condition in several paragraphs
 ([ADR-0036](../docs/adr/0036-addressable-reasons.md)) — there is exactly one thing
-to hand over and it is the node, whose own page has the buttons for it. A per-line
-copy there would offer somebody half of one condition. Prose reasons also have no
+to hand over and it is the node, which its Copy tab hands over. A per-line copy
+there would offer somebody half of one condition. Prose reasons also have no
 stable slug to address, so the URL could not be written even if the offer were
 right.
 """

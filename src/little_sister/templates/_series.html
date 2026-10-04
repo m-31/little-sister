@@ -1,55 +1,159 @@
-{#- A subject's series on the node that stands for it (ADR-0092 decision 6): the
+{#- A series drawn and listed (ADR-0092, as ADR-0096 and ADR-0097 amend it): the
     curves of its measures, drawn on the server as SVG with no script of its own, and
-    its readings as a table. `_node_facts.html` shows the curves and the newest
-    `reading_cap` rows; the History page shows every row and no curve.
+    its readings as a table. A node's page shows the curves that stand on it
+    (`_node_facts.html`); its Series view every curve at or beneath it and the newest
+    `reading_cap` rows of each series they were drawn from; its History page every
+    row and no curve.
 
     The geometry is `little_sister.curves`' — every number below is its, and this
     only writes it down. What is drawn, and what says so in words:
 
     * the value axis — a hairline per step, its reading on the left, and a free-text
-      unit once above them; a span unit names itself in every step instead;
-    * the line, broken wherever a reading had no value or nothing was read for
-      longer than the node's freshness tolerance, and a dot for a reading that stands
-      alone between two breaks and for the newest one;
-    * a reading without a value, marked at its instant in the lane beneath the
-      baseline — never as a zero — and counted beside the title with the mark as its
-      key; a hole is counted too, and has no mark of its own;
-    * the oldest and the newest time, in the configured zone and format;
-    * each reading's time and value where the pointer is: the plot is cut between
-      each two neighbors' midpoints, so the pointer finds a time, not a line.
+      unit once above the plot; a span or a size unit names itself in every step
+      instead;
+    * the line, broken wherever a reading failed, answered without a number, or
+      nothing was read for longer than the node's freshness tolerance, and a dot for
+      a reading that stands alone between two breaks and for the newest one;
+    * a reading that failed — its record carries an `error` — marked at its instant
+      in the lane beneath the baseline, never as a zero, and counted beside the title
+      with the mark as its key; a hole is counted too, and has no mark of its own;
+    * the time axis, beneath the plot and a drawing of its own: labels at round
+      times in the configured zone, a faint line for each across the plot, and on a
+      Series view a track divided at the labels, each stretch between two of them a
+      link to the view over it that returns to the curve's group — in the tab order
+      on the view's first curve alone, since every curve's are the same links
+      (ADR-0098 decisions 3 and 4) — the oldest and the newest time where no round
+      time falls between them;
+    * each reading's time and value where the pointer is, as a title and with
+      nothing drawn: the plot is cut between each two neighbors' midpoints, so the
+      pointer finds a time, not a line — or, where a window holds more readings than
+      the plot has columns, each column's range, count and times (ADR-0098 decision
+      5). On a Series view the plot says where its window stands on it (`data-left`,
+      `data-right`) and how tall its strips run, for the view's script, which draws
+      a drag's stretch and one line across every plot and reads the strips' titles
+      into the summaries (decision 6).
+
+    A plot **of runs** (ADR-0106 decision 5, ADR-0111) has marks in place of a line:
+    a stem from the baseline for each run, under a measure to its value and without
+    one to the height its verdict gives a tick, all of one verdict as one path, the
+    worse painted over the better — no verdict, passed, warned, failed — and then
+    the heads in that order: a filled dot for a run that passed, where it has room;
+    the warning's triangle; a hollow ring in the failure ink. The lane marks each
+    column that holds a run that failed, and the summary counts the runs and then
+    what did not pass, by kind, each with its mark as its key.
 
     `role="img"` keeps the per-reading titles from being read out one by one: the
     table is the accessible twin, and the caption says what the drawing shows. -#}
 {%- from '_status_cue.html' import status_cue %}
 
+{#- What a Series view says of a node none of whose series draws a curve
+    (ADR-0106 decision 4): how many readings it keeps, and where they are. Whose
+    they are, where they are a subject's that has no node of its own — its line
+    shares a node, or its node was removed (ADR-0109 decision 6) — so that a removed
+    subject's kept readings do not read as its check's: by name, the first three and
+    how many more. -#}
+{%- macro quiet_line(one) -%}
+<p class="small text-muted mt-3 mb-0 ls-series-quiet"><code>{{ one.path }}</code> keeps {{ one.kept }} {{ "reading" if one.kept == 1 else "readings" }}
+    {%- if one.unstood -%}
+    {%- if one.unstood_kept < one.kept %}, {{ one.unstood_kept }} of them{% endif %} of
+    {% for subject in one.unstood[:3] -%}
+    <code>{{ subject }}</code>{{ "" if loop.last else " and " if loop.revindex == 2 and one.unstood | length <= 3 else ", " }}
+    {%- endfor -%}
+    {%- if one.unstood | length > 3 %} and {{ one.unstood | length - 3 }} more{% endif -%}
+    , which {{ "has no node of its own" if one.unstood | length == 1 else "have no node of their own" }},
+    {%- elif one.subjects > 1 %} of {{ one.subjects }} subjects
+    {%- endif %} and draws no curve — they are on its <a href="{{ url_for('history', path=one.path) }}">History</a> page.</p>
+{%- endmacro %}
+
+{%- macro runs_summary(c) -%}
+{%- if c.readings == 0 -%}
+no runs in this window
+{%- else -%}
+{{ c.readings }} {{ "run" if c.readings == 1 else "runs" }}
+{%- if c.lowest %} · newest {{ c.newest }} · lowest {{ c.lowest }} · highest {{ c.highest }}{% endif -%}
+{%- if c.failed %} · <span class="ls-curve__key"><svg class="ls-curve__swatch" viewBox="0 0 10 12" width="10" height="12" focusable="false" aria-hidden="true"><circle class="ls-curve__failed" cx="5" cy="6" r="3.5"/></svg> {{ c.failed }} failed</span>{% endif -%}
+{%- if c.warned %} · <span class="ls-curve__key"><svg class="ls-curve__swatch" viewBox="0 0 12 12" width="12" height="12" focusable="false" aria-hidden="true"><path class="ls-curve__warned" d="M6 1.5L11 10.5H1Z"/></svg> {{ c.warned }} warned</span>{% endif -%}
+{%- if c.unjudged %} · <span class="ls-curve__key"><svg class="ls-curve__swatch" viewBox="0 0 6 12" width="6" height="12" focusable="false" aria-hidden="true"><line class="ls-curve__stem ls-curve__stem--unjudged" x1="3" x2="3" y1="5" y2="11"/></svg> {{ c.unjudged }} without a verdict</span>{% endif -%}
+{%- endif -%}
+{%- endmacro %}
+
 {%- macro summary(c) -%}
+{%- if c.of_runs -%}
+{{ runs_summary(c) }}
+{%- else -%}
+{%- if c.readings == 0 and c.first -%}
+no readings in this window
+{%- elif not c.valued -%}
+no values in this window
+{%- endif -%}
 {%- if c.lowest -%}
 newest {{ c.newest }} · lowest {{ c.lowest }} · highest {{ c.highest }}
 {%- endif -%}
-{%- if c.unvalued -%}
-{%- if c.lowest %} · {% endif -%}
-<span class="ls-curve__key"><svg class="ls-curve__swatch" viewBox="0 0 6 12" width="6" height="12" focusable="false" aria-hidden="true"><line class="ls-curve__none" x1="3" x2="3" y1="1" y2="11"/></svg> {{ c.unvalued }} without a value</span>
+{%- if c.failed -%}
+{%- if c.lowest or not c.valued %} · {% endif -%}
+<span class="ls-curve__key"><svg class="ls-curve__swatch" viewBox="0 0 6 12" width="6" height="12" focusable="false" aria-hidden="true"><line class="ls-curve__none" x1="3" x2="3" y1="1" y2="11"/></svg> {{ c.failed }} failed</span>
 {%- endif -%}
 {%- if c.holes %} · {{ c.holes }} {{ "stretch" if c.holes == 1 else "stretches" }} without readings{% endif -%}
+{%- endif -%}
 {%- endmacro %}
 
-{%- macro curve(c) -%}
+{#- A curve seen small (ADR-0114): the plot of `curve` below with nothing around it
+    — its box is the plot's own, from the top of the scale to the baseline, so the
+    line is the curve's line on the curve's scale, from zero, broken where the curve
+    breaks — squeezed into a strip that sits in a line of text. The strokes keep
+    their width whatever the squeeze. A reading that stands alone is a stroke of no
+    length, which a round cap makes a dot; a run is its stem. It says nothing by
+    itself: the words beside it do, so it is hidden from a reader that hears the
+    page. -#}
+{%- macro spark(c) -%}
+<svg class="ls-spark" viewBox="{{ c.left }} {{ c.top }} {{ c.right - c.left }} {{ c.bottom - c.top }}" width="120" height="24" preserveAspectRatio="none" focusable="false" aria-hidden="true">
+    {%- for d in c.paths %}<path class="ls-spark__line" d="{{ d }}"/>{% endfor %}
+    {%- for dot in c.dots %}<path class="ls-spark__dot" d="M{{ '%.1f' | format(dot.x) }} {{ '%.1f' | format(dot.y) }}h0"/>{% endfor %}
+    {%- for verdict in ("unjudged", "passed", "warned", "failed") %}
+    {%- set d = c.stem_path(verdict) %}
+    {%- if d %}<path class="ls-spark__stem ls-spark__stem--{{ verdict }}" d="{{ d }}"/>{% endif %}
+    {%- endfor -%}
+</svg>
+{%- endmacro %}
+
+{%- macro curve(c, zoom=none, times=none, anchor="", keyed=true) -%}
 <figure class="ls-curve">
     <figcaption class="ls-curve__head">
         <span class="ls-curve__title">{{ c.label }}</span>
         <span class="ls-curve__summary">{{ summary(c) }}</span>
     </figcaption>
     <div class="ls-curve__frame">
-    <svg class="ls-curve__plot" viewBox="0 0 {{ c.width }} {{ c.height }}" width="{{ c.width }}" height="{{ c.height }}" focusable="false" role="img" aria-label="{{ c.label }}, {{ c.readings }} {{ 'reading' if c.readings == 1 else 'readings' }} from {{ c.first }} to {{ c.last }}">
+    <svg class="ls-curve__plot" viewBox="0 0 {{ c.width }} {{ c.height }}" width="{{ c.width }}" height="{{ c.height }}"{% if zoom %} data-left="{{ c.left }}" data-right="{{ c.right }}" data-top="{{ c.top }}" data-bottom="{{ c.lane_bottom }}"{% endif %} focusable="false" role="img" aria-label="{{ c.label }}, {{ c.readings }} {% if c.of_runs %}{{ 'run' if c.readings == 1 else 'runs' }}{% else %}{{ 'reading' if c.readings == 1 else 'readings' }}{% endif %} from {{ c.first }} to {{ c.last }}">
         {%- for tick in c.ticks %}
         <line class="ls-curve__grid" x1="{{ c.left }}" x2="{{ c.right }}" y1="{{ '%.1f' | format(tick.y) }}" y2="{{ '%.1f' | format(tick.y) }}"/>
         <text class="ls-curve__tick" x="{{ c.left - 8 }}" y="{{ '%.1f' | format(tick.y + 4) }}" text-anchor="end">{{ tick.text }}</text>
         {%- endfor %}
+        {%- for t in c.time_ticks %}
+        <line class="ls-curve__grid ls-curve__grid--time" x1="{{ '%.1f' | format(t.x) }}" x2="{{ '%.1f' | format(t.x) }}" y1="{{ c.top }}" y2="{{ c.bottom }}"/>
+        {%- endfor %}
         {%- if c.unit_label %}
-        <text class="ls-curve__unit" x="{{ c.left - 8 }}" y="{{ c.unit_baseline }}" text-anchor="end">{{ c.unit_label }}</text>
+        <text class="ls-curve__unit" x="{{ c.left }}" y="{{ c.unit_baseline }}" text-anchor="start">{{ c.unit_label }}</text>
+        {%- endif %}
+        {%- if c.of_runs and not c.ticks %}
+        <line class="ls-curve__grid" x1="{{ c.left }}" x2="{{ c.right }}" y1="{{ c.bottom }}" y2="{{ c.bottom }}"/>
         {%- endif %}
         {%- for d in c.paths %}
         <path class="ls-curve__line" d="{{ d }}"/>
+        {%- endfor %}
+        {%- for verdict in ("unjudged", "passed", "warned", "failed") %}
+        {%- set d = c.stem_path(verdict) %}
+        {%- if d %}
+        <path class="ls-curve__stem ls-curve__stem--{{ verdict }}" d="{{ d }}"/>
+        {%- endif %}
+        {%- endfor %}
+        {%- for stem in c.heads("passed") %}
+        <circle class="ls-curve__dot" cx="{{ '%.1f' | format(stem.x) }}" cy="{{ '%.1f' | format(stem.y) }}" r="4"/>
+        {%- endfor %}
+        {%- for stem in c.heads("warned") %}
+        <path class="ls-curve__warned" d="M{{ '%.1f' | format(stem.x) }} {{ '%.1f' | format(stem.y - 5.5) }}L{{ '%.1f' | format(stem.x + 5) }} {{ '%.1f' | format(stem.y + 3.5) }}H{{ '%.1f' | format(stem.x - 5) }}Z"/>
+        {%- endfor %}
+        {%- for stem in c.heads("failed") %}
+        <circle class="ls-curve__failed" cx="{{ '%.1f' | format(stem.x) }}" cy="{{ '%.1f' | format(stem.y) }}" r="4"/>
         {%- endfor %}
         {%- for dot in c.dots %}
         <circle class="ls-curve__dot" cx="{{ '%.1f' | format(dot.x) }}" cy="{{ '%.1f' | format(dot.y) }}" r="4"/>
@@ -60,40 +164,61 @@ newest {{ c.newest }} · lowest {{ c.lowest }} · highest {{ c.highest }}
         {%- for mark in c.marks %}
         <line class="ls-curve__none" x1="{{ '%.1f' | format(mark.x) }}" x2="{{ '%.1f' | format(mark.x) }}" y1="{{ c.lane_top }}" y2="{{ c.lane_bottom }}"/>
         {%- endfor %}
-        {%- if c.first == c.last %}
-        <text class="ls-curve__time" x="{{ c.right }}" y="{{ c.time_baseline }}" text-anchor="end">{{ c.last }}</text>
-        {%- else %}
-        <text class="ls-curve__time" x="{{ c.left }}" y="{{ c.time_baseline }}" text-anchor="start">{{ c.first }}</text>
-        <text class="ls-curve__time" x="{{ c.right }}" y="{{ c.time_baseline }}" text-anchor="end">{{ c.last }}</text>
-        {%- endif %}
         <g class="ls-curve__hover">
             {%- for strip in c.hover %}
             <rect x="{{ '%.1f' | format(strip.x) }}" y="{{ c.top }}" width="{{ '%.1f' | format(strip.width) }}" height="{{ c.lane_bottom - c.top }}"><title>{{ strip.title }}</title></rect>
             {%- endfor %}
         </g>
     </svg>
+    <svg class="ls-curve__axis" viewBox="0 0 {{ c.width }} {{ c.axis_height }}" width="{{ c.width }}" height="{{ c.axis_height }}" focusable="false"{% if not (zoom and c.stretches and keyed) %} aria-hidden="true"{% endif %}>
+        {%- if zoom %}
+        {%- for s in c.stretches %}
+        <a class="ls-curve__stretch" href="{{ zoom(s.start, s.end, anchor) }}"{% if not keyed %} tabindex="-1"{% endif %}><title>Zoom into {{ times(s.start) }} to {{ times(s.end) }}</title><rect class="ls-curve__hit" x="{{ '%.1f' | format(s.x) }}" y="0" width="{{ '%.1f' | format(s.width) }}" height="{{ c.axis_height }}"/><rect class="ls-curve__segment" x="{{ '%.1f' | format(s.x + 1) }}" y="1" width="{{ '%.1f' | format([s.width - 2, 0] | max) }}" height="3" rx="1.5"/></a>
+        {%- endfor %}
+        {%- endif %}
+        {%- for t in c.time_ticks %}
+        <text class="ls-curve__time" x="{{ '%.1f' | format(t.x) }}" y="{{ c.time_baseline }}" text-anchor="middle">{{ t.text }}</text>
+        {%- else %}
+        {%- if c.first and c.first == c.last %}
+        <text class="ls-curve__time" x="{{ c.right }}" y="{{ c.time_baseline }}" text-anchor="end">{{ c.last }}</text>
+        {%- elif c.first %}
+        <text class="ls-curve__time" x="{{ c.left }}" y="{{ c.time_baseline }}" text-anchor="start">{{ c.first }}</text>
+        <text class="ls-curve__time" x="{{ c.right }}" y="{{ c.time_baseline }}" text-anchor="end">{{ c.last }}</text>
+        {%- endif %}
+        {%- endfor %}
+    </svg>
     </div>
 </figure>
 {%- endmacro %}
 
 {#- The readings, newest first, as the ADR lists a row: the time on the series'
-    clock, the code the reading stood with as a cue — its column's header is for a
-    screen reader only, since a record's own `status` field often stands beside it
-    and a second visible *Status* would read as the same thing — a column per field
-    as the record list writes it, and the sentence as it stood. -#}
+    clock with the code the reading stood with as a cue beside it, a column per field
+    as the record list writes it, and the sentence as it stood. The table is a box
+    that scrolls both ways inside itself, its heading row and its Time column held
+    still, as wide as the page and about as tall as the window, every reading in it —
+    a region with a name and a place in the tab order, so a keyboard can scroll it
+    (ADR-0102 decision 1). The cue rides in the Time cell so that one column holds
+    still rather than two: a second needs the first's width, which the time format
+    decides. A column a measure declares is headed by its label and unit over the
+    field's name, a label that is the field's name standing once with the unit
+    beside it; any other by the field's name; the declared ones first (decision 2). -#}
 {%- macro readings_table(view) -%}
-<div class="table-responsive">
+<div class="ls-readings-box" role="region" tabindex="0" aria-label="Readings of {{ view.subject }}">
     <table class="table table-sm align-middle ls-readings">
         <thead>
-            <tr><th scope="col">Time</th><th scope="col" class="ls-readings__cue"><span class="visually-hidden">Status</span></th>{% for column in view.columns %}<th scope="col">{{ column }}</th>{% endfor %}<th scope="col">Reason</th></tr>
+            <tr><th scope="col">Time</th>
+            {%- for column in view.columns %}<th scope="col">
+                {%- if column.label %}<span class="ls-readings__label">{{ column.label }}{% if column.unit %} · {{ column.unit }}{% endif %}</span> <code class="ls-readings__field">{{ column.field }}</code>
+                {%- else %}<code class="ls-readings__name">{{ column.field }}</code>{% if column.unit %} <span class="ls-readings__unit">· {{ column.unit }}</span>{% endif %}
+                {%- endif %}</th>
+            {%- endfor %}<th scope="col">Reason</th></tr>
         </thead>
         <tbody>
             {%- for row in view.rows %}
             <tr>
-                <td class="text-nowrap"><time datetime="{{ row.stored }}">{{ row.at }}</time></td>
-                <td class="ls-readings__cue">{% if row.code %}{{ status_cue(row.code, labeled=true) }}{% endif %}</td>
+                <td class="ls-readings__time"><time datetime="{{ row.stored }}">{{ row.at }}</time>{% if row.code %} {{ status_cue(row.code, labeled=true) }}{% endif %}</td>
                 {%- for column in view.columns %}
-                {%- set field = row.fields.get(column) %}
+                {%- set field = row.fields.get(column.field) %}
                 <td>{% if field %}{% if field.kind == 'instant' %}<time datetime="{{ field.stored }}">{{ field.text }}</time>{% else %}{{ field.text }}{% endif %}{% endif %}</td>
                 {%- endfor %}
                 <td class="md-body">{{ row.texts | join('; ') | markdown_inline }}</td>

@@ -222,7 +222,7 @@ class RenderTests(TestCase):
     def test_system_names_what_registered(self):
         slots.register("reason.actions", DEMO, TEMPLATE, action)
         self._login()
-        body = self._body("/system")
+        body = self._body("/system/installed")
         self.assertIn("reason.actions", body)
         self.assertIn(DEMO, body)
 
@@ -369,7 +369,7 @@ class NodeActionTests(TestCase):
     def test_system_names_the_second_slot_too(self):
         slots.register("node.actions", DEMO, NODE_TEMPLATE, node_action)
         self._login()
-        body = self._body("/system")
+        body = self._body("/system/installed")
         self.assertIn("node.actions", body)
         self.assertIn(DEMO, body)
 

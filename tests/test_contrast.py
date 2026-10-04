@@ -100,6 +100,14 @@ PAGE_ROWS = (
     (".ls-links__verdict--dead", "--ls-danger-ink", "--ls-canvas"),
 )
 
+# The folds of the links page's setup guide are cards, and a card's surface is
+# Bootstrap's, as the dropdown's is: white on a light canvas and #212529 on a dark
+# one. What a fold's summary adds beside its name is muted, from our token rather
+# than Bootstrap's `.text-muted`, so that it can be measured here on that surface.
+FOLD_ROWS = (
+    (".ls-links__aside", "--ls-muted"),
+)
+
 # The /about hero paints no surface of its own — it sits on the page canvas in
 # every theme, which is what settled the light themes. What it does own is a
 # **color vocabulary**, and these are the two readings that carry meaning: a
@@ -126,8 +134,12 @@ HERO_ROWS = (
 # of the measurement, so a new one has to be written down here to be allowed at all.
 QUIET_INK, QUIET_SURFACE = "--ls-tint-maintenance-ink", "--ls-tint-maintenance"
 QUIET_RULES = (".status-node__reason.is-quiet", ".check-reason.is-quiet",
-               ".reason-quiet-count", ".reason-quiet-note", ".reason-orphan",
-               ".pin-banner", ".event-suppressed")
+               ".reason-quiet-count", ".reason-orphan",
+               ".event-suppressed", ".event-cause",
+               # a rule's block (ADR-0104): the same pair, on its own surface —
+               # on a node's page, on the Maintenance page, in a card on the wall
+               # and in a branch's head, where it took over from the strip
+               '.rule-block[data-rule="maintenance"]')
 
 
 def _strip_comments(css):
@@ -272,8 +284,10 @@ class StylesheetTests(TestCase):
             if not re.search(r"color:\s*var\(--ls-[\w-]+\)", body):
                 continue
             with self.subTest(rule=selector):
+                # a declaration wherever it stands: in a rule written on one line
+                # it follows a semicolon, and no line begins with it
                 self.assertNotRegex(
-                    body, r"(?m)^\s*opacity\s*:",
+                    body, r"(?m)(?:^|;)\s*opacity\s*:",
                     f"{selector} sets an --ls-* ink and dims it; the token was "
                     f"measured undimmed, so the rendered value is unmeasured")
 
@@ -283,8 +297,9 @@ class StylesheetTests(TestCase):
         # card fill again — or on Bootstrap's alert — and the numbers are fiction.
         rules = _by_selector(self.blocks)
         for rule in (".status-node__reason.is-quiet", ".check-reason.is-quiet",
-                     ".reason-quiet-count", ".reason-orphan", ".pin-banner",
-                     ".event-suppressed"):
+                     ".reason-quiet-count", ".reason-orphan",
+                     ".event-suppressed", ".event-cause",
+                     '.rule-block[data-rule="maintenance"]'):
             with self.subTest(rule=rule):
                 self.assertIn(f"background: var({QUIET_SURFACE})", rules[rule])
                 self.assertIn(f"color: var({QUIET_INK})", rules[rule])
@@ -361,6 +376,22 @@ class MenuContrastTests(TestCase):
                         round(ratio, 2), AA,
                         f"{row} is {ratio:.2f}:1 on {palette[surface]}")
 
+    def test_a_folds_aside_clears_aa_on_the_card(self):
+        rules = _by_selector(self.blocks)
+        for theme, selector, canvas in THEMES:
+            palette = _tokens(self.blocks, selector)
+            for row, ink in FOLD_ROWS:
+                with self.subTest(theme=theme, row=row):
+                    # a literal, or another token, and the number is fiction
+                    self.assertIn(f"color: var({ink})", rules[row])
+                    ratio = _ratio(_rgb(palette[ink]), _rgb(DROPDOWN[canvas]))
+                    if theme in UNGATED:
+                        self.assertGreater(ratio, 1.0)
+                        continue
+                    self.assertGreaterEqual(
+                        round(ratio, 2), AA,
+                        f"{row} is {ratio:.2f}:1 on {DROPDOWN[canvas]}")
+
     def test_every_hero_row_clears_aa_in_every_gated_theme(self):
         # The hero is on the canvas, so each theme paints it with its own inks —
         # which is the point, and which means each theme owes the bar.
@@ -425,6 +456,55 @@ class MenuContrastTests(TestCase):
                         round(ratio, 2), AA,
                         f"a coded {state} line is {ratio:.2f}:1 on its tint "
                         f"in {theme}")
+
+    def test_a_removal_s_chip_and_a_suspended_pin_s_sentence_clear_aa(self):
+        """What a removed node paints (ADR-0109): the chip of its row wears the
+        undefined pair on a surface of its own, since no pin wrote that row, and
+        the sentence over a pin whose node is not reported the muted ink on the
+        page's canvas."""
+        rules = _by_selector(self.blocks)
+        chip, sentence = rules[".event-cause--removed"], rules[".pin-node__suspended"]
+        self.assertIn("background: var(--ls-tint-undefined)", chip)
+        self.assertIn("color: var(--ls-tint-undefined-ink)", chip)
+        self.assertIn("color: var(--ls-muted)", sentence)
+        pairs = (("--ls-tint-undefined-ink", "--ls-tint-undefined"),
+                 ("--ls-muted", "--ls-canvas"))
+        for theme, selector, _ in THEMES:
+            palette = _tokens(self.blocks, selector)
+            for ink, surface in pairs:
+                with self.subTest(theme=theme, ink=ink):
+                    ratio = _ratio(_rgb(palette[ink]), _rgb(palette[surface]))
+                    if theme in UNGATED:
+                        self.assertGreater(ratio, 1.0)
+                        continue
+                    self.assertGreaterEqual(
+                        round(ratio, 2), AA,
+                        f"{ink} is {ratio:.2f}:1 on {palette[surface]} in {theme}")
+
+    def test_a_reached_rows_chip_wears_the_pair_of_its_status(self):
+        """What the end of a wait paints (ADR-0119 decision 3): the chip of its
+        row wears the pair of the status the row shows, on a surface of its own.
+        No pin wrote that row, so the chip is not on a pin's tint; and only a
+        worse status is ever held back, so a row that reached shows *warn* or
+        *error*."""
+        rules = _by_selector(self.blocks)
+        for state in ("error", "warn"):
+            chip = rules[f".row-{state} .event-cause--reached"]
+            self.assertIn(f"background: var(--ls-tint-{state})", chip)
+            self.assertIn(f"color: var(--ls-tint-{state}-ink)", chip)
+            self.assertNotRegex(chip, r"opacity\s*:")
+            for theme, selector, _ in THEMES:
+                palette = _tokens(self.blocks, selector)
+                with self.subTest(state=state, theme=theme):
+                    ratio = _ratio(_rgb(palette[f"--ls-tint-{state}-ink"]),
+                                   _rgb(palette[f"--ls-tint-{state}"]))
+                    if theme in UNGATED:
+                        self.assertGreater(ratio, 1.0)
+                        continue
+                    self.assertGreaterEqual(
+                        round(ratio, 2), AA,
+                        f"a chip that says reached is {ratio:.2f}:1 on its "
+                        f"{state} tint in {theme}")
 
     def test_a_coded_line_resets_the_reason_wash(self):
         """The base reason rule carries `opacity: 0.95`; a line that paints its
@@ -532,10 +612,21 @@ class MenuContrastTests(TestCase):
 # links page's *does not answer*, which is what a failed request says — and the axes'
 # words in the muted ink. Marks are graphics and owe 3:1 (WCAG 1.4.11); the axes'
 # words are text and owe the text bar. (rule, the property it paints, the token.)
+#
+# A run's mark (ADR-0111) is drawn from the same inks: its stem in the body ink, in
+# the danger ink where it failed and in the muted ink where it kept no verdict; a
+# hollow ring in the danger ink for a head that failed; and for one that warned the
+# cue's triangle, whose **outline** is the body ink and is what is measured — the
+# warning's yellow inside it is a fill no ink could be on a card.
 CURVE_MARKS = (
     (".ls-curve__line", "stroke", "--ls-ink"),
     (".ls-curve__dot", "fill", "--ls-ink"),
     (".ls-curve__none", "stroke", "--ls-danger-ink"),
+    (".ls-curve__stem", "stroke", "--ls-ink"),
+    (".ls-curve__stem--failed", "stroke", "--ls-danger-ink"),
+    (".ls-curve__stem--unjudged", "stroke", "--ls-muted"),
+    (".ls-curve__failed", "stroke", "--ls-danger-ink"),
+    (".ls-curve__warned", "stroke", "--ls-ink"),
 )
 CURVE_WORDS = (
     (".ls-curve__tick", "fill", "--ls-muted"),
@@ -572,6 +663,16 @@ class CurveContrastTests(TestCase):
                         continue
                     self.assertGreaterEqual(round(ratio, 2), GRAPHICS,
                                             f"{rule} is {ratio:.2f}:1")
+
+    def test_a_warnings_head_is_filled_from_the_warning_and_a_failures_from_the_card(
+            self):
+        # the two fills that are no ink: the warning's own surface color inside the
+        # ink's outline, and the card's surface inside a failure's ring, which is
+        # what makes it hollow in every theme
+        rules = _by_selector(self.blocks)
+        self.assertIn("fill: var(--ls-warn)", rules[".ls-curve__warned"])
+        self.assertIn("fill: var(--bs-card-bg, var(--bs-body-bg))",
+                      rules[".ls-curve__failed"])
 
     def test_every_word_on_the_axes_clears_aa_on_the_card(self):
         for theme, selector, canvas in THEMES:

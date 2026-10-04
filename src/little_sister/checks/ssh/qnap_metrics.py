@@ -31,21 +31,14 @@ from little_sister.checks.base import (
     plain,
     register,
 )
-from little_sister.checks.ssh.base import (
-    TRANSPORT_TEXT_BYTES,
-    TRANSPORT_TEXT_CHARS,
-    SshScriptCheck,
-    parse_descriptions,
-)
+from little_sister.checks.ssh.base import SshScriptCheck, parse_descriptions
 from little_sister.checks.ssh.metrics import (
     grade,
-    oneline,
     parse_metrics,
     reading,
     readings,
     unavailable,
 )
-from little_sister.reasons import clip
 from little_sister.status import StatusCode, join_path
 
 DEFAULT_SCRIPT = "qnap-health.sh"
@@ -56,6 +49,19 @@ SMART_DESCRIPTION = "Drive SMART status"
 SMART_OK = {"GOOD", "OK", "PASSED", "NORMAL"}
 SMART_WARN = {"WARNING", "WARN"}
 
+#: What this type's nodes are graded on, each on the node that grades it — the
+#: curves it draws by default (ADR-0096 decision 6). A drive is keyed by its node's
+#: name, so one declaration is a curve for each bay (decision 2); SMART is a word
+#: and draws none.
+MEASURES: dict[str, object] = {
+    "sys_temp_c": {"unit": "°C", "label": "System temperature",
+                   "node": "temperature/system"},
+    "cpu_temp_c": {"unit": "°C", "label": "CPU temperature",
+                   "node": "temperature/cpu"},
+    "drives.*.temp_c": {"unit": "°C", "label": "Temperature of *",
+                        "node": "temperature/*"},
+}
+
 
 @register("qnap-metrics")
 class QnapMetricsCheck(SshScriptCheck):
@@ -64,7 +70,7 @@ class QnapMetricsCheck(SshScriptCheck):
     def __init__(self, *, temp_warn: float, temp_error: float,
                  descriptions: dict[str, str] | None = None,
                  **kwargs: Any) -> None:
-        super().__init__(**kwargs)
+        super().__init__(measure_defaults=MEASURES, **kwargs)
         self.temp_warn = temp_warn
         self.temp_error = temp_error
         self.descriptions = descriptions or {}
@@ -97,10 +103,11 @@ class QnapMetricsCheck(SshScriptCheck):
 
     # --- the two halves (ADR-0086) -------------------------------------------
 
-    #: What a drive's own entry in the record holds. `smart` is a word the NAS
-    #: chose (`GOOD`, `Warning`) and stays a string; `temp_c` is a number, and the
-    #: key names its unit.
-    DRIVE_KEYS = ("temp_c",)
+    #: What a drive's own entry in the record holds, under `drives`, keyed by
+    #: its node's name (ADR-0096 decision 2): its `bay`, which is its identity; its
+    #: `smart`, a word the NAS chose (`GOOD`, `Warning`) that stays a string; and
+    #: `temp_c`, a number whose key names its unit.
+    DRIVE_KEYS = ("bay", "temp_c", "smart")
 
     def measure(self) -> Measurement:
         """One SSH call, one `getsysinfo` script, one flat reading of this NAS —
@@ -109,31 +116,19 @@ class QnapMetricsCheck(SshScriptCheck):
         result = self._run()
         record = self._transport_record(result)
         metrics = parse_metrics(result.stdout)
-        record.update(readings(metrics, "sys_temp_c", "cpu_temp_c",
-                               "drive_count"))
-        # Under the script's own `drive{i}_` numbering, with its `bay` beside
-        # each: the bay is the drive's identity, the index is only where it sat
-        # in one run's output, and a record keeps both so neither has to be
-        # guessed back later.
-        for index in range(1, int(record.get("drive_count") or 0) + 1):
-            prefix = f"drive{index}_"
-            sub = {key[len(prefix):]: value for key, value in metrics.items()
-                   if key.startswith(prefix)}
-            record[f"{prefix}bay"] = sub.get("bay") or str(index)
-            record[f"{prefix}temp_c"] = reading(sub.get("temp_c"))
-            record[f"{prefix}smart"] = sub.get("smart") or None
-        if not self._has_readings(record):
-            record["output"] = clip(oneline(result.stdout),
-                                    chars=TRANSPORT_TEXT_CHARS,
-                                    budget=TRANSPORT_TEXT_BYTES)
+        record.update(readings(metrics, "sys_temp_c", "cpu_temp_c"))
+        record["drives"] = _drive_readings(metrics)
+        self._say_it_failed(record, result.stdout,
+                            readable=self._has_readings(record),
+                            nothing="connected, but no QNAP data")
         record.update({key: value for key, value in metrics.items()
                        if key.startswith("debug")})
         return Measurement(record=record)
 
     def _has_readings(self, record: Mapping[str, Any]) -> bool:
         """Did `getsysinfo` give us anything worth grading?"""
-        return any(record.get(key) is not None
-                   for key in ("sys_temp_c", "cpu_temp_c", "drive_count"))
+        return bool(record.get("drives")) or any(
+            record.get(key) is not None for key in ("sys_temp_c", "cpu_temp_c"))
 
     def grade(self, measurements: Sequence[Measurement],
               now: datetime) -> CheckResult:
@@ -184,10 +179,11 @@ class QnapMetricsCheck(SshScriptCheck):
                 ("cpu_temp_c", "cpu", "CPU temperature")):
             if record.get(key) is not None:
                 children.append(self._temp_leaf(name, record[key], desc))
-        for bay, sub in _drives(record):
+        for name, sub in _drives(record):
             if sub.get("temp_c") is not None:
                 children.append(self._temp_leaf(
-                    f"drive{bay}", sub["temp_c"], f"Drive {bay} temperature"))
+                    name, sub["temp_c"],
+                    f"Drive {sub.get('bay') or name} temperature"))
         temp_desc = self._describe("temperature", TEMPERATURE_DESCRIPTION)
         if not children:
             return unavailable("temperature", temp_desc)
@@ -208,10 +204,10 @@ class QnapMetricsCheck(SshScriptCheck):
 
     def _smart(self, record: Mapping[str, Any]) -> CheckResult:
         children: list[CheckResult] = []
-        for bay, sub in _drives(record):
+        for name, sub in _drives(record):
             status = str(sub.get("smart") or "")
             if status and status != "--":
-                children.append(_smart_leaf(f"drive{bay}", status))
+                children.append(_smart_leaf(name, status))
         smart_desc = self._describe("smart", SMART_DESCRIPTION)
         if not children:
             return unavailable("smart", smart_desc)
@@ -219,22 +215,30 @@ class QnapMetricsCheck(SshScriptCheck):
                            description=smart_desc, children=tuple(children))
 
 
-def _drives(record: Mapping[str, Any]) -> list[tuple[str, dict[str, Any]]]:
-    """``(bay, fields)`` for each reported drive (``drive{i}_*`` → fields).
-
-    Reads a record, which is also the shape the script's parsed output has —
-    the measurement keeps the script's own `drive{i}_` numbering for exactly
-    that reason, so one walk serves both sides of the seam."""
-    count = record.get("drive_count")
-    if not isinstance(count, (int, float)):
-        return []
-    drives = []
-    for i in range(1, int(count) + 1):
-        prefix = f"drive{i}_"
-        sub = {key[len(prefix):]: value for key, value in record.items()
-               if key.startswith(prefix)}
-        drives.append((str(sub.get("bay") or i), sub))
+def _drive_readings(metrics: Mapping[str, str]) -> dict[str, dict[str, Any]]:
+    """The script's drives, each keyed by the name of the node it becomes —
+    ``drive<bay>`` — and holding its bay, its temperature and its SMART word
+    (ADR-0096 decision 2). The script numbers them in the order it found them; the
+    bay is the drive's identity, and the index would move a curve from one drive to
+    the next the day a bay stands empty."""
+    drives: dict[str, dict[str, Any]] = {}
+    count = reading(metrics.get("drive_count")) or 0
+    for index in range(1, int(count) + 1):
+        prefix = f"drive{index}_"
+        bay = metrics.get(f"{prefix}bay") or str(index)
+        drives[f"drive{bay}"] = {"bay": bay,
+                                 "temp_c": reading(metrics.get(f"{prefix}temp_c")),
+                                 "smart": metrics.get(f"{prefix}smart") or None}
     return drives
+
+
+def _drives(record: Mapping[str, Any]) -> list[tuple[str, Mapping[str, Any]]]:
+    """``(node name, fields)`` for each drive the record holds."""
+    drives = record.get("drives")
+    if not isinstance(drives, Mapping):
+        return []
+    return [(str(name), sub) for name, sub in drives.items()
+            if isinstance(sub, Mapping)]
 
 
 def _smart_leaf(name: str, status: str) -> CheckResult:

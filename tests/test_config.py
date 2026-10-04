@@ -1,10 +1,14 @@
+import logging
 import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import TestCase
 from zoneinfo import ZoneInfo
 
+import little_sister.logger
 from little_sister.config import (
     DEFAULT_BRANCH_CAP,
     DEFAULT_MAINTENANCE_CAP,
@@ -17,6 +21,7 @@ from little_sister.config import (
     RECORD_LIMIT,
     load_config,
 )
+from tests.running import subprocess_env
 
 
 class StacktraceOptionTests(TestCase):
@@ -321,6 +326,75 @@ class EngineSizingTests(TestCase):
 
     def test_a_share_of_exactly_one_is_allowed(self):
         self.assertEqual(self._load("memory_share: 1\n").memory_share, 1.0)
+
+
+class TheZoneIsHandedOverTests(TestCase):
+    """The configuration hands the time zone to whoever asked, the moment it has
+    read it (ADR-0120 decision 9): the process's own configuration hands it to the
+    logger, so that what is logged of the settings after it is stamped in it."""
+
+    def _load(self, text: str, *, tell: bool = True) -> list[str]:
+        """What was handed over and what was logged while ``text`` was loaded, in
+        the order it happened."""
+        heard: list[str] = []
+
+        class _Heard(logging.Handler):
+            def emit(self, record: logging.LogRecord) -> None:
+                heard.append(f"logged: {record.getMessage()}")
+
+        said = logging.getLogger("little_sister.logger")
+        handler, level = _Heard(), said.level
+        said.addHandler(handler)
+        said.setLevel(logging.INFO)
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "settings.yaml"
+                path.write_text(text)
+                if tell:
+                    load_config(path,
+                                zone_read=lambda zone: heard.append(f"zone: {zone}"))
+                else:
+                    load_config(path)
+        finally:
+            said.removeHandler(handler)
+            said.setLevel(level)
+        return heard
+
+    def test_it_is_handed_over_before_anything_is_logged_of_the_settings(self):
+        heard = self._load("timezone: Asia/Kathmandu\nreason_cap: many\n")
+        self.assertEqual(heard[0], "zone: Asia/Kathmandu")
+        self.assertEqual(heard.count("zone: Asia/Kathmandu"), 1)
+        self.assertTrue(heard[1].startswith(
+            "logged: config: reason_cap 'many' is not an integer"), heard)
+        self.assertTrue(heard[-1].startswith("logged: config: loaded "), heard)
+
+    def test_an_unknown_zone_hands_over_the_default_and_then_says_so(self):
+        heard = self._load("timezone: Not/AZone\n")
+        self.assertEqual(heard[:2], [
+            f"zone: {DEFAULT_TIMEZONE}",
+            f"logged: config: unknown timezone 'Not/AZone'; using {DEFAULT_TIMEZONE}"])
+
+    def test_a_load_that_names_nobody_to_tell_leaves_the_logs_stamp_alone(self):
+        # a test, or a tool, that loads a settings file of its own does not move
+        # the zone this process's log is stamped in
+        before = little_sister.logger._zone
+        heard = self._load("timezone: Asia/Kathmandu\n", tell=False)
+        self.assertIs(little_sister.logger._zone, before)
+        self.assertFalse([line for line in heard if line.startswith("zone: ")])
+
+    def test_the_process_own_configuration_hands_it_to_the_logger(self):
+        # in a process of its own, since this one's logger is reloaded by its tests
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.yaml"
+            path.write_text("timezone: Asia/Kathmandu\n")
+            done = subprocess.run(
+                [sys.executable, "-c",
+                 "import little_sister.config, little_sister.logger as said; "
+                 "print(said._zone)"],
+                env={**subprocess_env(), "LITTLE_SISTER_CONFIG": str(path)},
+                capture_output=True, text=True, timeout=60)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(done.stdout.strip(), "Asia/Kathmandu")
 
 
 if __name__ == "__main__":

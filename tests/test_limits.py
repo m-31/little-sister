@@ -4,7 +4,6 @@ as it runs, and the sentences the heartbeat carries — tested from the claims
 side of it — what it records on the tick — is in ``test_engine.py``."""
 from __future__ import annotations
 
-import builtins
 from types import SimpleNamespace
 from unittest import TestCase
 from unittest.mock import patch
@@ -26,9 +25,9 @@ from little_sister.limits import (
     Waiting,
     capacity,
     declared_costs,
+    format_weight,
     machine_memory,
     may_run_late,
-    resident_size,
 )
 from little_sister.status import StatusCode
 
@@ -111,20 +110,23 @@ class EntryCountTests(TestCase):
 
 class MemoryTests(TestCase):
     """The resident size against the memory limit, the same shape; no line where
-    the machine could not say; a high-water mark is called the peak it is."""
+    the machine could not say; the size now graded where there is one and a
+    high-water mark, where it is all there is, called the peak it is (ADR-0095
+    decision 1). What the platform reads is ``test_memory_figures.py``'s."""
 
     def _limits(self) -> Limits:
         return Limits(memory_limit=GIB, machine_memory=2 * GIB)
 
     def test_below_the_amber_share_says_nothing(self):
         report = _report(limits=self._limits(),
-                         resident=lambda: Resident(700 * MIB, peak=False))
+                         resident=lambda: Resident(peak=700 * MIB, now=700 * MIB))
         report.observe(0.0, entries=0, waiting=[], late=[])
         self.assertNotIn("memory", _slugs(report))
 
     def test_the_amber_share_names_the_size_the_limit_and_the_machine(self):
         report = _report(limits=self._limits(),
-                         resident=lambda: Resident(int(GIB * 0.85), peak=False))
+                         resident=lambda: Resident(peak=int(GIB * 0.85),
+                                                  now=int(GIB * 0.85)))
         report.observe(0.0, entries=0, waiting=[], late=[])
         line = _line(report, "memory")
         self.assertIs(line.code, StatusCode.WARN)
@@ -134,7 +136,7 @@ class MemoryTests(TestCase):
 
     def test_the_limit_is_an_error(self):
         report = _report(limits=self._limits(),
-                         resident=lambda: Resident(GIB, peak=False))
+                         resident=lambda: Resident(peak=GIB, now=GIB))
         report.observe(0.0, entries=0, waiting=[], late=[])
         line = _line(report, "memory")
         self.assertIs(line.code, StatusCode.ERROR)
@@ -143,14 +145,26 @@ class MemoryTests(TestCase):
 
     def test_a_peak_is_named_as_one(self):
         report = _report(limits=self._limits(),
-                         resident=lambda: Resident(GIB, peak=True))
+                         resident=lambda: Resident(peak=GIB))
         report.observe(0.0, entries=0, waiting=[], late=[])
         self.assertTrue(_line(report, "memory").text.startswith(
             "peak resident size 1.0 GiB"))
 
+    def test_the_size_now_is_graded_and_not_the_peak_beside_it(self):
+        """A high-water mark past the limit would stand ERROR for the life of the
+        process; the size now has fallen back to the amber band, and the line
+        says what it is now."""
+        report = _report(limits=self._limits(),
+                         resident=lambda: Resident(peak=GIB, now=int(GIB * 0.85)))
+        report.observe(0.0, entries=0, waiting=[], late=[])
+        line = _line(report, "memory")
+        self.assertIs(line.code, StatusCode.WARN)
+        self.assertTrue(line.text.startswith("resident size 870 MiB, 85 % of the "
+                                             "limit"), line.text)
+
     def test_no_limit_means_no_line_however_large_the_process(self):
         report = _report(limits=Limits(memory_limit=None),
-                         resident=lambda: Resident(64 * GIB, peak=False))
+                         resident=lambda: Resident(peak=64 * GIB, now=64 * GIB))
         report.observe(0.0, entries=0, waiting=[], late=[])
         self.assertNotIn("memory", _slugs(report))
 
@@ -363,31 +377,6 @@ class LimitsFromTheMachineTests(TestCase):
                 patch.object(limits_module, "_cgroup_memory_limit",
                              return_value=None):
             self.assertIsNone(machine_memory())
-
-
-class ResidentSizeTests(TestCase):
-    """The resident size is read from the kernel's own record of the process:
-    ``/proc/self/statm`` where it exists, else the high-water mark ``getrusage``
-    keeps, marked as the peak it is."""
-
-    def test_this_machine_answers_with_a_positive_size(self):
-        measured = resident_size()
-        assert measured is not None
-        self.assertGreater(measured.bytes, 0)
-
-    def test_without_proc_the_high_water_mark_is_the_answer(self):
-        real_open = builtins.open
-
-        def no_proc(path, *args, **kwargs):
-            if str(path) == "/proc/self/statm":
-                raise OSError("no /proc here")
-            return real_open(path, *args, **kwargs)
-
-        with patch.object(builtins, "open", no_proc):
-            measured = resident_size()
-        assert measured is not None
-        self.assertTrue(measured.peak)
-        self.assertGreater(measured.bytes, 0)
 
 
 class DeclaredCostTests(TestCase):
@@ -654,3 +643,20 @@ class CapacityLineTests(TestCase):
         report = _report(capacity=None)
         report.observe(0.0, entries=0, waiting=[], late=[])
         self.assertEqual(_slugs(report), [])
+
+
+class WeightTests(TestCase):
+    """A weight in bytes at the resolution a series line needs — and, since the
+    binary sizes became units a curve is written in, a volume of terabytes too:
+    `format_weight` gains TiB (ADR-0096 decision 3)."""
+
+    def test_each_binary_unit_where_it_begins(self) -> None:
+        self.assertEqual(format_weight(1023), "1,023 B")
+        self.assertEqual(format_weight(1024), "1.0 KiB")
+        self.assertEqual(format_weight(1024 ** 2), "1.0 MiB")
+        self.assertEqual(format_weight(1024 ** 3), "1.0 GiB")
+        self.assertEqual(format_weight(1024 ** 4), "1.0 TiB")
+
+    def test_a_volume_reads_in_tib_and_not_in_thousands_of_gib(self) -> None:
+        self.assertEqual(format_weight(1023 * 1024 ** 3), "1,023.0 GiB")
+        self.assertEqual(format_weight(5_835_678_284 * 1024), "5.4 TiB")

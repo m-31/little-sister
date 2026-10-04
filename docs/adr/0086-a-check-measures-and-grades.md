@@ -1,7 +1,7 @@
 # ADR-0086 — A check measures, and then grades what it measured
 
 - **Status:** Accepted
-- **Date:** 2026-09-27
+- **Date:** 2026-10-04 (accepted 2026-09-27)
 - **Related:** [ADR-0085](0085-a-measure-is-read-out-of-a-record.md) (the record
   this splits in two, and whose decision 2 moves here),
   [ADR-0040](0040-what-a-failing-check-becomes.md) (what a raising check becomes,
@@ -13,7 +13,9 @@
   a grading still returns), [ADR-0058](0058-transport-policy-vocabulary.md) (the
   instrument-versus-subject question this makes structural),
   [ADR-0087](0087-a-check-keeps-its-subjects-readings.md) (the series that narrows
-  decision 8 again)
+  decision 8 again),
+  [ADR-0106](0106-a-subject-with-a-history-has-a-node-of-its-own.md) (a subject's
+  own node, where a line may name the subject its reading does not)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -64,13 +66,14 @@ that measurement is the check's own node's reading. Where it handed back several
 the engine places none and the grading has already said where they go.
 
 **The grading carries a reading through onto the `Entry` it produced**, as that
-entry's `data`, and the line's `subject` is the measurement's; a `Measurement` does not
-declare a place. No type in this repository reads more than one object, so the case
-that settled it is the first that does — the `actions` aspect of little-sister-github's
-`github` type (little-sister-github ADR-0013). Its mapping is one-to-one — one workflow
-on one branch is one measurement and one line — and the grading is where the line's
-slug is minted anyway, so a declared place would have been a second way of saying what
-the `Entry` already says, and an engine mechanism with nothing to do.
+entry's `data`, and the line's `subject` is the measurement's wherever the measurement
+names one; a `Measurement` does not declare a place. No type in this repository reads
+more than one object, so the case that settled it is the first that does — the `actions`
+aspect of little-sister-github's `github` type (little-sister-github ADR-0013). Its
+mapping is one-to-one — one workflow on one branch is one measurement and one line — and
+the grading is where the line's slug is minted anyway, so a declared place would have
+been a second way of saying what the `Entry` already says, and an engine mechanism with
+nothing to do.
 
 The same case showed that decision 8 decides a subject's **grain**. The object of that
 line had been the repository, and a repository with many workflow-branches would have
@@ -81,6 +84,11 @@ workflow-branch record weighs 291 bytes, so ten of them pass the 2 KB `record_li
 before any other aspect is counted. The `github` type's pull requests, alerts and issues
 are measured one measurement per line for the same reason; whether any of them is an
 object with a history is a decision for later, against its own surface.
+
+A line on a subject's own node may name that subject where its reading names none
+([ADR-0106](0106-a-subject-with-a-history-has-a-node-of-its-own.md) decision 2) — a
+reading taken on every poll and kept nowhere, beside the subject's runs, which are
+written for the record.
 
 ### 3. A measurement is the only place an object and its reading live
 

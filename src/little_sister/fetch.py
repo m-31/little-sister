@@ -57,7 +57,7 @@ from email.message import Message
 from email.utils import parsedate_to_datetime
 from typing import IO, Any, Protocol
 
-from little_sister import __version__
+from little_sister import __version__, instants
 from little_sister.transport import Deadline, DeadlineExceeded, Fault, RemoteError
 
 __all__ = ["Response", "fault_for", "fetch", "retry_after"]
@@ -177,7 +177,7 @@ def retry_after(headers: Message, *, now: datetime | None = None) -> float | Non
         return None
     if when.tzinfo is None:                       # an HTTP-date is GMT by definition
         when = when.replace(tzinfo=UTC)
-    return max(0.0, (when - (now or datetime.now(UTC))).total_seconds())
+    return max(0.0, (when - (now or instants.now())).total_seconds())
 
 
 class _KeepRedirects(urllib.request.HTTPRedirectHandler):

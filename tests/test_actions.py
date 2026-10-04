@@ -262,7 +262,7 @@ class RenderTests(TestCase):
 
     def test_system_names_the_built_in_filler(self):
         self._login()
-        body = self._body("/system")
+        body = self._body("/system/installed")
         self.assertIn("built-in", body)
         self.assertIn("node.actions", body)
 

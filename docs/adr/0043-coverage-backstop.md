@@ -1,7 +1,8 @@
 # ADR-0043 — The coverage backstop: an empty scope is never silently green
 
 - **Status:** Accepted
-- **Date:** 2026-08-08 (in the design round on information a status code cannot carry)
+- **Date:** 2026-10-04 (accepted 2026-08-08, in the design round on information a
+  status code cannot carry)
 - **Related:** [ADR-0032](0032-status-contribution-boundary.md) (rules 6 and 7, the
   invariants this one stands beside),
   [ADR-0005](0005-dashboard-freshness-and-self-monitoring.md) (the zero-checks
@@ -11,7 +12,9 @@
   [ADR-0044](0044-run-facts-on-the-node.md) (`report`, where the discovered roster
   goes),
   [ADR-0042](0042-entries-carry-their-own-code.md) (why a branch container still
-  declares its code, which is what makes the `WARN` expressible)
+  declares its code, which is what makes the `WARN` expressible),
+  [ADR-0106](0106-a-subject-with-a-history-has-a-node-of-its-own.md) (the node of
+  its own that a subject with a history has)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -85,13 +88,16 @@ answer was *amber, saying so*.
    ([ADR-0042](0042-entries-carry-their-own-code.md)). What a line is *about* — a
    repository, a workflow, an API budget — is its **subject**, and several lines
    commonly share one: a repository with a failed build and a run awaiting approval
-   is one subject with two lines. A subject may be **read** as the worst of its
-   lines, and it stores nothing; what that reading has to respect to leave a node's
-   code unchanged is fold arithmetic, and belongs to the model rather than here —
-   [`../architecture.md`](../architecture.md) §4.3 states it once. The distinction
-   earns its keep in one place: **a pin holds an identifier, and only a reason has
-   one** — so maintenance is per line, and a subject is something to read rather than
-   something to act on. Naming one well is
+   is one subject with two lines. A subject that has a history — a workflow on its
+   branch, a job name, a pipeline — has a node of its own, and its line stands on it
+   ([ADR-0106](0106-a-subject-with-a-history-has-a-node-of-its-own.md) decisions 1
+   and 2). A subject without one is a grouping of the lines about it: it may be
+   **read** as the worst of its lines, and it stores nothing; what that reading has
+   to respect to leave a node's code unchanged is fold arithmetic, and belongs to the
+   model rather than here — [`../architecture.md`](../architecture.md) §4.3 states it
+   once. The distinction earns its keep in one place: **a pin holds an identifier,
+   and only a reason has one** — so maintenance is per line, and such a subject is
+   something to read rather than something to act on. Naming one well is
    [ADR-0050](0050-slugs-from-provider-identifiers.md)'s business: a slug is built
    from identifiers the provider minted rather than from rendered text, which is why
    a rename at the provider re-keys a subject's lines.
@@ -116,10 +122,10 @@ answer was *amber, saying so*.
   means, and a core knob would be either meaningless or wrong per check type.
 - **Leaving it in the log** — the hole itself; the log is where the information
   already was while every dashboard stayed green.
-- **A node per discovered subject** — rejected: forty repositories times seven
-  aspects is a tree nobody reads. Per-subject *identity* already exists in the
-  entry slugs; what was missing was per-subject **presence**, which the roster
-  gives without paths, histories and pins per subject. What that leaves is decision
-  7's reading: a subject is a **grouping of the lines about it** — readable as the
-  worst of them, and owning none of the three things this alternative would have had
-  to buy for it.
+- **A node per discovered subject, under every aspect** — rejected: forty
+  repositories times seven aspects is a tree nobody reads. Per-subject *identity*
+  already exists in the entry slugs; what was missing was per-subject **presence**,
+  which the roster gives without paths, histories and pins per subject. What that
+  leaves is decision 7's reading: a subject without a history is a **grouping of the
+  lines about it** — readable as the worst of them, and owning none of the three
+  things this alternative would have had to buy for it.

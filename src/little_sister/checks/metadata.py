@@ -11,7 +11,7 @@ type, ``Check.__init__`` resolves the labels against what the type *declared*
 (``subnode_defaults`` / ``label_tokens``) through :func:`resolve_text`, and the engine
 applies both per child name. So a deployment can write this block for any installed
 branch check with no check release, and a check type reads none of it — the flag since
-ADR-0063, the labels since its 2026-08-19 update, which is also when the three label
+ADR-0063, the labels since ADR-0025 decision 5, which is also when the three label
 helpers left the check-authoring surface (they had no external caller left, and the
 epoch moved with them, ADR-0051).
 

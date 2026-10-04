@@ -16,22 +16,13 @@
 
         {% include '_said.html' %}
 
+        {#- Everything the refresh swaps, and with it every pin the page states
+            and every editor of one (ADR-0104 decisions 2 and 3): a card's block
+            and its pause mark, and on a node's page the head's. The refresh
+            waits while one of those editors is open (decision 7, `poll.js`). -#}
         <div id="status-grid">
             {% include '_status_grid.html' %}
         </div>
-
-        {% if is_admin and branch and node and layout != 'kiosk' %}
-        {#- The viewed node's own maintenance card (ADR-0014): the subtree
-            page is a dashboard of the children, so without it a pin on this
-            node is invisible here — and the branch pin, which the model and
-            POST /maintenance always supported, finally has a page. Outside
-            #status-grid, so the ~10s poll swap leaves an open form alone.
-            Deliberately absent on the overview root: a silence-everything form
-            is a foot-gun, so the root stays curl-only. #}
-        <div class="mt-3" style="max-width: 820px">
-            {% include '_maintenance_card.html' %}
-        </div>
-        {% endif %}
     </div>
 {% include '_page_end.html' %}
 
@@ -41,9 +32,10 @@
        peek at the labels rather than a setting. #}
     <script src="{{ url_for('static', filename='js/rail.js') }}"></script>
     {# The ~10s fragment poll, shared with /system (poll.js swaps data-target
-       and keeps the #status-updated stamp truthful, ADR-0005). #}
+       and keeps the #status-updated stamp truthful, ADR-0005) — and waits while
+       an editor of a pin is open in what it would swap (ADR-0104 decision 7). #}
     <script src="{{ url_for('static', filename='js/poll.js') }}"
-            data-target="status-grid"></script>
+            data-target="status-grid" data-assets="{{ assets_digest() }}"></script>
 
     {# Topology-weighted card spans (ADR-0056, superseding ADR-0024): the server
        sends stable plans; this measures the responsive grid and reapplies the
@@ -59,6 +51,8 @@
        boxes, toggled in place and re-applied across the ~10s fragment swap
        (event-delegated on #status-grid, the ADR-0019 pattern). #}
     <script src="{{ url_for('static', filename='js/branches.js') }}"></script>
+    {# Cancel and Escape for a pin's editor, in a card or in a node's head: the
+       editor is the browser's own disclosure and works without this. #}
     <script src="{{ url_for('static', filename='js/maintenance-edit.js') }}"></script>
 
     {# Inspection popover (ADR-0019): static node metadata preloaded with the page
@@ -74,9 +68,5 @@
        links. Event-delegated on #status-grid so it survives the ~10s poll swap. #}
     <div id="maintenance-card" class="maintenance-pop" role="dialog" aria-label="maintenance in this card" hidden></div>
     <script src="{{ url_for('static', filename='js/maintenance.js') }}"></script>
-
-    {% if is_admin and layout != 'kiosk' %}
-    {% include '_pin_dialog.html' %}
-    {% endif %}
 </body>
 </html>

@@ -49,6 +49,92 @@
     </span>
 {%- endmacro -%}
 
+{#- The setup guide, folded (ADR-0030). With no links the page used to be the
+    guide in full — a sample file, where it goes, the roster of installed marks,
+    how to add one — more than a screen before anybody had a link; and a
+    deployment that had written its file lost the roster with the empty state. So
+    the guide is two folds, each the browser's own disclosure and closed, which
+    works without script: *Add links* on a page that has none, and *Icon names*
+    there and at the foot of a page that has links.
+
+    A fold is a card, whose surface Bootstrap paints. What its summary adds beside
+    its name is muted from our own token for that reason: `.text-muted` is an ink
+    nobody here measured on that surface (`tests/test_contrast.py`). -#}
+{%- macro fold(name, aside) -%}
+            <details class="card mb-2 ls-links__fold">
+                <summary class="card-body py-2"><strong>{{ name }}</strong> <span class="ls-links__aside">· {{ aside }}</span></summary>
+                <div class="card-body pt-1">
+{{ caller() }}
+                </div>
+            </details>
+{%- endmacro -%}
+
+{#- The roster and how a deployment adds a mark of its own. It stands alone under
+    a page that has links, so it names the file it means rather than pointing at a
+    fold that is not there. -#}
+{%- macro icon_names_fold(icon_names) -%}
+{%- call fold('Icon names', (icon_names | length) ~ ' installed, and how to add your own') %}
+                    {%- if icon_names %}
+                    <p>
+                        <code>icon:</code> takes a <em>name</em>, never a URL — a
+                        dozen entries for one tool cost one mark, one fetch, one
+                        probe. These names are already installed. Each is drawn
+                        twice, once for a light background and once for a dark
+                        one, and the page picks by theme:
+                    </p>
+                    {#- The whole roster, not an example of one: the reader is choosing a
+                        name, and a name they cannot see is one they will write wrong. The
+                        list is the **registry** (built-in pack plus anything a dependent
+                        package registered), so every row here is servable by the icon
+                        route — the deployment's own map is not in it, since an entry
+                        there may be a remote URL or a suppression, neither of which has
+                        bytes to serve. The images are decorative: the name they belong to
+                        is the row header beside them, so `alt` is empty rather than a
+                        second reading of it. A file that fails to load still becomes the
+                        neutral glyph — links.js delegates on `.ls-links__mark`, which is
+                        why each one keeps that wrapper here too. -#}
+                    <div class="table-responsive position-relative mb-3">
+                    <table class="table table-sm ls-links__pack mb-0">
+                        <thead>
+                            <tr>
+                                <th scope="col">name</th>
+                                <th scope="col">on light</th>
+                                <th scope="col">on dark</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {%- for name in icon_names %}
+                            <tr>
+                                <th scope="row" class="fw-normal"><code>{{ name }}</code></th>
+                                {%- for variant, side in (('on-light', 'light'), ('on-dark', 'dark')) %}
+                                <td class="ls-links__swatch ls-links__swatch--{{ side }}">
+                                    <span class="ls-links__mark">
+                                        <img class="ls-links__icon"
+                                             src="{{ url_for('link_icon', variant=variant, name=name) }}"
+                                             alt="" width="20" height="20" loading="lazy">
+                                    </span>
+                                </td>
+                                {%- endfor %}
+                            </tr>
+                            {%- endfor %}
+                        </tbody>
+                    </table>
+                    </div>
+                    {%- endif %}
+                    <p>
+                        To use a mark of your own, put an <code>icons/</code>
+                        directory beside <code>links.yaml</code> and drop the file
+                        in: <code>firewall.svg</code> is the name
+                        <code>firewall</code>. Name it after one of the installed
+                        marks and it replaces that one. A pair —
+                        <code>firewall-on-light.svg</code> and
+                        <code>firewall-on-dark.svg</code> — is one name with a
+                        drawing for each background; a single file rides a light
+                        chip instead, so it stays legible under every theme.
+                    </p>
+{%- endcall %}
+{%- endmacro -%}
+
     <div class="container-fluid mt-3 px-4" id="ls-links-page">
         <h1 class="h4 mb-3">Links</h1>
 
@@ -75,80 +161,32 @@
         {%- endif %}
 
         {%- if links_config.is_empty() %}
-        {#- The empty state keeps the page and its nav entry and says where the
-            file goes: an empty toolbox is a deployment that has not filled it
-            in yet, not a broken install. -#}
+        {#- The empty state keeps the page and its nav entry and says what the page
+            is: an empty toolbox is a deployment that has not filled it in yet, not
+            a broken install. One sentence, for every reader alike — the page knows
+            no roles — and the guide a step away, in its two folds. -#}
         <div class="ls-links__empty">
-            <p>No links yet.</p>
-            <p>
-                They come from this deployment's own configuration — one flat
-                level of groups, each with an ordered list of entries:
-            </p>
-            <pre class="ls-links__sample"><code>groups:
+            <p><strong>No links yet.</strong> This page is the deployment's toolbox,
+                the dashboards and tools to have at hand in an incident, and it has
+                not been filled in.</p>
+            {%- call fold('Add links', "one file in this deployment's configuration") %}
+                    <p>
+                        Links come from this deployment's own configuration — one
+                        flat level of groups, each with an ordered list of entries:
+                    </p>
+                    <pre class="ls-links__sample"><code>groups:
   - title: Toolbox
     links:
       - title: Grafana
         url: https://grafana.example.org/
         icon: grafana</code></pre>
-            <p>
-                Put that in <code>{{ links_file }}</code> and reload — the file is
-                re-read when it changes, so nothing needs restarting.
-            </p>
-            {%- if icon_names %}
-            <p>
-                <code>icon:</code> takes a <em>name</em>, never a URL — a dozen
-                entries for one tool cost one mark, one fetch, one probe. These
-                names are already installed. Each is drawn twice, once for a
-                light background and once for a dark one, and the page picks by
-                theme:
-            </p>
-            {#- The whole roster, not an example of one: the reader is choosing a
-                name, and a name they cannot see is one they will write wrong. The
-                list is the **registry** (built-in pack plus anything a dependent
-                package registered), so every row here is servable by the icon
-                route — the deployment's own map is not in it, since an entry
-                there may be a remote URL or a suppression, neither of which has
-                bytes to serve. The images are decorative: the name they belong to
-                is the row header beside them, so `alt` is empty rather than a
-                second reading of it. A file that fails to load still becomes the
-                neutral glyph — links.js delegates on `.ls-links__mark`, which is
-                why each one keeps that wrapper here too. -#}
-            <table class="table table-sm ls-links__pack">
-                <thead>
-                    <tr>
-                        <th scope="col">name</th>
-                        <th scope="col">on light</th>
-                        <th scope="col">on dark</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {%- for name in icon_names %}
-                    <tr>
-                        <th scope="row" class="fw-normal"><code>{{ name }}</code></th>
-                        {%- for variant, side in (('on-light', 'light'), ('on-dark', 'dark')) %}
-                        <td class="ls-links__swatch ls-links__swatch--{{ side }}">
-                            <span class="ls-links__mark">
-                                <img class="ls-links__icon"
-                                     src="{{ url_for('link_icon', variant=variant, name=name) }}"
-                                     alt="" width="20" height="20" loading="lazy">
-                            </span>
-                        </td>
-                        {%- endfor %}
-                    </tr>
-                    {%- endfor %}
-                </tbody>
-            </table>
-            {%- endif %}
-            <p>
-                To use a mark of your own, put an <code>icons/</code> directory
-                beside that file and drop the file in:
-                <code>firewall.svg</code> is the name <code>firewall</code>.
-                Name it after one of the marks above and it replaces that one.
-                A pair — <code>firewall-on-light.svg</code> and
-                <code>firewall-on-dark.svg</code> — is one name with a drawing
-                for each background; a single file rides a light chip instead, so
-                it stays legible under every theme.
-            </p>
+                    <p>
+                        Put that in <code>{{ links_file }}</code> and reload — the
+                        file is re-read when it changes, so nothing needs
+                        restarting.
+                    </p>
+            {%- endcall %}
+            {{ icon_names_fold(icon_names) }}
         </div>
         {%- else %}
         {#- The filter is the primary navigation once a page reaches sixty
@@ -284,6 +322,13 @@
                 </ul>
             </section>
             {%- endif %}{% endfor %}
+        </div>
+        {#- The icon names, at the foot and closed: whoever adds a fortieth link
+            reads a name here rather than guessing one, and a page that is read
+            mid-incident carries one line for it, under everything that is on
+            fire. Outside the columns, so the filter never hides it. -#}
+        <div class="ls-links__foot">
+            {{ icon_names_fold(icon_names) }}
         </div>
         {%- endif %}
     </div>

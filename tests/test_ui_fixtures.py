@@ -9,9 +9,13 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import UTC, datetime, timedelta
 from html import unescape
 from unittest import TestCase
 
+from little_sister.status import StatusCode
+from little_sister.tree import StatusTree
+from tests import ui_fixtures
 from tests.render_ui_fixtures import render_copy_page, render_page
 from tests.ui_fixtures import FIXTURES, FIXTURES_BY_NAME
 
@@ -83,8 +87,30 @@ class FixtureRenderTests(TestCase):
         html = self._render("idle_maintenance_stale_mix")
         self.assertIn("connection refused", html)      # live ERROR
         self.assertIn("stale", html)                   # the short-frequency node
-        self.assertIn("maintenance", html)             # the admin pin
+        self.assertIn("under-maintenance", html)       # the pinned node, by name
+        self.assertIn("planned kernel upgrade", html)  # and its pin's note
         self.assertIn("undefined", html)               # the never-reported node
+
+    def test_a_deep_pin_is_surfaced_by_the_pill_and_a_pip(self):
+        html = self._render("maintenance_deep_pin")
+        self.assertIn('maintenance-pill__count">1<', html)
+        self.assertIn("/nexus/disk/smart/bay-7", html)
+        self.assertIn('data-pop-for="/nexus"', html)   # the card's pip
+
+    def test_twelve_pins_fold_behind_the_cap(self):
+        html = self._render("maintenance_many_pins")
+        self.assertIn('maintenance-pill__count">12<', html)
+        self.assertIn("+7 more", html)
+
+    def test_no_fixture_pins_what_it_never_wrote(self):
+        # a pin makes no node (ADR-0109 decision 4), so a fixture that pins a path
+        # it did not write shows no pinned node, and nothing on its page says so
+        tree = StatusTree()
+        tree.upsert("/written", StatusCode.OK)
+        tree.set_maintenance("/never/written", "planned",
+                             expires_at=datetime.now(UTC) + timedelta(days=1))
+        with self.assertRaisesRegex(AssertionError, "/never/written"):
+            ui_fixtures._snapshot(tree)
 
     def test_reasons_graduated_keeps_the_largest_card(self):
         html = self._render("reasons_graduated")
@@ -107,7 +133,9 @@ class FixtureRenderTests(TestCase):
 
     def test_multi_front_incident_renders_through_copy_page(self):
         html = render_copy_page()
-        self.assertIn("Copy status", html)
+        # in the root's band, under its tabs, as the route draws it
+        self.assertRegex(html, r'<a class="ls-views__tab is-current" href="/copy"')
+        self.assertIn("little-sister status", html)
         self.assertIn("Copy Markdown", html)
         self.assertIn("Copy Rich HTML", html)
         self.assertIn("actions", html)
@@ -116,8 +144,13 @@ class FixtureRenderTests(TestCase):
     def test_maintenance_editor_fixture_has_read_and_edit_states(self):
         html = self._render("maintenance_editor_member_leaf")
         self.assertIn("<strong>Ada owns this</strong>", html)
-        self.assertIn("Edit maintenance", html)
-        self.assertIn("Set maintenance", html)
+        # the node's block and the pinned line's, each with its editor, and a
+        # pause mark on the lines still to be pinned (ADR-0104)
+        self.assertIn("Edit<span class=\"visually-hidden\"> this node's "
+                      "maintenance</span>", html)
+        self.assertIn("Edit<span class=\"visually-hidden\"> this line's "
+                      "maintenance</span>", html)
+        self.assertIn("Set maintenance for this line", html)
         self.assertIn("maintenance-reason-source", html)
         self.assertIn("&lt;script&gt;shown as text&lt;/script&gt;", html)
 
@@ -280,19 +313,50 @@ class WallFixtureTests(TestCase):
         self.assertEqual(html.count('class="status-card__time"'), 1)
 
     def test_the_series_leaf_draws_its_curve_with_both_breaks(self):
-        # ADR-0092 on the sheet: one curve, the four failed requests marked in its
-        # lane (and once more as the summary's key), the night's sleep counted and
-        # left unmarked, the slow first answer in the unit's second rung, and the
-        # newest ten readings beneath
+        # ADR-0092 on the sheet, as ADR-0096 and ADR-0097 amend it: one curve, the
+        # four failed requests marked in its lane (and once more as the summary's
+        # key), the night's sleep counted and left unmarked, the slow first answer
+        # in the unit's second rung — and the readings left to the Series view
         html = self._render("series_http_leaf")
         self.assertEqual(html.count('<figure class="ls-curve"'), 1)
         self.assertEqual(len(re.findall(r'<line class="ls-curve__none"', html)), 5)
-        self.assertIn("4 without a value", html)
+        self.assertIn("4 failed", html)
         self.assertIn("1 stretch without readings", html)
         self.assertIn("highest 1.9 s", html)
-        table = html.split('class="table table-sm align-middle ls-readings"')[1]
-        rows = table.split("<tbody>")[1].split("</tbody>")[0]
-        self.assertEqual(rows.count("<tr>"), 10)
+        self.assertNotIn("ls-readings", html)
+        self.assertIn('href="/series/web/site#node"', html)
+
+    def test_the_runs_leaf_draws_a_stem_for_each_run(self):
+        # ADR-0111 on the sheet: one plot of runs under its measure, no line
+        # joining them; each failure a hollow ring and a mark in the lane, each
+        # warning the triangle — once more each as the summary's key — and the
+        # runs that kept no verdict counted with theirs
+        html = self._render("runs_stems_leaf")
+        self.assertEqual(html.count('<figure class="ls-curve"'), 1)
+        self.assertNotIn('class="ls-curve__line"', html)
+        self.assertEqual(html.count('class="ls-curve__failed"'), 3 + 1)
+        self.assertEqual(html.count('class="ls-curve__warned"'), 4 + 1)
+        self.assertEqual(len(re.findall(r'<line class="ls-curve__none"', html)), 3)
+        words = " ".join(re.sub(r"<[^>]+>", " ", html).split())
+        self.assertIn("75 runs · newest 42m 45s · lowest 6m · highest 1h 5m · "
+                      "3 failed · 4 warned · 9 without a verdict", words)
+        # in the crowd of the last four days a passing run's head gives way: far
+        # fewer heads than the 59 runs that passed
+        heads = len(re.findall(r'<circle class="ls-curve__dot"', html))
+        self.assertGreater(heads, 10)
+        self.assertLess(heads, 30)
+        self.assertIn('href="/series/batch/transform#node"', html)
+
+    def test_the_runs_leaf_without_a_measure_draws_ticks(self):
+        # the same runs as ticks: a plot as tall as its marks, titled by what they
+        # are, a failure told by its ring alone and no lane beneath it
+        html = self._render("runs_ticks_leaf")
+        self.assertIn('<span class="ls-curve__title">Runs</span>', html)
+        self.assertIn('<svg class="ls-curve__plot" viewBox="0 0 760 64"', html)
+        self.assertNotIn('<line class="ls-curve__none"', html)
+        self.assertNotIn('class="ls-curve__dot"', html)
+        words = " ".join(re.sub(r"<[^>]+>", " ", html).split())
+        self.assertIn("75 runs · 3 failed · 4 warned · 9 without a verdict", words)
 
     def test_the_refused_records_leaf_says_why_in_the_records_place(self):
         # ADR-0093 on the sheet: the line that lost its record stands with its own

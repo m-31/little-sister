@@ -1,7 +1,7 @@
 # ADR-0072 — The instance reports on itself through one seam, in lines that clear
 
 - **Status:** Accepted
-- **Date:** 2026-09-05
+- **Date:** 2026-10-04 (accepted 2026-09-05)
 - **Related:** [ADR-0005](0005-dashboard-freshness-and-self-monitoring.md) (the
   heartbeat and staleness, untouched), [ADR-0024](0024-dashboard-layout.md)
   (the strip that draws the heartbeat), [ADR-0031](0031-deployment-config-directory.md)
@@ -9,7 +9,8 @@
   / [ADR-0042](0042-entries-carry-their-own-code.md) (entries with slugs and codes,
   which the lines are), [ADR-0064](0064-the-resolver-is-a-registration.md) (the
   registration rules), [ADR-0071](0071-what-a-restart-keeps-is-a-directory-of-files.md)
-  (the first contributor)
+  (the first contributor), [ADR-0100](0100-system-is-two-views.md) (the *Installed*
+  view of `/system`, which prints each package's contributors)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -69,9 +70,10 @@ take the scheduler down with it.
 
 6. **The engine's own lines** live on `/little-sister/engine`, and the no-checks
    warning is the first of them: the sentence at WARN, the searched paths beside it
-   as a line with no claim of its own (ADR-0042). `/system` prints each package's
-   contributors beside its other seams, and the tree shows each as a child of the
-   heartbeat whether or not it has something to say (ADR-0076).
+   as a line with no claim of its own (ADR-0042). `/system`'s *Installed* view,
+   `/system/installed` ([ADR-0100](0100-system-is-two-views.md)), prints each
+   package's contributors beside its other seams, and the tree shows each as a child
+   of the heartbeat whether or not it has something to say (ADR-0076).
 
 7. **Two records, so the log and the node cannot drift apart.** A warning about
    the state of this process takes one of two shapes, and the seam offers a record

@@ -53,9 +53,8 @@ import os
 import socket
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
 
-from little_sister import self_report
+from little_sister import instants, self_report
 from little_sister.reasons import plain
 
 #: The longest configured name. Long enough for a deployment's own naming scheme,
@@ -132,7 +131,7 @@ def resolve() -> Instance:
         name=_valid_name(config.instance) if config.instance
         else socket.gethostname(),
         pid=os.getpid(),
-        started=datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ"),
+        started=instants.now().strftime("%Y%m%dT%H%M%SZ"),
         tag=uuid.uuid4().hex[:8])
 
 

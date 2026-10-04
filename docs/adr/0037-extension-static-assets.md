@@ -1,7 +1,7 @@
 # ADR-0037 — Extension static assets: a filler may ship CSS and JS
 
 - **Status:** Accepted
-- **Date:** 2026-08-02
+- **Date:** 2026-10-04 (accepted 2026-08-02)
 - **Related:** [ADR-0034](0034-template-slots-for-dependent-packages.md) (the slot
   seam this lifts a stated limit from),
   [ADR-0030](0030-curated-links.md) §3 (the icon route's sandbox and package-data
@@ -11,7 +11,9 @@
   [ADR-0038](0038-declarative-action-list.md) (the library's own filler, which needs
   none of this and is the reason the limit was survivable so long),
   [ADR-0029](0029-per-user-presentation-preferences.md) (the kiosk, which loads none
-  of it), [ADR-0008](0008-json-output-api.md) (untouched: assets are presentation)
+  of it), [ADR-0008](0008-json-output-api.md) (untouched: assets are presentation),
+  [ADR-0100](0100-system-is-two-views.md) (the *Installed* view of `/system`, which
+  lists what registered)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -101,8 +103,9 @@ and puts the tags on the page.
   installing an extension is trusting it.
 - Registration hashes the file, so it is read once at startup. A file edited under a
   running process keeps its old digest until a restart, like every other registration.
-- `/system` lists what registered, and now says whether a filler is a dependent
-  package's or the library's own.
+- `/system`'s *Installed* view, `/system/installed`
+  ([ADR-0100](0100-system-is-two-views.md)), lists what registered, and now says
+  whether a filler is a dependent package's or the library's own.
 - The page pays nothing when nothing registered: an empty loop emits no tags.
 
 ## Alternatives considered

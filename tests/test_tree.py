@@ -1,6 +1,6 @@
 import threading
 import unittest
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import ClassVar
 from unittest import TestCase
 
@@ -11,11 +11,13 @@ from little_sister.tree import CHANGE_WINDOW_SECONDS, Event, StatusTree
 
 
 class _RecordingStore:
-    """A maintenance store that just remembers the last table saved (no file)."""
+    """A maintenance store that just remembers the last table saved, and how often
+    one was (no file)."""
 
     def __init__(self) -> None:
         self.saved: dict[str, MaintenanceEntry] = {}
         self.saved_entries: dict[tuple[str, str], MaintenanceEntry] = {}
+        self.saves = 0
 
     def load(self) -> dict[str, MaintenanceEntry]:
         return {}
@@ -26,6 +28,7 @@ class _RecordingStore:
     def save(self, entries, entry_pins=None):
         self.saved = dict(entries)
         self.saved_entries = dict(entry_pins or {})
+        self.saves += 1
 
 
 class DampingTests(TestCase):
@@ -123,10 +126,10 @@ class DampingTests(TestCase):
         # never advance and the hold would never end (ADR-0032 rule 6)
         tree = self._tree(3)
         tree.upsert("/svc/api", StatusCode.ERROR, frequency_seconds=60)
-        stale = datetime.now() - timedelta(seconds=3600)
+        stale = datetime.now(UTC) - timedelta(seconds=3600)
         tree.snapshot("/svc/api")
         node = tree._ensure_node("/svc/api")           # age it by hand
-        node.timestamp = stale.isoformat()
+        node.timestamp = stale
         leaf = self._snap(tree)
         self.assertTrue(leaf.stale)
         self.assertIsNone(leaf.damping, "the hold is not in force on a stale node")
@@ -156,7 +159,7 @@ class DampingTests(TestCase):
         tree = StatusTree()
         tree.upsert("/svc/api", StatusCode.OK)
         tree.set_maintenance("/svc/api", "window",
-                             expires_at=datetime(2999, 1, 1), set_by="ada")
+                             expires_at=datetime(2999, 1, 1, tzinfo=UTC), set_by="ada")
         tree.upsert("/svc/api", StatusCode.ERROR)
         self.assertNotIn(StatusCode.ERROR,
                          [period.code for period in tree.history("/svc/api")])
@@ -184,7 +187,7 @@ class DampingTests(TestCase):
         tree = StatusTree()
         tree.upsert("/svc/api", StatusCode.OK)
         tree.set_maintenance("/svc/api", "window",
-                             expires_at=datetime(2999, 1, 1), set_by="ada")
+                             expires_at=datetime(2999, 1, 1, tzinfo=UTC), set_by="ada")
         tree.upsert("/svc/api", StatusCode.ERROR)
         self.assertEqual(self._snap(tree).changes, 1)
         self.assertEqual(tree.history("/svc/api")[-1].code, StatusCode.MAINTENANCE,
@@ -194,7 +197,7 @@ class DampingTests(TestCase):
         tree = StatusTree()
         tree.upsert("/svc/api", StatusCode.OK)
         tree.upsert("/svc/api", StatusCode.ERROR)
-        later = datetime.now() + timedelta(seconds=CHANGE_WINDOW_SECONDS + 60)
+        later = datetime.now(UTC) + timedelta(seconds=CHANGE_WINDOW_SECONDS + 60)
         snap = tree.snapshot("/svc/api", now=later)
         assert snap is not None
         self.assertEqual(snap.changes, 0)
@@ -234,7 +237,7 @@ class ShieldingTests(TestCase):
     def _age(self, tree: StatusTree, path: str, seconds: float = 3600.0) -> None:
         node = tree._ensure_node(path)
         node.frequency_seconds = 60
-        node.timestamp = (datetime.now() - timedelta(seconds=seconds)).isoformat()
+        node.timestamp = datetime.now(UTC) - timedelta(seconds=seconds)
 
     def test_the_unit_keeps_its_reading_and_stops_reaching_its_parent(self):
         tree = self._tree()
@@ -324,7 +327,7 @@ class ShieldingTests(TestCase):
         tree.upsert("/net/vpn", StatusCode.ERROR)
         tree.upsert("/svc/api", StatusCode.ERROR)
         tree.set_maintenance("/svc/api", "window",
-                             expires_at=datetime(2999, 1, 1), set_by="ada")
+                             expires_at=datetime(2999, 1, 1, tzinfo=UTC), set_by="ada")
         leaf = self._snap(tree)
         self.assertEqual(leaf.contribution.by, "maintenance")
         self.assertEqual(leaf.shielded_by, "/net/vpn",
@@ -703,7 +706,7 @@ class StatusTreeTests(TestCase):
         # so a pinned node keeps reporting a real observation.
         tree = StatusTree()
         tree.set_maintenance("/db", "planned",
-                             expires_at=datetime.now() + timedelta(days=1))
+                             expires_at=datetime.now(UTC) + timedelta(days=1))
         tree.upsert("/db", StatusCode.OK)
         snap = tree.snapshot("/db")
         assert snap is not None
@@ -736,7 +739,7 @@ class StatusTreeTests(TestCase):
         tree = StatusTree()
         tree.upsert("/db", StatusCode.OK, "all good")
         tree.set_maintenance("/db", "planned",
-                             expires_at=datetime.now() + timedelta(days=7))
+                             expires_at=datetime.now(UTC) + timedelta(days=7))
         snap = tree.snapshot("/db")
         assert snap is not None
         self.assertTrue(snap.maintenance)
@@ -778,7 +781,7 @@ class StatusTreeTests(TestCase):
         tree = StatusTree()
         tree.upsert("/system/db", StatusCode.OK, frequency_seconds=60)
         tree.set_maintenance("/system/db", "planned",
-                             expires_at=datetime.now() + timedelta(days=7))
+                             expires_at=datetime.now(UTC) + timedelta(days=7))
         fresh = tree.snapshot("/system/db")
         assert fresh is not None
         self.assertFalse(fresh.stale)
@@ -789,7 +792,7 @@ class StatusTreeTests(TestCase):
         self.assertEqual(tree.effective("/system"), StatusCode.MAINTENANCE)
 
         # nobody writes it again; the clock moves past two intervals
-        later = datetime.now() + timedelta(seconds=200)
+        later = datetime.now(UTC) + timedelta(seconds=200)
         stale = tree.snapshot("/system/db", now=later)
         assert stale is not None
         self.assertTrue(stale.stale)
@@ -806,8 +809,8 @@ class StatusTreeTests(TestCase):
         tree = StatusTree()
         tree.upsert("/system/db", StatusCode.ERROR, "boom", frequency_seconds=60)
         tree.set_maintenance("/system/db", "planned",
-                             expires_at=datetime.now() + timedelta(days=7))
-        later = datetime.now() + timedelta(seconds=200)
+                             expires_at=datetime.now(UTC) + timedelta(days=7))
+        later = datetime.now(UTC) + timedelta(seconds=200)
         parent = tree.snapshot("/system", now=later)
         assert parent is not None
         self.assertEqual(parent.code, StatusCode.ERROR)
@@ -818,7 +821,7 @@ class StatusTreeTests(TestCase):
         # carries no severity for the stale degrade to take the worst of.
         tree = StatusTree()
         tree.upsert("/db", StatusCode.MAINTENANCE, frequency_seconds=60)
-        later = datetime.now() + timedelta(seconds=200)
+        later = datetime.now(UTC) + timedelta(seconds=200)
         snap = tree.snapshot("/db", now=later)
         assert snap is not None
         self.assertFalse(snap.stale)
@@ -830,7 +833,7 @@ class StatusTreeTests(TestCase):
         tree = StatusTree()
         tree.upsert("/db", StatusCode.ERROR, "boom")
         tree.set_maintenance("/db", "planned",
-                             expires_at=datetime.now() + timedelta(days=7))
+                             expires_at=datetime.now(UTC) + timedelta(days=7))
         pinned = tree.recent_events()[-1]
         self.assertEqual((pinned.old, pinned.new),
                          (StatusCode.ERROR, StatusCode.MAINTENANCE))
@@ -850,7 +853,7 @@ class StatusTreeTests(TestCase):
         tree = StatusTree()
         tree.upsert("/db", StatusCode.OK, "all good")
         tree.set_maintenance("/db", "cutover",
-                             expires_at=datetime.now() + timedelta(days=7))
+                             expires_at=datetime.now(UTC) + timedelta(days=7))
         tree.upsert("/db", StatusCode.ERROR, "disk full")
         broke = tree.recent_events()[-1]
         self.assertEqual((broke.old, broke.new), (StatusCode.OK, StatusCode.ERROR))
@@ -861,7 +864,7 @@ class StatusTreeTests(TestCase):
         tree = StatusTree()
         tree.upsert("/db", StatusCode.ERROR, "boom")
         tree.set_maintenance("/db", "cutover",
-                             expires_at=datetime.now() + timedelta(days=7))
+                             expires_at=datetime.now(UTC) + timedelta(days=7))
         self.assertEqual(tree.recent_events()[-1].suppressed_by, "")
         tree.clear_maintenance("/db")
         self.assertEqual(tree.recent_events()[-1].suppressed_by, "")
@@ -889,7 +892,7 @@ class StatusTreeTests(TestCase):
         tree = StatusTree()
         tree.upsert("/db", StatusCode.OK, "all good")
         tree.set_maintenance("/db", "cutover",
-                             expires_at=datetime.now() + timedelta(days=7))
+                             expires_at=datetime.now(UTC) + timedelta(days=7))
         tree.upsert("/db", StatusCode.ERROR, "disk full")
         tree.upsert("/db", StatusCode.OK, "recovered")
         codes = [period.code for period in tree.history("/db")]
@@ -905,7 +908,7 @@ class StatusTreeTests(TestCase):
         # observation time to borrow and carries the moment the admin acted.
         tree = StatusTree()
         tree.set_maintenance("/planned/window", "cutover",
-                             expires_at=datetime.now() + timedelta(hours=2))
+                             expires_at=datetime.now(UTC) + timedelta(hours=2))
         event = tree.recent_events()[-1]
         self.assertEqual(event.new, StatusCode.MAINTENANCE)
         self.assertTrue(event.timestamp)
@@ -917,12 +920,36 @@ class StatusTreeTests(TestCase):
         assert fresh is not None
         self.assertFalse(fresh.stale)
         self.assertEqual(fresh.code, StatusCode.OK)
-        future = datetime.now() + timedelta(hours=1)
+        future = datetime.now(UTC) + timedelta(hours=1)
         stale = tree.snapshot("/db", now=future)
         assert stale is not None
         self.assertTrue(stale.stale)
         self.assertEqual(stale.code, StatusCode.WARN)     # degraded
         self.assertEqual(stale.own_code, StatusCode.OK)   # raw code unchanged
+
+    def test_a_branch_says_whether_the_stale_reading_is_its_own(self):
+        # `stale` is the alarm, and a branch carries it for every node beneath it;
+        # `own_stale` is the fact about the node's own reading
+        tree = StatusTree()
+        tree.upsert("/gateway", StatusCode.OK, "answers", frequency_seconds=60)
+        tree.upsert("/gateway/backend", StatusCode.OK, "fine")
+        tree.upsert("/hosts", StatusCode.OK, "all reachable")
+        tree.upsert("/hosts/nexus", StatusCode.OK, "fine", frequency_seconds=60)
+        later = datetime.now(UTC) + timedelta(hours=1)
+
+        def said(path: str) -> tuple[bool, bool]:
+            node = tree.snapshot(path, now=later)
+            assert node is not None
+            return node.stale, node.own_stale
+
+        self.assertEqual(said("/gateway"), (True, True))
+        self.assertEqual(said("/gateway/backend"), (False, False))
+        self.assertEqual(said("/hosts"), (True, False))     # a node beneath it is
+        self.assertEqual(said("/hosts/nexus"), (True, True))
+        self.assertEqual(said(""), (True, False))
+        fresh = tree.snapshot("/gateway")
+        assert fresh is not None
+        self.assertEqual((fresh.stale, fresh.own_stale), (False, False))
 
     def test_a_stated_tolerance_is_what_freshness_measures(self):
         # ADR-0081: a node may be read on no check's schedule and still have to go
@@ -938,11 +965,11 @@ class StatusTreeTests(TestCase):
         self.assertEqual(snap.stale_after_seconds, 31.0)
         self.assertFalse(snap.stale)
         fresh = tree.snapshot("/little-sister/startup",
-                              now=datetime.now() + timedelta(seconds=30))
+                              now=datetime.now(UTC) + timedelta(seconds=30))
         assert fresh is not None
         self.assertFalse(fresh.stale)
         gone = tree.snapshot("/little-sister/startup",
-                             now=datetime.now() + timedelta(seconds=32))
+                             now=datetime.now(UTC) + timedelta(seconds=32))
         assert gone is not None
         self.assertTrue(gone.stale)
         self.assertEqual(gone.code, StatusCode.WARN)
@@ -958,12 +985,12 @@ class StatusTreeTests(TestCase):
         self.assertEqual(snap.stale_after_seconds, 45.0)
         self.assertEqual(snap.frequency_seconds, 60, "the period is still shown")
         self.assertTrue(tree.snapshot(
-            "/db", now=datetime.now() + timedelta(seconds=50)).stale)
+            "/db", now=datetime.now(UTC) + timedelta(seconds=50)).stale)
 
     def test_stale_rolls_up(self):
         tree = StatusTree()
         tree.upsert("/svc/a", StatusCode.OK, frequency_seconds=60)
-        svc = tree.snapshot("/svc", now=datetime.now() + timedelta(hours=1))
+        svc = tree.snapshot("/svc", now=datetime.now(UTC) + timedelta(hours=1))
         assert svc is not None
         self.assertEqual(svc.code, StatusCode.WARN)
         self.assertTrue(svc.stale)
@@ -971,16 +998,19 @@ class StatusTreeTests(TestCase):
     def test_stale_does_not_downgrade_error(self):
         tree = StatusTree()
         tree.upsert("/db", StatusCode.ERROR, "boom", frequency_seconds=60)
-        snap = tree.snapshot("/db", now=datetime.now() + timedelta(hours=1))
+        snap = tree.snapshot("/db", now=datetime.now(UTC) + timedelta(hours=1))
         assert snap is not None
         self.assertTrue(snap.stale)
         self.assertEqual(snap.code, StatusCode.ERROR)
 
     def test_maintenance_is_not_stale(self):
+        # a node its deployment declared and no check has written yet: a pin makes
+        # no node (ADR-0109 decision 4), so the declaration is what it stands on
         tree = StatusTree()
+        tree.set_title("/db", "Database")
         tree.set_maintenance("/db", "planned",
-                             expires_at=datetime.now() + timedelta(days=7))
-        snap = tree.snapshot("/db", now=datetime.now() + timedelta(hours=1))
+                             expires_at=datetime.now(UTC) + timedelta(days=7))
+        snap = tree.snapshot("/db", now=datetime.now(UTC) + timedelta(hours=1))
         assert snap is not None
         self.assertFalse(snap.stale)
         self.assertEqual(snap.code, StatusCode.MAINTENANCE)
@@ -1109,7 +1139,7 @@ class MountTimestampTests(TestCase):
         tree.upsert("/system/node_a/host_metrics", StatusCode.OK,
                     frequency_seconds=60)
         container = tree.snapshot("/system/node_a",
-                                  now=datetime.now() + timedelta(hours=1))
+                                  now=datetime.now(UTC) + timedelta(hours=1))
         assert container is not None
         self.assertIsNotNone(container.timestamp)
         self.assertEqual(container.age_seconds, 0.0)
@@ -1134,11 +1164,11 @@ class RunFactsTests(TestCase):
         tree.set_check_mount("/svc/github")
         tree.upsert("/svc/github", StatusCode.OK)
         tree.set_run_facts("/svc/github", wall_seconds=1.25,
-                           next_run_at="2026-08-06T09:20:00")
+                           next_run_at=datetime(2026, 8, 6, 9, 20, tzinfo=UTC))
         facts = self._run(tree, "/svc/github")
         assert facts is not None
         self.assertEqual(facts.wall_seconds, 1.25)
-        self.assertEqual(facts.next_run_at, "2026-08-06T09:20:00")
+        self.assertEqual(facts.next_run_at, datetime(2026, 8, 6, 9, 20, tzinfo=UTC))
 
     def test_unwritten_ancestors_inherit_the_facts_with_the_stamp(self):
         # Safe for the same reason the inherited stamp is: above a sole mount,
@@ -1147,7 +1177,7 @@ class RunFactsTests(TestCase):
         tree.set_check_mount("/svc/github")
         tree.upsert("/svc/github", StatusCode.OK)
         tree.set_run_facts("/svc/github", wall_seconds=0.5,
-                           next_run_at="2026-08-06T09:20:00")
+                           next_run_at=datetime(2026, 8, 6, 9, 20, tzinfo=UTC))
         mount = self._run(tree, "/svc/github")
         self.assertIsNotNone(mount)
         self.assertEqual(self._run(tree, "/svc"), mount)
@@ -1161,7 +1191,7 @@ class RunFactsTests(TestCase):
         tree.upsert("/svc/github", StatusCode.OK)
         tree.upsert("/svc/github/actions", StatusCode.OK)
         tree.set_run_facts("/svc/github", wall_seconds=0.5,
-                           next_run_at="2026-08-06T09:20:00")
+                           next_run_at=datetime(2026, 8, 6, 9, 20, tzinfo=UTC))
         self.assertIsNotNone(self._run(tree, "/svc/github"))
         self.assertIsNone(self._run(tree, "/svc/github/actions"))
 
@@ -1175,23 +1205,23 @@ class RunFactsTests(TestCase):
         tree.set_check_mount("/system/node_a/metrics")
         tree.upsert("/system/node_a/metrics", StatusCode.OK)
         tree.set_run_facts("/system/node_a/metrics", wall_seconds=0.2,
-                           next_run_at="2026-08-06T09:20:00")
+                           next_run_at=datetime(2026, 8, 6, 9, 20, tzinfo=UTC))
         self.assertIsNone(self._run(tree, "/system/node_a/metrics"))
         self.assertIsNone(self._run(tree, "/system/node_a"))
         self.assertIsNone(self._run(tree))
 
     def test_two_sole_mounts_keep_their_own_and_block_the_root(self):
         tree = StatusTree()
-        for path, next_at in (("/a/check_1", "2026-08-06T09:20:00"),
-                              ("/b/check_2", "2026-08-06T09:25:00")):
+        for path, next_at in (("/a/check_1", datetime(2026, 8, 6, 9, 20, tzinfo=UTC)),
+                              ("/b/check_2", datetime(2026, 8, 6, 9, 25, tzinfo=UTC))):
             tree.set_check_mount(path)
             tree.upsert(path, StatusCode.OK)
             tree.set_run_facts(path, wall_seconds=0.1, next_run_at=next_at)
         side_a = self._run(tree, "/a")
         side_b = self._run(tree, "/b")
         assert side_a is not None and side_b is not None
-        self.assertEqual(side_a.next_run_at, "2026-08-06T09:20:00")
-        self.assertEqual(side_b.next_run_at, "2026-08-06T09:25:00")
+        self.assertEqual(side_a.next_run_at, datetime(2026, 8, 6, 9, 20, tzinfo=UTC))
+        self.assertEqual(side_b.next_run_at, datetime(2026, 8, 6, 9, 25, tzinfo=UTC))
         self.assertIsNone(self._run(tree))
 
     def test_rewriting_replaces_the_facts(self):
@@ -1199,7 +1229,7 @@ class RunFactsTests(TestCase):
         tree.set_check_mount("/svc/github")
         tree.upsert("/svc/github", StatusCode.OK)
         tree.set_run_facts("/svc/github", wall_seconds=1.0,
-                           next_run_at="2026-08-06T09:20:00")
+                           next_run_at=datetime(2026, 8, 6, 9, 20, tzinfo=UTC))
         tree.set_run_facts("/svc/github", wall_seconds=2.0, next_run_at=None)
         facts = self._run(tree, "/svc/github")
         assert facts is not None
@@ -1312,7 +1342,7 @@ class UnwrittenNodeHistoryTests(TestCase):
         tree = StatusTree()
         tree.upsert("/system/alpha/disk", StatusCode.OK)
         tree.set_maintenance("/system/alpha", "rebuild",
-                             expires_at=datetime.now() + timedelta(days=1),
+                             expires_at=datetime.now(UTC) + timedelta(days=1),
                              set_by="pan")
         periods = tree.history("/system/alpha")
         self.assertEqual(len(periods), 1)
@@ -1593,15 +1623,16 @@ class ShowWhenQuietTests(TestCase):
 
 class MaintenancePersistenceTests(TestCase):
     def _entry(self, expires_at, *, reason="planned", set_by="ada"):
-        now = datetime.now().isoformat()
+        now = datetime.now(UTC)
         return MaintenanceEntry(reason=reason, set_at=now,
-                                expires_at=expires_at.isoformat(), set_by=set_by)
+                                expires_at=expires_at, set_by=set_by)
 
     def test_set_and_clear_write_through(self):
         store = _RecordingStore()
         tree = StatusTree(maintenance_store=store)
+        tree.upsert("/db", StatusCode.OK)
         tree.set_maintenance("/db", "planned", set_by="ada",
-                             expires_at=datetime.now() + timedelta(days=1))
+                             expires_at=datetime.now(UTC) + timedelta(days=1))
         self.assertEqual(set(store.saved), {"/db"})
         self.assertEqual(store.saved["/db"].set_by, "ada")
         snap = tree.snapshot("/db")
@@ -1613,16 +1644,23 @@ class MaintenancePersistenceTests(TestCase):
     def test_restore_replays_non_expired_and_drops_expired(self):
         store = _RecordingStore()
         tree = StatusTree(maintenance_store=store)
-        now = datetime.now()
+        now = datetime.now(UTC)
         entries = {
             "db": self._entry(now + timedelta(days=1)),
             "cache": self._entry(now - timedelta(days=1), reason="old"),
         }
         tree.restore_maintenance(entries, now=now)
+        # the pin is held against its path, and a replay makes no node for it
+        # (ADR-0109 decision 4): the node its check writes is pinned from the first
+        self.assertIsNotNone(tree.maintenance_entry("/db"))
+        self.assertIsNone(tree.snapshot("/db"))
+        tree.upsert("/db", StatusCode.OK)
         db = tree.snapshot("/db")
         assert db is not None
         self.assertTrue(db.maintenance)
-        self.assertIsNone(tree.snapshot("/cache"))     # expired: no node created
+        self.assertEqual(db.code, StatusCode.MAINTENANCE)
+        self.assertIsNone(tree.maintenance_entry("/cache"))   # expired: dropped
+        self.assertIsNone(tree.snapshot("/cache"))
         self.assertEqual(set(store.saved), {"/db"})     # file rewritten without it
 
     def test_adopt_replaces_the_table_in_a_running_process(self):
@@ -1631,9 +1669,10 @@ class MaintenancePersistenceTests(TestCase):
         are dropped, per-entry pins are replaced whole, nothing is written."""
         store = _RecordingStore()
         tree = StatusTree(maintenance_store=store)
-        now = datetime.now()
+        now = datetime.now(UTC)
         tree.upsert("/db", StatusCode.OK)
         tree.upsert("/cache", StatusCode.OK)
+        tree.upsert("/web", StatusCode.OK)
         tree.set_maintenance("/db", "mine", expires_at=now + timedelta(days=1))
         tree.set_maintenance("/cache", "mine too", expires_at=now + timedelta(days=1))
         tree.set_entry_maintenance("/db", "slow", "old pin",
@@ -1660,7 +1699,7 @@ class MaintenancePersistenceTests(TestCase):
                           for event in tree.recent_events()][-3:],
                          [("/cache", StatusCode.MAINTENANCE, StatusCode.OK),
                           ("/db", StatusCode.MAINTENANCE, StatusCode.MAINTENANCE),
-                          ("/web", StatusCode.UNDEFINED, StatusCode.MAINTENANCE)])
+                          ("/web", StatusCode.OK, StatusCode.MAINTENANCE)])
         self.assertIsNone(tree.entry_maintenance("/db", "slow"))
         self.assertIsNotNone(tree.entry_maintenance("/web", "a"))
         self.assertIsNone(tree.entry_maintenance("/web", "b"))
@@ -1669,24 +1708,37 @@ class MaintenancePersistenceTests(TestCase):
 
     def test_sweep_expired_clears_and_emits(self):
         tree = StatusTree(maintenance_store=_RecordingStore())
+        tree.upsert("/db", StatusCode.OK)
         tree.set_maintenance("/db", "planned",
-                             expires_at=datetime.now() - timedelta(minutes=1))
+                             expires_at=datetime.now(UTC) - timedelta(minutes=1))
         self.assertEqual(tree.effective("/db"), StatusCode.MAINTENANCE)
         self.assertEqual(tree.sweep_expired(), ["/db"])
-        self.assertEqual(tree.effective("/db"), StatusCode.UNDEFINED)
-        self.assertTrue(any(e.path == "/db" and e.new == StatusCode.UNDEFINED
-                            for e in tree.recent_events()))
+        self.assertEqual(tree.effective("/db"), StatusCode.OK)
+        last = tree.recent_events()[-1]
+        self.assertEqual((last.path, last.old, last.new, last.cause),
+                         ("/db", StatusCode.MAINTENANCE, StatusCode.OK,
+                          "pin-ended"))
 
     def test_reap_drops_uncovered_keeps_covered(self):
         tree = StatusTree(maintenance_store=_RecordingStore())
-        far = datetime.now() + timedelta(days=1)
+        far = datetime.now(UTC) + timedelta(days=1)
         tree.set_maintenance("/payments", "release", expires_at=far)   # a subsystem
         tree.set_maintenance("/gone/node", "stale", expires_at=far)    # an orphan
         # a check root beneath `payments` covers it; nothing covers `gone.node`
         self.assertEqual(tree.reap_uncovered(["/payments/api", "/system/alpha"]),
                          ["/gone/node"])
+        # a startup reaps before any check has run: the pins are held against
+        # their paths, and no node stands at either (ADR-0109 decision 4)
+        self.assertIsNotNone(tree.maintenance_entry("/payments"))
+        self.assertIsNone(tree.maintenance_entry("/gone/node"))
+        self.assertIsNone(tree.snapshot("/gone"))
+        last = tree.recent_events()[-1]
+        self.assertEqual((last.path, last.old, last.new, last.cause),
+                         ("/gone/node", StatusCode.MAINTENANCE,
+                          StatusCode.UNDEFINED, "pin-ended"))
+        # and the one that is covered silences its node from the first reading
+        tree.upsert("/payments/api", StatusCode.ERROR, "down")
         self.assertEqual(tree.effective("/payments"), StatusCode.MAINTENANCE)
-        self.assertEqual(tree.effective("/gone/node"), StatusCode.UNDEFINED)
 
 
 class MaintenanceEditTests(TestCase):
@@ -1695,12 +1747,26 @@ class MaintenanceEditTests(TestCase):
 
     def setUp(self):
         self.tree = StatusTree(maintenance_store=_RecordingStore())
-        self.far = datetime.now() + timedelta(days=1)
+        self.far = datetime.now(UTC) + timedelta(days=1)
 
     def _pin(self, reason="planned", by="ada", expires_at=None, token=None):
         return self.tree.set_maintenance(
             "/db", reason, expires_at=expires_at or self.far, set_by=by,
             expected_set_at=token)
+
+    # ----- the read -----
+
+    def test_a_pin_is_read_at_the_path_it_was_written_to_however_it_is_spelled(self):
+        # the write, the clear and the per-entry read all take a path with or
+        # without its leading slash; the read of a node's pin took only the
+        # absolute one, so a form that posts the route's `branch` found nothing
+        entry = self._pin().current
+        assert entry is not None
+        for spelled in ("/db", "db", "db/", "//db"):
+            with self.subTest(path=spelled):
+                self.assertEqual(self.tree.maintenance_entry(spelled), entry)
+        self.assertIsNone(self.tree.maintenance_entry("d"))
+        self.assertIsNone(self.tree.maintenance_entry("/db/x"))
 
     # ----- both dates -----
 
@@ -1715,7 +1781,7 @@ class MaintenanceEditTests(TestCase):
         first = self._pin(by="ada").current
         assert first is not None
         second = self._pin("planned, extended", by="ben",
-                           token=first.set_at).current
+                           token=first.token).current
         assert second is not None
         self.assertEqual(second.created_at, first.created_at)
         self.assertEqual(second.created_by, "ada")     # who pinned it
@@ -1725,7 +1791,7 @@ class MaintenanceEditTests(TestCase):
     def test_clear_and_repin_starts_a_new_creation(self):
         first = self._pin(by="ada").current
         assert first is not None
-        self.tree.clear_maintenance("/db", expected_set_at=first.set_at)
+        self.tree.clear_maintenance("/db", expected_set_at=first.token)
         again = self._pin(by="ben", token="").current
         assert again is not None
         self.assertEqual(again.created_by, "ben")
@@ -1736,9 +1802,9 @@ class MaintenanceEditTests(TestCase):
     def test_a_stale_token_writes_nothing(self):
         first = self._pin("ada's words", by="ada").current
         assert first is not None
-        self._pin("ben's words", by="ben", token=first.set_at)
+        self._pin("ben's words", by="ben", token=first.token)
         # carla still holds the token she was served before ben wrote
-        refused = self._pin("carla's words", by="carla", token=first.set_at)
+        refused = self._pin("carla's words", by="carla", token=first.token)
         self.assertFalse(refused.applied)
         self.assertTrue(refused.refused)
         assert refused.current is not None
@@ -1760,24 +1826,24 @@ class MaintenanceEditTests(TestCase):
         first = self._pin(by="ada").current
         assert first is not None
         self.tree.clear_maintenance("/db")
-        refused = self._pin("mine", by="ben", token=first.set_at)
+        refused = self._pin("mine", by="ben", token=first.token)
         self.assertTrue(refused.refused)
         self.assertIsNone(refused.current)      # nothing to reckon with
 
     def test_clearing_carries_the_same_guard(self):
         first = self._pin(by="ada").current
         assert first is not None
-        self._pin("ben's words", by="ben", token=first.set_at)
+        self._pin("ben's words", by="ben", token=first.token)
         refused = self.tree.clear_maintenance("/db",
-                                              expected_set_at=first.set_at)
+                                              expected_set_at=first.token)
         self.assertTrue(refused.refused)
-        self.assertEqual(self.tree.effective("/db"), StatusCode.MAINTENANCE)
         # with the fresh token it goes through
         current = self.tree.maintenance_entry("/db")
         assert current is not None
-        ok = self.tree.clear_maintenance("/db", expected_set_at=current.set_at)
+        self.assertEqual(current.reason, "ben's words")
+        ok = self.tree.clear_maintenance("/db", expected_set_at=current.token)
         self.assertTrue(ok.applied)
-        self.assertEqual(self.tree.effective("/db"), StatusCode.UNDEFINED)
+        self.assertIsNone(self.tree.maintenance_entry("/db"))
 
     def test_clearing_nothing_is_not_a_conflict(self):
         # the belief ("nothing is pinned") is correct, so there is no one to
@@ -1801,7 +1867,7 @@ class MaintenanceEditTests(TestCase):
     def test_a_real_edit_emits_an_event(self):
         first = self._pin("planned", by="ada").current
         assert first is not None
-        self._pin("planned, one more day", by="ben", token=first.set_at)
+        self._pin("planned, one more day", by="ben", token=first.token)
         events = self._maintenance_events()
         self.assertEqual(len(events), 2)
         # MAINTENANCE -> MAINTENANCE: the code cannot tell, the entry can
@@ -1812,16 +1878,81 @@ class MaintenanceEditTests(TestCase):
     def test_extending_the_window_alone_emits_an_event(self):
         first = self._pin("planned", by="ada").current
         assert first is not None
-        self._pin("planned", by="ada", token=first.set_at,
+        self._pin("planned", by="ada", token=first.token,
                   expires_at=self.far + timedelta(days=1))
         self.assertEqual(len(self._maintenance_events()), 2)
 
     def test_a_no_op_resubmit_emits_nothing(self):
         first = self._pin("planned", by="ada").current
         assert first is not None
-        self._pin("planned", by="ada", token=first.set_at,
-                  expires_at=datetime.fromisoformat(first.expires_at))
+        self._pin("planned", by="ada", token=first.token,
+                  expires_at=first.expires_at)
         self.assertEqual(len(self._maintenance_events()), 1)
+
+    # ----- a save that changes nothing -----
+
+    def _same_again(self, first, by="ben", token=None):
+        """The pin as it stands, set once more: the same note, the same expiry."""
+        return self._pin(first.reason, by=by, token=token,
+                         expires_at=first.expires_at)
+
+    def test_a_save_that_changes_nothing_writes_nothing(self):
+        # the pin keeps its token, so another open editor of it is not made stale,
+        # and it stays its last author's: nobody changed it (ADR-0104 decision 5)
+        first = self._pin("planned", by="ada").current
+        assert first is not None
+        store = self.tree._maintenance_store
+        saves = store.saves
+        write = self._same_again(first, by="ben", token=first.token)
+        self.assertFalse(write.refused)         # nobody to reckon with
+        self.assertFalse(write.applied)         # and the table did not change
+        self.assertEqual(write.current, first)
+        self.assertEqual(self.tree.maintenance_entry("/db"), first)
+        self.assertEqual(store.saves, saves)    # nor was the file written
+
+    def test_an_unguarded_save_that_changes_nothing_writes_nothing_either(self):
+        first = self._pin("planned", by="ada").current
+        assert first is not None
+        saves = self.tree._maintenance_store.saves
+        write = self._same_again(first, by="ben")       # expected_set_at=None
+        self.assertFalse(write.applied)
+        self.assertEqual(self.tree.maintenance_entry("/db"), first)
+        self.assertEqual(self.tree._maintenance_store.saves, saves)
+
+    def test_the_token_decides_before_anything_is_compared(self):
+        # a stale form is refused even where its fields say what is stored now:
+        # the token names a pin, and that pin has been written over since
+        first = self._pin("planned", by="ada").current
+        assert first is not None
+        moved = self._pin("moved", by="ben", token=first.token).current
+        assert moved is not None
+        back = self._same_again(first, by="ben", token=moved.token).current
+        assert back is not None
+        self.assertTrue(back.same_pin_as(first))
+        stale = self._same_again(first, by="carla", token=first.token)
+        self.assertTrue(stale.refused)
+        self.assertEqual(stale.current, back)
+
+    def test_a_changed_note_alone_and_a_changed_expiry_alone_are_writes(self):
+        first = self._pin("planned", by="ada").current
+        assert first is not None
+        store = self.tree._maintenance_store
+        saves = store.saves
+        note = self._pin("planned, with a ticket", by="ben", token=first.token,
+                         expires_at=first.expires_at)
+        assert note.current is not None
+        self.assertTrue(note.applied)
+        self.assertNotEqual(note.current.set_at, first.set_at)
+        self.assertEqual(note.current.set_by, "ben")
+        self.assertEqual(store.saves, saves + 1)
+        window = self._pin("planned, with a ticket", by="carla",
+                           token=note.current.token,
+                           expires_at=self.far + timedelta(minutes=1))
+        assert window.current is not None
+        self.assertTrue(window.applied)
+        self.assertNotEqual(window.current.set_at, note.current.set_at)
+        self.assertEqual(window.current.set_by, "carla")
+        self.assertEqual(store.saves, saves + 2)
 
 
 class EntryMaintenanceTests(TestCase):
@@ -1829,7 +1960,7 @@ class EntryMaintenanceTests(TestCase):
 
     def setUp(self):
         self.tree = StatusTree(maintenance_store=_RecordingStore())
-        self.far = datetime.now() + timedelta(days=1)
+        self.far = datetime.now(UTC) + timedelta(days=1)
 
     def _findings(self, *slugs):
         return {slug: f"finding {slug}" for slug in slugs}
@@ -1915,7 +2046,7 @@ class EntryMaintenanceTests(TestCase):
     def test_expiry_disposes_of_an_entry_pin(self):
         self.tree.upsert("/wiz", StatusCode.ERROR, self._findings("a"))
         self.tree.set_entry_maintenance(
-            "/wiz", "a", "brief", expires_at=datetime.now() - timedelta(seconds=1))
+            "/wiz", "a", "brief", expires_at=datetime.now(UTC) - timedelta(seconds=1))
         self.assertEqual(self._snap().quiet_reasons, 1)
         self.tree.sweep_expired()
         self.assertIsNone(self.tree.entry_maintenance("/wiz", "a"))
@@ -1937,7 +2068,7 @@ class EntryMaintenanceTests(TestCase):
         self.tree.upsert("/wiz", StatusCode.OK, self._findings("a"),
                          frequency_seconds=60)
         self._pin("a")
-        later = datetime.now() + timedelta(hours=1)
+        later = datetime.now(UTC) + timedelta(hours=1)
         snap = self._snap(now=later)
         self.assertTrue(snap.stale)
         self.assertEqual(snap.own_code, StatusCode.MAINTENANCE)  # nothing reports
@@ -1947,7 +2078,7 @@ class EntryMaintenanceTests(TestCase):
         self.tree.upsert("/wiz", StatusCode.ERROR, self._findings("a", "b"),
                          frequency_seconds=60)
         self._pin("a")
-        self.assertTrue(self._snap(now=datetime.now() + timedelta(hours=1)).stale)
+        self.assertTrue(self._snap(now=datetime.now(UTC) + timedelta(hours=1)).stale)
 
     # ----- the guard, one key deeper -----
 
@@ -1955,11 +2086,40 @@ class EntryMaintenanceTests(TestCase):
         self.tree.upsert("/wiz", StatusCode.ERROR, self._findings("a"))
         first = self._pin("a").current
         assert first is not None
-        self._pin("a", reason="ben's turn", token=first.set_at)
-        refused = self._pin("a", reason="mine", token=first.set_at)
+        self._pin("a", reason="ben's turn", token=first.token)
+        refused = self._pin("a", reason="mine", token=first.token)
         self.assertTrue(refused.refused)
         assert refused.current is not None
         self.assertEqual(refused.current.reason, "ben's turn")
+
+    def test_an_entry_save_that_changes_nothing_writes_nothing(self):
+        # the same rule one key deeper (ADR-0104 decision 5): the same note and
+        # the same expiry leave the pin, its token and the file as they were
+        self.tree.upsert("/wiz", StatusCode.ERROR, self._findings("a", "b"))
+        first = self._pin("a").current
+        other = self._pin("b").current
+        assert first is not None and other is not None
+        store = self.tree._maintenance_store
+        saves = store.saves
+        again = self._pin("a", token=first.token)
+        self.assertFalse(again.refused)
+        self.assertFalse(again.applied)
+        self.assertEqual(again.current, first)
+        self.assertEqual(self.tree.entry_maintenance("/wiz", "a"), first)
+        self.assertEqual(store.saves, saves)
+        # a changed note is a write, and it is this line's alone
+        edited = self._pin("a", reason="waiting on a review", token=first.token)
+        assert edited.current is not None
+        self.assertTrue(edited.applied)
+        self.assertNotEqual(edited.current.set_at, first.set_at)
+        self.assertEqual(store.saves, saves + 1)
+        self.assertEqual(self.tree.entry_maintenance("/wiz", "b"), other)
+        # and the token decides first here too: a stale form is refused even
+        # where it says what is stored now
+        stale = self._pin("a", reason="waiting on a review", token=first.token)
+        self.assertTrue(stale.refused)
+        self.assertEqual(stale.current, edited.current)
+        self.assertEqual(store.saves, saves + 1)
 
     def test_clearing_an_entry_pin(self):
         self.tree.upsert("/wiz", StatusCode.ERROR, self._findings("a"))
@@ -1967,16 +2127,19 @@ class EntryMaintenanceTests(TestCase):
         assert entry is not None
         self.assertTrue(
             self.tree.clear_entry_maintenance(
-                "/wiz", "a", expected_set_at=entry.set_at).applied)
+                "/wiz", "a", expected_set_at=entry.token).applied)
         self.assertEqual(self._snap().quiet_reasons, 0)
 
-    def test_an_entry_pin_writes_no_status_and_emits_no_event(self):
-        # the pin was never in the tree; the node's own code is derived at
-        # snapshot time (ADR-0032 rule 3), so there is no transition to record
+    def test_an_entry_pin_writes_no_status_and_its_event_is_what_the_node_shows(self):
+        # the pin was never in the tree, and the node's own code is derived
+        # (ADR-0032 rule 3). What is recorded is the change of what the node
+        # shows, as a node's own pin records one (ADR-0107 decision 1)
         self.tree.upsert("/wiz", StatusCode.ERROR, self._findings("a"))
         before = len(self.tree.recent_events())
         self._pin("a")
-        self.assertEqual(len(self.tree.recent_events()), before)
+        event, = self.tree.recent_events()[before:]
+        self.assertEqual((event.old, event.new),
+                         (StatusCode.ERROR, StatusCode.MAINTENANCE))
         # "nothing was written" is now a statement about `reported_code` — the
         # check's own answer, untouched. `effective` reads what the node *shows*,
         # and with its one member pinned there is nothing left reporting.
@@ -1993,10 +2156,10 @@ class EntryMaintenanceTests(TestCase):
 
     def test_restore_replays_entry_pins_without_touching_the_tree(self):
         tree = StatusTree()
-        live = MaintenanceEntry("working on it", datetime.now().isoformat(),
-                                (datetime.now() + timedelta(days=1)).isoformat())
-        dead = MaintenanceEntry("stale", datetime.now().isoformat(),
-                                (datetime.now() - timedelta(days=1)).isoformat())
+        live = MaintenanceEntry("working on it", datetime.now(UTC),
+                                datetime.now(UTC) + timedelta(days=1))
+        dead = MaintenanceEntry("stale", datetime.now(UTC),
+                                datetime.now(UTC) - timedelta(days=1))
         tree.restore_maintenance({}, entry_pins={("/wiz", "a"): live,
                                                  ("/wiz", "b"): dead})
         self.assertIsNotNone(tree.entry_maintenance("/wiz", "a"))
@@ -2018,7 +2181,7 @@ class CodedEntryRollupTests(TestCase):
 
     def setUp(self):
         self.tree = StatusTree(maintenance_store=_RecordingStore())
-        self.far = datetime.now() + timedelta(days=1)
+        self.far = datetime.now(UTC) + timedelta(days=1)
 
     def _jobs(self, **codes):
         return [Entry(slug, f"job {slug}", code) for slug, code in codes.items()]
@@ -2116,7 +2279,8 @@ class EventLogAsAStateFileTests(TestCase):
     def test_an_event_round_trips_through_its_dict(self):
         event = Event(path="/db", name="db", old=StatusCode.OK,
                       new=StatusCode.ERROR, reason=("down", "for real"),
-                      timestamp="2026-09-01T10:00:00", suppressed_by="maintenance")
+                      timestamp=datetime(2026, 9, 1, 10, 0, tzinfo=UTC),
+                      suppressed_by="maintenance")
         self.assertEqual(Event.from_dict(event.to_dict()), event)
         # codes travel by name, so the file reads without this module
         self.assertEqual(event.to_dict()["new"], "ERROR")

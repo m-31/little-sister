@@ -17,7 +17,13 @@ path: /mynas                # absolute node path (ADR-0016)
 frequency: 5m                # how often to run
 timeout: 30s                 # per-run timeout
 # series_keep: 60            # readings kept per subject as its history (default 0: keep none)
-# reading_cap: 10            # of those, the newest its page lists (default: settings.yaml's)
+# reading_cap: 10            # of those, the newest its Series view lists (default: settings.yaml's)
+#
+# What the kept readings are drawn by (ADR-0092, ADR-0096): qnap-metrics declares its
+# temperatures in °C — the system's, the CPU's and each drive's, one curve per bay on
+# its `temperature/drive<bay>` node. Name a field to relabel it, `null` to draw none:
+# measures:
+#   cpu_temp_c: null
 
 # --- connection (same fields as the ssh check) -----------------------------
 host: mynas-ssh-alias        # SSH target — ~/.ssh/config alias or hostname/FQDN

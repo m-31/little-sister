@@ -1,7 +1,7 @@
 # ADR-0060 — A line makes no claim; the node says it could not look
 
 - **Status:** Accepted
-- **Date:** 2026-08-15
+- **Date:** 2026-10-04 (accepted 2026-08-15)
 - **Related:** [ADR-0042](0042-entries-carry-their-own-code.md) (the decision that
   put `UNDEFINED` in the entry vocabulary, and so created the collision),
   [ADR-0039](0039-status-rollup-semantics.md) (the roll-up that ignores it, and the
@@ -16,7 +16,9 @@
   layer down), [ADR-0007](0007-check-result-branches.md) (children are not pruned,
   which is what makes decision 3 free),
   [ADR-0036](0036-addressable-reasons.md) (the entry model, and the stamp decision 5
-  declines to add)
+  declines to add), [ADR-0109](0109-a-node-says-its-children-are-complete.md) (a
+  node's statement that its children are complete, which a node that could not read
+  a child does not make)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -107,7 +109,11 @@ write rebinds the whole entry set, so there is no merge to reach for. What a che
 does instead is **omit** the node — and [ADR-0007](0007-check-result-branches.md) does
 not prune omitted children, so the previous entries and their timestamp survive
 together and freshness ([ADR-0005](0005-dashboard-freshness-and-self-monitoring.md))
-is left to say honestly that the reading is old.
+is left to say honestly that the reading is old. A node may say that its children are
+complete, and a child it then leaves out is removed
+([ADR-0109](0109-a-node-says-its-children-are-complete.md)): this rule holds where a
+result says nothing, and a node that leaves a child out because it could not read it
+does not say that its children are complete.
 
 The same rule decides what a failed **discovery** means: a check that cannot find out
 what its subjects are has read nothing, so it reports its own coverage failure and

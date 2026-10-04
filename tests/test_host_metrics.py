@@ -262,6 +262,41 @@ class HostMetricsCheckTests(TestCase):
         self.assertEqual(nodes["/ssh/disk/root"].about, ABOUT["disk"])
         self.assertEqual(nodes["/ssh/disk/ext"].about, ABOUT["disk"])
 
+    def test_a_volume_the_host_names_like_an_aspect_is_still_a_volume(self):
+        # `/mnt/memory` is a filesystem and `/mnt/cpu` one whose numbers did not
+        # arrive. Their nodes are `disk/memory` and `disk/cpu`, named by the host,
+        # and they say so: what is declared for the aspects of those names — the
+        # type's `about`, a deployment's `title` — is not said of them (ADR-0118).
+        # Nor does the block reach a volume by a name no aspect has: `root`, and
+        # `backup`, whose numbers did not arrive either.
+        from little_sister.checks.ssh.host_metrics import ABOUT
+        stdout = (
+            "disk_count=4\n"
+            "disk1_path=/\ndisk1_total_kb=1000000\ndisk1_used_kb=520000\n"
+            "disk1_avail_kb=480000\ndisk1_pct=52\n"
+            "disk2_path=/mnt/memory\ndisk2_total_kb=379888\n"
+            "disk2_used_kb=375916\ndisk2_avail_kb=3972\ndisk2_pct=99\n"
+            "disk3_path=/mnt/cpu\n"
+            "disk4_path=/mnt/backup\n"
+            "mem_pct=30\ncpu_pct=5\nload1=0.5\nncpu=2\n")
+        with tempfile.TemporaryDirectory() as directory:
+            nodes = self._nodes(directory, stdout,
+                                subnodes={"memory": {"title": "RAM"},
+                                          "cpu": {"title": "Processor"},
+                                          "root": {"title": "System"},
+                                          "backup": {"title": "Backups"}})
+        self.assertEqual((nodes["/ssh/memory"].title, nodes["/ssh/memory"].about),
+                         ("RAM", ABOUT["memory"]))
+        self.assertEqual((nodes["/ssh/cpu"].title, nodes["/ssh/cpu"].about),
+                         ("Processor", ABOUT["cpu"]))
+        for volume in ("/ssh/disk/memory", "/ssh/disk/cpu", "/ssh/disk/root",
+                       "/ssh/disk/backup"):
+            with self.subTest(volume=volume):
+                self.assertEqual((nodes[volume].title, nodes[volume].about),
+                                 ("", ABOUT["disk"]))
+        for unread in ("/ssh/disk/cpu", "/ssh/disk/backup"):
+            self.assertEqual(list(nodes[unread].reason), ["unavailable"])
+
     def test_subnodes_config_overrides_the_declared_about(self):
         # a deployment overrides a declared aspect about (and sets a title) in the
         # check's own config — per aspect, per field (ADR-0025).

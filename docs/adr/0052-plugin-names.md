@@ -1,12 +1,14 @@
 # ADR-0052 — Plugin names: one convention for a git dependency and a published one
 
 - **Status:** Accepted
-- **Date:** 2026-08-23 (accepted 2026-08-08, decided while writing the extraction
+- **Date:** 2026-10-04 (accepted 2026-08-08, decided while writing the extraction
   procedure, looking ahead to publication)
 - **Related:** [ADR-0051](0051-what-startup-refuses.md) (the type name this pins, and
   the roster that reads the mapping),
   [ADR-0049](0049-the-check-authoring-surface.md) (what a plugin depends on),
-  [ADR-0022](0022-generated-release-branch.md) (the tag a git dependency resolves)
+  [ADR-0022](0022-generated-release-branch.md) (the tag a git dependency resolves),
+  [ADR-0100](0100-system-is-two-views.md) (the *Installed* view of `/system`, which
+  shows the package that answers for a type)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -69,10 +71,12 @@ that to hold.
   renamed anything.
 - **The hyphen/underscore pair is one name, not two.** Index names normalize, so
   `little-sister-<x>` and `little_sister_<x>` are the same project. That is what lets
-  `/system` derive the distribution from a registered type's import package and show
-  which package answers for it. It is a *convention* the code leans on, not a
-  guarantee the packaging system makes — which is why the roster shows the loaded
-  path beside the version rather than trusting the mapping alone.
+  `/system`'s *Installed* view, `/system/installed`
+  ([ADR-0100](0100-system-is-two-views.md)), derive the distribution from a registered
+  type's import package and show which package answers for it. It is a *convention*
+  the code leans on, not a guarantee the packaging system makes — which is why the
+  roster shows the loaded path beside the version rather than trusting the mapping
+  alone.
 - **A plugin that wants a name outside the convention** — a vendor's own prefix, a
   type name that differs from its package — is not forbidden, but it gives up the
   derivation: the roster will show its distribution as unknown. That is a fair price

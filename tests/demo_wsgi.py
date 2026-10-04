@@ -18,7 +18,9 @@ Log in with the committed fixture user (``pan`` / ``12345678``). Single worker: 
 engine and the status tree live in-process (ADR-0001). What a restart keeps, and the
 log, go under ``var/demo/`` rather than into this checkout's own ``var/``, so the demo
 runs beside an instance of this checkout; ``LITTLE_SISTER_DEMO_DIR`` names another
-directory.
+directory. ``LITTLE_SISTER_DEMO_OFFSET=36s`` starts every scenario that far into its
+cycle, so a start finds the build failed and ``/ci/pipelines`` waiting — what a
+restart does to a wait (``tests/demo_check.py``).
 
 Dev-only: lives under ``tests/`` and never ships in the package.
 """

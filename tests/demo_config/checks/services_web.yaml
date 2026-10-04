@@ -2,16 +2,17 @@
 # Synthetic: no real system is probed; the `demo` type replays a scenario on a loop.
 #
 # The `latency` scenario records what an `http` check does — a status and a response
-# time — so its node stands for the site it names and shows the series it keeps: the
-# response-time curve and the newest readings (ADR-0092). Every three minutes the
-# site fails a few requests (marked breaks) and one run hangs for 45 seconds (a plain
-# break: nothing is read, and the node goes stale meanwhile).
+# time — so its node stands for the site it names and shows the curve its series is
+# drawn by, and its Series view the newest readings beneath it (ADR-0092, ADR-0097).
+# Every three minutes the site fails a few requests (marked breaks) and one run hangs
+# for 45 seconds (a plain break: nothing is read, and the node goes stale meanwhile).
 type: demo
 path: /services/web
 title: Public website
 about: |
   The public **website** (a *synthetic* demo node). Its response time is kept as
-  a series and drawn on this node's page; the whole series is on its History page.
+  a series and drawn on this node's page and its Series view; the whole series is
+  on its History page.
 scenario: latency
 subject: https://www.example.org
 frequency: 4s

@@ -199,14 +199,18 @@ def local_time(moment: datetime, fmt: str | None = None) -> str:
     """One instant, in the configured timezone and ``time_format``; ``fmt``
     overrides the format and never the zone.
 
-    A naive ``moment`` is read as the machine's local time, which is what a
-    timestamp somebody built from ``datetime.now()`` means; an aware one is
-    converted. The configuration is read at the call, not at import — this module
-    has no imports of its own and must keep it that way, because the configuration
-    reads the settings file when *it* is imported and imports the limits that
-    import this.
+    ``moment`` is an instant: a time that carries its zone, whichever zone that
+    is, and it is converted. A time without a zone is refused (ADR-0120): it was
+    read as the machine's local time once, which is right only on the machine
+    that built it, and nothing tells such a time from one that was meant as UTC.
+    The configuration is read at the call, not at import — this module has no
+    imports of its own and must keep it that way, because the configuration reads
+    the settings file when *it* is imported and imports the limits that import
+    this.
+
+    :raises ValueError: ``moment`` is a time without a zone.
     """
+    from little_sister import instants
     from little_sister.config import config
-    if moment.tzinfo is None:
-        moment = moment.astimezone()
-    return moment.astimezone(config.tzinfo).strftime(fmt or config.time_format)
+    instant = instants.utc(moment, "the moment handed to local_time")
+    return instant.astimezone(config.tzinfo).strftime(fmt or config.time_format)

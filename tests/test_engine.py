@@ -8,7 +8,7 @@ import time
 import unittest
 from collections.abc import Sequence
 from dataclasses import replace
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest import TestCase
 from unittest.mock import patch
@@ -542,13 +542,15 @@ class EngineTests(TestCase):
 
     def test_tick_sweeps_expired_maintenance(self):
         tree = StatusTree()
+        tree.upsert("/db", StatusCode.OK)
         tree.set_maintenance("/db", "planned",
-                             expires_at=datetime.now() - timedelta(seconds=1))
+                             expires_at=datetime.now(UTC) - timedelta(seconds=1))
+        self.assertEqual(tree.effective("/db"), StatusCode.MAINTENANCE)
         engine = Engine([_FakeCheck(path="/x")], tree, poll_interval=0.02)
         engine.start()
         try:
             self.assertTrue(_wait_for(
-                lambda: tree.effective("/db") == StatusCode.UNDEFINED))
+                lambda: tree.effective("/db") == StatusCode.OK))
         finally:
             engine.stop()
 
@@ -1024,7 +1026,7 @@ class EngineTests(TestCase):
         engine.run_once()
         info = engine.info().checks[0]
         assert info.last_run_at is not None
-        datetime.fromisoformat(info.last_run_at)      # a real timestamp
+        self.assertIs(info.last_run_at.tzinfo, UTC)   # an instant
         # the finished run is no longer reported as in flight
         self.assertIsNone(info.running_since)
         self.assertIsNone(info.running_seconds)
@@ -1032,7 +1034,7 @@ class EngineTests(TestCase):
     def test_next_run_at_is_a_timestamp(self):
         engine = Engine([_FakeCheck(path="/a")], StatusTree())
         info = engine.info().checks[0]
-        datetime.fromisoformat(info.next_run_at)      # parseable, wall clock
+        self.assertIs(info.next_run_at.tzinfo, UTC)   # an instant
 
     def test_info_carries_type_name(self):
         class _TypedCheck(_FakeCheck):
@@ -1149,11 +1151,11 @@ class EngineTests(TestCase):
         finally:
             engine.stop()
         beating = tree.snapshot(HEARTBEAT_PATH,
-                                now=datetime.now() + timedelta(seconds=30))
+                                now=datetime.now(UTC) + timedelta(seconds=30))
         assert beating is not None
         self.assertFalse(beating.stale)
         dead = tree.snapshot(HEARTBEAT_PATH,
-                             now=datetime.now() + timedelta(seconds=32))
+                             now=datetime.now(UTC) + timedelta(seconds=32))
         assert dead is not None
         self.assertTrue(dead.stale)
         self.assertEqual(dead.code, StatusCode.WARN)
@@ -1355,6 +1357,43 @@ class RunLogLineTests(TestCase):
         self.assertEqual(len(lines), 1, caught.output)
         self.assertIn("is not authorized to perform: sts:AssumeRole", lines[0])
 
+    def _line(self, path: str, result: CheckResult) -> str:
+        check = _FakeCheck(path=path, result=result)
+        with self.assertLogs("little_sister.logger", level="INFO") as caught:
+            Engine([check], StatusTree()).run_once()
+        lines = [line.split(":", 2)[2] for line in caught.output
+                 if f"check {path}:" in line]
+        self.assertEqual(len(lines), 1, caught.output)
+        return lines[0]
+
+    def test_a_container_run_says_what_it_rolls_up_to(self):
+        # A root that declares nothing above children that grade — host metrics' —
+        # was logged `UNDEFINED` on every run, whether its disk was full or not.
+        line = self._line("/host", CheckResult(StatusCode.UNDEFINED, children=(
+            CheckResult(StatusCode.ERROR, "disk full", name="disk"),
+            CheckResult(StatusCode.OK, name="cpu"))))
+        self.assertRegex(
+            line, r"^check /host: UNDEFINED, rolls up to ERROR \(\d+ ms\)$")
+
+    def test_a_root_that_declares_ok_above_a_failing_child_says_so_too(self):
+        line = self._line("/repos", CheckResult(StatusCode.OK, children=(
+            CheckResult(StatusCode.ERROR, "red", name="actions"),)))
+        self.assertRegex(
+            line, r"^check /repos: OK, rolls up to ERROR \(\d+ ms\)$")
+
+    def test_a_run_whose_own_code_is_its_roll_up_says_only_that(self):
+        # A leaf, and a container whose children are no worse than its own code:
+        # the line as it always was.
+        for path, result in (
+                ("/web", CheckResult(StatusCode.OK)),
+                ("/svc", CheckResult(StatusCode.ERROR, "down", children=(
+                    CheckResult(StatusCode.OK, name="a"),)))):
+            with self.subTest(path=path):
+                line = self._line(path, result)
+                self.assertRegex(
+                    line, rf"^check {path}: {result.stored_code.name} \(\d+ ms\)")
+                self.assertNotIn("rolls up", line)
+
 
 class SelfReportOnTheBeatTests(TestCase):
     """The heartbeat is a branch (ADR-0076): the engine's own lines on
@@ -1423,7 +1462,7 @@ class SelfReportOnTheBeatTests(TestCase):
         self.assertEqual(child.own_code, StatusCode.WARN)
         tree.set_entry_maintenance(
             "/little-sister/aws-keeper", "standby", "a test with two instances",
-            expires_at=datetime.now() + timedelta(days=1), set_by="pan",
+            expires_at=datetime.now(UTC) + timedelta(days=1), set_by="pan",
             expected_set_at=None)
         self.assertEqual(self._child(tree, "aws-keeper").own_code,
                          StatusCode.MAINTENANCE)
@@ -1530,7 +1569,7 @@ class SelfReportOnTheBeatTests(TestCase):
         self.assertEqual(tree.snapshot(child_path).own_code, StatusCode.ERROR)
         tree.set_entry_maintenance(child_path, "load.maintenance.json",
                                    "re-pinned by hand",
-                                   expires_at=datetime.now() + timedelta(days=1),
+                                   expires_at=datetime.now(UTC) + timedelta(days=1),
                                    set_by="ada")
         pinned = tree.snapshot(child_path)
         self.assertEqual(pinned.own_code, StatusCode.MAINTENANCE)

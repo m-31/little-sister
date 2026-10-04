@@ -12,15 +12,14 @@ from __future__ import annotations
 import itertools
 import json
 import tempfile
-from collections.abc import Sequence
-from datetime import UTC, datetime, timedelta, timezone, tzinfo
+from collections.abc import Callable, Sequence
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
-from unittest import TestCase, mock
+from unittest import TestCase
 
 import yaml
 
-from little_sister import engine as engine_module
 from little_sister import self_report
 from little_sister.checks import (
     CHECK_TYPES,
@@ -397,7 +396,7 @@ class ClockTests(TestCase):
         self.assertEqual(record.observed_at, T0)
         self.assertIs(record.observed_at.tzinfo, UTC)
         with self.assertRaises(ValueError):
-            SeriesRecord({}, datetime(2026, 9, 20, 12, 0))
+            SeriesRecord({}, T0.replace(tzinfo=None))
 
 
 class _Reader(Check):
@@ -429,16 +428,10 @@ class _OtherReader(_Reader):
     type_name = "other-reader"
 
 
-class _Ticking(datetime):
+def _ticking() -> Callable[[], datetime]:
     """A wall clock that moves one second every time it is read."""
-
-    _reads = itertools.count()
-
-    @classmethod
-    def now(cls, tz: tzinfo | None = None) -> datetime:  # type: ignore[override]
-        moment = T0 + timedelta(seconds=next(cls._reads))
-        return moment.astimezone(tz) if tz is not None else moment.replace(
-            tzinfo=None)
+    reads = itertools.count()
+    return lambda: T0 + timedelta(seconds=next(reads))
 
 
 def _reading(subject: str = "", identity: str = "", **data: Any) -> Measurement:
@@ -462,35 +455,47 @@ class EngineSeriesTests(TestCase):
         self.assertEqual(engine.series.window(
             SeriesKey("reader", "/web", "web01")), ())
 
-    def test_the_node_that_stands_for_a_subject_finds_its_series(self) -> None:
-        # the engine answers for the page (ADR-0092 decision 6): the checks
-        # mounted on that node that keep a series, each with that subject's
-        # readings, oldest first and each where its series places it
+    def test_a_node_finds_the_series_kept_at_it_beneath_it_and_above_it(self) -> None:
+        # the engine answers for the pages (ADR-0097 decision 1): every check that
+        # keeps a series mounted at the node, beneath it or above it, with its
+        # subject's readings, oldest first and each where its series places it
         check = _Reader(path="/web", subject="web01", series_keep=5,
                         measurements=[_reading(load=0.4)])
         engine = self._run(check, times=2)
-        kept, = engine.series_at("/web", "web01")
-        self.assertIs(kept.check, check)
-        self.assertEqual(kept.readings, engine.series.placed(
-            SeriesKey("reader", "/web", "web01")))
-        self.assertEqual(len(kept.readings), 2)
+        for path in ("/web", "/", "/web/child"):
+            with self.subTest(path=path):
+                kept, = engine.series_near(path)
+                self.assertIs(kept.check, check)
+                self.assertEqual(kept.subject, "web01")
+                self.assertEqual(kept.readings, engine.series.placed(
+                    SeriesKey("reader", "/web", "web01")))
+                self.assertEqual(len(kept.readings), 2)
 
-    def test_no_series_for_another_subject_or_another_node(self) -> None:
+    def test_every_subject_a_check_keeps_a_series_of(self) -> None:
+        check = _Reader(path="/web", series_keep=5,
+                        measurements=[_reading("web01", load=0.4),
+                                      _reading("web02", load=0.7)])
+        engine = self._run(check)
+        self.assertEqual(sorted(kept.subject for kept in engine.series_near("/web")),
+                         ["web01", "web02"])
+
+    def test_no_series_near_another_node(self) -> None:
         check = _Reader(path="/web", subject="web01", series_keep=5,
                         measurements=[_reading(load=0.4)])
         engine = self._run(check)
-        for path, subject in (("/web", "web02"), ("/web", ""),
-                              ("/other", "web01"), ("/web/child", "web01")):
-            with self.subTest(path=path, subject=subject):
-                self.assertEqual(engine.series_at(path, subject), ())
+        for path in ("/other", "/webshop"):
+            with self.subTest(path=path):
+                self.assertEqual(engine.series_near(path), ())
 
     def test_no_series_where_the_check_keeps_none(self) -> None:
+        # whatever an older series file left behind: the next sweep drops it, and
+        # nothing shows it meanwhile
         check = _Reader(path="/web", subject="web01",
                         measurements=[_reading(load=0.4)])
         engine = Engine([check], StatusTree())
         engine.series.add(SeriesKey("reader", "/web", "web01"),
                           SeriesRecord({"load": 0.4}, T0), keep=5)
-        self.assertEqual(engine.series_at("/web", "web01"), ())
+        self.assertEqual(engine.series_near("/web"), ())
 
     def test_a_check_with_series_keep_holds_its_readings_bounded(self) -> None:
         check = _Reader(path="/web", subject="web01", series_keep=3,
@@ -607,8 +612,8 @@ class EngineSeriesTests(TestCase):
         # it cannot pass for one at the resolution of a fast machine
         check = _Reader(path="/web", subject="web01", series_keep=5,
                         measurements=[_reading(load=0.4)])
-        with mock.patch.object(engine_module, "datetime", _Ticking):
-            engine = self._run(check)
+        engine = Engine([check], StatusTree(), wall=_ticking())
+        engine.run_once()
         record, = engine.series.window(SeriesKey("reader", "/web", "web01"))
         self.assertIsNotNone(check.graded_at)
         self.assertEqual(record.observed_at, check.graded_at)
@@ -831,7 +836,7 @@ class StoodTests(TestCase):
         tree = StatusTree()
         tree.upsert("/macmini/system", StatusCode.UNDEFINED)
         tree.set_maintenance("/macmini/system", "planned",
-                             expires_at=datetime(2999, 1, 1))
+                             expires_at=datetime(2999, 1, 1, tzinfo=UTC))
         self.assertIs(tree.effective("/macmini/system"), StatusCode.MAINTENANCE)
         record = self._kept(_Host(), self.HOST, tree)
         self.assertIs(record.code, StatusCode.WARN)

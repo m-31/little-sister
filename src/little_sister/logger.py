@@ -37,14 +37,49 @@ root adds none of our lines and every dependency's. One deployment's log ran two
 thirds ``botocore`` request detail nobody had asked for. ``LOG_LEVEL=DEBUG`` asks
 for that on purpose — which is also when the caps below earn their place, since
 they are what keeps a deliberate DEBUG session readable.
+
+**The default's lines are stamped in the configured timezone, with its offset**
+(ADR-0120 decision 9) — ``2026-10-04 13:02:35,893 +0200`` — so that a line of the
+log and a time on a page are the same clock, and the offset says which. The
+configuration hands the zone over the moment it has read it (:func:`stamp_in`); a
+line written before that carries the machine's own clock, with its offset as well.
+The stamp is taken where a line is written, so what the import logged stands in the
+log file in the configured zone from its first line. And where the machine's clock
+does not show that zone's time, now or within the year ahead, the start says so
+once, in the log: gunicorn's own lines are stamped on the machine's clock.
 """
 import logging
 import os
+from datetime import UTC, datetime, timedelta, tzinfo
+
+from little_sister import instants
 
 _LOG_FILE = os.environ.get("LOG_FILE", "var/little-sister.log")
 _DEFAULT_LEVEL = "INFO"
 _FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-_formatter = logging.Formatter(_FORMAT)
+
+#: The zone the default's lines are stamped in, once the configuration has read
+#: one and handed it over (:func:`stamp_in`); the machine's own clock until then.
+_zone: tzinfo | None = None
+
+#: How far ahead the start looks for the hour from which the machine's clock and
+#: the zone the log is stamped in show different times: a year, and a day of slack.
+_HOURS_AHEAD = 366 * 24
+
+
+class _Stamped(logging.Formatter):
+    """The default's lines: the stamp in the zone the log is stamped in, with the
+    offset in force at it — ``2026-10-04 13:02:35,893 +0200`` (ADR-0120 decision
+    9). The zone is read when a line is written, not when it was logged, which is
+    what puts the lines of the import into the log file in the configured zone."""
+
+    def formatTime(self, record: logging.LogRecord,
+                   datefmt: str | None = None) -> str:
+        moment = datetime.fromtimestamp(record.created, UTC).astimezone(_zone)
+        return f"{moment:%Y-%m-%d %H:%M:%S},{int(record.msecs):03d} {moment:%z}"
+
+
+_formatter = _Stamped(_FORMAT)
 
 #: How many records an import may log before the start writes them into the log
 #: file it opens (ADR-0091 decision 4); the rest reach stderr only, and are counted.
@@ -113,10 +148,51 @@ if not root_logger.handlers:
                        _LEVEL_NAME, _DEFAULT_LEVEL)
 
 
+def stamp_in(zone: tzinfo) -> None:
+    """The configuration's call, the moment it has read the time zone (ADR-0120
+    decision 9): the default's lines are stamped in ``zone`` from here on, each
+    with its offset. Where the application configured logging itself the stamp is
+    that application's, and nothing it can see changes."""
+    global _zone
+    _zone = zone
+
+
+def _say_where_the_clocks_part(zone: tzinfo) -> None:
+    """Said once, by the start, in the log it has just opened (ADR-0120 decision
+    9): that the machine's clock does not show the time this log is stamped in —
+    now, or from a day within the year ahead. A process cannot ask its machine for
+    the name of its zone, so the two are compared by what they show, hour by hour.
+    Log only: a note on ``/little-sister`` would stand for the life of the process
+    on a machine whose zone is another on purpose."""
+    start = instants.now()
+    for hour in range(_HOURS_AHEAD + 1):
+        moment = start + timedelta(hours=hour)
+        stamped, machine = moment.astimezone(zone), moment.astimezone()
+        if stamped.utcoffset() == machine.utcoffset():
+            continue
+        if hour == 0:
+            logger.warning(
+                "logger: this log is stamped in %s, the configured timezone, at %s "
+                "now; the machine's clock is at %s, so a line stamped on it, as "
+                "gunicorn's own are, shows another time for the same moment",
+                zone, f"{stamped:%z}", f"{machine:%z}")
+        else:
+            logger.warning(
+                "logger: this log is stamped in %s, the configured timezone, which "
+                "shows the machine's time now and not from %s on, at %s against the "
+                "machine's %s; a line stamped on the machine's clock, as gunicorn's "
+                "own are, shows another time from then on",
+                zone, f"{stamped:%Y-%m-%d}", f"{stamped:%z}", f"{machine:%z}")
+        return
+
+
 def open_log_file() -> None:
     """The server's start (ADR-0091 decision 4): open the log file — ``LOG_FILE``, or
     ``var/little-sister.log`` of the working directory — and write into it first what
-    the import logged, so that a run's log begins with its configuration.
+    the import logged, so that a run's log begins with its configuration. Every
+    line of it is stamped as it is written here: in the configured zone, where the
+    configuration handed one over, and the start then says once where the
+    machine's clock is another (ADR-0120 decision 9).
 
     Where the application configured logging itself this does nothing: the file is
     the default's, and the default did not run. A second call does nothing either.
@@ -138,3 +214,5 @@ def open_log_file() -> None:
     if buffer.dropped:
         logger.info("logger: %d more lines were logged before the start opened this "
                     "file, and went to stderr only", buffer.dropped)
+    if _zone is not None:
+        _say_where_the_clocks_part(_zone)

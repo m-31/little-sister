@@ -691,7 +691,11 @@ class ChromiumBoundaryTests(unittest.TestCase):
         finally:
             page.close()
 
-    def test_content_anchored_panels_slide_beneath_the_bar(self):
+    def test_an_open_editor_slides_beneath_the_bar(self):
+        # A line's editor stands in the flow (ADR-0104), so it scrolls under
+        # the sticky bar like the line it belongs to; the panel it replaces
+        # was anchored over the page and had to be kept beneath the bar by
+        # its layer.
         page = self.browser.new_page()
         try:
             page.set_viewport_size({"width": 1200, "height": 500})
@@ -704,14 +708,15 @@ class ChromiumBoundaryTests(unittest.TestCase):
                 """
                 () => {
                   const bar = document.querySelector('.ls-bar');
-                  const panels = [...document.querySelectorAll('.reason-pin__panel')];
-                  const panel = panels[panels.length - 1];
-                  panel.closest('.reason-pin').open = true;
+                  const setters = [...document.querySelectorAll('.reason-pin')];
+                  const setter = setters[setters.length - 1];
+                  setter.open = true;
+                  const editor = setter.querySelector('.rule-block');
                   const barHeight = bar.getBoundingClientRect().height;
-                  const panelTop = panel.getBoundingClientRect().top + window.scrollY;
+                  const top = editor.getBoundingClientRect().top + window.scrollY;
                   document.documentElement.style.scrollBehavior = 'auto';
-                  window.scrollTo(0, panelTop - barHeight / 2);
-                  const box = panel.getBoundingClientRect();
+                  window.scrollTo(0, top - barHeight / 2);
+                  const box = editor.getBoundingClientRect();
                   const hit = document.elementFromPoint(
                       box.left + Math.min(20, box.width / 2),
                       Math.max(box.top, 0) + 5);
@@ -724,6 +729,159 @@ class ChromiumBoundaryTests(unittest.TestCase):
             )
             self.assertTrue(measured["overlaps"])
             self.assertTrue(measured["barOwnsPoint"])
+        finally:
+            page.close()
+
+    def test_a_lines_editor_opens_beneath_its_line(self):
+        """ADR-0104 decisions 3 and 4, in paint: the pause mark is drawn on the
+        seat the rail keeps for it at the line's end — beside the rail's own
+        box, in its band — and the editor it opens stands under the line and
+        moves the next line down, where the panel it replaces floated over
+        the lines beneath."""
+        page = self.browser.new_page()
+        try:
+            page.set_viewport_size({"width": 1200, "height": 900})
+            self._open_fixture(
+                page,
+                "maintenance_editor_member_leaf",
+                bootstrap=True,
+            )
+            measured = page.evaluate(
+                """
+                () => {
+                  const setter = document.querySelector(
+                      '.check-reason .reason-pin');
+                  const line = setter.closest('.check-reason');
+                  const next = line.nextElementSibling;
+                  const mark = setter.querySelector('summary')
+                      .getBoundingClientRect();
+                  const rail = line.querySelector('.check-reason__rail')
+                      .getBoundingClientRect();
+                  const text = line.querySelector('.check-reason__body')
+                      .getBoundingClientRect();
+                  const lineBox = line.getBoundingClientRect();
+                  const before = next.getBoundingClientRect().top;
+                  setter.open = true;
+                  const editor = setter.querySelector('.rule-block')
+                      .getBoundingClientRect();
+                  const after = next.getBoundingClientRect().top;
+                  return {
+                    markWidth: mark.width,
+                    markOnSeat: mark.left >= rail.right - 1
+                        && mark.right <= lineBox.right + 1
+                        && mark.top >= rail.top - 1
+                        && mark.bottom <= rail.bottom + 1,
+                    markAtLineEnd: lineBox.right - mark.right,
+                    textBottom: text.bottom,
+                    editorTop: editor.top,
+                    editorBottom: editor.bottom,
+                    editorHeight: editor.height,
+                    nextTop: after,
+                    pushed: after - before,
+                  };
+                }
+                """
+            )
+            self.assertGreater(measured["markWidth"], 10, measured)
+            self.assertTrue(measured["markOnSeat"], measured)
+            self.assertLess(measured["markAtLineEnd"], 12, measured)
+            self.assertGreaterEqual(
+                measured["editorTop"], measured["textBottom"] - 1, measured)
+            self.assertGreater(measured["editorHeight"], 100, measured)
+            self.assertGreaterEqual(
+                measured["nextTop"], measured["editorBottom"], measured)
+            self.assertGreaterEqual(
+                measured["pushed"], measured["editorHeight"], measured)
+        finally:
+            page.close()
+
+    def test_an_open_editor_does_not_widen_a_phones_page(self):
+        # An open disclosure is a flex item in its block's head, and a flex
+        # item keeps the width of what it holds: the node's editor stood 8px
+        # past a 390px viewport and a line's 32px before it was told not to.
+        page = self.browser.new_page()
+        try:
+            page.set_viewport_size({"width": 390, "height": 844})
+            self._open_fixture(
+                page,
+                "maintenance_editor_member_leaf",
+                bootstrap=True,
+            )
+            measured = page.evaluate(
+                """
+                () => {
+                  const root = document.documentElement;
+                  const closed = root.scrollWidth;
+                  const widths = {};
+                  for (const [name, selector] of [
+                      ['node', '.rule-block--node .rule-block__edit'],
+                      ['line', '.rule-block--line .rule-block__edit'],
+                      ['new', '.check-reason .reason-pin']]) {
+                    const editor = document.querySelector(selector);
+                    editor.open = true;
+                    widths[name] = root.scrollWidth;
+                    editor.open = false;
+                  }
+                  return {viewport: root.clientWidth, closed, widths};
+                }
+                """
+            )
+            self.assertLessEqual(
+                measured["closed"], measured["viewport"], measured)
+            for name, width in measured["widths"].items():
+                with self.subTest(editor=name):
+                    self.assertLessEqual(width, measured["viewport"], measured)
+        finally:
+            page.close()
+
+    def test_an_untouched_expiry_is_selected_when_its_field_is_entered(self):
+        """ADR-0104 decision 5, where script runs: Edit starts in the note,
+        the expiry's text is selected when its field takes focus while it is
+        as it was filled, and one keystroke then replaces it."""
+        page = self.browser.new_page()
+        try:
+            page.set_viewport_size({"width": 1200, "height": 900})
+            self._open_fixture(
+                page,
+                "maintenance_editor_member_leaf",
+                bootstrap=True,
+            )
+            page.wait_for_function(
+                "document.documentElement.classList"
+                ".contains('maintenance-edit-enhanced')")
+            page.click(".rule-block--node .rule-block__edit > summary")
+            # `toggle` is a task of its own, so the note takes focus a moment
+            # after the click returns; a wait that never comes true fails
+            page.wait_for_function(
+                "document.activeElement !== null"
+                " && document.activeElement.name === 'reason'")
+            field = page.locator("#node-maintenance-duration")
+            was = field.input_value()
+            self.assertRegex(was, r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
+            field.click()
+            # the selection is made after the click has placed its caret
+            page.wait_for_function(
+                "(() => { const f = document.activeElement; return f !== null"
+                " && f.id === 'node-maintenance-duration' && f.value !== ''"
+                " && f.selectionStart === 0"
+                " && f.selectionEnd === f.value.length; })()")
+            page.keyboard.type("3d")
+            self.assertEqual(field.input_value(), "3d")
+            # changed, it is somebody's text: entering it again selects nothing
+            page.click("#node-maintenance-reason")
+            field.click()
+            page.wait_for_timeout(150)
+            ends = page.evaluate(
+                "() => { const f = document.activeElement; return "
+                "[f.id, f.selectionStart, f.selectionEnd]; }")
+            self.assertEqual(ends[0], "node-maintenance-duration")
+            self.assertEqual(ends[1], ends[2])
+            # Escape puts the block back as it was read, the field as filled
+            page.keyboard.press("Escape")
+            self.assertFalse(page.evaluate(
+                "document.querySelector("
+                "'.rule-block--node .rule-block__edit').open"))
+            self.assertEqual(field.input_value(), was)
         finally:
             page.close()
 

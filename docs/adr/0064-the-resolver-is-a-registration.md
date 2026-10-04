@@ -1,7 +1,7 @@
 # ADR-0064 — A secret resolver is a registration like the others
 
 - **Status:** Accepted
-- **Date:** 2026-08-22
+- **Date:** 2026-10-04 (accepted 2026-08-22)
 - **Related:** [ADR-0023](0023-secret-references.md) (the reference grammar and the
   registry this makes first class), [ADR-0051](0051-what-startup-refuses.md) (the
   duplicate-claim refusal this copies, and the `/system` origin card),
@@ -9,7 +9,9 @@
   [ADR-0034](0034-template-slots-for-dependent-packages.md) /
   [ADR-0037](0037-extension-static-assets.md) (the neighboring seams, and the
   warn-and-skip rule that does **not** apply here),
-  [ADR-0003](0003-config-and-secrets-via-env-file.md) (the `env` scheme's behavior)
+  [ADR-0003](0003-config-and-secrets-via-env-file.md) (the `env` scheme's behavior),
+  [ADR-0100](0100-system-is-two-views.md) (the *Installed* view of `/system`, which
+  prints the seam)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -17,8 +19,9 @@
 Five kinds of contribution reach a running instance from a package installed beside
 the library: a check type, a template slot filler, an asset, a configuration aspect,
 and a **secret resolver**. Four of them are registrations in the full sense — the
-registry records who made the claim, `/system` prints it, and a collision has a
-stated outcome. The fifth was a bare dictionary assignment:
+registry records who made the claim, `/system`'s *Installed* view at
+`/system/installed` ([ADR-0100](0100-system-is-two-views.md)) prints it, and a
+collision has a stated outcome. The fifth was a bare dictionary assignment:
 
 ```python
 _resolvers[scheme] = resolver          # last writer wins, silently
@@ -26,8 +29,8 @@ _resolvers[scheme] = resolver          # last writer wins, silently
 
 Three asymmetries follow from that one line. It **records no registering package**,
 so nothing can say which installation answers for `aws-sm://`. It is therefore
-**absent from `/system`**, the page whose whole job is to say what is installed and
-what it contributed — a seam nobody can see from the running instance is
+**absent from `/system/installed`**, the page whose whole job is to say what is
+installed and what it contributed — a seam nobody can see from the running instance is
 indistinguishable from one that silently did not take. And a second registration of
 a scheme **replaces the first with no sound**, where a second claim on a `type:`
 name refuses at startup naming both projects (ADR-0051).
@@ -93,8 +96,8 @@ registering a resolver on import, or through discovery.
    to. Re-registering from the replacing package carries it forward, so a reload
    does not quietly un-say the override.
 
-6. **`/system` prints the seam twice, on purpose.** Each package's inventory row
-   gains `secret <scheme>://` beside its types, slots, assets and aspects — that
+6. **`/system/installed` prints the seam twice, on purpose.** Each package's inventory
+   row gains `secret <scheme>://` beside its types, slots, assets and aspects — that
    card answers *what did this installation contribute*. And the extensions card
    gains the **whole scheme list** with each scheme's owner, built-in `env`
    included, which the aspects line beside it deliberately does not do for the

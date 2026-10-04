@@ -27,6 +27,8 @@ from little_sister import app as app_module
 from little_sister import identity, local_login, secrets, system_admin
 from little_sister.identity import Identity
 from little_sister.secrets import UnknownSchemeError
+from little_sister.status import StatusCode
+from little_sister.tree import StatusTree
 from little_sister.users import AvatarFile
 
 PASSWORD = "a-real-password"
@@ -220,7 +222,7 @@ class UnresolvableCredentialTests(_Case):
     def test_system_says_configured_but_unavailable(self):
         self.client.post("/login", data={"username": "pan",
                                          "password": "12345678"})
-        page = self.client.get("/system").get_data(as_text=True)
+        page = self.client.get("/system/installed").get_data(as_text=True)
         self.assertIn("credential unavailable", page)
         self.assertIn(MISSING_REFERENCE, page)
 
@@ -370,7 +372,10 @@ class TheDoorTests(_Case):
     def test_the_stored_authorship_is_the_name_alone(self):
         # `set_by` is a stored key that outlives the mechanism that produced it, so
         # *which door* must not leak into it (ADR-0069 §5). The pin page is where
-        # that stored name is shown back.
+        # that stored name is shown back — a leaf's, on a tree of this test's own:
+        # a branch an earlier test left at this path would be another page.
+        app_module.status_tree = StatusTree()
+        app_module.status_tree.upsert("/db", StatusCode.OK, "in step")
         self._login()
         self.client.post("/maintenance",
                          data={"path": "db", "action": "set",
@@ -380,7 +385,7 @@ class TheDoorTests(_Case):
         # The stored name, whole and alone — anchored on both sides, since a
         # substring assertion cannot tell `admin` from `admin@system-admin`.
         self.assertIn("Pinned by <strong>admin</strong>", body)
-        self.assertIn("Silenced by <strong>admin</strong>", body)
+        self.assertIn("silenced by <strong>admin</strong>", body)
 
 
 class VisibleInUseTests(_Case):
@@ -433,7 +438,8 @@ class SystemPageTests(_Case):
     def _system(self) -> str:
         self.client.post("/login", data={"username": "pan",
                                          "password": "12345678"})
-        return " ".join(self.client.get("/system").get_data(as_text=True).split())
+        return " ".join(
+            self.client.get("/system/installed").get_data(as_text=True).split())
 
     def test_every_door_has_a_row_of_its_own(self):
         self._configure(reference=PASSWORD_REFERENCE)

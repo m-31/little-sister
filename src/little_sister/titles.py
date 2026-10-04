@@ -20,8 +20,8 @@ nothing may make it stop being true:
 
 What *is* a surface, and therefore folds: the grid's leaf chips, box and card
 head lines and the heartbeat strip, the page band beside the breadcrumb (so the
-detail page too), the inspection popover (ADR-0019) and the ``/maintenance``
-pin table — plus the ``/copy`` hand-off, which is read somewhere with no chips
+detail page too), the inspection popover (ADR-0019) and the Maintenance
+page's headings — plus the ``/copy`` hand-off, which is read somewhere with no chips
 and no styling, where ``critical`` alone is a fine name and the title adds
 nothing either. They all call :func:`shown_title`; none of them re-implements it.
 
@@ -47,8 +47,8 @@ title, never dropping one that said something.
 
 **A second question, for the two surfaces that draw the title instead of the name**
 (ADR-0061). Most of the list above draws both — the chip, the card head, the strip,
-the band and the pin table all put the name down and the title beside it — and for
-those the only question is the one above. ``/copy`` and the inspection popover carry
+the band and the Maintenance page all put the name down and the title beside it — and
+for those the only question is the one above. ``/copy`` and the inspection popover carry
 the title *alone*, which is right while a title is a **word**: a node titled
 *Cluster A* is better named that way in a document pasted into a ticket.
 

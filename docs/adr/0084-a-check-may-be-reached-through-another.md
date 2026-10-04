@@ -1,7 +1,7 @@
 # ADR-0084 — A check may be reached through another
 
 - **Status:** Accepted
-- **Date:** 2026-09-19
+- **Date:** 2026-10-04 (accepted 2026-09-19)
 - **Related:** [ADR-0032](0032-status-contribution-boundary.md) (the contribution
   boundary this is the third rule at, and rules 3, 5 and 6 which bind it),
   [ADR-0039](0039-status-rollup-semantics.md) (the roll-up, and its closed
@@ -12,7 +12,8 @@
   [ADR-0080](0080-the-envelope-is-the-snapshot-published.md) (decision 1: a field
   added to the snapshot is added to the envelope in the same change),
   [ADR-0005](0005-dashboard-freshness-and-self-monitoring.md) (the freshness
-  backstop this must not close)
+  backstop this must not close), [ADR-0100](0100-system-is-two-views.md) (the
+  schedule of `/system`'s *Running* view, which carries the graph)
 - **Register:** [`../decisions.md`](../decisions.md)
 - **Contract:** [`../api/openapi.yaml`](../api/openapi.yaml) — `shielded_by`, from
   2.4.0.
@@ -131,7 +132,9 @@ configuration file:
   this is for;
 - the dependency's page says how many checks are reached through it, which is the
   question to ask *before* declaring one rather than after a quiet morning;
-- `/system` carries the whole graph in a column beside the checks;
+- the schedule of `/system`'s *Running* view
+  ([ADR-0100](0100-system-is-two-views.md)) carries the whole graph, on a line
+  beneath each check's path;
 - the envelope carries `shielded_by` on every node — the path, not merely the fact,
   because `contribution.by` already says a dependency withheld the node and only
   this says which one.

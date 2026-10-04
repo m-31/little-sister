@@ -3,12 +3,13 @@
 The web surface has to hold its shape against **extremes**, not just the friendly
 local tree — a card drowning in a hundred linked reasons, a 200-line `code()`
 block, a tree eight levels deep, a node that falls silent — and it has to hold it
-in every theme. Five dev-only harnesses under `tests/` let you see the GUI under
+in every theme. Six dev-only harnesses under `tests/` let you see the GUI under
 synthetic scenarios **without a real deployment**: a **static fixture sheet** for
 judging layout (the fast loop), a **live demo** for the dynamics a static page
 can't show, a **render matrix** that shoots `/links` across the theme roster, and
-a **contrast sweep** that measures what the eye cannot judge, plus **browser
-boundary checks** for layout claims paint has to prove. All render the *real*
+a **contrast sweep** that measures what the eye cannot judge, **browser
+boundary checks** for layout claims paint has to prove, and a **walk** that goes
+through the pages as a reader does and says what did not hold. All render the *real*
 templates, so a variant that looks right here is most of the implementation.
 
 ---
@@ -50,7 +51,14 @@ a time past the calendar, which are shown as stored — and a subject's **series
 of response times, a burst of failed requests and one alone marked in the curve's lane,
 an hour and a half asleep left plain, and the newest ten readings beneath; and a host
 branch whose two measures are two curves, one of them in `%`. A `Fixture` with an
-`engine` lends the page the engine its series is read from. A second,
+`engine` lends the page the engine its series is read from. A subject's **runs**
+stand twice ([ADR-0111](adr/0111-a-runs-mark-says-how-the-run-stood.md)): a job
+name's leaf whose thirty days of runs are stems to their run time — the oldest bare
+and muted, having kept no verdict, a hollow ring and a mark in the lane for each
+failure, the warning's triangle where the run time crept past its limit, and four
+days of a run every two hours, a crowd in which a passing run's head gives way — and
+a workflow's leaf with the same runs and no measure, each a tick whose height says
+how it stood. A second,
 **realistic-wall** tier embeds the extremes in a
 populated overview (all content synthetic): an 80-root mixed wall (root scale), a
 multi-front incident wall (eruption + trace + stale/idle/maintenance at once), an
@@ -96,8 +104,70 @@ start the demo where it writes nothing into the checkout. Stop it and start it a
 see what a restart does to a history
 ([ADR-0094](adr/0094-a-restart-is-no-transition.md)): a node reading what it read
 before keeps its period across the restart, `/events` gains an event only for a node
-whose reading changed, and `/history/little-sister` shows the gap — *undefined, the
-instance was not running*, from the stop until the first beat.
+whose reading changed or whose pin ran out meanwhile, and `/history/little-sister`
+shows the gap — *undefined, the instance was not running*, from the stop until the
+first beat. For the pin
+([ADR-0107](adr/0107-an-event-is-a-change-of-what-a-node-shows.md)), pin
+`/services/api` for `1m`, stop the demo, and start it once the minute is over: the
+node's first reading writes the pin's end — on `/events` a row with the *maintenance
+ended* chip, and a second one *held back* beside it where the reading moved meanwhile
+— its History closes the maintenance row at that reading, and its **Time** card says
+*since* then, *when its maintenance ended*.
+
+A pin that outlives the stop shows what a start does with one its log has lost
+([ADR-0110](adr/0110-what-every-node-last-showed-is-kept-beside-the-log.md) decision
+6). Pin `/storage/backup` for a day, stop the demo, put an empty log in the kept one's
+place, and start it:
+
+```bash
+echo '{"events": []}' > var/demo/var/state/events.json
+uv run python tests/demo_wsgi.py
+```
+
+The node's **Time** card says *maintenance since* the moment it was pinned — the
+instant its block gives under *Edit*, *Pinned by …* — and not since this start, while
+`/events?under=/storage/backup` lists the pin's set at the start, when this log learned
+of it. Clear the pin afterwards.
+
+For the wait
+([ADR-0110](adr/0110-what-every-node-last-showed-is-kept-beside-the-log.md)) a start
+has to find a failure, and every scenario starts at the top of its cycle, where none
+fails. `LITTLE_SISTER_DEMO_OFFSET=36s` starts each of them that far in, where the build
+has failed:
+
+```bash
+uv run python tests/demo_wsgi.py     # stop it within twenty seconds: pipelines is green
+LITTLE_SISTER_DEMO_OFFSET=36s uv run python tests/demo_wsgi.py
+```
+
+For three readings — some five seconds, since a failing check is retried early — the
+pipelines card on `/status/ci` reads *error · 1 of 3 to escalate*, then *2 of 3*, while
+the page's head stays yellow, and afterwards `/events?under=/ci/pipelines` shows that
+row with the *damping* chip, which a failure published at once does not carry, and
+above it the row of the third reading with the chip *reached*
+([ADR-0119](adr/0119-a-wait-that-ends-by-its-count-writes-a-row.md)). Stop the demo
+within that wait and start it with `43s`: the wait goes on. The kept file's entry of
+`/ci/pipelines` says `"publishes": "OK"`, the card reads *2 of 3* at the node's first
+reading, and the *reached* row comes with the next. A node the log holds no row of is
+the other half. Start the demo without an offset and leave it for eighty seconds —
+`/services/web` fails a few requests 54 seconds in and reads *ok* again a quarter of a
+minute later — then stop it, empty the kept log's rows and leave its table of what
+every node last showed, and start it:
+
+```bash
+python3 -c "import json, pathlib; kept = pathlib.Path('var/demo/var/state/events.json'); \
+log = json.loads(kept.read_text()); log['events'] = []; kept.write_text(json.dumps(log))"
+uv run python tests/demo_wsgi.py
+```
+
+`/events` gains a row only for a node that reads something else than it last showed,
+and for the instance's own gap, where every node got one dated the start. And no
+**Time** card lost its *since*, which the table keeps for every node (ADR-0110 decision
+5): `/status/services/web` says *since* its recovery, to the second, with no row of it
+left in the log, and a quiet node's, `/status/security/audit`, says *since before* the
+same instant as before the stop — the bound it was given when it was first seen, which
+no longer moves with the log. History's row for the period that holds says the same on
+each.
 
 Log in with the committed fixture user **`pan` / `12345678`**. Use a single worker:
 the engine and the status tree live in-process.
@@ -112,9 +182,11 @@ time:
   carries two long reason lists that look alike and behave differently.
 - **flap** — flips healthy/failed each half-cycle (stresses the fragment swap).
 - **silent** — a branch whose `cache` child falls silent mid-cycle: it stops being
-  reported, ages past the freshness threshold, and shows **stale**, then returns
-  fresh. (This is how a live check demonstrates staleness — the tree never prunes
-  an omitted child, it lets it age.)
+  reported, ages past the freshness threshold, and shows **stale**, then returns fresh.
+  (This is how a live check demonstrates staleness: its result says nothing of whether
+  its children are complete, so the tree keeps the child it leaves out and lets it age.
+  `runs`, below, is the other half: its node says so, and a child it stops returning is
+  removed.)
 - **children** — disk / memory / load in a shifting mix, so the card's roll-up
   moves. Its three also carry a **declared rank** (below), which is why they read in
   that order rather than with `load` filed in the middle.
@@ -155,8 +227,10 @@ time:
 - **latency** — a site's answer, recorded as `http` records one: a status and a
   response time, both null where the request failed. `/services/web` keeps it as a
   series and declares its one measure in its YAML (`measures:`), so its page shows the
-  **Readings** card ([ADR-0092](adr/0092-a-check-declares-its-measures.md)): the
-  response-time curve and the newest eight readings, every one on its History page.
+  **Series** card ([ADR-0092](adr/0092-a-check-declares-its-measures.md),
+  [ADR-0097](adr/0097-a-nodes-series-have-a-view-of-their-own.md)): the response-time
+  curve, and the way to its Series view, which lists the newest eight readings beneath
+  it, and to its History page, which lists every one.
   Each three-minute cycle fails a few requests — marked in the curve's lane, the
   retry making them several — and hangs one run for 45 seconds: nothing is read
   meanwhile, the node goes stale, and the curve breaks there with no mark. Watch a
@@ -171,6 +245,41 @@ time:
   `/little-sister/runtime` holds a line for each; and `/system` marks the record it
   saw *refused* while the heavy one is in. Where the two stretches overlap, `octo/api`
   is graded alone.
+- **runs** — four job names and their runs, the demo's **subject with a history**
+  ([ADR-0106](adr/0106-a-subject-with-a-history-has-a-node-of-its-own.md),
+  [ADR-0111](adr/0111-a-runs-mark-says-how-the-run-stood.md)). `/ci/jobs` hands back a
+  node for each job name its source lists — `import`, `export`, `cleanup` and, two
+  minutes of every three, `backfill` — whose line carries the job's newest run, and
+  every run is a reading that names the run it is of, so each node draws its runs as
+  marks at their own times, on its page and in its Series view. `import` and `export`
+  carry a run time, which the check's `measures:` draws as a stem for each run;
+  `cleanup` and `backfill` carry none and are drawn as ticks. Every seventh run fails —
+  a hollow ring in the failure ink, and under a run time a short stem and a mark in the
+  lane — and a run that takes more than a minute warns, under the warning's triangle.
+  The source lists a job name's six newest runs, and each poll reads all of them:
+  `import`, `export` and `backfill` say how every listed run stood, **for the record
+  alone** (`for_record`), so their older runs keep their verdicts; `cleanup` says it of
+  its newest run only, so a run of it loses its verdict when the next one takes the
+  line, and is a bare, muted tick from then on. The runs are on the wall clock —
+  `import` and `backfill` every twenty seconds, `cleanup` every forty, `export` every
+  minute — so a restart finds the runs it left. On `/series/ci/jobs` the job names share
+  one axis, as long as the slowest job's kept runs reach back, so `import`'s runs crowd
+  there: its passing heads give way, its failures and warnings keep theirs, and a strip
+  under the pointer names its column's runs.
+
+  `backfill` **comes and goes**
+  ([ADR-0109](adr/0109-a-node-says-its-children-are-complete.md)): it runs for two
+  minutes and then not for one, and its source does not list a job name that is not
+  running. `/ci/jobs` says that its children are complete, so `backfill`'s node leaves
+  the wall with the first poll that does not find it, and is back with the first that
+  does. While it is gone, `/events?cause=removed` holds its row — *undefined*, the chip
+  *removed*, *no longer reported by its check* — `/history/ci/jobs` lists the runs the
+  check still keeps of it, the Series index and `/series/ci/jobs` do not name it, and
+  its own address — Status, History or Series — is a `404` whose page says *removed*,
+  when and why, and names `ci/jobs` as the nearest node that stands
+  ([ADR-0116](adr/0116-a-path-with-no-node-says-what-is-known-of-it.md)). When it returns its runs stand
+  on its node again, the new ones behind the old, and its History shows the time it was
+  away as a period of *undefined* between two of *ok*.
 
 ### Members, and the two slug promises
 
@@ -205,11 +314,12 @@ after its control is activated. The review queue is the
 pleasant everyday version, and it is deliberately small enough to pin *every* member,
 which is the case worth walking: with all of them pinned the card reads
 **MAINTENANCE** on the dashboard, the strip pill's popover says *all 5 reasons* — the
-row that explains the blue card — and `/maintenance` lists each pin with the line it
-silences. Click one of those rows and you land on that line, marked, rather than at
-the top of the page. Pin a line on `/security/audit` too, and then wait out a cycle:
-the audit list clears at the end of it, and the node page tells you the pin's line is
-no longer being reported rather than leaving you to wonder.
+row that explains the blue card — and `/maintenance` states each pin as a block that
+opens with the line it silences. Follow a block's *this line* and you land on that
+line, marked, rather than at the top of the page. Pin a line on `/security/audit`
+too, and then wait out a cycle: the audit list clears at the end of it, and the node
+page tells you the pin's line is no longer being reported rather than leaving you to
+wonder.
 
 `/ci/pipelines` adds the **coded** third
 ([ADR-0042](adr/0042-entries-carry-their-own-code.md)): its lines disagree — a red
@@ -217,12 +327,36 @@ build over a green test suite, a warn gate, a never-concluded nightly wearing th
 ring cue — and the node's color is *derived* from them. Two things to walk. Watch
 `web-build` fail and then rerun: the line goes italic and **stays red** — the
 verdict is not displaced by the retry, which is the whole design in one line. Then
-pin that one red line: the node turns **green** while the pinned line sits in the
-maintenance tint with its cue still saying *error* — silencing the one failing
-workflow no longer silences (or discolors) the rest. The healthy lines are emitted
-deliberately, so `hide_ok` is worth toggling here too: the green lines vanish with
-their node when it reads OK, exactly as an operator who asked for problems-only
-asked.
+pin that one red line: the node takes the color of the lines that are left — yellow
+while the gate waits, **green** once it is approved — while the pinned line sits in
+the maintenance tint with its cue still saying *error*: silencing the one failing
+workflow no longer silences (or discolors) the rest. The node's **Time** card says
+*since* that moment, *when a line was silenced*, and `/events?under=/ci/pipelines`
+lists the row with a *line silenced* chip and, for its reason, the line and the pin's
+note ([ADR-0107](adr/0107-an-event-is-a-change-of-what-a-node-shows.md)). Leave the
+pin through a cycle: what the build does beneath it is on Events as rows marked
+*maintenance*, the node's own changes beside them, and the node's History lists only
+what the node showed. Clear the pin while the build is red: the card says *error
+since* that moment, *when a line's maintenance ended*, and the row carries that chip.
+The healthy lines are emitted deliberately, so `hide_ok` is worth toggling here too:
+the green lines vanish with their node when it reads OK, exactly as an operator who
+asked for problems-only asked.
+
+The same node **waits before it escalates** — `escalate_after: 3` in its YAML, the one
+demo node that does ([ADR-0083](adr/0083-a-node-may-wait-before-it-escalates.md)).
+Each turn for the worse is on the node at once: its card says *1 of 3 to escalate*,
+its page *Showing warn — 1 of 3 consecutive readings before this escalates, so the
+level above still counts ok*, and its row on Events is marked *damping*; the level
+above counts it two readings later, which the demo's retry makes a few seconds, and a
+second row on Events says when: the same status, with the chip *reached* (ADR-0119).
+What is counted is what the node shows
+([ADR-0108](adr/0108-the-wait-before-an-escalation-counts-what-a-node-shows.md)), so
+walk it with the build pinned. Pin the red line: the node takes its new color and
+states no wait, a pin's change being published at once. Through the next cycle the
+gate's own turn to yellow waits its three readings while the build goes red beneath
+its pin, and neither the card nor the page says anything of an error the node does
+not show. Clear the pin while the build is red: the node turns red and states no wait
+— what a pin's end uncovers is published at once.
 
 ### What the demo tree carries besides its checks
 
@@ -255,7 +389,7 @@ that make the features above visible:
   own `title:`, which is what puts the posture card ahead of `audit`.
 - **`actions.yaml`** puts a deployment's own links on the pages — see below.
 - **`csp.yaml`** adds one source to the assembled Content-Security-Policy, so the
-  `/system` readout has a line whose contributor is *this deployment* rather than the
+  `/system/installed` readout has a line whose contributor is *this deployment* rather than the
   library or a package — see below.
 - **`links/links.yaml`**, so `/links` has a page worth judging: many groups, a title
   long enough to wrap, notes, and every rung of the icon search path — a built-in
@@ -312,7 +446,7 @@ header, it ships as `Content-Security-Policy-Report-Only`, and it blocks nothing
 ([ADR-0048](adr/0048-an-assembled-content-security-policy.md),
 `architecture.md` §5.4). Two places show it anyway.
 
-**`/system`, as an admin.** The policy table prints every directive with the
+**`/system/installed`, as an admin.** The policy table prints every directive with the
 contributor of each source, and the demo is rigged so all three kinds appear at once:
 `'self'` and the CDN from the library, `https://tracker.example.org` in `connect-src`
 from **`tests.demo_extension`** (a `csp.allow` in `demo_wsgi.py` — the origin its
@@ -345,26 +479,35 @@ documents, and on a JSON body it would be a header no browser consults.
 
 ### Copy
 
-Open `/copy` at different points in the demo cycle. The page keeps only non-OK
-leaves and their ancestor chains, so a healthy scenario disappears and a recovering
-one leaves no empty heading behind. The review queue proves authored links survive;
-the maintenance recipe below proves both a whole-node pin and an individually pinned
-reason are named and attributed. **Copy Markdown** should put the visible source on
-the clipboard as plain text; **Copy Rich HTML** should paste as a nested list in a
-rich editor and still carry the Markdown as its plain-text fallback. Deny clipboard
-permission once: the source opens, selects itself, and the message must say that
-manual copying is required rather than claiming success.
+Open `/copy` at different points in the demo cycle. The document opens with a head —
+*little-sister status*, the wall's address as *Dashboard*, the instant it was made as
+*As of* — and a count, *Needs attention — 3 of 14 nodes: …*; with nothing wrong it
+says *Nothing needs attention* and is a document still. Beneath the count the outline
+keeps only non-OK leaves and their ancestor chains, so a healthy scenario disappears
+and a recovering one leaves no empty heading behind, and each node it lists says since
+when: compare one against the *since* on that node's own Time card. The review queue
+proves authored links survive; the maintenance recipe below proves both a whole-node
+pin and an individually pinned reason are named and attributed, and a pin set on a
+**branch** from its head has to stand on the branch's own line, above what it
+silences. **Copy Markdown** should put the visible source on the clipboard as plain
+text; **Copy Rich HTML** should paste as a nested list in a rich editor and still
+carry the Markdown as its plain-text fallback — also where the page has no clipboard
+interface, which is any instance opened by a host's name over plain `http`: the
+button copies through the browser's copy event there. Mode 5 holds both in Chromium.
 
-The **same two buttons** sit on a leaf's detail page — `/status/services/api`, or
-any `/ci/reviews` line — under the status card, handing over that one node instead
-of the tree. Four things to check there, because they are what the tree document
-cannot say. The pasted document names the node's path and states the frequency the
-way the page does (`15m`, not `15m 0s`). Every instant carries an offset: compare
-one against the page directly above it, which shows the same moment without one.
-Pin the node from the card below and copy again — the document must still report
-what the check **measured** and say a pin is in force, never present `maintenance`
-as the reading. And a **container** page (`/status/ci`) must offer no buttons at
-all; its hand-off is `/copy`.
+A **node's** document is behind its **Copy** tab, which stands on every view of every
+node — the overview's leads to the tree's document — and the Copy page keeps the
+node's trail and tabs. No Status page offers the buttons, a leaf's no more than a
+container's. Open the tab on a leaf, `/status/services/api`: the same two buttons
+hand over that one node instead of the tree. Four things to check there, because
+they are what the tree document cannot say. The pasted document names the node's
+path and states the frequency the way the node's page does (`15m`, not `15m 0s`).
+Every instant carries an offset: compare one against the node's Time card, which
+shows the same moment without one. Pin the node on its Status tab and open Copy
+again — the document must still report what the check **measured** and say a pin is
+in force, never present `maintenance` as the reading. And on a **container**
+(`/status/ci`) the tab leads to `/copy/ci`, which says what the branch shows and
+where that comes from, and lists what needs attention beneath it.
 
 `/ci/pipelines` is the one to copy for coded lines: each line that declared a code
 carries its own cue, the uncoded advisory beside them carries none, and a running
@@ -386,42 +529,106 @@ it into the ticket beside the document.
 ### Maintenance
 
 Maintenance is not a scenario — a check cannot set a real pin (that is the tree's
-concern). Set one from the admin **Set maintenance** button on any node (`pan` is an
-admin), or from the per-line control on `/ci/reviews` and `/security/audit`.
+concern). Set one from the admin **Set maintenance** button on a node's status line
+(`pan` is an admin), or from the pause mark at the end of a line on `/ci/reviews` and
+`/security/audit`.
 
 The read/edit interaction has one concrete walk:
 
-1. Open `/status/security/audit` while its findings are present. Move the pointer down
-   the action controls without clicking: no reason or control should move, and no form
-   should appear. Tab through the same controls; each has a visible focus ring.
-2. Open one *Set maintenance* disclosure. The **Duration or expiry** field names the
+1. Open `/status/security/audit` while its findings are present. Every line ends in a
+   pause mark. Move the pointer down them without clicking: no reason or control
+   should move, and no form should appear. Tab through the same controls; each has a
+   visible focus ring, and its name is *Set maintenance for this line*.
+2. Click one mark. Its editor opens beneath the line and moves the lines below it
+   down, its first sentence says it is for this line only and how many keep alarming,
+   and the cursor is in the note. The **Duration or expiry** field names the
    configured timezone; open *Which formats can I use?* by click and keyboard and
-   confirm the full table fits the reason panel without covering its actions. Enter
+   confirm the full table fits the editor. Enter
    `**owned** — [ticket](https://example.com/ticket)` plus `Friday` and save. The
-   line stays in place, shows the bold word and link as rendered HTML, and reports the
-   resolved expiry in read mode. Repeat once with `07-10` or a day such as `17` and
-   confirm the displayed boundary is the next future midnight described by the help.
-3. Click *Edit maintenance*. The textarea contains the exact Markdown source, not text
-   recovered from the rendered DOM. Change it and cancel once — read mode returns with
-   the stored explanation unchanged — then edit and save. The line never alarms between
-   the two writes. *Clear maintenance* remains a separate clear action.
-4. Repeat at node depth from the maintenance card: a pinned node opens in rendered read
-   mode, *Edit maintenance* reveals the prefilled textarea, and raw `<script>` entered
-   as a check stays visible as escaped text rather than becoming an element.
-5. From the dashboard, open a pinned card's pause-bars dialog. It starts in read mode;
-   open Edit, type without submitting and leave it across a poll. The dialog re-anchors
-   without replacing the source, expiry input or original compare-and-set token. Open
-   the format help there too: the fixed dialog scrolls instead of leaving the viewport.
-   Cancel returns focus to Edit; Escape once does the same while editing, and once more
-   closes the dialog.
+   line stays in place, takes the maintenance tint and carries its block: who silenced
+   it, the resolved expiry with what is left of it, and the bold word and link as
+   rendered HTML. The page comes back **at that line**, ringed — pin one far down the
+   list, where the top of the page would be out of sight of it. Repeat once with
+   `07-10` or a day such as `17` and confirm the displayed boundary is the next future
+   midnight described by the help.
+3. Click *Edit* in the block. The textarea contains the exact Markdown source, not text
+   recovered from the rendered DOM, with the cursor at its end, and the expiry field
+   holds the stored expiry; click into it and all of it is selected. Change the note
+   and cancel once — the block returns with the stored note unchanged — then change
+   the note alone and save: the expiry in the block has not moved. Edit again, empty
+   the expiry field and save: the pin runs for the configured default from now. The
+   line never alarms between the writes, and each save comes back at the line. Then
+   open *Edit* once more and save with **nothing changed**: who pinned it gains no
+   *Last changed* beside it, and the same pin's editor left open in a second tab
+   still saves. *Clear* remains a separate action, and comes back at the line too.
+4. Repeat at node depth: *Set maintenance* on the status line opens the node's editor
+   beneath it, saying how many lines it silences. Pinned, the node's block heads a
+   frame round every line, the line pinned before says *also silenced on its own*,
+   and raw `<script>` entered as a note stays visible as escaped text rather than
+   becoming an element. With scripts disabled, each *Edit* and each mark still opens
+   its editor. A branch's page states its node's pin in its head, above the children,
+   and an admin's *Set maintenance* stands there: open `/status/ci`, set a pin from the
+   head and read it back in the block, whose *Edit* fills the expiry field the same
+   way. Then edit the node's note once more and read
+   its **Time** card and its History: the card still says *maintenance since* the
+   moment the pin was set, and History has one maintenance row, *current*, with the
+   note as it reads now
+   ([ADR-0099](adr/0099-a-status-that-still-holds-says-since-when.md) decisions 6 to
+   8). *Clear* the pin: the card says *since* that moment, *when its maintenance
+   ended*, and History's maintenance row has its end and keeps the note.
+5. On the dashboard, move the pointer over a card that is not pinned: a pause mark
+   shows at the end of its head, and Tab reaches it without the pointer. Click it. The
+   editor opens **in the card**, which grows to hold it, and its first sentence names
+   what the pin covers — *services and everything beneath it*. The line above the grid
+   reads *updated … — paused while editing* at once. Type half a sentence and leave it
+   for half a minute: the grid does not refresh and what was typed stays. Press
+   Escape: the editor closes, the mark has the focus again, the line drops the words,
+   and the next refresh, at most ten seconds on, brings the grid up to date. Open the
+   editor again and leave it for more than a minute: everything but that card dims, as
+   the page does when it loses its server
+   ([ADR-0104](adr/0104-a-pin-is-one-block-on-what-it-silences.md) decision 7);
+   *Cancel*, and the page refreshes at once. Then set the pin, with *hide idle* on and
+   a depth of your own in the address. The wall comes back as it was asked for, and
+   the card states its pin as the block: who, until when and what is left, and the
+   note in full. *Edit* and *Clear* show while the pointer is over the card or the
+   keyboard is on them, *Edit* holds the stored expiry, and the card has no pause mark
+   while it is pinned. With scripts disabled the mark still opens the editor and
+   closes it again. The kiosk layout and a viewer's wall show the block without
+   buttons, and no mark.
+6. Pin a second node, so that two are, and open **Maintenance**. The pins stand under
+   their node's path: *The whole node* first, then its lines in the order the node's
+   own page lists them, each opening with its line and, under the node's pin, saying
+   it is *also silenced on its own*; a node with only lines pinned has no first block.
+   Beneath each note stands who pinned it, and who last changed it where somebody has.
+   Click *Edit* in a line's block: the editor opens in the block, in place of that
+   record, with the note's source and the expiry filled as in step 3. Save. The page
+   comes back with that node's section ringed and in view, and no other marked.
+   *Clear* one the same way, and follow *this line* in another: it lands on the line
+   on its node's page. Narrow the window to a phone's width with an editor open;
+   nothing on the page scrolls sideways.
+
+**A pin whose node is not reported**
+([ADR-0109](adr/0109-a-node-says-its-children-are-complete.md) decision 4) needs the job
+name that comes and goes. Pin `/ci/jobs/backfill` for `10m` while it is on the wall, and
+open the Maintenance page once it has left, within two minutes at the latest. Its
+section stands under its path, which is no link there, says that the node is not
+reported at present and that its pin silences nothing, and its block opens *The whole
+node, when it is reported,*. The wall's pill does not count it. *Edit* the note in the
+block and save: the page comes back with the section marked, and no node appears on the
+wall. When `backfill` returns it is in maintenance from its first reading —
+`/events?under=/ci/jobs/backfill` shows its return as *maintenance*, and beside it the
+reading its pin holds back — its section reads as any other, and the pill counts it
+again. Pin a line of `/ci/jobs/backfill` instead, with the pause mark at its end, and
+the section says *One of its lines, when it is reported,* and names no line while the
+node is away.
 
 The **conflict page** needs no code either, only a recipe, because it is about two
 people and one node. Every maintenance form carries the pin's `set_at` as a
 compare-and-set token, and an *empty* token says "I believe nothing is pinned" — so
 the shortest way in is two tabs on an **unpinned** node:
 
-1. Open the same node's page in **two tabs** and open the Set-maintenance dialog in
-   both. Neither form has a token yet.
+1. Open the same node's page in **two tabs** and open *Set maintenance* in both.
+   Neither form has a token yet.
 2. Submit one of them.
 3. Submit the other. The table now says something is pinned, its empty token no
    longer matches, and instead of silently overwriting the first pin you land on the
@@ -431,6 +638,74 @@ Editing works the same way with a real token: open an existing pin's edit form i
 tabs, submit the newer, then the older. An **entry** pin conflicts identically and
 the page carries its slug, so the two tabs can be two per-line pins on the same
 reason of `/ci/reviews`.
+
+Do it once from the **Maintenance** page as well: open it in two tabs, open the same
+block's *Edit* in both, save one and then the other. The conflict page is answered at
+the Maintenance page's own address, so check each way off it — *Change nothing*
+above all, which is a plain link — loads the Maintenance page again with that node's
+section marked, rather than staying where it is.
+
+### History
+
+`/history/services/web` lists every reading the latency scenario keeps
+([ADR-0102](adr/0102-a-readings-table-keeps-time-and-names-in-view.md)). Scroll the
+readings box both ways: its heading row and its Time column hold still, and its
+scrollbars stay at its edges; tab into it and scroll with the arrow keys and Page Down.
+*Response time · ms* heads the declared column over `response_ms`, before the fields
+nothing declares. `/history/services` declares nothing of its own and says so in its
+periods table; a node the log holds no change of shows the period that holds, since
+*before* the log's oldest event — after a long run, or with a seeded log (below) whose
+events name other nodes.
+
+`/history/ci/jobs/import` lists every kept run of a job name with its code's cue and its
+sentence, the older runs' from the lines its grading wrote for the record;
+`/history/ci/jobs/cleanup` lists its older runs without either, which is what their bare
+ticks say. `/history/ci/jobs` lists `backfill`'s kept runs while that job name is gone —
+*All 6 readings kept of* `jobs/backfill` — and no such table while its node stands,
+where they are the node's own (ADR-0109 decision 6).
+
+### Events
+
+`/events` shows what its URL names
+([ADR-0101](adr/0101-the-events-page-is-filtered-by-its-url.md)), and the demo's own
+log grows too slowly to judge that by. Give it a busy one: stop the demo, write a log
+into `var/demo/var/state/events.json` — `{"events": [...]}`, oldest first, each event
+as `Event.to_dict()` writes it, its time without an offset on this machine's clock —
+and start the demo again, which restores it. Seed an outage that takes five aspects of
+one host down at one moment, among a few hundred unrelated transitions and a pin over a
+flapping check. Then find the outage's first failure with `under` and *error* alone,
+its recovery by turning *ok* back on, and what the pin held back with *reached* off;
+type into a field and press Enter, and toggle a switch from the keyboard. Move the
+window with the bar and confirm every link keeps the filters; open a window reaching
+back past the log, which must say where the log begins, and filters that match
+nothing, which must say how many they were over; *reset* returns the whole log. Scroll
+the table: the filters, the bar and the count stay above it from the md breakpoint up.
+The third switch group is what wrote a row (ADR-0109 decision 5): after the demo has
+run some minutes, *removals* off hides `backfill`'s goings, *removals* alone lists
+them, each a row whose path is no link while the node is away, and *pins* alone lists
+what an admin set, edited and cleared. A wait that ended by its count is two rows of
+its node (ADR-0119): the change the wait held back, with the chip *damping*, and at the
+reading that completed the count the same status with the chip *reached*. With *held
+back* off the page lists the second and not the first; `/ci/pipelines` writes such a
+pair in every cycle of the demo.
+
+### A phone
+
+Look at the demo as a phone lays it out
+([ADR-0105](adr/0105-a-page-is-laid-out-at-its-screens-width.md)): with a browser's
+device emulation — a touch device with a phone's user agent, 390 pixels wide or 360 —
+and not with a narrow window alone, which shows the same layout now and would have
+shown it before any document declared its viewport. No page scrolls sideways. On the
+wall the filters stand on two lines beneath the stamp, and with a node pinned the
+strip takes the line beneath the count of pins. On `/status/security/wiz/informational`
+the trail takes two lines, the first ending in its slash; on `/status/services/web`
+it keeps one, and the node's title stands on the line beneath, where the trail left
+it less room than a word needs. On Events, History and both System views a table
+scrolls inside its box while the bar and the rail stay put, and System's schedule,
+scrolled to *Seen*, is still there after the next poll. Open an editor on a node's
+page and on the Maintenance page: it fits. Two things do not, and are known: the
+rail's labels, opened, stand beside the page and take half a phone's width, and at
+320 pixels the wall under the rail is a few pixels wider than the screen.
 
 ---
 
@@ -468,8 +743,12 @@ The other three modes are for *looking*. Contrast is the one property looking is
 bad at: a red that reads fine to you can be under the bar, and the accessibility
 bar outranks any picked swatch. `tests/sweep_contrast.py` walks every theme — the
 settings menu opened on `/status`, the rows on `/links` that are not plain body
-text, and the coded reason lines of a seeded tree — and measures each as the eye
-actually gets it: the *computed* ink,
+text and the folds of its setup guide, closed and opened, the coded reason lines of a
+seeded tree, on its leaf page a pin's block
+with its buttons and its opened editor, the Maintenance page's count, headings
+and records, the same block on the wall — in a box inside a card, in the editor a
+card's pause mark opens, and in a branch's head — and the chips in the rows of the
+Events page, and measures each as the eye actually gets it: the *computed* ink,
 the background composited from every translucent layer above the first opaque
 one, stacked opacity folded in. It prints the WCAG ratio:
 
@@ -497,6 +776,24 @@ written as a `btn-outline-secondary`, which Bootstrap paints `#6c757d` on **ever
 canvas — 3.76:1 on the dark one. The button now wears `btn btn-sm` for the shape
 and takes its ink from our tokens, which is the general answer whenever a
 Bootstrap component's own color has to hold the bar on six canvases.
+
+A pin's block is walked for the same reason. Its statement and its note sit on the
+block's own tint, a pair the tokens can measure; but *Set maintenance* stands on the
+page's alert, which Bootstrap paints, and the editor's labels, muted help and
+*Cancel* are Bootstrap's inks on our panel. So the block's buttons draw from the ink
+they stand in rather than wearing an outline variant, and the sweep opens the editor
+and reads each of those rows where it lands. On the Maintenance page the same blocks
+stand on the page's own canvas, with rows a node's page does not have: the count
+above them, which is Bootstrap's muted ink, a node's path, which is a link on the
+canvas, the link to its line inside a block's sentence, and the record beneath a
+note. The sweep reads those there.
+
+The Links page's setup guide is walked for it too. Its folds are cards, which
+Bootstrap paints, so what a fold's summary says beside its name takes our muted ink
+rather than Bootstrap's; and opened, the roster is Bootstrap's inks on Bootstrap's
+surfaces throughout — its `code` ink stands at 4.50:1 on a light card, which is the
+bar itself. The sample file, which only a page with no links has, is the card's ink
+on the sheet's own code fill; the sweep empties the links for that one row.
 
 The /about hero needs neither half: it paints no surface, so every reading of it
 is a token on the canvas and the gate test measures all of them. Use a browser
@@ -526,7 +823,7 @@ and again on the member leaf page.
 
 ## Mode 5 — the browser boundary checks (layout and chrome, against paint)
 
-The other four modes are for *looking*; some layout claims need measurements.
+Modes 1 to 4 are for *looking*; some layout claims need measurements.
 The stable-flow model
 ([ADR-0056](adr/0056-stable-useful-dashboard-flow.md)) needs one thing looking
 cannot give: proof that the widths it publishes are the widths Chromium acts on.
@@ -579,11 +876,217 @@ It takes a minute or two — most of it is Chromium re-laying out the page at ea
 probe width. Each run renders into its own temporary directory, so concurrent
 runs cannot delete each other's artifacts.
 
+`tests/test_series_browser.py` holds a Series view's script against a real pointer
+([ADR-0098](adr/0098-a-series-view-is-drawn-over-a-window.md) decision 6): a real
+server over the estate `tests/test_series_window.py` reads, logged into by the
+form, and Chromium dragging, pointing and pressing Escape at positions worked out
+from the drawing's geometry rather than from what the script reads. It takes
+Bootstrap from the copy Mode 4 vendors, where there is one, since the page bar's
+menu unfolded would cover the view the pointer is sent to. Run it the same way
+when `series.js`, the Series templates or the curves' stylesheet rules change:
+
+```
+uv run pytest tests/test_series_browser.py
+```
+
+`tests/test_pin_browser.py` holds a pin's write and its editor the same way
+([ADR-0104](adr/0104-a-pin-is-one-block-on-what-it-silences.md)): a real server over
+a node of 80 lines that can each be pinned, and Chromium scrolling to the 60th,
+pinning, editing and clearing it — the page has to come back with that line in the
+window, clear of the bar, each time — and opening an editor on a note, where the
+cursor has to stand at the note's end. And over a wall of three cards, with the
+page's clock in the test's hand: a card's pause mark opening its editor in the card,
+the refresh holding off while it is open and dropping an answer that was on its way,
+the line saying *paused while editing* at once, the page dimming a minute later but
+for the card being edited, and the mark keeping its seat at the end of the state
+however the head wraps — with a pointer, with the keyboard, by touch and without
+script. A node's inspection card stays away while its editor is open, and a pinned
+card is drawn at every width a card comes in, its sentence ending no line inside the
+date of its expiry. Run it when `maintenance-edit.js`, `poll.js`, `inspect.js`, the
+block's templates or styles, or what `POST /maintenance` returns to change:
+
+```
+uv run pytest tests/test_pin_browser.py
+```
+
+`tests/test_phone_browser.py` holds every page to a phone
+([ADR-0105](adr/0105-a-page-is-laid-out-at-its-screens-width.md)): a real server over
+an estate with a deep path, a name and a word with nowhere to break, long reasons and
+a pin on each, and Chromium **emulating a phone** — a touch device with a phone's user
+agent, at 390 pixels and at 360 — in the three layouts. Each page has to be laid out
+at the screen's width, at its own scale, with nothing reaching past the screen outside
+a box of its own. The band's filters, its trail at every width a line can end at, a
+title beside its trail, the wall's strip, a table in its box, a reason's width there,
+the Links page's guide with its folds opened and the schedule's place over a poll are
+each held, and a desk's window confirms that
+the band reads there as it did. A narrow window is not a phone: a desktop browser lays
+a page out at its window's width whatever the document declares, which is how pages
+drawn 980 pixels wide on every phone passed the checks that set one. It takes
+Bootstrap from the copy Mode 4 vendors where there is one and from the CDN otherwise;
+with neither it measures an unstyled page, and fails. Run it when a template gains a
+table, when the shared head, the band, the wall's cards or `poll.js` change:
+
+```
+uv run pytest tests/test_phone_browser.py
+```
+
 ---
+
+`tests/test_strip_browser.py` holds the instance's own pill above the wall: a real
+server over a tree whose instance node has a title, and Chromium at a desk's width, on
+an emulated phone and at five widths between. The pill has to be one line high with its
+name and its state unbroken, and its title has to be as wide as on the desk or out of
+sight — never squeezed, and never painted beneath the pill. Run it when the strip's
+markup in `_status_grid.html` or its stylesheet rules change:
+
+```
+uv run pytest tests/test_strip_browser.py
+```
+
+`tests/test_rail_browser.py` holds where the rail gives way
+([ADR-0105](adr/0105-a-page-is-laid-out-at-its-screens-width.md) decision 8): a real
+server and Chromium with the rail chosen, at widths from 320 pixels to 1400. Below 576
+there has to be no rail, the bar's toggler has to stand with the sections folded
+behind it, opening them and leading, and the page has to start at the screen's edge
+with the bar's parts where a viewer who chose the top bar has them; from 576 the rail
+stands and the page starts beside it; a window made wider gets its rail back with the
+preference untouched; and the top-bar layout is as it was. Run it when the bar's or
+the rail's markup in `_header.html` or their stylesheet rules change:
+
+```
+uv run pytest tests/test_rail_browser.py
+```
+
+`tests/test_about_browser.py` holds About to its screen: a real server and Chromium at
+six widths from 1440 pixels down to a phone's. The page has to be no wider than the
+screen, and a ring's width with the width of its widest word has to fit the page —
+the geometry, since a word travels along its ring and where it stands when a test
+looks proves little; a wide screen keeps both rings at their full widths, and a phone
+keeps the one the story names, passing outside the eyes. Run it when `about.html` or
+the hero's stylesheet rules change:
+
+```
+uv run pytest tests/test_about_browser.py
+```
+
+`tests/test_curve_frame_browser.py` holds where a curve's frame opens on a phone: a real
+server over the estate `tests/test_series_window.py` reads, and Chromium emulating one.
+A drawing wider than its frame has to stand with its right end at the frame's — in a
+Series view, on a node's own page, and over a window chosen by its URL — while its words
+still read from the left; on a desk nothing scrolls; and, with the page's clock in the
+test's hand, a frame scrolled back has to be where it was after a refresh. Run it when
+the curves' stylesheet rules, `_series.html` or `poll.js` change:
+
+```
+uv run pytest tests/test_curve_frame_browser.py
+```
+
+`tests/test_index_folds_browser.py` holds the Series index to a narrow screen
+([ADR-0114](adr/0114-a-curve-seen-small-and-the-series-tabs-count.md) decision 3): a
+real server over an estate shaped like a deployment's — eight hosts of five curves each,
+two checks on one node, checks that draw nothing — and Chromium at 946 pixels and
+emulating a phone. With every fold open the table has to be no wider than its box, a
+fold's strips have to stand in a column, and a closed fold has to be one line; on the
+phone every fold's control and every open fold's label, strip and values have to be
+inside the screen, and a row has to say everything its columns said. Run it when
+`series_index.html` or the index's and the sparklines' stylesheet rules change:
+
+```
+uv run pytest tests/test_index_folds_browser.py
+```
+
+`tests/test_assets_browser.py` holds what an open page does when the server links other
+files than the page was loaded with
+([ADR-0112](adr/0112-our-own-assets-carry-their-content-hash.md)): a real server over a
+wall of three cards, the page's clock in the test's hand, and the server's digest of its
+files changed under a page that is open. The page has to load itself afresh at the next
+refresh and not swap that answer in; to wait while an editor is open, keeping what was
+typed; and, over a server that draws the page with one digest and answers the refresh
+with another, to reload once and then go on showing what it is sent. Run it when
+`poll.js` or `little_sister.assets` change:
+
+```
+uv run pytest tests/test_assets_browser.py
+```
+
+`tests/test_copy_browser.py` holds the two Copy buttons to what a paste receives
+([ADR-0115](adr/0115-a-copy-document-says-where-it-is-from-and-since-when.md) decision
+8): one real server reached twice — on `127.0.0.1`, where a page has a clipboard
+interface, and by a name the browser is told to resolve to the same server, where over
+plain `http` it has none — and Chromium pressing a button on every page that offers
+the pair, then pasting into a field that keeps the members it was handed. *Copy Rich
+HTML* has to hand over the rendered document beside its Markdown on both, and *Copy
+Markdown* the Markdown alone; a sentence copied by hand stands on the clipboard before
+each press, so a button that says it copied and did not is seen. An interface that
+refuses, a copy event that never arrives and a browser that copies nothing are each
+played, and where the interface is missing the copy has to be made while the click is
+still being answered. Run it when `copy.js` or `_copy_controls.html` change:
+
+```
+uv run pytest tests/test_copy_browser.py
+```
+
+## Mode 6 — the walk (a review, repeated)
+
+The other modes each hold one claim. `tests/walk_gui.py` goes looking: it starts the
+live demo on a port of its own, 36 seconds into its scenarios so the wall it meets is
+not all green, renders the fixture sheet beside it, and drives headless Chromium over
+both at three widths of a desk — 1440, 1000 and 700 pixels — and on an emulated phone.
+
+```
+npm i --prefix var/bootstrap bootstrap@5.3.2 \
+    @floating-ui/core@1.6.8 @floating-ui/dom@1.6.12     # once; var/ is gitignored
+uv sync --group browser
+uv run python tests/walk_gui.py                          # → var/gui-walk/index.html
+```
+
+On every screen it opens the wall and a branch's wall and points at each card head — a
+tap on the phone — which raises the inspection card where a node has one; a branch's
+page, a leaf's and its History; a subject's branch and node; Events, Maintenance, both
+System views, Links, Copy and About; the Series index with every fold open; and two
+Series views, with a pointer at rest on a curve and, with a mouse, a stretch dragged
+across it. Once, on the widest screen, it pins the demo's job name that comes and goes
+through the wall's own editor, waits until its node has left the tree, and then visits
+what a removed node leaves on every screen: its row on Events, its suspended pin on
+Maintenance, the branch it left, its own address, and its check's History and Series.
+Last it opens every page of the fixture sheet on the widest screen and on the phone.
+A walk takes about eight minutes, most of it the demo's own clock.
+
+**Every step leaves a screenshot and what the browser said** while it was taken: the
+console's errors, the Content-Security-Policy reports the page sent, and how far the
+layout shifted with no input. **And every step is measured** against a short list of
+facts (`FACTS` in the script): a page no wider than its screen, a raised card inside
+the screen, the name, the title and the state of a card's head not lying over one
+another, and everything a curve or a sparkline draws inside its plot. A fact that does
+not hold **marks** the step.
+
+**Nothing fails.** A review collects, so the walk always ends with its gallery,
+`var/gui-walk/index.html`: each fact with how many steps it marked, the marked steps
+first, then every step in the order it was taken; `walk.json` beside it is the same as
+data. Two things to know when reading it. A layout shift is counted whatever caused it
+— but for a raised card's own move from one node to the next, which a browser counts
+and nothing in the layout makes — and the demo's readings change under the walk, so a refresh that swapped in a longer
+list marks a step as a real shift does — a mark that comes back at the same step on a
+second walk is the one to believe. And the library's own pages still send an `img-src`
+report for a `data:` image, which marks every wall until that is settled.
+
+**A fact that is fixed moves into a test of Mode 5**, which is where a claim is held;
+the walk finds, Mode 5 keeps. `tests/test_walk_gui.py` holds the facts themselves, each
+against a page of the test's own that is broken in its way, which it has to mark, and
+the same page sound, which it has to pass — a walk that never fails would otherwise
+look the same with a fact that measures nothing. Its half that needs no browser runs in
+the ordinary gate. Run it when a fact is added or changed:
+
+```
+uv run pytest tests/test_walk_gui.py
+```
+
+It walks synthetic shapes. A real estate's are looked at on a deployment, by hand,
+beside it.
 
 ## Not part of a deployment
 
-All five harnesses are **dev-only**: they live under `tests/`, carry no real
+All six harnesses are **dev-only**: they live under `tests/`, carry no real
 checks, and start no engine except when you run the demo wrapper. Keep them green
 with the rest of the gate (`hooks/pre-commit`) and run Mode 5 by hand
 when the dashboard layout changes.

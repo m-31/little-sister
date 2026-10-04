@@ -8,6 +8,620 @@ contract versions **separately** — see `docs/api/openapi.yaml` `info.version`.
 
 ## [Unreleased]
 
+## [0.3.19] - 2026-10-04
+
+### Removed
+
+- **`Engine.series_at(path, subject)`.** It answered the question the node pages
+  asked — the series one node shows while it stands for one subject — and they ask
+  another now: `Engine.series_near(path)` answers every series kept at a node, beneath
+  it or above it, with every subject ([ADR-0097](docs/adr/0097-a-nodes-series-have-a-view-of-their-own.md)).
+
+### Added
+
+- **A Series view zooms, by its URL.** `/series/<path>?from=now-6h` draws every curve
+  of the view over the last six hours, and `from` and `to` take `now`, `now-` and a
+  duration, or an instant — one without an offset read in the configured timezone —
+  as Grafana writes them, so a bookmark keeps the window. A bar above the curves, in
+  view while the page scrolls, names the window with its time zone and holds the
+  presets, from an hour up to what is kept, and earlier, zoom out, later and now, each
+  in its place and disabled where it does not apply; a window that ends now stays
+  live. Each stretch of a curve's time axis is a link into that stretch, back at that
+  curve; with a mouse, dragging across a curve chooses any stretch, and the pointer at
+  rest reads every curve at one instant, each curve's summary saying its value there.
+  The axis is labeled at round times in the configured timezone, and a window
+  holding more readings than a plot's 336 columns is drawn by each column's first,
+  last, lowest and highest reading, so no spike is lost and a day's page is lighter. A
+  view without a window shows everything kept, as it did
+  ([ADR-0098](docs/adr/0098-a-series-view-is-drawn-over-a-window.md)).
+- **The Events page is filtered by its URL.**
+  `/events?under=/hosts/nas&words=disk+full&status=error&held=no&from=now-6h` lists a
+  node's transitions and everything beneath it, those whose reason holds every word,
+  a switch for each status an event moved to, *reached* and *held back* as two more,
+  and the Series view's window with its bar, whose links keep the filters. A line
+  counts what matches in the window and says how far back the log reaches where the
+  window starts earlier; an empty table says whether the log is empty, the window
+  holds nothing or the filters left nothing; *reset* returns the whole log, and
+  nothing remembers a filter. A switch the page does not offer is answered `400`
+  ([ADR-0101](docs/adr/0101-the-events-page-is-filtered-by-its-url.md)).
+- **Events link to the affected node.** Each Service path opens its current Status
+  page when the node still exists; removed paths remain readable without a dead link.
+- **A node's series have a view of their own.** `/series/<path>` shows every curve that
+  stands at or beneath a node, whichever check drew it — grouped under the node it
+  stands on, each group headed by that node's status and sentence, all on one time
+  axis — with the newest `reading_cap` readings of each series folded beneath, and
+  `/series` is the index of every node a series is kept on: a name opens the node's
+  Status page, *curves* and *readings* beside it open its Series view and its History,
+  and a count of its curves unfolds to a line for each: its label, the curve seen
+  small — on the curve's own scale, from zero, broken where the curve breaks — and its
+  newest, lowest and highest value
+  ([ADR-0103](docs/adr/0103-the-series-index-says-where-each-link-leads.md),
+  [ADR-0114](docs/adr/0114-a-curve-seen-small-and-the-series-tabs-count.md)). A node's
+  Series tab carries the number of curves its view draws. On a phone the index lays
+  each row out as a block of its own, so nothing in it is scrolled sideways. A node's
+  page shows the curves that stand on it; its Status, Series and History views are tabs
+  beneath its title; the breadcrumb starts at `nodes` and keeps the view it is in; and
+  the rail gains Series ([ADR-0097](docs/adr/0097-a-nodes-series-have-a-view-of-their-own.md)).
+- **A measure names the node its curve stands on, and a `*` draws one curve per
+  thing.** A `measures:` entry takes `node:`, a path from the check's own node, and a
+  field may pick every key of a mapping with one `*`, which stands for the key in its
+  node and its label too: `volumes.*.avail_kb: {unit: KiB, label: Free space on *,
+  node: disk/*}` is a free-space curve on every volume's node. `B`, `KiB`, `MiB`, `GiB`
+  and `TiB` are written as sizes — 19,169,728 KiB as `18.3 GiB` — on axes that step in
+  powers of two ([ADR-0096](docs/adr/0096-a-measure-names-its-node-and-its-things.md)).
+- **`host-metrics`, `qnap-metrics` and `macos-memory` draw what they grade**, where a
+  check keeps a series: memory, CPU, load per core and disk use, every volume's with
+  `disk_path: all`; the system, CPU and drive temperatures; the memory pressure, the
+  compressed share, the swap and each watched process's resident memory — each curve
+  on the aspect that grades it. `host-metrics`' record gains `load1_per_core`, the
+  number its `load` node grades ([ADR-0096](docs/adr/0096-a-measure-names-its-node-and-its-things.md)).
+
+- **The instance says what it holds.** `/system` shows the process's resident size and
+  its peak — the peak alone on macOS — beside the entries and the series held, against
+  the memory limit and what the machine gives the process; the engine's own node,
+  `/little-sister/engine`, states the same figures on its page, and the log carries
+  them every ten minutes of the clock, once at the start and once at the stop:
+  `engine: memory — resident size 312 MiB, peak 369 MiB, of a limit of 8.0 GiB; the
+  series hold 3.1 MiB, the tree 12,345 entries`. A check's log line now says what rose
+  while it ran, where the size or the peak rose by 1 MiB or more —
+  `check /web: OK (5812 ms; resident +38.2 MiB while it ran, beside /nas1)` — and the
+  scheduler tick logs its own rise the same way. The figures are the process's, never
+  a run's cost, which is why the line names every other run that was in flight
+  ([ADR-0095](docs/adr/0095-the-instance-states-its-memory.md)).
+- **A subject's node shows its series.** A node whose lines name one subject and no
+  other stands for that subject: where its check keeps a series, the subject's readings
+  are on that node's History page, its measures' curves on the node, and the node has a
+  Series view and a row in the Series index; a measure's `node` is read from that node.
+  A check's own History page keeps the readings of its own object and of every subject
+  no node stands for, and a node that carries the lines of several subjects shows what
+  it showed, so a type that has not moved its lines changes nothing.
+  `implementing-checks.md` says how a type hands a subject back as a node
+  ([ADR-0106](docs/adr/0106-a-subject-with-a-history-has-a-node-of-its-own.md) decisions
+  2 and 4).
+- **A run is drawn as a mark at its own time.** A series' runs — its records with an
+  identity — are drawn where the series is shown, on the time axis every curve of a view
+  shares, with no line between two: a stem from the baseline to the run's value under
+  each measure its check declares, and, where it declares none, a tick on the node that
+  stands for its subject, in a plot titled *Runs*. A series no node stands for draws no
+  ticks, so a deployment sees no mark until one of its types hands back a node for its
+  subjects or declares a measure over its runs. A mark says how the run's reading stood
+  — a short tick or a filled head for a pass, the warning's triangle, a hollow ring in
+  the failure ink for a failure, which the lane marks as well beneath a value axis, and
+  a bare mark in the muted ink for a run that kept no verdict. Where runs crowd, each
+  stands at its own instant and value and a passing run's head gives way. The summary
+  counts the runs, names the newest, lowest and highest value under a measure, and
+  counts what did not pass, by kind. A record with a state has no mark and stays a row
+  of its readings
+  ([ADR-0106](docs/adr/0106-a-subject-with-a-history-has-a-node-of-its-own.md) decision
+  5, [ADR-0111](docs/adr/0111-a-runs-mark-says-how-the-run-stood.md)).
+- **A grading says how a run stood, for the record alone.** `CheckResult` takes
+  `for_record`, a list of `Entry` that no node shows: the reading whose record such a
+  line carries keeps the line's code and its sentence. A check that reads several runs
+  of one subject on each poll shows the newest and still says how every other one stood,
+  so a run that failed last week keeps saying so in its series, in its mark and in its
+  readings table. Each line carries its own code and its record and is refused without
+  either; no node's code, line cap, envelope or pin sees it. The check API's epoch stays
+  3, and `implementing-checks.md` says when to write one
+  ([ADR-0111](docs/adr/0111-a-runs-mark-says-how-the-run-stood.md) decisions 2 and 7).
+- **A node says that its children are complete, and one it no longer returns is
+  removed.** A child a run stopped returning stayed in the tree, went stale and degraded
+  every node above it until the instance restarted. `CheckResult` takes
+  `children_complete=True`: a node that says so loses every direct child it no longer
+  returns, at once, with what stood beneath it. A result that says nothing keeps what it
+  leaves out, so nothing changes for a type until it says so, and the check API's epoch
+  stays 3. Nothing kept about a removed node goes with it: its readings stay and are
+  listed on its check's History page, and a pin on it is suspended — the Maintenance
+  page lists it under its path, as one whose node is not reported at present — and holds
+  again from the node's first reading when it returns. Each node removed writes an
+  event, from what it showed to *undefined*, with the chip *removed* and the reason *no
+  longer reported by its check*; the first run after a restart writes it for a node that
+  went while the instance was down. The Events page gains a third switch group,
+  *readings*, *pins* and *removals* — `cause=` in its URL — so the removals can be
+  hidden or read alone, and a removed node's own pages say that it was removed, with
+  what is known of its path. `implementing-checks.md` says when a type makes the
+  statement
+  ([ADR-0109](docs/adr/0109-a-node-says-its-children-are-complete.md)).
+- **A check reads what it kept.** `Check.kept(subject)` hands a check's `measure()` the
+  window of one of its own series as the store holds it: every kept record, oldest
+  first, with its own time, the moment it was observed, its identity or its state, and
+  the code and the texts that stood — as copies, and with no argument for the object the
+  check declares. A type that reads a history from its source can ask from where its own
+  history ends instead of asking for all of it on every poll. The answer is empty where
+  the check keeps no series, and under the engine the read answers inside `measure()`
+  alone: from `grade()` it raises, since a grading reads what it is handed. A type's own
+  test binds what the type is to find with `Check.bind_kept(reader)`. `SeriesRecord`
+  joins the check-authoring surface, the check API's epoch stays 3, and
+  `implementing-checks.md` says how a type resumes from what it kept
+  ([ADR-0113](docs/adr/0113-a-measurement-reads-what-its-check-kept.md)).
+- **A child of a result says that a run names it.** A type declares the labels of the
+  children it always emits by their names, a deployment's `subnodes:` block retunes them
+  by the same names, and both reach every node of that name. A node named by its source
+  — a volume, a repository, an account — took them too wherever its source called it by
+  such a name. `CheckResult` takes `dynamic=True`: nothing declared for its name reaches
+  such a child, from the type or from the block, and its labels are the `title`, `about`
+  and `show_when_quiet` its own result carries; a `nodes.yaml` entry for its path still
+  beats them. A result that says nothing is read by its name as before, so nothing
+  changes for a type until it says so, and the check API's epoch stays 3. **A deployment
+  that labeled a node its check's run names through `subnodes:`, by that node's name,
+  labels it by path in `nodes.yaml`** once the node's type says so.
+  `implementing-checks.md` says where a type says it
+  ([ADR-0118](docs/adr/0118-a-child-a-run-names-takes-nothing-declared-for-its-name.md)).
+
+### Changed
+
+- **Every stored time is an instant, and an upgrade starts the event log and the pins
+  empty.** At the first start on this version the event log and the maintenance pins
+  of the version before are not read: both start empty, each file is an ERROR line on
+  `/little-sister/state` until the process ends, and a pin that is still wanted is set
+  again. **Every instance on one keeper's prefix is stopped before the first one starts
+  on this version**: an instance that takes over from a holder still on the version
+  before can take neither file that holder wrote. **And the version before is not
+  started on that state again**: it reads no event log this version wrote, and does
+  not start where `maintenance.json` holds a pin — the way back removes that file
+  first. What it buys: a node's, an event's and a pin's times were the machine's wall
+  clock, written without a zone, and are instants in UTC now. A state read on a machine
+  in another zone — a keeper's store, a takeover — shows the times it was written at,
+  where a standby six hours from its holder showed everything six hours early and took
+  a two-hour pin as expired. In the hour a clock repeats, a node's age no longer reads
+  0, so a check that stopped reporting is noticed in that hour and not after it, and a
+  pin set for thirty minutes holds for thirty; in the hour a clock skips, the wall no
+  longer goes stale at once. The JSON API serves what it served, the same text for the
+  same instant, and no name a check type imports carries one of these times. A line
+  that names a time — a reachability pass that overran, the log's *was not running
+  from* — writes it in the configured timezone, as a page does.
+  ([ADR-0120](docs/adr/0120-every-stored-time-is-an-instant.md), which supersedes
+  [ADR-0006](docs/adr/0006-config-file-and-timezones.md))
+- **`spans.local_time` refuses a time without a zone.** It read one as the machine's
+  local time, which is right only on the machine that built it. It takes an instant —
+  a time with its zone, whichever zone — and raises `ValueError` for anything else:
+  **hand it `datetime.now(UTC)`, or the time your source gave you with its offset.** A
+  check type that hands it a time without a zone has its run become an ERROR on its
+  node, with the refusal as the reason. The check API's epoch stays 3: a type that
+  handed it an instant, as the surface asked, is untouched.
+  ([ADR-0120](docs/adr/0120-every-stored-time-is-an-instant.md) decision 8)
+- **The log's lines are stamped in the configured timezone, with its offset.** A line
+  of the default log carried the machine's clock and no zone —
+  `2026-10-04 13:02:35,893` — beside pages that write every time in the configured
+  zone. It reads `2026-10-04 13:02:35,893 +0200` now, on stderr and in
+  `var/little-sister.log`: the time in the zone `timezone` names, and the offset in
+  force at it. **Whatever parses the stamp reads one field more, and on a machine in
+  another zone than the configured one the log's times move to the configured zone's
+  at the upgrade.** The log file is in that zone from its first line, what the import
+  logged included, and the engine's ten-minute memory line keeps to the marks of that
+  clock. A start says once, in the log, where the machine's clock shows another time,
+  now or from a day within the year ahead, since gunicorn's own lines stay on the
+  machine's clock. An application that configured its own logging keeps its own stamp.
+  ([ADR-0120](docs/adr/0120-every-stored-time-is-an-instant.md) decision 9)
+- **On a phone the rail gives way to the top bar.** The left rail kept its 52 pixels
+  at every width. Below 576 pixels a viewer whose layout is the rail now gets the top
+  bar's: no rail, the sections behind the bar's toggler, the page at the screen's whole
+  width. The preference is untouched and the rail stands again on a wider window.
+  ([ADR-0105](docs/adr/0105-a-page-is-laid-out-at-its-screens-width.md) decision 8)
+- **A percent of a whole is drawn to 100.** A curve's value axis ended a step past its
+  own highest reading, so a memory at 18 % and one at 81 % both sat near the top of
+  their plots, and as sparklines side by side they looked alike. A measure may now
+  declare where its axis reaches — `axis_to`, a key of its entry in a check's
+  `measures:` and in a type's `measure_defaults` — and `host-metrics`' memory, CPU
+  and disk percents and `macos-memory`'s compressed memory declare 100. A reading
+  above the declared end grows the axis as before; nothing is cut off. **On upgrade
+  these curves sit lower on their plots**; a deployment that names the field without
+  the key gets the old axis, and one that had relabeled a default keeps it until it
+  adds the key. A value that is not a positive number refuses the load.
+  ([ADR-0117](docs/adr/0117-a-measure-says-where-its-axis-reaches.md))
+- **A path no node stands at has a page that says what is known of it, and is a
+  `404`.** `/status/<path>` and `/history/<path>` answered `200` with *No such branch*
+  for a node its check had stopped reporting, and for any path at all; `/series/<path>`
+  was a bare `404`, and `/copy/<path>` a `404` that said *No such node*. All four now
+  answer `404` with one page: that the node was removed, when and why, with a link to
+  its rows on Events; every pin held against the path or beneath it, which an admin
+  edits and clears there; and the nearest node above that stands, on whose History the
+  readings kept of a removed subject are listed. A path nothing is recorded of says so.
+  A Status page that is open when its node leaves still refreshes, and shows the node
+  gone and back. **A monitor that watched a node's address for `200` sees a removal as
+  `404` now.**
+  ([ADR-0116](docs/adr/0116-a-path-with-no-node-says-what-is-known-of-it.md))
+- **A page that is open takes an upgrade by itself.** The stylesheet and every script
+  of the library are linked by a URL that carries a hash of their content
+  (`/static/js/poll.js?v=1a2b3c4d`) and may be kept by a browser for good, so a changed
+  file is a changed URL and no reload shows yesterday's. A page that refreshes itself —
+  the wall, a branch's page, System — also compares the files it was loaded with against
+  the ones the server links now, at every refresh, and loads itself afresh when they
+  differ: after an open editor closes, and once for an upgrade. A wall display no longer
+  runs the old scripts against new markup until somebody reloads it. A URL without the
+  hash is answered as before
+  ([ADR-0112](docs/adr/0112-our-own-assets-carry-their-content-hash.md)).
+
+- **A pin makes no node.** Setting a pin on a path the tree held no node at made the
+  node, and a restart's replay relied on that to bring a pinned node back before its
+  check had run. A pin is held against its path now, whether it is set, replayed or
+  adopted with a kept file, and the node its check writes is pinned from its first
+  reading. So after a restart a pinned node appears with its check's first run and no
+  longer at once, the Maintenance page listing its pin meanwhile as one whose node is
+  not reported at present; and a pin set for a path nothing reports is listed the same
+  way and puts no node on the wall
+  ([ADR-0109](docs/adr/0109-a-node-says-its-children-are-complete.md) decision 4, which
+  amends [ADR-0014](docs/adr/0014-maintenance-persistence.md) decision 3).
+- **An event says what caused it.** On the Events page a row that a pin caused carries
+  a chip beside its status — *set*, *edited*, *maintenance ended*, *line silenced*,
+  *line's maintenance ended* — and a status that a line's pin began says so on the
+  Time card and in the Copy document: *since …, when a line was silenced*. A node's
+  pin is written from what the node showed, which with a line pinned is not what its
+  check reports, and a new pin always writes its set. The kept event log gains two
+  keys per event, its cause and what the check reported
+  ([ADR-0107](docs/adr/0107-an-event-is-a-change-of-what-a-node-shows.md)).
+- **A pin is one block on a node's own page and on the Maintenance page, and it is
+  edited there.** A leaf's status card stated a pin in a strip cut off after two lines,
+  and a card at the foot of the page stated it again beside its buttons; every line
+  that can be pinned ended in *Set maintenance*, whose editor floated over the lines
+  beneath; and the Maintenance page listed the pins in a table, where changing one
+  meant following its link. The pin is one block now — at the top of the status card
+  for the node, framing every line it covers, and beneath its line for a line: who
+  silenced it, until when and what is left (*until 2026-10-03 20:44:28 · 1d 23h left*),
+  its note in full, and for an admin *Edit* and *Clear*. A viewer reads the same block
+  without the buttons. *Set maintenance* is one button on the status line and a pause
+  mark at each such line's end; each opens its editor in place, and the editor's first
+  sentence says what the pin covers. The editor calls the pin's text its *note*, and
+  opens with the cursor at the note's end. Setting, editing or clearing a line's pin
+  comes back to that line, marked, where a write from a node's page returned to the
+  top of the page — a long way from the line on a node with many. The Maintenance
+  page states the same blocks, grouped under each node's path — the whole node first,
+  then its lines in the check's order, each naming its line — with who pinned a pin
+  and who last changed it beneath its note; an admin edits and clears a pin there, and
+  the page comes back with that node marked. The card at the foot is gone from a
+  leaf's page
+  ([ADR-0104](docs/adr/0104-a-pin-is-one-block-on-what-it-silences.md)).
+- **The wall and a branch's page edit a pin in place, and the refresh waits.** A card
+  on the wall stated its node's pin in a strip cut off after two lines, and its pause
+  mark opened a dialog that floated over the wall; a branch's page stated its node's
+  pin a second time in a card at its foot, for an admin only. A pinned card states
+  its pin as the block now, note in full, and a box inside a card does the same; an
+  admin's *Edit* and *Clear* show while the card is hovered or the keyboard is on
+  them. An unpinned card's pause mark opens the pin's editor in the card, and its
+  first sentence names what the pin covers — *hemulen and everything beneath it*. A
+  branch's page states its node's pin in its head, above the children it covers, and
+  an admin sets one from there with *Set maintenance*; an admin's page of a branch
+  has that head even where the node has nothing of its own to say. A write from a
+  card or from a head comes back to the page as it was asked for, with its filters
+  and its depth. The editors stand inside what the ten-second refresh swaps, so the
+  refresh waits while one is open: the line above the grid says *paused while
+  editing* at once, and after a minute the page dims, all of it but the card or the
+  head being edited, as a page that lost its server does. When the editor closes the
+  line drops the words and the next refresh brings the page up to date; a page that
+  had dimmed is refreshed at once. The card at the foot of a branch's page, the
+  wall's dialog and its script are gone
+  ([ADR-0104](docs/adr/0104-a-pin-is-one-block-on-what-it-silences.md)).
+- **An edit keeps a pin's expiry unless its field is changed.** An edit that left the
+  expiry field as it found it — blank — renewed the pin for the configured default
+  from now, so correcting a word in a note moved a pin with two days left to seven.
+  Every editor of a pin — on a node's page, on the Maintenance page, in a card on the
+  wall and in a branch's head — now fills the field with the stored expiry. Left as
+  filled it keeps that instant exactly; emptied it means the default from now, as on a
+  new pin; anything typed is read as before, and so is every post of a hand-rolled
+  client, which names no filled value. A save that changes neither the note nor the
+  expiry writes nothing: the pin keeps its last author and its token, so nobody is
+  recorded as having changed it and another editor of it that is open elsewhere is not
+  refused as stale
+  ([ADR-0104](docs/adr/0104-a-pin-is-one-block-on-what-it-silences.md)).
+- **A readings table keeps its times and names in view.** History lists every reading a
+  node's checks keep in a box as wide as the page that scrolls both ways inside itself,
+  its heading row and its Time column held still, the reading's cue beside its time; the
+  Series view's tables sit in the same box. A field a check's measures declare is headed
+  by its label and unit over the field's name — *Memory in use · %* over `mem_pct` — and
+  those columns come first. Where the log holds no change of a node, History no longer
+  says *No status changes recorded*: a container says it declares nothing of its own, and
+  a node a check has written shows the period that holds, from when it began or from
+  *before* its bound ([ADR-0102](docs/adr/0102-a-readings-table-keeps-time-and-names-in-view.md)).
+- **A status that still holds says since when.** A node's Time card read *Status error
+  from 09:12 until 17:45*, where the later time was only the latest reading, and *from
+  19:32:39 until 19:32:39* whenever that reading began the period. It says *Status error
+  since 09:12* and, on a line of its own, *Last observed 17:45* now, and the node's Copy
+  document says the same; History writes *current* in the *Until* of the period that
+  still holds, and a stale node says when it was last *observed* rather than checked.
+  When a period began is kept beside the event log, so a node whose one transition the
+  bounded log has dropped still says *since* it, where it said only *Observed …*. And a
+  node's first reading is no change the instance saw: a new check's node says *Status ok
+  since before 18:51*, its first reading, on its Time card, in its Copy document and in
+  History's row, and keeps that until it changes; the instance's own node begins with
+  its process and says *since*
+  ([ADR-0099](docs/adr/0099-a-status-that-still-holds-says-since-when.md)).
+- **System is two pages.** *Running*, at `/system`, is which instance this is, its
+  engine's figures and every check's schedule, refreshing itself as before; *Installed*,
+  at `/system/installed`, is what the installation settled at startup — check types,
+  packages, extensions, the ways in and the Content-Security-Policy — every section
+  open under an index. The schedule is a row per check, its type and what it is reached
+  through beneath its path, and splits *Declared* — the type's estimate — from *Seen*,
+  the heaviest record the last run carried, which it used to put in parentheses beside
+  it ([ADR-0100](docs/adr/0100-system-is-two-views.md)).
+- **A node says what it is once, folded.** A leaf's page showed its `about` twice —
+  beneath its title and again as *About:* in its status card — and every other view of
+  a node showed it in full. Each view shows it once now, beneath the title, folded
+  behind a line that names it and shows how it begins.
+- **The `file` check writes a long age in days.** *stale: last changed 82d 19h ago (max
+  20m)* where it wrote *1987h14m*, and the maximum as it was configured — *1w*, in the
+  reason and in the check's configuration, where it wrote *168h00m*.
+- **A check's log line says what its run rolls up to** where that differs from the
+  node's own code: `check /host: UNDEFINED, rolls up to ERROR (1234 ms)` for a host
+  whose metrics grade its children, which said `UNDEFINED` on every run. A leaf's line
+  is unchanged.
+- **Three records key their things by name — a break for a consumer that reads an
+  indexed key.** `host-metrics`' `disk_count` and `disk{i}_*` are `volumes:
+  {<name>: {path, pct, avail_kb, total_kb}}`, `qnap-metrics`' `drive_count` and
+  `drive{i}_*` are `drives: {drive<bay>: {bay, temp_c, smart}}`, and `macos-memory`'s
+  `proc{i}_*` are `processes: {<name>: {count, rss_kb, elapsed_seconds}}` — each
+  keyed by the name of the node it becomes, so a curve follows its thing when the
+  order moves. The API's `record` is free-form in each check's own keys, so the
+  contract's version does not move. Readings kept before the release keep their shape,
+  and the new curves start at it ([ADR-0096](docs/adr/0096-a-measure-names-its-node-and-its-things.md)).
+- **A curve marks a reading that failed, and only that.** A reading is marked where its
+  record carries an `error` — which the three metrics types now write for a script that
+  exited non-zero or answered with nothing they can read, in the sentence their node
+  has always said — and a reading that answered without a number breaks the line with
+  no mark. A curve's summary counts the failed readings ([ADR-0096](docs/adr/0096-a-measure-names-its-node-and-its-things.md)).
+- **The readings move off a node's page** to its Series view, which lists the newest
+  `reading_cap` of each series; the History page takes the node's title and tabs and
+  keeps every reading of each check mounted there, and the Time card's History button
+  gives way to the tab ([ADR-0097](docs/adr/0097-a-nodes-series-have-a-view-of-their-own.md)).
+- **`macos-memory` writes its sizes as the family does**: `1.4 GiB used of 3.0 GiB
+  allocated`, `412.0 MiB RSS over 1 process` — the figure its curve writes beside it,
+  where it said `1419 MB` and `412 MB`. The grading does not move ([ADR-0096](docs/adr/0096-a-measure-names-its-node-and-its-things.md)).
+- **The Links page folds its setup guide, and a page that has links keeps the icon
+  names.** With no links the page was the guide in full — a sample file, where to put
+  it, every installed icon name with both its drawings and how to add a mark — more
+  than a screen at a desk and two on a phone. It opens with one sentence now, *No
+  links yet*, and two folds, closed: *Add links*, and *Icon names*, which says how
+  many are installed. A page that has links carries *Icon names* at its foot, where
+  the roster used to go with the empty state and a name had to be guessed or read
+  from the log. Every reader gets the same page
+  ([ADR-0030](docs/adr/0030-curated-links.md)).
+- **A Copy document says where it is from, when it was made and since when.** What
+  somebody pastes into a ticket is read by somebody who was not at the page. Every
+  document — the tree's, a node's and a line's — now carries *Dashboard*, the address
+  of the page it was made from, and *As of*, the instant it was made, and each finding
+  the tree's document lists says since when: *disk ⛔ — error since 2026-10-03 16:09:40
+  +02:00*. The tree's document opens with a head and a count — *Needs attention — 6 of
+  12 nodes: 2 error ⛔, 3 warn ⚠️, 1 maintenance 🛠️* — and a tree that is well has one
+  too, *Nothing needs attention — all 12 nodes are ok.*, where the page offered none.
+  `/copy/<branch>` for a node with nodes beneath it hands over what is beneath it: what
+  the branch shows and where that comes from, how many of its nodes need attention, and
+  those with their lines — where it read *Reported: undefined* for a host above a full
+  disk. Every node's views carry a **Copy** tab beside Status, Series and History that
+  leads to its document, the overview's to the tree's; the Copy page stands in the
+  node's band as its other views do, and says which document it holds. The tab is the
+  one way to a node's document: **a leaf's page no longer carries the two Copy
+  buttons**, and copying a leaf is the tab and then the button, on a page that shows
+  the document first
+  ([ADR-0115](docs/adr/0115-a-copy-document-says-where-it-is-from-and-since-when.md)).
+
+### Fixed
+
+- **A volume its host names like an aspect is shown as a volume.** Where `disk_path` is
+  `all` or a list, `host-metrics` names each filesystem's node by its mount, and one
+  mounted at `/mnt/memory` or `/mnt/cpu` wore that aspect's `about`, and a `title` a
+  deployment gave the aspect in its `subnodes:` block. A volume's node now says that the
+  host names it, and carries the `disk` aspect's `about` as every volume does. **A
+  `subnodes:` entry written under a volume's own name no longer labels the volume**:
+  write it under the volume's path in `nodes.yaml`
+  ([ADR-0118](docs/adr/0118-a-child-a-run-names-takes-nothing-declared-for-its-name.md)).
+- **An opened fold of the Series index keeps its row together.** With a node's curves
+  unfolded, its name and its links stood in the middle of a row five curves tall, far
+  from the line they belong to; every cell of the row now stands at its top. On a
+  window of 1400 pixels or more the three numbers beneath a strip keep one line.
+- **The instance's own pill above the wall holds on a phone.** With a title on the
+  instance's node the pill had no room on a narrow screen: its name broke in two or its
+  state took a second line, and the title was squeezed to a few letters. The name and
+  the state no longer break, and the title is shown at its own width or steps out
+  whole; the node's page and its inspection card still say it.
+- **A Series view says whose readings draw no curve.** Where a check keeps readings
+  of a subject that has no node of its own — its node was removed, or its line shares a
+  node with another's — the view named them as the check's: *batch keeps 11 readings and
+  draws no curve*. It names the subjects now, the first three and how many more, and
+  says how many of the readings are theirs.
+- **About fits a narrow window.** The rings of words around the eyes were as wide as a
+  share of the window, which the page is narrower than by the rail and its margins: in a
+  window of 1000 pixels and narrower the words at a ring's two ends were cut and the page
+  scrolled sideways. A ring is as wide as the page allows now, with room for the word at
+  its end.
+- **On a phone a curve opens at its newest end.** A drawing is never scaled below the
+  width its axes can be read at, so in a phone's card it scrolls sideways in its frame —
+  and the frame opened at the oldest reading, with the newest out of sight. It opens at
+  the drawing's right end now, on a node's page and in a Series view, and on a page that
+  refreshes itself a frame stays where it was scrolled to.
+- **A node's wait before it escalates counts what the node shows.** With
+  `escalate_after` above 1 the counter counted the code a check reports, which with a
+  line in maintenance is not what its node shows. A silenced line that kept failing
+  spent the wait, so the first failure of another line reached the level above at
+  once; one that flapped restarted the count at every reading, so a failure the node
+  showed never got there; and the node's card said *1 of 3 to escalate* over a green
+  node. The counter counts the node's own status now, and a change that a pin made,
+  set or ended, is published at once: only a reading starts a wait
+  ([ADR-0108](docs/adr/0108-the-wait-before-an-escalation-counts-what-a-node-shows.md)).
+- **A restart neither re-arms a node's wait nor rewrites a quiet node's history.** What
+  a node last showed was read from the event log's rows, and the log is bounded: a node
+  whose last change had left it was written `undefined → ok` again at every restart, so
+  its Time card said *since* the restart and those rows pushed real ones out of the log.
+  And the counter behind `escalate_after` began every process empty, so a node's first
+  reading after a restart was published at once: a failure a restart found reached the
+  level above without its wait. `var/state/events.json` now says, beside its rows, what
+  every node shows, what its check last reported and when its period began. A restart
+  reads that: a node reading what it read writes nothing, however long ago it last
+  changed, and its Time card goes on saying *since* when — or *since before* the bound
+  it was given, which no longer moves as the log drops rows — and a node's wait counts
+  from what it last showed, so a failure a restart finds waits like any other and one
+  that stood before stays published. What the file says of a node that no configured
+  check covers is dropped at startup. The live demo starts every scenario part-way into
+  its cycle where
+  `LITTLE_SISTER_DEMO_OFFSET` says so (`36s` finds its build failed), which is how a
+  start finds a failure there
+  ([ADR-0110](docs/adr/0110-what-every-node-last-showed-is-kept-beside-the-log.md)).
+- **The event log says when a failure that waited reached the level above.** With
+  `escalate_after` above 1 a node's failure is written when the node shows it, marked
+  *damping*, and the reading that completed its wait wrote nothing: the Events page
+  listed a failure that turned the wall red as *held back*, and with *held back* off
+  its newest row of such a node was the node's last recovery. That reading writes a row
+  of its own now, the status the node shows with the chip *reached*: it begins no
+  period and counts as no status change, and the log holds one row more for each wait
+  that completes. A wait that ends another way writes what it wrote, and one that
+  completes behind a failing dependency writes nothing. `var/state/events.json` says in
+  its table what a waiting node publishes, so a wait under way at a stop goes on after
+  the restart, counted from the reading its held row records, where a restart cut it
+  short: a wait of two readings ends at the first reading afterwards, as before, and a
+  longer one keeps waiting
+  ([ADR-0119](docs/adr/0119-a-wait-that-ends-by-its-count-writes-a-row.md)).
+- **The log says what a node showed where a line is silenced.** A line's pin wrote no
+  event, and the log followed the code a check reports: pinning a node's one failing
+  line turned it green with nothing written, a pinned line that failed again wrote
+  *error*, unmarked, over a green node, and History and the Time card said what the
+  wall did not show. An event is a change of what a node shows now, whatever caused it
+  — a reading, the node's pin, a line's pin set or ended — and a change of the reading
+  that the node does not show is a row of its own, held back, also where only some of
+  its lines are pinned. Nothing is written for a line by itself.
+- **A pin that ran out while the instance was down ends in the log.** A node's first
+  reading after a restart was compared with what the log last reported and not with
+  what it last showed, so the end of such a pin wrote nothing and History said
+  *maintenance*, *current*, over a node that showed its reading. The first reading is
+  compared with both and writes the pin's end; a branch's pin, which no reading ends,
+  ends at its own expiry.
+- **An edited pin is one period.** Every event of a node began a period, and an edit of
+  a pin is an event: a node silenced at 11:19 whose note was corrected a minute later
+  read *maintenance since 11:20*, and History listed two maintenance periods. A period
+  is a run of events that show the same status now. The Time card and the Copy document
+  say *since* the pin was set, also once the set has left the log, and History shows one
+  row; the Events page lists every edit, as it did
+  ([ADR-0099](docs/adr/0099-a-status-that-still-holds-says-since-when.md)).
+- **A pinned node says *since* when it was pinned, also after a start that had lost the
+  pin's event.** A start whose kept log no longer held a pin — its event evicted by the
+  log's bound, or the log lost — wrote the pin's event again, dated that start, and the
+  node's period began there: its Time card said *maintenance since* the start, days
+  after the instant the pin's own block states. The period begins at the pin's creation
+  now, which `var/state/maintenance.json` keeps; the event stays dated the start that
+  wrote it. A pin set or edited while the instance runs dates its event as the store
+  dates the pin
+  ([ADR-0110](docs/adr/0110-what-every-node-last-showed-is-kept-beside-the-log.md)).
+- **A maintenance row in History shows the pin's note as it last stood.** The row that
+  holds showed the node's own lines, and nothing on a pinned branch, where an ended one
+  showed the note the pin was set with. Both show the note as it last read; what the
+  check says beneath a pin stays on the node's Status page.
+- **A status that began where a pin ended says so.** A node ok for days read *ok since
+  11:29* after ten minutes under a pin, as if it had recovered then. Its Time card and
+  its Copy document say *since 11:29, when its maintenance ended*.
+- **A pin on the instance's own node survives a restart.** At a start the pins that no
+  configured check covers are reaped, and the instance's own node and what stands
+  beneath it are no check's: a pin on `/little-sister` or on one of its children, a
+  node's or a line's, came back and was dropped at once, the log naming it an orphaned
+  pin. The reaping takes the instance's own line beside the checks'
+  ([ADR-0014](docs/adr/0014-maintenance-persistence.md)).
+- **A phone lays a page out at its own width.** No document declared its viewport, so a
+  phone drew every page 980 pixels wide and scaled that to its screen — the wall at two
+  fifths its size — and never reached a narrow layout. Every document declares the
+  device's width at its own scale now, and says nothing about zooming
+  ([ADR-0105](docs/adr/0105-a-page-is-laid-out-at-its-screens-width.md)).
+- **No page is wider than a phone.** At a phone's width a page scrolled sideways as a
+  whole, its bar and rail with it: by the band's filters, which could not wrap; by the
+  tables of Events, History and both System views; by the trail of a node four levels
+  down, kept on one line; and by a name or a word with nowhere to break — on a card of
+  the wall, where it ran out of its card on a desk too, in a pin's sentence and in the
+  Copy page's heading. Each table scrolls inside a box of its own now, where on a phone
+  a reason keeps a line's worth of width and System's schedule keeps its place over
+  each refresh; the filters, the trail, the node's title and the wall's strip take
+  another line; and such a name breaks inside itself. On a desk nothing else moves.
+- **A blank note on an edit keeps the stored one from a page's own form too.** A page's
+  form names its node without the leading slash, and the stored text was looked up at
+  the path as posted, where nothing is stored: emptying the note in a node's
+  maintenance card wrote the placeholder *maintenance* over the explanation, where a
+  blank is meant to leave it alone. `StatusTree.maintenance_entry` reads a path as
+  every write there does, with or without the slash.
+- **A refused maintenance write names its node one way.** The page that answers a
+  stale form or an expiry it cannot read headed itself with the path as the form had
+  posted it — *ci/actions* from a node's own page, */ci/actions* from the wall — and
+  heads itself with the node's path as every page writes one.
+- **A pin's expiry is not broken inside its date.** In a narrow card the block's
+  sentence ended a line after a hyphen of the date — *until 2026-10-*, and the day on
+  the next line with the time. The date and the time of day each stay on one line now,
+  in the sentence and where the block says who pinned it and when, and a line may end
+  between them; with a `time_format` of more words, each word stays whole.
+- **No inspection card over a pin that is being written.** A card's pause mark, and *Set
+  maintenance* in a branch's head, give way to the editor they open, which left the
+  pointer on the node's row: the node's inspection card came up over the card above and
+  stood there while the note was typed. A row with an editor of its pin open in it
+  raises no inspection card now; when the editor closes, the row answers as before.
+- **The Series index writes no reading's time.** It drew every curve the instance
+  keeps in full only to print their labels — 65 curves and 36,754 formatted times over
+  a day of 17 series' readings, which took more than two seconds on macOS — and now
+  draws each small, over sixty columns, with no instant written. A
+  Series view no longer draws its curves twice, and a node's page, which its poll
+  renders again every ten seconds, draws the curves that stand on it rather than every
+  curve beneath it. What each page shows does not change.
+- **A Series page writes each reading's time once.** A curve titles a hover strip with
+  the time of every reading it is drawn over, and the curves of one series are drawn
+  over the same readings: a view of a host's 11 curves over two series formatted 7,964
+  times for 1,440 instants, at some 60 µs each on macOS. Its curves, its range and its
+  tables of readings now share one writing of each instant while the page is
+  rendered, and a node's page does the same for its curves. Nothing shown changes.
+- **Empty Series views say “No curves to display.”** They no longer print a blank
+  time range; retained-reading counts and History links remain available.
+- **System says “1 entry”** for a singular declaration, keeping plural counts and
+  absent declarations distinct.
+- **A node that declares nothing of its own says so in its Copy document too.** A host
+  above its metrics leaves its own code undefined while its children grade, so it has
+  no status of its own for a period to name, and its page says *Observed …*. Its
+  `/copy/<branch>` document wrote *Status undefined from … until …* instead once the
+  node's own code had changed at all — a host that failed to answer and then answered.
+  Both take the period from one place now.
+- **A wall the filters emptied says what they hid.** With *hide ok* on and nothing
+  wrong, the overview said *No checks reporting yet match the current filters*, as if
+  nothing reported at the moment everything did and was well. It says *All 14 nodes
+  are ok.* now, *idle* for what *hide idle* hid and both counts where both did —
+  *11 nodes are ok and 3 are idle.* — and a branch's page says the same of the nodes
+  beneath it. *No checks reporting yet.* is left to an empty tree.
+- **Hiding every child no longer hides the node.** With *hide ok* or *hide idle*
+  dropping every child of a branch, its page said only *No checks match the current
+  filters*, and the node's own head, Time card, report and configuration went with the
+  children. The filters drop children; the node keeps its place, and the grid says
+  what they hid.
+- **The state layer no longer holds a copy of every file it keeps.** To skip a save
+  that would change nothing it kept the text it last wrote of each kept file — the
+  series' whole `series.json` among them, some megabytes at a day of readings and
+  about 13 MiB at the default `series_limit` — for the life of the process. It keeps a
+  digest of it now, and an unchanged file is still left alone.
+- **Copy Rich HTML copies rich HTML over plain http.** On an instance reached by a
+  host's name over `http`, the button answered *Rich HTML is unavailable; Markdown
+  copied instead* in every browser: the clipboard interface it wrote through exists
+  only on `https` and on the machine's own address. There it now copies through the
+  browser's copy event, with the same two members — the rendered document and its
+  Markdown.
+- **The tree's Copy document no longer skips what a branch holds itself.** A pin on a
+  container was not in it, so everything the pin silences read as alarming; and a
+  container with a status of its own above healthy nodes — a gateway that itself
+  answers 503, or one whose check has stopped — was not in it at all. A branch's line
+  carries its pin, its own status and its own lines now, and says *stale* where its own
+  reading is.
+- **A pinned node that no check has written states its period.** Its Time card and its
+  Copy document said *Not yet observed* and nothing else, of a node that has shown
+  *maintenance* since its pin. Both say *Status maintenance since …* now, and the
+  document no longer calls what the pin stands over a measurement. A pinned container
+  that no check has written had no Time card on its page at all, and has one now,
+  beneath its children.
+
 ## [0.3.18] - 2026-09-27
 
 **Every gunicorn line needs one flag now: `--config python:little_sister.gunicorn_hooks`.**

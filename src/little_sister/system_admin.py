@@ -244,7 +244,7 @@ def use_system_admin(*, reference: str = "", password: str = "") -> None:
             "system-admin",
             plain(f"the system-admin password {reference!r} did not resolve "
                   f"({error}); that door is shut and the application keeps "
-                  f"serving — /system says so too"))
+                  f"serving — /system/installed says so too"))
         return
     _register(SystemAdmin(value, keyword=BY_REFERENCE, reference=reference))
     logger.info("System-admin account configured from %r.", reference)

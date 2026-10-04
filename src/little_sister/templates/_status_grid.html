@@ -34,30 +34,49 @@
 {%- if node.own_code.name == 'MAINTENANCE' and node.reported_code.name not in ('MAINTENANCE', 'UNDEFINED') %} <span class="status-reported">{% if word %}maintenance {% endif %}· {{ node.reported_code.name.lower() }}</span>{% endif -%}
 {%- if node.damping %} <span class="status-reported">· {{ node.damping.seen }} of {{ node.damping.needed }} to escalate</span>{% endif -%}
 {%- endmacro %}
-{#- Why the node is blue: who pinned it, until when, and their explanation. It sits
-    **above** the reason block and outside the ``reason_cap`` clamp, so the reason
-    for the color can never be the thing that gets clipped — the placement rule the
-    quiet count already follows. Paints its own maintenance tint, like every other
-    maintenance surface, so it does not depend on the card fill under it. -#}
-{% macro pin_banner(node) -%}
-{%- if node.maintenance_entry %}<div class="pin-banner">Silenced by <strong>{{ node.maintenance_entry.set_by or 'an admin' }}</strong> until {{ node.maintenance_entry.expires_at | localtime }}{% if node.maintenance_entry.reason and node.maintenance_entry.reason != 'maintenance' %}<span class="pin-banner__reason"> — {{ node.maintenance_entry.reason | markdown_inline }}</span>{% endif %}</div>{% endif -%}
+{#- Why the node is blue: the pin's block (ADR-0104 decisions 1 and 2), as the node's
+    own page states it — who silenced it, until when and what is left, its note in
+    full, and for an admin *Edit* and *Clear*. It stands **above** the reason block
+    and outside the ``reason_cap`` clamp, so the reason for the color can never be
+    the thing that gets clipped — the placement rule the quiet count already
+    follows — and it paints its own maintenance tint, like every other maintenance
+    surface, so it does not depend on the card fill under it. A card's head names
+    the node, so the sentence opens with what was done to it (`bare`).
+
+    ``pinning`` is what every pin on the page shares: whether the reader may write
+    one, the address a write comes back to, and the count that gives each editor
+    ids of its own — a wall carries an editor for each card, and a label finds its
+    field by id. -#}
+{% macro pin_stated(node, pinning) -%}
+{%- if node.maintenance_entry -%}
+{%- set pinning.count = pinning.count + 1 -%}
+{{ pin_block(node.maintenance_entry, 'node', node.path, '', 'pin-' ~ pinning.count, pinning.may, next=pinning.back, of=node.path, bare=true) }}
+{%- endif -%}
 {%- endmacro %}
 {#- The **viewed** node's own state, above its children.
 
     A subtree page is a dashboard *of the children*, which left the one node you
     actually navigated to as the only one on the page that never said anything about
-    itself. A pin on it surfaced solely through the maintenance card at the foot of
-    the page — in different words, with the reason tucked inside a form field, and
-    `{% if is_admin %}`, so a viewer got nothing at all. `depth=0` already drew the
-    viewed node as a card; this is the same thing at every other depth, which also
-    ends the page disagreeing with itself as the depth control moves.
+    itself. `depth=0` already drew the viewed node as a card; this is the same thing
+    at every other depth, which also ends the page disagreeing with itself as the
+    depth control moves.
 
-    Silent when the node has nothing of its own to add: a container with no reading,
-    no reasons and no pin is exactly the page that should open with its children. It
+    **The node's pin stands here** (ADR-0104 decisions 2 and 3): its block, above the
+    children it covers, and for an admin the one control that sets it — *Set
+    maintenance*, which opens its editor where the block will stand. The form posts
+    the page's own `branch`, as a leaf's page does. The card at the foot of the page
+    said the pin a second time, in different words and to an admin only; it went
+    when the head took this over.
+
+    Silent when the node has nothing of its own to add **and the reader cannot pin**:
+    a container with no reading, no reasons and no pin is exactly the page that should
+    open with its children. An admin gets the head on every branch's page, because
+    the control needs its place. The caller decides (`head_drawn`, where the page is
+    drawn), since what the head shows is also what the cards beneath it suppress. It
     reports **own** status, not the roll-up — the children are directly below and say
     that themselves. Rendered as a `status-node` so it takes the same fill and ink as
-    any box, and kept **inside `#status-grid`** so it refreshes on the ~10s poll; the
-    maintenance card stays outside, deliberately, because it holds an open form.
+    any box, and kept **inside `#status-grid`** so it refreshes on the ~10s poll —
+    which waits while an editor in it is open (decision 7).
 
     **A node that declares nothing is the exception.** Its `UNDEFINED` is a
     container's, which the roll-up skips (ADR-0039), and not a status: one that carries
@@ -67,9 +86,7 @@
     pale as its card is where its children show, because the culprit is right below;
     that is also the code a kept reading records for it (ADR-0087 decision 8). A
     roll-up of nothing is `UNDEFINED`, the node's own again, and says so. -#}
-{% macro viewed_head(node, reason_cap) -%}
-{%- if node.maintenance_entry or node.reason or node.stale
-       or node.own_code.name != 'UNDEFINED' %}
+{% macro viewed_head(node, reason_cap, pinning, branch) -%}
 {%- set rolled = node.own_code.name == 'UNDEFINED' and node.code.name != 'UNDEFINED' %}
 {%- set head_code = node.code if rolled else node.own_code %}
 <div class="status-node viewed-head s-{{ head_code | status_slug }}{% if rolled %} dim{% endif %}">
@@ -81,10 +98,20 @@
             (ADR-0044): seven aspect cards repeating one check's run time invite a
             reader to think the seven were checked separately. -#}
         <span class="viewed-head__state">{{ card_time(node) }}{{ head_code.name.lower() }}{{ reported_suffix(node) }}</span>
-        {{ pin_banner(node) }}{{ reason_block(node, reason_cap) }}
+        {%- if node.maintenance_entry %}
+        {{ pin_block(node.maintenance_entry, 'node', branch, '', 'head-maintenance', pinning.may, next=pinning.back) }}
+        {%- elif pinning.may %}
+        {#- What the pin would cover, as its editor's first sentence says it: the
+            node whose page this is, and with it every node beneath. -#}
+        {%- set covers %}It silences everything beneath it: nothing under here will alarm before the pin expires. Its checks keep running, their colors stay visible here, and they count again when the pin clears.{% endset %}
+        <details class="maintenance-editor-disclosure rule-setter">
+            <summary class="rule-button rule-setter__toggle">{{ rule_mark('maintenance') }}Set maintenance</summary>
+            {{ pin_new('node', covers, branch, '', 'head-maintenance', next=pinning.back) }}
+        </details>
+        {%- endif %}
+        {{ reason_block(node, reason_cap) }}
     </div>
 </div>
-{%- endif -%}
 {%- endmacro %}
 {#- A coded line (ADR-0042) carries the entry's **own** claim: its state class, a
     small labeled cue (a line has no status word, so the cue is its accessible name),
@@ -104,8 +131,8 @@
 {%- endfor %}
 </div>
 {#- Under a **node** pin everything here is silenced already, so this count is not
-    the reason the card is blue — the banner is. It says what will still be quiet
-    once the node pin is cleared, which is the one thing the banner cannot. -#}
+    the reason the card is blue — the pin's block is. It says what will still be
+    quiet once the node pin is cleared. -#}
 {%- if node.quiet_reasons %}<div class="reason-quiet-count">{{ node.quiet_reasons }} of {{ total }} {% if node.maintenance %}also pinned individually{% else %}in maintenance{% endif %}</div>{% endif -%}
 {%- endif -%}
 {%- endmacro %}
@@ -114,6 +141,10 @@
     the labeling rule are documented there. -#}
 {% from '_status_cue.html' import status_cue %}
 {% from '_next_update.html' import next_update %}
+{#- A pin's block and its editor are the rule's own (ADR-0104), imported with the
+    context for the deployment's default window and its timezone that an editor's
+    fields print — so the refresh's fragment is handed both, as the page is. -#}
+{% from '_rule_block.html' import pin_block, pin_new, rule_mark with context %}
 {#- Maintenance pip: a click-to-open marker on a card whose subtree holds a
     pinned node but which is not itself pinned — a glance at any depth shows where to
     drill, and a click opens a popover (maintenance.js) listing that card's pins as
@@ -165,23 +196,24 @@
 {%- endfor %}
 </ul></template>
 {%- endmacro %}
-{#- The admin pin control (ADR-0014): a card head's door to maintenance — an
-    outline pause-bars link to the node's own page (the no-JS fallback carries the
-    form), upgraded by pin.js to the #pin-card dialog. Quiet until the card is
-    hovered (CSS), always visible to keyboard focus. Cards only, deliberately: a
-    deep box's subtree page carries the maintenance card, one drill-down away.
-    Data attributes carry what the dialog needs; a pinned card's control also
-    says when the pin ends, who pinned it, its stored reason and its `set_at` —
-    the reason so the dialog can prefill an edit rather than make the admin
-    retype it, and the `set_at` because it is the compare-and-set token the
-    write has to carry (ADR-0014). -#}
-{% macro pin_control(node) -%}
-<a class="pin-control" href="{{ url_for('status', branch=node.path | url_branch) }}"
-   role="button" aria-haspopup="dialog" aria-expanded="false"
-   aria-label="maintenance for {{ node.path }}"
-   data-pin-path="{{ node.path }}" data-pin-name="{{ node.name }}"
-   {%- if node.children %} data-pin-kids="1"{% endif %}
-   {%- if node.maintenance_entry %} data-pin-pinned="1" data-pin-expires="{{ node.maintenance_entry.expires_at | localtime }}" data-pin-by="{{ node.maintenance_entry.set_by }}" data-pin-reason="{{ node.maintenance_entry.reason }}" data-pin-token="{{ node.maintenance_entry.set_at }}"{% endif %}><svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" focusable="false"><rect x="4" y="3.5" width="2.7" height="9" rx="0.7" fill="none" stroke="currentColor" stroke-width="1.5"/><rect x="9.3" y="3.5" width="2.7" height="9" rx="0.7" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></a>{% if node.maintenance_entry and node.maintenance_entry.reason and node.maintenance_entry.reason != 'maintenance' %}<template class="pin-control__reason-source">{{ node.maintenance_entry.reason | markdown }}</template>{% endif %}
+{#- An admin's way to pin a card (ADR-0104 decision 3): a pause mark in the card's
+    head that opens the pin's editor **in the card**, where its block will stand. The
+    browser's own disclosure, so it works without script, and the mark is its
+    summary. Quiet until the card is hovered (CSS), always visible to keyboard
+    focus. Cards only, deliberately: a box inside a card states the pin it has, and
+    is pinned from its own page, one step away. A pinned card has no mark; its block
+    carries *Edit* and *Clear*.
+
+    The editor's first sentence says what the pin covers, and a pin on a node covers
+    everything beneath it whether or not this page shows it. ``containers`` is read
+    before *hide ok* or *hide idle* drops a child, so a card the filter left with
+    no children still says *and everything beneath it*. -#}
+{% macro pin_setter(node, pinning, containers) -%}
+{%- set pinning.count = pinning.count + 1 -%}
+<details class="maintenance-editor-disclosure pin-setter">
+    <summary class="pin-control" title="Set maintenance" aria-label="set maintenance for {{ node.path }}"><svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" focusable="false"><rect x="4" y="3.5" width="2.7" height="9" rx="0.7" fill="none" stroke="currentColor" stroke-width="1.5"/><rect x="9.3" y="3.5" width="2.7" height="9" rx="0.7" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></summary>
+    {{ pin_new('node', '', node.path, '', 'pin-' ~ pinning.count, what=node.name ~ (' and everything beneath it' if node.path in containers else ''), next=pinning.back) }}
+</details>
 {%- endmacro %}
 {#- Branch density (ADR-0024): render one level of a card's descendants — a quiet
     leaf as an inline chip, everything else as a box — and, in the dense view, cap the
@@ -202,7 +234,7 @@
     moves. The condition appears three times below because the chip-run wrapper has
     to agree with it about the neighbors, or a declared node between two chips would
     leave the run's ``<span>`` open. -#}
-{% macro render_nodes(children, depth0, parent_path, dense, max_depth, branch_cap, reason_cap, shown_time="") -%}
+{% macro render_nodes(children, depth0, parent_path, dense, max_depth, branch_cap, reason_cap, pinning, shown_time="") -%}
 {%- set ns = namespace(quiet_boxes=0) -%}
 {%- for child in children -%}
 {%- if dense and not child.children and child.code.name not in ('WARN', 'ERROR')
@@ -264,10 +296,10 @@
                 duplicate the shape. -#}
             {%- set box_time = child.timestamp | localtime("%H:%M") if child.timestamp else "" -%}
             <span class="status-node__state">{% if child.stale %}<span class="status-stale">stale{% if not child.children %} · {{ child.age_seconds | elapsed }} ago{% endif %}</span> {% endif %}{{ card_time(child, shown_time) }}{{ child.code.name.lower() }}{{ reported_suffix(child) }}<button type="button" class="reason-chevron" tabindex="-1" aria-hidden="true"></button></span>
-            {{ pin_banner(child) }}{{ reason_block(child, reason_cap) }}
+            {{ pin_stated(child, pinning) }}{{ reason_block(child, reason_cap) }}
         </div>
         {%- if has_kids -%}
-        <div class="status-node__children node-children" data-branch="{{ child.path }}">{{ render_nodes(child.children, depth0 + 1, child.path, dense, max_depth, branch_cap, reason_cap, box_time or shown_time) }}</div>
+        <div class="status-node__children node-children" data-branch="{{ child.path }}">{{ render_nodes(child.children, depth0 + 1, child.path, dense, max_depth, branch_cap, reason_cap, pinning, box_time or shown_time) }}</div>
         {%- endif -%}
     </div>
 {%- endif -%}
@@ -280,6 +312,11 @@
             aria-expanded="false"><span class="branch-more__show">+{{ ns.quiet_boxes - branch_cap }} more</span><span class="branch-more__hide">show less</span></button>
 {%- endif -%}
 {%- endmacro %}
+{#- What every pin on this page shares (see `pin_stated`): the reader may write one
+    as an admin, and not on the kiosk, where nothing is to be clicked; a write comes
+    back to the page's own address, with its filters and its depth; and each editor
+    counts itself. -#}
+{%- set pinning = namespace(count=0, may=is_admin and layout != 'kiosk', back=here) %}
 {%- if maintenance_rows or (heartbeat is defined and heartbeat) %}
 {#- Status-strip band (ADR-0024): the self-monitor heartbeat pill and, to its
     left, the maintenance pill — a compact count that folds the always-visible
@@ -321,7 +358,11 @@
     </svg>
     <a class="ls-strip__name"
        href="{{ url_for('status', branch=heartbeat.path | url_branch) }}">{{ heartbeat.name }}</a>
-    {% set shown = heartbeat | node_title %}{% if shown %}<span class="node-title">{{ shown | markdown_inline }}</span>{% endif %}
+    {#- The title at its own width or not at all: its frame is one line high and
+        wraps, so a title with no room beside the name and the state goes to a
+        second line nobody sees, where it would have been squeezed to a few
+        letters. The node's page and its inspection card still say it. -#}
+    {% set shown = heartbeat | node_title %}{% if shown %}<span class="ls-strip__title"><span class="node-title">{{ shown | markdown_inline }}</span></span>{% endif %}
     <span class="ls-strip__state">
         {% if heartbeat.stale %}<span class="status-stale">stale</span>{% endif %}
         {{ status_cue(heartbeat.code) }}{{ heartbeat.code.name.lower() }}
@@ -330,24 +371,37 @@
 {%- endif %}
 </div>
 {%- endif %}
-{% if node is none %}
+{% if node is none and no_node %}
+    {% include '_no_node.html' %}
+{% elif node is none %}
     <div class="alert alert-warning">
         No such branch: <code>{{ branch }}</code>.
         <a href="{{ url_for('status') }}" class="alert-link">Back to status</a>.
     </div>
-{% elif not node.children %}
-    <p class="text-muted">
-        No checks{% if not branch %} reporting yet{% endif %}{% if hide_ok or hide_idle %} match the current filters{% endif %}.
-    </p>
+{#- The overview is nobody's node, so with nothing under it there is only the
+    sentence to show. A node's page is different: hide ok and hide idle filter its
+    **children**, and a filter that hides every one of them leaves the node itself —
+    its head, its card at depth 0, its own facts below — exactly where it was, with
+    the grid saying that nothing in it matches. They went with the children once,
+    and a page of one sentence could not say what the node was. -#}
+{#- Where the filters leave none of the nodes a page shows, it says what they hid
+    (`_nothing_left`): with hide ok on, the wall is the list of problems and empty on
+    a good day, which must read as all well rather than as nothing reporting. A
+    renderer that filters nothing passes no sentence. -#}
+{% elif not node.children and not branch %}
+    <p class="text-muted">{{ nothing_left | default("") or "No checks reporting yet." }}</p>
 {% else %}
-    {%- if branch and max_depth >= 1 %}{{ viewed_head(node, reason_cap) }}{% endif %}
-    {#- What the head displays is what the cards below suppress (ADR-0044): the
-        viewed head is the topmost visible node, and it renders exactly when it has
-        something of its own to say — which a written sole-check container does. -#}
+    {#- The head is drawn where the node has something of its own to say — which a
+        written sole-check container does — or the reader may pin it, and the head
+        carries the control (see `viewed_head`). Decided once, because what the head
+        displays is what the cards below suppress (ADR-0044): the viewed head is the
+        topmost visible node. -#}
+    {%- set head_drawn = branch and max_depth >= 1
+        and (pinning.may or node.maintenance_entry or node.reason or node.stale
+             or node.own_code.name != 'UNDEFINED') -%}
+    {%- if head_drawn %}{{ viewed_head(node, reason_cap, pinning, branch) }}{% endif %}
     {%- set head_shown = node.timestamp | localtime("%H:%M")
-        if (branch and max_depth >= 1 and node.timestamp
-            and (node.maintenance_entry or node.reason or node.stale
-                 or node.own_code.name != 'UNDEFINED')) else "" -%}
+        if (head_drawn and node.timestamp) else "" -%}
     {#- Stable flow spans (ADR-0056): the server derives useful width steps
         from rendered topology, depth and the configured reason-line budget — never
         current status or reason content — and prices each span at the width it
@@ -360,7 +414,11 @@
         ordinary auto-fill grid. Each card carries its one-track stable height and
         minimum-width useful steps for readable harness diagnostics. -#}
     {%- set grid_layout = dashboard_layout(node.children, max_depth, reason_cap)
-        if max_depth >= 1 and dashboard_columns == 'flow' else none -%}
+        if max_depth >= 1 and dashboard_columns == 'flow' and node.children
+        else none -%}
+    {%- if max_depth >= 1 and not node.children %}
+    <p class="text-muted">{{ nothing_left | default("") or "No checks reporting yet." }}</p>
+    {%- else %}
     <div class="status-grid"{% if grid_layout %} data-layout-breakpoints='{{ grid_layout.breakpoints | tojson }}'{% endif %}>
         {% if max_depth < 1 %}
             {# depth 0 — a single card for the viewed node: its rolled-up "overall" light #}
@@ -376,15 +434,23 @@
                         deployment's node action vanish at one depth setting while
                         its reason action stayed. -#}
                     <span class="node-actions">{{ slot('node.actions', node=node, surface='grid') }}</span></span>
-                    <span class="status-card__state">
+                    {#- At depth 0 this card is where the viewed node's pin stands, so
+                        it is set here too — on a node's page. The overview's card is
+                        every node there is, and silencing all of them from a form is
+                        a foot-gun: that pin is not set from the wall. One that stands
+                        is stated like any other, with *Edit* and *Clear*, as the
+                        Maintenance page states it. -#}
+                    {%- set settable = branch and pinning.may and not node.maintenance_entry %}
+                    <span class="status-card__state{% if settable %} status-card__state--seat{% endif %}">
                         {% if node.stale %}<span class="status-stale">stale</span>{% endif %}
                         {% if node.path in maintenance_ancestors %}{{ maintenance_pip(node.path, maintenance_rows) }}{% endif %}{{ card_time(node) }}{{ status_cue(node.code) }}{{ node.code.name.lower() }}{{ reported_suffix(node) }}<button type="button" class="reason-chevron" tabindex="-1" aria-hidden="true"></button>
                     </span>
+                    {%- if settable %}{{ pin_setter(node, pinning, containers) }}{% endif %}
                 </div>
-                {#- The panel also carries the pin banner, so a pinned node that
+                {#- The panel also carries the pin's block, so a pinned node that
                     reports nothing at all still says who silenced it and why. -#}
                 {% if node.reason or node.maintenance_entry %}
-                    <div class="status-panel">{{ pin_banner(node) }}{{ reason_block(node, reason_cap) }}</div>
+                    <div class="status-panel">{{ pin_stated(node, pinning) }}{{ reason_block(node, reason_cap) }}</div>
                 {% endif %}
             </div>
         {% else %}
@@ -406,41 +472,51 @@
                         lines — which is where it belongs when a node's reasons are
                         prose (ADR-0036). Offered on every card and declined by the
                         filler, like every slot; it collapses to nothing when
-                        nobody fills it. Cards only, like the pin control: a deep
+                        nobody fills it. Cards only, like the pause mark: a deep
                         box's own page carries it one drill-down away. -#}
                     <span class="node-actions">{{ slot('node.actions', node=system, surface='grid') }}</span></span>
-                    <span class="status-card__state">
+                    {#- The pause mark follows the state cluster, on a seat the
+                        cluster keeps for it, and opens its editor beneath the head
+                        line (`pin_setter`). -#}
+                    {%- set settable = pinning.may and not system.maintenance_entry %}
+                    <span class="status-card__state{% if settable %} status-card__state--seat{% endif %}">
                         {% if system.stale %}<span class="status-stale">stale</span>{% endif %}
-                        {% if system.path in maintenance_ancestors %}{{ maintenance_pip(system.path, maintenance_rows) }}{% endif %}{{ card_time(system, shown=head_shown) }}{{ status_cue(system.code) }}{{ system.code.name.lower() }}{{ reported_suffix(system) }}<button type="button" class="reason-chevron" tabindex="-1" aria-hidden="true"></button>{% if is_admin and layout != 'kiosk' %}{{ pin_control(system) }}{% endif %}
+                        {% if system.path in maintenance_ancestors %}{{ maintenance_pip(system.path, maintenance_rows) }}{% endif %}{{ card_time(system, shown=head_shown) }}{{ status_cue(system.code) }}{{ system.code.name.lower() }}{{ reported_suffix(system) }}<button type="button" class="reason-chevron" tabindex="-1" aria-hidden="true"></button>
                     </span>
+                    {%- if settable %}{{ pin_setter(system, pinning, containers) }}{% endif %}
                 </div>
                 <div class="status-panel">
-                    {{ pin_banner(system) }}{{ reason_block(system, reason_cap) }}
+                    {{ pin_stated(system, pinning) }}{{ reason_block(system, reason_cap) }}
                     {% if card_has_kids %}
-                    <div class="node-children" data-branch="{{ system.path }}">{{ render_nodes(system.children, 0, system.path, dense, max_depth, branch_cap, reason_cap, (system.timestamp | localtime("%H:%M") if system.timestamp else head_shown)) }}</div>
+                    <div class="node-children" data-branch="{{ system.path }}">{{ render_nodes(system.children, 0, system.path, dense, max_depth, branch_cap, reason_cap, pinning, (system.timestamp | localtime("%H:%M") if system.timestamp else head_shown)) }}</div>
                     {% endif %}
                 </div>
             </div>
         {% endfor %}
         {% endif %}
     </div>
+    {%- endif %}
     {#- The viewed node's own facts, **below** its children (ADR-0044 decision 8):
         the head line says what this node is, the grid says what is under it, and
         the details come last — a forty-line report above the grid would push the
         dashboard the reader came for off the screen.
 
-        Inside `#status-grid` deliberately, unlike the maintenance card beneath it:
-        `report` is an **output of the run** and changes with every tick, so a
-        frozen roster beside a live grid would be the one part of the page quietly
-        going wrong. The maintenance card holds an open form and must not be
-        swapped; this block holds none.
+        Inside `#status-grid` deliberately: `report` is an **output of the run** and
+        changes with every tick, so a frozen roster beside a live grid would be the
+        one part of the page quietly going wrong.
 
-        Rendered only when the node has something of its own to say. A container two
-        checks share has nothing here by construction — the snapshot withholds its
-        text and its run facts (decision 1) — and its Time card could only say "not
-        yet observed" about a node neither check writes. -#}
+        Rendered only when the node has something of its own to say: an observation,
+        a configuration, a report — or a period, which the route hands over as
+        ``since`` (ADR-0115 decision 6). A container two checks share has none of
+        the first three by construction — the snapshot withholds its text and its
+        run facts (decision 1) — and its Time card could only say "not yet observed"
+        about a node neither check writes. Pinned, a node nothing has written has
+        shown *maintenance* since its pin, and the card says so: the pin's block
+        above the children says who and until when, and since when was on no part
+        of the page. Unpinned it declares nothing, has no period, and the block
+        stays away. -#}
     {%- if branch and layout != 'kiosk'
-           and (node.timestamp or node.config or node.report) %}
+           and (node.timestamp or node.config or node.report or since) %}
     <div class="mt-3" style="max-width: 820px">
         {#- The block's cards are h3s, and this page's only other heading is the
             band's h1 — so without this the outline jumps a level and a screen

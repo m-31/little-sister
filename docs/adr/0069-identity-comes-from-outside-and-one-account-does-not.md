@@ -1,14 +1,16 @@
 # ADR-0069 — Identity comes from outside, and never from a chain
 
 - **Status:** Accepted
-- **Date:** 2026-08-29
+- **Date:** 2026-10-04 (accepted 2026-08-29)
 - **Related:** [ADR-0068](0068-the-login-gate-refuses-by-default.md) (the gate this sits
   on), [ADR-0023](0023-secret-references.md) (the reference the system admin's password
   is), [ADR-0064](0064-the-resolver-is-a-registration.md) (the registration this copies,
   including what a second claim on one name does),
   [ADR-0034](0034-template-slots-for-dependent-packages.md) (the seam whose failure rule
   this deliberately inverts), [ADR-0052](0052-plugin-names.md) (a name claimed once),
-  [ADR-0008](0008-json-output-api.md) (the bearer token that stays out of this)
+  [ADR-0008](0008-json-output-api.md) (the bearer token that stays out of this),
+  [ADR-0100](0100-system-is-two-views.md) (the *Installed* view of `/system`, which
+  shows the doors and the system-admin line)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -151,7 +153,9 @@ a deployment the only page it could have offered a choice on.
   renders when the identity provider is unreachable. That is the case it exists for: a
   `/login` that is only a redirect answers a broken identity provider with a browser
   error, while the other door is reachable only by somebody who remembers its address —
-  `/system`, which lists it, being behind the login that is not working.
+  `/system`'s *Installed* view at `/system/installed`
+  ([ADR-0100](0100-system-is-two-views.md)), which lists it, being behind the login
+  that is not working.
 
 **The library supplies the page and the installation asks for it**, in the same
 import-before-app block as the registrations it is about:
@@ -167,9 +171,10 @@ whole of why this works. The shape we tried first — a provider returning the c
 its own `login_page()` — is a **loop**: both routes reach that one method, so the entry
 for its own door leads back to the page it was on. Separating them also puts the choice
 where it belongs, as a statement about the installation rather than about one provider,
-visible on `/system` beside the doors it is about. And it is a statement rather than an
-inference: two enterable doors are not by themselves a request for a menu, and working
-out which installations would want one is the kind of guess §3 exists to refuse.
+visible on `/system/installed` beside the doors it is about. And it is a statement
+rather than an inference: two enterable doors are not by themselves a request for a
+menu, and working out which installations would want one is the kind of guess §3 exists
+to refuse.
 
 **A redirecting provider adds one method to appear there**: a `login_page()` returning
 the redirect it was already performing. `challenge()` is not an address, so a provider
@@ -346,8 +351,8 @@ the built-in list, so the link reaches the install whose default door is a local
 **not** the redirecting install this account mostly exists for, where `/login` renders
 nothing of ours. It is a convenience for the small install. The redirecting install's
 answer is the chooser in §1; until a deployment points its `login_page()` at one, the
-incident path there is what it always was — a fixed address, the row on `/system`, and
-the runbook.
+incident path there is what it always was — a fixed address, the row on
+`/system/installed`, and the runbook.
 
 **The name is hard-coded.** A configurable one is a knob whose only effect is to make a
 runbook wrong.
@@ -370,8 +375,8 @@ invisible until the day the door is needed.
 `password=` exists because a deployment whose secret store has no little-sister resolver
 would otherwise be shut out of a feature that exists for emergencies — a poor trade. It
 is discouraged **operationally rather than only in prose**: which keyword was used is
-logged at startup and shown on `/system`, the way a deliberate resolver replacement is
-recorded and shown rather than left indistinguishable
+logged at startup and shown on `/system/installed`, the way a deliberate resolver
+replacement is recorded and shown rather than left indistinguishable
 ([ADR-0064](0064-the-resolver-is-a-registration.md)).
 
 **Resolved once, eagerly, at registration.** A wrong address is then a startup warning
@@ -380,8 +385,9 @@ rather than a discovery during an incident.
 **A failed resolution closes that door and the application keeps serving.** Refusing to
 start would mean an unreachable parameter store takes the dashboard down during exactly
 the kind of event it is watching — and if the store is unreachable, the operator cannot
-read the password either. `/system` says *configured but unavailable*, so an admin who
-did get in can see why the other door is shut.
+read the password either. `/system/installed` says *configured but unavailable*, so an
+admin who did get in can see why the other door is shut, and the startup line for a
+credential that did not resolve names that view.
 
 **No generation, ever.** A generated password has to be readable by the operator, which
 means the log or a file — a live admin credential on the instance's disk, in service of a
@@ -401,8 +407,8 @@ own, which §2 already gives it.
 door you came through — a session left open for a week after the incident is the real
 risk, and this is the cheapest thing that prevents it. A `WARNING` on every system-admin
 login, because it is an event somebody should be able to reconstruct afterwards. A line
-on `/system`. Deliberately **no page banner**: three channels is enough, and the fourth
-would be shouting.
+on `/system/installed`. Deliberately **no page banner**: three channels is enough, and
+the fourth would be shouting.
 
 **`set_by` records the name only.** It is a stored key that maintenance pins are held
 against, so putting *which door somebody came through* into it would leak a mechanism
@@ -412,12 +418,12 @@ detail into data that outlives the mechanism. The door is
 `Identity` at four fields, since how you got in is a property of the session rather than
 of the person.
 
-### 6. Every door is visible on `/system`
+### 6. Every door is visible on `/system/installed`
 
-`/system` already answers *what is installed and what did it contribute* — the check-type
-roster, the package inventory, the extension seams, the assembled policy. Identity joins
-it, because a way into an application is exactly the kind of thing that must not be
-knowable only by reading the source.
+`/system/installed` already answers *what is installed and what did it contribute* —
+the check-type roster, the package inventory, the extension seams, the assembled policy.
+Identity joins it, because a way into an application is exactly the kind of thing that
+must not be knowable only by reading the source.
 
 One row per door: its **name** (with its **label** beside it where they differ), its
 **route**, the **provider** behind it, the **package** that registered it (inferred from

@@ -16,9 +16,10 @@ schema promises and no run ever fills is a promise no test can check.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
+from little_sister import instants
 from little_sister.maintenance import MaintenanceEntry
 from little_sister.secrets import same_secret
 from little_sister.tree import ReasonLine, StatusSnapshot
@@ -26,20 +27,6 @@ from little_sister.tree import ReasonLine, StatusSnapshot
 #: Major version of the JSON / federation schema (ADR-0080). Bumped only when a field
 #: changes meaning or goes; an added field keeps it and moves the spec's minor.
 SCHEMA_VERSION = 2
-
-def _utc_z(timestamp: str) -> str:
-    """Render an ISO-8601 timestamp as RFC 3339 UTC with a ``Z`` suffix.
-
-    Stored timestamps are naive server-local (ADR-0006); a naive value is taken
-    to be local time and converted to UTC. An unparseable value passes through.
-    """
-    try:
-        moment = datetime.fromisoformat(timestamp)
-    except ValueError:
-        return timestamp
-    if moment.tzinfo is None:
-        moment = moment.astimezone()
-    return moment.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
 
 def _maintenance(entry: MaintenanceEntry | None) -> dict[str, str] | None:
@@ -64,10 +51,10 @@ def _maintenance(entry: MaintenanceEntry | None) -> dict[str, str] | None:
     return {
         "note": entry.reason,
         "set_by": entry.set_by,
-        "set_at": _utc_z(entry.set_at),
-        "expires_at": _utc_z(entry.expires_at),
+        "set_at": instants.stamp(entry.set_at),
+        "expires_at": instants.stamp(entry.expires_at),
         "created_by": entry.created_by,
-        "created_at": _utc_z(entry.created_at),
+        "created_at": instants.stamp(entry.created_at),
     }
 
 
@@ -136,10 +123,10 @@ def _run(snapshot: StatusSnapshot) -> dict[str, Any] | None:
         return None
     stamp = snapshot.timestamp
     run: dict[str, Any] = {
-        "observed_at": None if stamp is None else _utc_z(stamp),
+        "observed_at": None if stamp is None else instants.stamp(stamp),
         "wall_seconds": None if facts is None else facts.wall_seconds,
         "next_at": (None if facts is None or facts.next_run_at is None
-                    else _utc_z(facts.next_run_at)),
+                    else instants.stamp(facts.next_run_at)),
     }
     if snapshot.frequency_seconds is not None:
         run["frequency_seconds"] = snapshot.frequency_seconds
@@ -233,11 +220,9 @@ def status_envelope(snapshot: StatusSnapshot, *, version: str = "",
     the bearer token. Per envelope and never per node: one response is one instance's
     answer.
     """
-    moment = now or datetime.now(UTC)
-    generated = moment.astimezone(UTC).isoformat().replace("+00:00", "Z")
     return {
         "schema_version": SCHEMA_VERSION,
-        "generated_at": generated,
+        "generated_at": instants.stamp(now or instants.now()),
         "instance": {"version": version, "engine": engine},
         "status": snapshot_to_dict(snapshot),
     }

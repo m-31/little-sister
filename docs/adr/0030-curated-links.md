@@ -1,7 +1,7 @@
 # ADR-0030 — Curated links come from a deployment-supplied file
 
 - **Status:** Accepted
-- **Date:** 2026-09-27 (accepted 2026-08-01)
+- **Date:** 2026-10-04 (accepted 2026-08-01)
 - **Related:** [ADR-0031](0031-deployment-config-directory.md) (the `config/` directory
   and its layering, which this file is an aspect of),
   [ADR-0015](0015-check-discovery-union.md) (the path-list underneath it),
@@ -64,6 +64,16 @@ three broken-image glyphs, all of them internal hosts.
    `LITTLE_SISTER_CONFIG_DIR` ([ADR-0031](0031-deployment-config-directory.md)) — or
    `config/links/` once a deployment ships icon files of its own — so a deployment that
    already composes `base:sites/alpha` gets link layering for free.
+
+   **With no links the page opens with one sentence** — what the page is, and that it
+   has not been filled in — and holds its setup guide in two folds, each the browser's
+   own disclosure and closed: *Add links*, the file's shape and where it goes, and
+   *Icon names*, the roster and how a deployment adds a mark of its own (decision 3).
+   The guide in full — a sample file, where it goes, every name of the registry with
+   both its drawings, and how to add a mark — is more than a screen before anybody has
+   a link. Every reader gets the same page, the file's path included: the page knows
+   no roles — *check now* (decision 9) is open to everyone who is logged in — because
+   whoever maintains the file is not necessarily an admin.
 
 2. **One level of grouping, merged by title, in file order.** Groups with the same
    title across directories **concatenate**, base first, so a site can add entries to a
@@ -138,6 +148,12 @@ three broken-image glyphs, all of them internal hosts.
    another's name the loader **logs it**, naming winner and loser: two packages both
    registering `grafana` otherwise resolve by import order, which nobody should have to
    reason about silently.
+
+   **The names stay within reach of a page that has links**, which keeps decision 1's
+   *Icon names* fold closed at its foot, under the links and outside what the filter
+   narrows. A deployment that has written its file would otherwise lose the roster
+   with the empty state, and adding a fortieth link would mean guessing a name or
+   reading the log.
 
 4. **An icon may declare a light/dark pair, and the pair is chosen in CSS.** A brand
    logo does not theme: a black mark vanishes on the dark themes and a white one

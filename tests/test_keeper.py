@@ -12,7 +12,7 @@ somebody else held it is adopted before the new holder's first save.
 import json
 import tempfile
 import unittest
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest import TestCase
 
@@ -419,7 +419,8 @@ class AFreshMachineTests(_KeeperTest):
         with tempfile.TemporaryDirectory() as directory:
             old = StateLayer(directory)
             MaintenanceStore(old).save({"/x": MaintenanceEntry(
-                "planned", "2026-01-01T00:00:00", "2999-01-01T00:00:00", "ada")})
+                "planned", datetime(2026, 1, 1, tzinfo=UTC),
+                datetime(2999, 1, 1, tzinfo=UTC), "ada")})
             written = StatusTree()
             written.upsert("/x", StatusCode.OK)
             written.upsert("/x", StatusCode.ERROR, "down")
@@ -593,7 +594,7 @@ class _TakeoverStore(_LeaseStore):
 
 
 def _far() -> datetime:
-    return datetime.now() + timedelta(days=1)
+    return datetime.now(UTC) + timedelta(days=1)
 
 
 class TakeoverTests(_KeeperTest):
@@ -723,6 +724,28 @@ class TakeoverTests(_KeeperTest):
             state.flush()
             self.assertEqual([name for name, _ in store.saved],
                              ["a.json", "log.json"])
+
+    def test_an_adopted_copy_counts_as_written_and_is_left_alone(self):
+        """What the layer adopted is what it wrote, as far as the next save is
+        concerned: a producer that now yields the same text leaves the file alone —
+        the same inode, since every real write lands a new one — and one whose
+        state moved writes it again."""
+        text = json.dumps({"n": 3}, indent=2, sort_keys=True)
+        store = _TakeoverStore({"log.json": text.encode()})
+        store.changed = ["log.json"]
+        held = {"n": 1}
+        with tempfile.TemporaryDirectory() as directory:
+            state = self._standby(directory, store)
+            state.keep("log.json", lambda: held, restore=held.update)
+            store.wanted = True
+            state.flush()
+            self.assertEqual(held, {"n": 3})
+            adopted = state.path("log.json").stat().st_ino
+            state.flush()
+            self.assertEqual(state.path("log.json").stat().st_ino, adopted)
+            held["n"] = 4
+            state.flush()
+            self.assertNotEqual(state.path("log.json").stat().st_ino, adopted)
 
     def test_a_file_with_no_restore_is_swapped_on_disk_only_and_says_so(self):
         store = _TakeoverStore({"store.sqlite3": b"\x00theirs"})
@@ -1053,7 +1076,8 @@ class AStandbyTakesOverTests(_KeeperTest):
         with tempfile.TemporaryDirectory() as directory:
             theirs = StateLayer(directory)
             MaintenanceStore(theirs).save({"/x": MaintenanceEntry(
-                "theirs", "2026-01-01T00:00:00", "2999-01-01T00:00:00", "ada")})
+                "theirs", datetime(2026, 1, 1, tzinfo=UTC),
+                datetime(2999, 1, 1, tzinfo=UTC), "ada")})
             written = StatusTree()
             written.upsert("/x", StatusCode.OK)
             written.upsert("/x", StatusCode.ERROR, "down")

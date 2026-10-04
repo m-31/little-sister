@@ -1,0 +1,161 @@
+{#- A rule at the contribution boundary, stated where it acts (ADR-0104).
+
+    Maintenance is the first kind and today the only one: a pin on a node, or on
+    one of its lines. The block is the one statement of it wherever it shows — who
+    silenced it, until when and what is left, its note in full, and for an admin
+    *Edit* and *Clear* — and a pin is edited where its block stands. *Edit* is the
+    browser's own disclosure, so every editor works without script and pinned
+    stays a read state (ADR-0014 decision 16); the stylesheet is what makes the
+    open editor stand in for the note and the buttons.
+
+    **The kind is data** (decision 8): `data-rule` on the block picks its tint in
+    the stylesheet, `rule_mark` draws its mark, and a rule an admin set is the one
+    that carries buttons — a viewer, and one day a rule the configuration declares,
+    gets the block without them. A second kind is a second value of each and a row
+    beside this one, never a second component.
+
+    `path` and `slug` address the pin as `POST /maintenance` reads them (`slug`
+    empty for the node's own), and `prefix` keeps an editor's field ids unique on
+    a page that may carry hundreds of them. Imported `with context`, for the
+    deployment's default window and its timezone that the fields print.
+
+    **A block on the wall or in a branch's head stands in what the refresh swaps**
+    (decision 7), so the refresh waits while one of these editors is open: what
+    `poll.js` looks for is an open disclosure around a
+    `form.maintenance-editor-form`, which is the shape both macros below write. -#}
+{% from '_maintenance_fields.html' import maintenance_fields with context %}
+
+{#- The kind's mark: maintenance pauses, as the wall's pin control draws it. -#}
+{% macro rule_mark(kind) -%}
+{%- if kind == 'maintenance' -%}
+<svg class="rule-mark" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" focusable="false"><rect x="4" y="3.5" width="2.7" height="9" rx="0.7" fill="currentColor"/><rect x="9.3" y="3.5" width="2.7" height="9" rx="0.7" fill="currentColor"/></svg>
+{%- endif -%}
+{%- endmacro %}
+
+{#- An instant in the block's words, each word of it kept whole: the date and the
+    time of day, or whatever the deployment's `time_format` writes between spaces. A
+    block's sentence wraps where it must — a card on the wall is narrow — and a
+    hyphen is a place for a line to end: *until 2026-10-*, and the day on the next
+    line with the time. Between the words a line may end, as anywhere in a
+    sentence, so nothing here is wider than what it stands in. -#}
+{% macro instant(value) -%}
+{%- for word in (value | localtime).split() -%}
+<span class="text-nowrap">{{ word }}</span>{% if not loop.last %} {% endif %}
+{%- endfor -%}
+{%- endmacro %}
+
+{#- Who pinned it, and who changed it last where that is somebody else's write:
+    the block's sentence names only the last. -#}
+{% macro pin_record(entry) -%}
+Pinned by <strong>{{ entry.created_by or 'unknown' }}</strong> {{ instant(entry.created_at) }}.
+{%- if entry.set_at != entry.created_at %} Last changed by <strong>{{ entry.set_by or 'unknown' }}</strong> {{ instant(entry.set_at) }}.{% endif %}
+{%- endmacro %}
+
+{#- A pin, stated. `scope` is what it silences — `node` or `line` — and `also`
+    marks a line's pin under its node's: the line stays quiet when the node's pin
+    ends, which is the one thing the block has to add there. `tag` is `li` where
+    the block is a row of a node's rule list.
+
+    Where the block stands says what it covers, so what its sentence opens with is
+    the place's to say (`subject`): on a node's own page it is *This node* or *This
+    line*, and on the Maintenance page, where the block stands under a path and
+    away from its line, *The whole node* or the line itself. There `record` puts
+    the pin's authors under the note for everyone — the page has room for the
+    whole reading, and a viewer has no editor to find it in — `next` brings a
+    saved edit back to the page, and `of` names the node in the buttons' names: a
+    page of many blocks is a page of many Edits. A card on the wall is the third
+    place: its head names the node already, so the sentence opens with what was
+    done to it (`bare`) — *Silenced by* — and says nothing twice.
+
+    The stored placeholder `maintenance` is the absence of a note, not a note
+    somebody wrote, so it is neither shown nor offered as the source to edit; a
+    blank note on an edit keeps the stored text (ADR-0014 decision 15), so
+    leaving it blank writes the placeholder back. -#}
+{% macro pin_block(entry, scope, path, slug, prefix, editable, also=false, tag='div',
+                   subject='', record=false, next='', of='', bare=false) -%}
+{%- set note = entry.reason if entry.reason != 'maintenance' else '' -%}
+{%- set kept = entry.expires_at | expiry_input -%}
+{%- set named %} this {{ scope }}'s maintenance{% if of %}, {{ of }}{% endif %}{% endset -%}
+<{{ tag }} class="rule-block rule-block--{{ scope }}" data-rule="maintenance">
+    <div class="rule-block__head">
+        <span class="rule-block__what" id="{{ prefix }}-what">{{ rule_mark('maintenance') }}{% if bare %}Silenced{% else %}{% if subject %}{{ subject }}{% else %}<strong>This {{ scope }}</strong>{% endif %} is {% if also %}also silenced on its own{% else %}silenced{% endif %}{% endif %} by <strong>{{ entry.set_by or 'an admin' }}</strong> until {{ instant(entry.expires_at) }} <span class="text-nowrap">· {{ entry.expires_at | time_left }}</span></span>
+        {%- if editable %}
+        <details class="maintenance-editor-disclosure rule-block__edit">
+            <summary class="rule-button" aria-describedby="{{ prefix }}-what">Edit<span class="visually-hidden">{{ named }}</span></summary>
+            <form method="post" action="{{ url_for('maintenance') }}"
+                  class="maintenance-editor-form rule-block__editor">
+                <p class="rule-block__record">{{ pin_record(entry) }}</p>
+                <input type="hidden" name="path" value="{{ path }}">
+                {%- if slug %}
+                <input type="hidden" name="slug" value="{{ slug }}">
+                {%- endif %}
+                <input type="hidden" name="action" value="set">
+                <input type="hidden" name="set_at" value="{{ entry.token }}">
+                {%- if next %}
+                <input type="hidden" name="next" value="{{ next }}">
+                {%- endif %}
+                {{ maintenance_fields(note, kept, prefix, maintenance_default,
+                                      maintenance_timezone, true, kept) }}
+                <div class="maintenance-editor-form__actions">
+                    <button class="btn btn-sm btn-primary" type="submit">Save changes</button>
+                    <button class="btn btn-sm btn-link maintenance-editor-cancel"
+                            type="reset">Cancel</button>
+                </div>
+            </form>
+        </details>
+        <form method="post" action="{{ url_for('maintenance') }}" class="rule-block__clear">
+            <input type="hidden" name="path" value="{{ path }}">
+            {%- if slug %}
+            <input type="hidden" name="slug" value="{{ slug }}">
+            {%- endif %}
+            <input type="hidden" name="action" value="clear">
+            <input type="hidden" name="set_at" value="{{ entry.token }}">
+            {%- if next %}
+            <input type="hidden" name="next" value="{{ next }}">
+            {%- endif %}
+            <button class="rule-button" type="submit" aria-describedby="{{ prefix }}-what">Clear<span class="visually-hidden">{{ named }}</span></button>
+        </form>
+        {%- endif %}
+    </div>
+    {%- if note %}
+    <div class="rule-block__note maintenance-explanation md-body">{{ note | markdown }}</div>
+    {%- endif %}
+    {%- if record %}
+    <p class="rule-block__record">{{ pin_record(entry) }}</p>
+    {%- endif %}
+</{{ tag }}>
+{%- endmacro %}
+
+{#- The editor of a pin still to be set, standing where its block will (decision
+    3). Its first sentence says what the pin covers — `covers` is the caller's,
+    which knows the node — and the form claims nothing is pinned: an empty token,
+    and an empty expiry, which is the configured default.
+
+    On a node's own page *this node* is the page's node. A card on the wall is one
+    of many, so there the sentence names what it covers outright (`what`): *hemulen
+    and everything beneath it*. `next` is the page a set comes back to, where that
+    is not the node's own. -#}
+{% macro pin_new(scope, covers, path, slug, prefix, what='', next='') -%}
+<div class="rule-block rule-block--{{ scope }} rule-block--new" data-rule="maintenance">
+    <p class="rule-block__scope">{{ rule_mark('maintenance') }}<strong>Maintenance for {% if what %}{{ what }}{% else %}this {{ scope }}{% if scope == 'line' %} only{% endif %}{% endif %}.</strong>{% if covers %} {{ covers }}{% endif %}</p>
+    <form method="post" action="{{ url_for('maintenance') }}"
+          class="maintenance-editor-form rule-block__editor">
+        <input type="hidden" name="path" value="{{ path }}">
+        {%- if slug %}
+        <input type="hidden" name="slug" value="{{ slug }}">
+        {%- endif %}
+        <input type="hidden" name="action" value="set">
+        <input type="hidden" name="set_at" value="">
+        {%- if next %}
+        <input type="hidden" name="next" value="{{ next }}">
+        {%- endif %}
+        {{ maintenance_fields('', '', prefix, maintenance_default,
+                              maintenance_timezone, true) }}
+        <div class="maintenance-editor-form__actions">
+            <button class="btn btn-sm btn-primary" type="submit">Set maintenance</button>
+            <button class="btn btn-sm btn-link maintenance-editor-cancel"
+                    type="reset">Cancel</button>
+        </div>
+    </form>
+</div>
+{%- endmacro %}

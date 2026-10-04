@@ -1,7 +1,7 @@
 # ADR-0014 — Persist maintenance to a file, with auto-expiry
 
 - **Status:** Accepted
-- **Date:** 2026-09-05 (accepted 2026-06-27)
+- **Date:** 2026-10-04 (accepted 2026-06-27)
 - **Related:** [ADR-0001](0001-in-process-threaded-engine.md) (one process, in
   memory), [ADR-0002](0002-rlock-snapshot-synchronization.md) (the tree owns state),
   [ADR-0003](0003-config-and-secrets-via-env-file.md) (config / secrets in files),
@@ -9,7 +9,18 @@
   [ADR-0015](0015-check-discovery-union.md) (the static check set the reaper keys
   off), [ADR-0008](0008-json-output-api.md) (JSON envelope, unchanged here),
   [ADR-0071](0071-what-a-restart-keeps-is-a-directory-of-files.md) (the state layer
-  this file belongs to, and the path it moved to).
+  this file belongs to, and the path it moved to),
+  [ADR-0104](0104-a-pin-is-one-block-on-what-it-silences.md) (the block that states a
+  pin and holds its editor, the expiry an edit keeps, and the set that writes nothing),
+  [ADR-0099](0099-a-status-that-still-holds-says-since-when.md) (an edit of a pin
+  begins no period), [ADR-0109](0109-a-node-says-its-children-are-complete.md) (a pin
+  is held against its path and makes no node),
+  [ADR-0076](0076-the-instance-node-is-a-branch.md) (the instance's own branch, whose
+  pins the reaper keeps),
+  [ADR-0110](0110-what-every-node-last-showed-is-kept-beside-the-log.md) (the
+  forgetting of what every node last showed, which takes the reaper's roots),
+  [ADR-0120](0120-every-stored-time-is-an-instant.md) (a pin's times are instants,
+  written in UTC and read strictly).
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -29,7 +40,11 @@ entry with an expiry.
    `Status.maintenance` stays the in-tree bool that drives roll-up
    ([ADR-0004](0004-status-aggregation-semantics.md)) and the `upsert` guard.
    `set_maintenance` / `clear_maintenance` are the single choke points that keep the
-   two in sync.
+   two in sync. A pin is held against its path and makes no node
+   ([ADR-0109](0109-a-node-says-its-children-are-complete.md) decision 4), whether it
+   is set, replayed at a start or adopted: `Status.maintenance` is the flag of a node
+   the tree holds, and a node the tree makes at a pinned path takes it from the
+   side-table.
 2. **Write-through JSON at `var/state/maintenance.json`.** Every set / clear / expiry /
    reap rewrites the whole file **atomically** (temp + `os.replace`); the file is
    exactly the side-table serialized. It is runtime state the app writes (not
@@ -45,9 +60,12 @@ entry with an expiry.
    the layer says where somebody looks (ADR-0071 §4).
 3. **Restore post-fork, before the engine starts** (single worker,
    [ADR-0001](0001-in-process-threaded-engine.md), so once). Replay each non-expired
-   entry via `set_maintenance` — which auto-creates the node, so replay before any
-   check has run is safe (`upsert` respects the flag). Already-expired entries are
-   dropped and the file rewritten once.
+   entry via `set_maintenance` — which makes no node
+   ([ADR-0109](0109-a-node-says-its-children-are-complete.md) decision 4), so a replay
+   before any check has run brings back the pins and no nodes: each node is pinned
+   from its first reading, and a pin whose node its check has stopped reporting stays
+   in the file, suspended, until the node returns or the pin expires. Already-expired
+   entries are dropped and the file rewritten once.
 4. **Auto-expiry.** Setting maintenance applies a **default duration** — one week,
    configurable in `settings.yaml` ([ADR-0006](0006-config-file-and-timezones.md)) —
    unless an explicit duration is given (`parse_duration`: `2h`, `3d`, `2w`, …). **No
@@ -56,13 +74,22 @@ entry with an expiry.
    real `MAINTENANCE → UNDEFINED` transition and event — and the next check refills
    the node.
 5. **Orphan reaping at startup, by static check-root coverage.** After loading the
-   checks and restoring the file, drop any maintenance entry whose path **no
-   configured check covers.** A check at `full_path` *Q* **covers** path *P* when the
-   two lie on the same root-to-leaf line, compared **segment-wise**: `P == Q`, *P* is
-   an ancestor of *Q*, or *Q* is an ancestor of *P*. This keys off the **statically
-   known check roots**, not the nodes a run happens to produce — so it is decidable
-   immediately and is unaffected by a branch check that emitted only its root this
-   run. The check set is fixed for the process (no live reload,
+   checks and restoring the file, drop any maintenance entry whose path **neither a
+   configured check nor the instance's own node covers.** A check at `full_path` *Q*
+   **covers** path *P* when the two lie on the same root-to-leaf line, compared
+   **segment-wise**: `P == Q`, *P* is an ancestor of *Q*, or *Q* is an ancestor of *P*.
+   This keys off the **statically known check roots**, not the nodes a run happens to
+   produce — so it is decidable immediately and is unaffected by a branch check that
+   emitted only its root this run. The instance's own node and its children are written
+   by no check: by the check roots alone, a pin on one of them — a node's or a line's —
+   would be replayed at a start and then reaped as orphaned, though
+   [ADR-0071](0071-what-a-restart-keeps-is-a-directory-of-files.md) decision 4 gives the
+   state layer's lines stable slugs so that either can be pinned, and
+   [ADR-0076](0076-the-instance-node-is-a-branch.md) decision 1 counts on pinning a
+   child's one warning. So the reaping takes the instance's own root beside the roots of
+   the configured checks, as the forgetting of what every node last showed does
+   ([ADR-0110](0110-what-every-node-last-showed-is-kept-beside-the-log.md) decision 4).
+   The check set is fixed for the process (no live reload,
    [ADR-0015](0015-check-discovery-union.md)), so once at startup suffices; expiry is
    the guaranteed backstop.
 
@@ -79,22 +106,25 @@ admins pinning the same node a minute apart silently lost the first one's words.
 reason field is the whole point of a pin; losing it quietly is the bad kind of cheap.
 
 6. **A pin is editable in place.** The set form is reachable **while pinned** and
-   **prefilled with the stored reason**, beside *Clear*, on both surfaces (the node
-   page's maintenance card and the card dialog). Duration is deliberately **not**
-   prefilled: blank means the configured default here exactly as it does on an unpinned
-   node, so there is one rule to know rather than a context-dependent one. Setting an
-   already-pinned node is an **edit** — it keeps the entry, replaces reason and expiry,
-   and never passes through an unpinned state.
+   **prefilled with the stored reason**, beside *Clear*, in the block that states the
+   pin (§16, [ADR-0104](0104-a-pin-is-one-block-on-what-it-silences.md)). The expiry
+   field (§20) is filled with the stored expiry, and a field left as it was filled
+   keeps that instant exactly; emptied, it means the configured default from now, as
+   a blank field does on an unpinned node. Setting an already-pinned node is an
+   **edit** — it keeps the entry, replaces reason and expiry, and never passes through
+   an unpinned state.
 7. **Both dates.** The entry becomes `{reason, set_at, expires_at, set_by, created_at,
-   created_by}`. `set_at` / `set_by` keep meaning **the last write**, which is what the
-   code always stored — every set rebuilds the entry — and `created_at` / `created_by`
-   mean the first. An entry that carries neither reads as its own creation: a pin set
-   once and never edited. Clearing drops the entry, so a clear-and-re-pin — and an
-   expiry sweep followed by a new pin — honestly starts a new creation; there is
-   nothing extra to rule.
-8. **The write is a compare-and-set.** Every form carries the entry's `set_at` as a
-   hidden token; the write names the pin it believes it is replacing, and an empty token
-   is the claim *"nothing is pinned"*. The comparison is **exact rather than
+   created_by}`. `set_at` / `set_by` mean **the last write that changed the pin** — a
+   set that says what the stored pin says, the same reason and the same expiry, writes
+   nothing ([ADR-0104](0104-a-pin-is-one-block-on-what-it-silences.md)) — and
+   `created_at` / `created_by` mean the first. An entry that carries neither reads as
+   its own creation: a pin set once and never edited. Clearing drops the entry, so a
+   clear-and-re-pin — and an expiry sweep followed by a new pin — honestly starts a new
+   creation; there is nothing extra to rule.
+8. **The write is a compare-and-set.** Every form carries a hidden token, the entry's
+   `set_at` as it is spelled ([ADR-0120](0120-every-stored-time-is-an-instant.md)); the
+   write names the pin it believes it is replacing, and an empty token is the claim
+   *"nothing is pinned"*. The comparison is **exact rather than
    best-effort**, because one process holds one lock
    ([ADR-0001](0001-in-process-threaded-engine.md),
    [ADR-0002](0002-rlock-snapshot-synchronization.md)). On a mismatch **nothing is
@@ -107,8 +137,12 @@ reason field is the whole point of a pin; losing it quietly is the bad kind of c
 9. **An edit emits an event.** Editing a pin is `MAINTENANCE -> MAINTENANCE`, which the
    status code alone cannot see, so an extended window or a rewritten reason would leave
    no trace anywhere. A changed **reason or expiry** therefore emits a transition too; a
-   re-submit that changes neither does not, so a double-click is not history. History
-   beyond that single event stays out.
+   re-submit that changes neither does not, so a double-click is neither history nor a
+   write (§7). History beyond that single event stays out. The event is in the log and
+   on the Events page, and it begins no period
+   ([ADR-0099](0099-a-status-that-still-holds-says-since-when.md) decision 6): a node's
+   History view shows an edited pin as one row, and the node holds *maintenance since*
+   its pin was set.
 
 `set_at` doing double duty — the last-write stamp *and* the concurrency token — is why
 both dates exist rather than one: `created_at` is then the one piece of history kept
@@ -134,7 +168,12 @@ space and §2's file shape grow, nothing above is withdrawn)*
     ignored with a warning naming what it dropped, and the next save rewrites it. The
     cost is a pin or two on one upgrade; the alternative is a compatibility branch
     sitting in the read path forever, for state the program owns, never hand-authors,
-    and bounds with a finite expiry anyway.
+    and bounds with a finite expiry anyway. A pin's `set_at`, `created_at` and
+    `expires_at` are instants, written in UTC
+    ([ADR-0120](0120-every-stored-time-is-an-instant.md)), and the file is read
+    strictly: one of them without a zone refuses the file whole, as the bare node table
+    is refused, so the pins of a version before that record are not in force after the
+    upgrade.
 12. **An entry pin emits no event.** It changes no stored code — the node's own status
     is derived at snapshot time — so there is no transition to record, exactly as
     staleness has none ([ADR-0005](0005-dashboard-freshness-and-self-monitoring.md)).
@@ -204,10 +243,13 @@ and hiding a whole per-entry form behind hover made the pointer move the form it
 trying to reach. The two depths now follow one interaction.
 
 16. **Pinned is a read state.** A pinned node or entry shows its rendered explanation,
-    authorship and expiry with explicit *Edit* and *Clear* actions. *Edit* reveals a
-    prefilled textarea and the existing blank “new window, from now” duration; *Save*
-    is the same guarded `action=set`, and *Cancel* writes nothing. An unpinned item has
-    one *Set maintenance* disclosure into the same editor.
+    authorship and expiry with explicit *Edit* and *Clear* actions, in one block that
+    states the pin where it acts — on a node's page, under a line, on the Maintenance
+    page and in a card ([ADR-0104](0104-a-pin-is-one-block-on-what-it-silences.md)).
+    *Edit* opens the editor there, with a prefilled textarea and the expiry field
+    filled with the stored expiry (§6); *Save* is the same guarded `action=set`, and
+    *Cancel* writes nothing. An unpinned item has one *Set maintenance* disclosure into
+    the same editor.
 17. **Entry pins edit in place.** The entry form carries `(path, slug)` and the stored
     entry's `set_at`, exactly as the node form carries `path` and its token. Rewording or
     extending one therefore never clears it and never lets the finding alarm in the
@@ -252,8 +294,9 @@ natural-language parser whose meaning changes by locale or library version.
     a numeric UTC offset wins when present. A DST hole or fold is refused and asks for
     an explicit offset. After resolution, the expiry must clear every floor §13 sets —
     one second, and the covering checks' longest `frequency` — and be at most 365 days
-    away, and is converted to the existing naive server-local timestamp before the
-    tree sees it.
+    away. It is an instant in UTC, which the tree stores as it is
+    ([ADR-0120](0120-every-stored-time-is-an-instant.md)): nothing turns it back into
+    the machine's clock.
 23. **The grammar is visible at the field.** Every shared maintenance editor labels
     the control *Duration or expiry*, states the configured timezone and carries a
     click-opened, keyboard-native format table. It is closed by default and never
@@ -277,7 +320,8 @@ natural-language parser whose meaning changes by locale or library version.
   `payments`) is covered because a check root sits *beneath* it; a branch-leaf pin
   (`system.alpha.disk`) is covered because the `host-metrics` root sits *above* it —
   even when the host is unreachable and that run wrote no `disk` leaf. Only a path
-  with no check anywhere on its line (a removed check) is reaped.
+  with neither a check nor the instance anywhere on its line (a removed check) is
+  reaped.
 - `set_maintenance` gains `expires_at` / `set_by`; the maintenance form gains an
   optional duration; the detail page shows "set by X, expires …".
 - Crash-safe: write-through at mutation time means a `kill -9` never loses a just-set
@@ -294,10 +338,10 @@ natural-language parser whose meaning changes by locale or library version.
   after.
 - *(2026-08-02)* **The two dates read differently by surface**, following the density
   rules: the popover has room for one name and takes `set_by` — the writer whose reason
-  text it is showing — the card dialog says who set it and how long is left, and the
+  text it is showing — a card's block says who set it and how long is left, and the
   whole four-field reading (*pinned by Anna three days ago, last changed by Ben an hour
-  ago*) belongs on the node page and in the `/maintenance` table, where there is room
-  for it. The second line appears only on a pin that has actually been edited.
+  ago*) belongs on the node page and on the Maintenance page, where there is room for
+  it. The second line appears only on a pin that has actually been edited.
 - *(2026-08-02)* **A ticket reference will be a named field on the entry**, not text
   inside `reason` — so moving it to acknowledgment is later a migration and not a parse.
 

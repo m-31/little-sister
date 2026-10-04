@@ -28,6 +28,7 @@ on the shared node, not duplicated here.
 """
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
@@ -52,11 +53,12 @@ from little_sister.checks.ssh.metrics import (
     grade,
     human_duration,
     human_kb,
-    oneline,
     parse_metrics,
+    reading,
     readings,
     unavailable,
 )
+from little_sister.limits import format_weight
 from little_sister.reasons import clip
 from little_sister.status import StatusCode, join_path
 
@@ -68,6 +70,21 @@ DEFAULT_SCRIPT = "memory-macos.sh"
 #: record are clipped.
 BASE_RECORD_BYTES = 256
 PROCESS_RECORD_BYTES = 96
+
+#: What this type's nodes are graded on, each on the node that grades it — the
+#: curves it draws by default (ADR-0096 decision 6). A watched process is keyed by
+#: its configured name, so one declaration is a curve for each (decision 2): the
+#: slow leak its RSS shows long before pressure moves.
+MEASURES: dict[str, dict[str, object]] = {
+    "pressure_level": {"unit": "", "label": "Memory pressure level",
+                       "node": "pressure"},
+    # a percent of physical memory: its axis reaches 100 (ADR-0117)
+    "compressor_pct": {"unit": "%", "label": "Compressed memory",
+                       "node": "compressor", "axis_to": 100},
+    "swap_used_mb": {"unit": "MiB", "label": "Swap used", "node": "swap"},
+    "processes.*.rss_kb": {"unit": "KiB", "label": "Resident memory of *",
+                           "node": "processes/*"},
+}
 
 # (warn, error) — a value at or above the bound takes that status.
 DEFAULT_THRESHOLDS: dict[str, tuple[float, float]] = {
@@ -106,7 +123,7 @@ class MacosMemoryCheck(SshScriptCheck):
                  processes: tuple[ProcessSpec, ...] = (),
                  descriptions: dict[str, str] | None = None,
                  **kwargs: Any) -> None:
-        super().__init__(**kwargs)
+        super().__init__(measure_defaults=MEASURES, **kwargs)
         self.thresholds = thresholds
         self.processes = processes
         self.descriptions = descriptions or {}
@@ -156,7 +173,9 @@ class MacosMemoryCheck(SshScriptCheck):
     #: record's keys are its contract with whatever draws a curve over it later.
     BASE_KEYS = ("pressure_level", "free_pct", "swap_used_mb", "swap_total_mb",
                  "compressor_pct", "compressor_kb", "mem_total_kb")
-    #: And, per watched process, what the script reports about it.
+    #: And, per watched process, what the script reports about it — under
+    #: `processes`, keyed by the name the configuration gives the process, which
+    #: is its node's (ADR-0096 decision 2).
     PROCESS_KEYS = ("count", "rss_kb", "elapsed_seconds")
 
     def measure(self) -> Measurement:
@@ -167,17 +186,20 @@ class MacosMemoryCheck(SshScriptCheck):
         record = self._transport_record(result)
         metrics = parse_metrics(result.stdout)
         record.update(readings(metrics, *self.BASE_KEYS))
-        for index, _spec in enumerate(self.processes, 1):
-            record.update(readings(
-                metrics, *(f"proc{index}_{key}" for key in self.PROCESS_KEYS)))
+        if self.processes:
+            # The script numbers them in the order the configuration lists them;
+            # the name is the process's node, and its curve's (decision 2).
+            record["processes"] = {
+                spec.name: {key: reading(metrics.get(f"proc{index}_{key}"))
+                            for key in self.PROCESS_KEYS}
+                for index, spec in enumerate(self.processes, 1)}
         if metrics.get("profile_error"):
             record["profile_error"] = clip(metrics["profile_error"],
                                            chars=TRANSPORT_TEXT_CHARS,
                                            budget=TRANSPORT_TEXT_BYTES)
-        if not self._has_readings(record):
-            record["output"] = clip(oneline(result.stdout),
-                                    chars=TRANSPORT_TEXT_CHARS,
-                                    budget=TRANSPORT_TEXT_BYTES)
+        self._say_it_failed(record, result.stdout,
+                            readable=self._has_readings(record),
+                            nothing="connected, but no memory data")
         record.update({key: value for key, value in metrics.items()
                        if key.startswith("debug")})
         return Measurement(record=record)
@@ -219,11 +241,12 @@ class MacosMemoryCheck(SshScriptCheck):
         return CheckResult(StatusCode.UNDEFINED, children=tuple(children))
 
     def expected_record(self) -> int:
-        """Seven numbers plus three per watched process, beside the transport
-        half — all of them countable from this check's own configuration
-        (ADR-0075)."""
+        """Seven numbers plus three per watched process under its configured
+        name, beside the transport half — all of them countable from this check's
+        own configuration (ADR-0075)."""
         return (self._transport_record_bytes() + BASE_RECORD_BYTES
-                + len(self.processes) * PROCESS_RECORD_BYTES)
+                + sum(PROCESS_RECORD_BYTES + len(json.dumps(spec.name))
+                      for spec in self.processes))
 
     def _failed(self, reason: str, record: Mapping[str, Any], *,
                 code: StatusCode = StatusCode.ERROR) -> CheckResult:
@@ -265,10 +288,12 @@ class MacosMemoryCheck(SshScriptCheck):
             return unavailable("swap", description)
         used = float(value)
         warn, error = self.thresholds["swap"]
-        reason = f"{used:.0f} MB used"
+        # In the units the swap curve is written in, so the node and its curve
+        # write one figure one way (ADR-0096 decision 6); graded in MiB as before.
+        reason = f"{_mib(used)} used"
         total = record.get("swap_total_mb")
-        if total is not None:
-            reason += f" of {_number(total)} MB allocated"
+        if isinstance(total, (int, float)):
+            reason += f" of {_mib(float(total))} allocated"
         return CheckResult(grade(used, warn, error), [reason], name="swap",
                            description=description,
                            config=self._threshold_md("swap", " MB"))
@@ -290,19 +315,22 @@ class MacosMemoryCheck(SshScriptCheck):
 
     def _processes(self, record: Mapping[str, Any]) -> CheckResult:
         description = self._describe("processes", PROCESSES_DESCRIPTION)
-        children = tuple(
-            self._process_leaf(i, spec, record)
-            for i, spec in enumerate(self.processes, 1))
+        children = tuple(self._process_leaf(spec, record)
+                         for spec in self.processes)
         return CheckResult(StatusCode.UNDEFINED, name="processes",
                            description=description, children=children)
 
-    def _process_leaf(self, index: int, spec: ProcessSpec,
+    def _process_leaf(self, spec: ProcessSpec,
                       record: Mapping[str, Any]) -> CheckResult:
         description = f"Resident memory of processes matching `{spec.pattern}`"
         config = config_markdown({"pattern": spec.pattern,
                                   "warn at": f"{spec.warn_mb:g} MB",
                                   "error at": f"{spec.error_mb:g} MB"})
-        found = record.get(f"proc{index}_count")
+        watched = record.get("processes")
+        sub = watched.get(spec.name) if isinstance(watched, Mapping) else None
+        if not isinstance(sub, Mapping):
+            sub = {}
+        found = sub.get("count")
         if found is None:
             return unavailable(spec.name, description)
         count = int(found)
@@ -311,20 +339,25 @@ class MacosMemoryCheck(SshScriptCheck):
             # growth; liveness is another check's job (e.g. a file heartbeat).
             return CheckResult(StatusCode.OK, ["not running"], name=spec.name,
                                description=description, config=config)
-        rss_kb = record.get(f"proc{index}_rss_kb")
+        rss_kb = sub.get("rss_kb")
         if rss_kb is None:
             return unavailable(spec.name, description)
         rss_mb = float(rss_kb) / 1024.0
         noun = "process" if count == 1 else "processes"
-        reason = f"{rss_mb:.0f} MB RSS over {count} {noun}"
+        reason = f"{_mib(rss_mb)} RSS over {count} {noun}"
         # Uptime of the oldest match — informative even when OK: a scheduled
         # restart/recycle shows up as the uptime resetting instead of growing.
-        up = record.get(f"proc{index}_elapsed_seconds")
+        up = sub.get("elapsed_seconds")
         if up is not None:
             reason += f", oldest up {human_duration(float(up))}"
         return CheckResult(grade(rss_mb, spec.warn_mb, spec.error_mb),
                            [reason], name=spec.name, description=description,
                            config=config)
+
+
+def _mib(size: float) -> str:
+    """A size the script reports in MiB, as the curve beside it writes it."""
+    return format_weight(round(size * 1024 ** 2))
 
 
 def _number(value: object) -> str:

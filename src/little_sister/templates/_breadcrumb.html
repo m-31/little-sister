@@ -1,15 +1,43 @@
-{# Header breadcrumb (clickable path): the `status` root link plus a link per
-   ancestor segment; the current node (last crumb) is plain text. One flex item,
-   so the trail stays together and the node title sits beside it. Expects `branch`
-   in context (the node's url-branch path). #}
-<span class="text-nowrap flex-shrink-0">
-    <a href="{{ url_for('status') }}" class="text-decoration-none text-reset crumb">status</a>
+{# Header breadcrumb (clickable path): where the node stands in the tree, and
+   nothing about which view of it this is — the tabs say that (ADR-0097 decision 3).
+   The first crumb names the tree, `nodes`: what its first level holds is the
+   deployment's to choose, so the crumb names the kind of thing rather than any of
+   them. Each crumb opens the same view of that ancestor — the Status view, the
+   Series view, the History page, the Copy page — and `nodes` that view's root, which
+   for History is the overview and for Copy the tree's document (ADR-0115 decision
+   7). The current node (last crumb) is plain text. One flex item, on one
+   line with the node's title beside it while the band has the room. Where it has
+   not — a deep path on a phone — the trail takes as many lines as it needs
+   (`.ls-crumbs`), each ending in its slash: the space before a slash does not break,
+   the one after it does. Expects `branch` in context (the node's url-branch path),
+   and `view` on a page that is one. #}
+{%- set crumb_view = view | default('status') -%}
+{%- macro crumb_href(path) -%}
+    {%- if crumb_view == 'series' -%}
+        {#- A Series crumb carries the window the view is drawn over (ADR-0098
+            decision 2); the index takes none. -#}
+        {{- url_for('series', path=path, **(window_args | default({}))) if path
+            else url_for('series_index') -}}
+    {%- elif crumb_view == 'history' -%}
+        {{- url_for('history', path=path) if path else url_for('status') -}}
+    {%- elif crumb_view == 'copy' -%}
+        {{- url_for('copy', branch=path) if path else url_for('copy') -}}
+    {%- else -%}
+        {{- url_for('status', branch=path) if path else url_for('status') -}}
+    {%- endif -%}
+{%- endmacro -%}
+<span class="ls-crumbs">
+    {%- if branch %}
+    <a href="{{ crumb_href('') }}" class="text-decoration-none text-reset crumb">nodes</a>
+    {%- else %}
+    <span class="text-muted">nodes</span>
+    {%- endif %}
     {%- for name, path in branch | breadcrumbs -%}
-        <span class="text-muted"> / </span>
+        <span class="text-muted">&nbsp;/ </span>
         {%- if loop.last -%}
             <span class="text-muted">{{ name }}</span>
         {%- else -%}
-            <a href="{{ url_for('status', branch=path) }}" class="text-decoration-none text-reset crumb">{{ name }}</a>
+            <a href="{{ crumb_href(path) }}" class="text-decoration-none text-reset crumb">{{ name }}</a>
         {%- endif -%}
     {%- endfor -%}
 </span>

@@ -219,6 +219,39 @@ What the base class gives you and expects:
   **Where your object has no node at all** — a repository, a job run, a finding — it is
   a line, and the line carries its own: `Entry(slug, text, subject=…, data=…)`.
 
+  **A subject that has a history gets a node of its own**
+  ([ADR-0106](adr/0106-a-subject-with-a-history-has-a-node-of-its-own.md)). Where one of
+  several readings names something whose runs a reader looks back over — a workflow, a
+  job name, a pipeline — write its line on a child of your result made for it,
+  `CheckResult(name=…, reason=[Entry(slug, text, code=…, subject=…, data=…)])`, and not
+  on a node it shares with other subjects. **A node whose lines name one subject and no
+  other stands for that subject**: where the deployment keeps your check's series, that
+  subject's readings are on the node's History page, its curves on the node, and the
+  node has a Series view and a row in the Series index. Nothing else is asked of you:
+  the line is found as before, by its record and its subject, wherever in your result it
+  stands. Hand the node back whether or not the subject is well, so that it stands in
+  the tree and says so; name it by what its provider calls the thing, with a `title`
+  where that needs one, and say that a run names it — `dynamic=True` (§5, *A label for a
+  child only the run can name*); and hang it where your tree has a place for it —
+  beneath the node its line stood on, under what it belongs to where there is such a
+  thing. A line on that node that names no subject changes nothing. A node that carries
+  the lines of several subjects stands for none of them, and their readings stay on your
+  check's own History page, as does the object you declared in the constructor, wherever
+  a line names it. A finding, a pull request, an alert has no history and stays a line.
+  Know one thing before you move a subject of a kind that comes and goes: a node a run
+  stops returning stays in the tree, goes stale and degrades what stands above it until
+  the instance restarts — unless the node above it says that its children are complete
+  (§3, *Children that come and go*). Say that where your run listed every one of them,
+  and a subject that is gone leaves the tree with the first run that no longer finds it.
+
+  **The line that names a subject need not carry one of its readings**
+  ([ADR-0106](adr/0106-a-subject-with-a-history-has-a-node-of-its-own.md) decision 2).
+  Where the line you show is written from a reading you keep no history of — a
+  function's newest bucket, asked on every poll — and the subject's runs are other
+  readings, written for the record (§3), give that line the subject all the same. The
+  node then stands for the subject in a poll that read a run and in one that read none;
+  the line's own reading names no subject and is kept nowhere.
+
   A `record` is validated at the seam like a line's: JSON-serializable, bounded by
   `record_limit`, and `at` / `started` / `ended` at any depth must be times with an
   offset — and one it refuses costs what a line's does (below): a raise in your
@@ -290,7 +323,36 @@ What the base class gives you and expects:
   the subject it names — so hand the measurement's record over unchanged and give the
   line the reading's subject, or the reading is kept with neither. The exception is a
   reading among several that names the object you declared: where no line carries
-  it, it stood on your node, and it keeps what the one placed reading would.
+  it, it stood on your node, and it keeps what the one placed reading would. A run
+  your grading reads and does not show has no line to keep a code from: say how it
+  stood in `for_record` (§3).
+- **`self.kept(subject)`** *(yours to call, in `measure()` alone)* — what your check
+  kept of a subject: the window of that one series as the store holds it, oldest first,
+  each a `SeriesRecord` with `data` (the record), `at` (its own time), `observed_at`,
+  its `identity` or its `state`, and the `code` and the `texts` that stood where it
+  landed ([ADR-0113](adr/0113-a-measurement-reads-what-its-check-kept.md)). With no
+  argument it reads the object you declared. The records are copies, so writing to one
+  changes nothing. **It is for deciding what to ask.** Where your source keeps a history
+  — the runs of a job, the buckets of a metric — ask it from where your own history ends
+  instead of asking for the whole of it on every poll: the newest record's `at` says
+  where the history ends, its `observed_at` when you last looked, and what you read
+  again replaces its record by its identity, so ask a little further back than that, by
+  whatever your source may still deliver late. The answer is empty where the deployment
+  keeps no series of your check, where nothing of the subject is kept yet, and where
+  nothing bound a read at all; ask for your whole window then. A restart does not ask
+  for everything again, so a point your source delivers later than you look back for
+  stays missing unless you ask for the whole window from time to time — whether you do
+  is yours to decide. **A record stays a fact about the world**: do not write what you
+  derived from your history into a new one, since two instances would then keep
+  different records of one world, and a judgment over a history is not `measure()`'s to
+  make. **Under the engine only `measure()` may call it**, on the thread the engine
+  called it on: from `grade()` it raises, since a grading reads what it is handed and
+  fetches nothing ([ADR-0086](adr/0086-a-check-measures-and-grades.md) decision 6), and
+  a thread you start carries no mark, so read before you fan out. In your own tests you
+  stand in the engine's place: `check.bind_kept(reader)` binds what your type is to find
+  — `reader(subject)` answering records you built,
+  `SeriesRecord(data, observed_at, identity)` from `little_sister.series` — and you call
+  `measure()` yourself.
 - **`config_summary(self) -> str`** *(optional)* — Markdown display metadata for the
   detail page ([ADR-0013](adr/0013-check-config-on-node.md)). Build it with
   `config_markdown({"label": value, ...})`; **never** put a secret in here. Default
@@ -355,7 +417,11 @@ CheckResult(
     about:       str = "",                 # subnode subject label; child-only, fills empty (ADR-0025)
     title:       str = "",                 # subnode short label; child-only, fills empty (ADR-0025)
     order:       int = 0,                  # sibling rank; root AND children, fills unset (ADR-0055)
+    show_when_quiet: bool | None = None,   # quiet lines are the reading; child-only (ADR-0063)
     entries:     bool = False,             # declare plain strings to be members (ADR-0036)
+    for_record:  Sequence[Entry] = (),     # what you say of a reading you do not show (ADR-0111)
+    children_complete: bool = False,       # these children are all of them (ADR-0109)
+    dynamic:     bool = False,             # a run names this child, not your code (ADR-0118)
 )
 ```
 
@@ -371,7 +437,7 @@ constructor, but it is wrong: say why.
 
 - **Leaf** — the common case: `CheckResult(StatusCode.OK)` or
   `CheckResult(StatusCode.ERROR, ["what went wrong"])`.
-- **Branch (a dynamic subtree)** — return a root whose `children` are named
+- **Branch (a subtree)** — return a root whose `children` are named
   `CheckResult`s; each child may itself have children. The engine upserts the root at
   `check.path` and each child beneath it
   ([ADR-0007](adr/0007-check-result-branches.md)). **Every child must set `name`**
@@ -385,6 +451,38 @@ constructor, but it is wrong: say why.
   child subtrees, so the container belongs to nobody and simply rolls up (ADR-0015 —
   all three built-in metrics checks do this); a check that **owns** its container
   grades it, and child problems still surface through the roll-up.
+- **Children that come and go**
+  ([ADR-0109](adr/0109-a-node-says-its-children-are-complete.md)) — a child a run leaves
+  out **stays**: silence means *I could not read it*, so its last reading stands and
+  goes stale. Where a child stands for something that can cease to exist — a workflow, a
+  job name, a repository, a volume — say so when you know it. A node of your result that
+  carries `children_complete=True` says that its `children` are all of them, and a child
+  an earlier run wrote there that this run does not return is **removed** at once, with
+  everything beneath it, a row on the Events page for each node that went:
+
+  ```python
+  return CheckResult(children=tuple(node_for(job) for job in listed),
+                     children_complete=True)     # the listing was read whole
+  ```
+
+  The statement is about **that node's direct children** and nothing beneath them, so
+  make it level by level, each node for itself: a repository that did not answer is
+  handed back as a node that says nothing — its workflows stay as they were — while the
+  node above still says that its repositories are complete. Say it only in a run that
+  read **every** child of the node. A listing cut short by a page limit, a throttle or
+  one failed request among several is not complete, and leaving the statement unsaid
+  costs a stale node where saying it wrongly removes a healthy one. A wrong statement is
+  cheap all the same: the node returns with the next run that finds it, and nothing kept
+  about it went — its readings, which are your check's and keyed by subject, so they are
+  listed on your check's History page meanwhile and stand on the node again when it
+  returns; its history, as far back as the log reaches; and a pin on it, which is
+  suspended while the node is away, listed on the Maintenance page, and holds again from
+  the node's first reading. A node whose children are your type's fixed aspects never
+  says it, there being nothing a run could find gone. And it removes only what is yours:
+  a child another check owns on a mount you share
+  ([ADR-0015](adr/0015-check-discovery-union.md)) stays whatever you say. The keyword is
+  additive — `API_VERSION` does not move, and a type that never says it behaves as
+  before.
 - **When discovery itself fails**, the answer depends on who failed
   ([ADR-0060](adr/0060-a-line-makes-no-claim.md) decision 3). A failure the service
   **answered** — an owner or team that is not there, a credential that may not look —
@@ -392,8 +490,9 @@ constructor, but it is wrong: say why.
   `CheckResult(StatusCode.ERROR, ["discovery failed: …"])`.
   A **transient** failure — a 5xx, a dropped connection, a throttle — is *we could not
   ask*, and grading the whole tree for it is the thing that rule exists to stop:
-  return `WARN` naming the coverage gap. Either way return **no children**, and note
-  what that does and does not do: omitted children are **not pruned** (ADR-0007), so
+  return `WARN` naming the coverage gap. Either way return **no children** and leave
+  `children_complete` unsaid, and note what that does and does not do: children a
+  result leaves out without that statement are **not removed** (ADR-0007, ADR-0109), so
   the subtree keeps the last good run's readings and their timestamps, and freshness
   ([ADR-0005](adr/0005-dashboard-freshness-and-self-monitoring.md)) is left to say
   honestly that they are old. In the `ERROR` case the root's own code dominates the
@@ -507,28 +606,87 @@ constructor, but it is wrong: say why.
   interpolate raw external bytes straight into a reason.
 - **A time in a sentence reads the way the page reads it.** Write an instant with
   `little_sister.spans.local_time`, which uses the deployment's configured `timezone`
-  and `time_format` ([ADR-0006](adr/0006-config-file-and-timezones.md)) — never a zone
-  of your own, and never the UTC your source handed you — and a span with
+  and `time_format` ([ADR-0120](adr/0120-every-stored-time-is-an-instant.md)) — never a
+  zone of your own, and never the UTC your source handed you — and a span with
   `format_span`, `coarse_span` or `format_duration`, whichever reading it is (their
   docstrings say which). A sentence that says *the lease lapsed at …* in `GMT`, beside a
   page whose every other time is in the configured zone, reads as a different moment.
+  **An instant carries its zone**, whichever zone that is: hand the function the time
+  with the offset your source gave it, or `datetime.now(UTC)`. It refuses a time
+  without a zone, which it could only read as the machine's own, and your run is then
+  an ERROR that says so; a source that names no zone is yours to settle where you parse
+  it. The same goes for a time in a message you log.
 - **Declare what your record's numbers are: `measure_defaults`**
-  ([ADR-0092](adr/0092-a-check-declares-its-measures.md)). Where a deployment keeps
-  your check's series, the node that stands for its subject draws a curve for each of
-  the check's **measures** — fields of your record, by the dotted name its record list
-  spells them with, each in a unit. What a field means and in which unit is your
+  ([ADR-0092](adr/0092-a-check-declares-its-measures.md),
+  [ADR-0096](adr/0096-a-measure-names-its-node-and-its-things.md)). Where a deployment
+  keeps your check's series, each of the check's **measures** — fields of your
+  record, by the dotted name its record list spells them with, each in a unit — is a
+  curve on the node it names, and every curve at or beneath a node is on that node's
+  Series view. What a field means, in which unit, and which node grades it is your
   type's knowledge, so declare it once in the constructor, shaped like the YAML block:
   `super().__init__(subject=url, measure_defaults={"response_ms": {"unit": "ms",
   "label": "Response time"}}, **kwargs)`, or `{"field": "unit"}` where the field's name
-  is label enough. Whether it is drawn is the deployment's: its `measures:` block is
-  read by the library and merged over yours **per field** — naming a field takes it
-  whole, `null` removes one, and every field it does not name keeps your default — so
-  do not read `measures:` yourself. A unit is free text and is never refused; `ms` and
-  `s` are written as spans (`1.9 s`), so prefer them for a time. Keep the record's
-  shape the same on every path, with a null where a reading failed: a null is drawn as
-  a marked break, and a field that is simply missing reads as one too — never as a
-  zero. A declaration of another shape refuses the load like any configuration
-  error.
+  is label enough. `node` is a path from the node the reading's series is shown on —
+  your check's own, or the subject's own where a reading among several has one —
+  `{"unit": "%", "node": "memory"}` for the aspect that grades the number — and the
+  curve stands on that node itself where it names none. Whether it is drawn is the
+  deployment's:
+  its `measures:` block is read by the library and merged over yours **per field** —
+  naming a field takes it whole, `null` removes one, and every field it does not name
+  keeps your default — so do not read `measures:` yourself. A unit is free text and is
+  never refused; `ms` and `s` are written as spans (`1.9 s`) and `B`, `KiB`, `MiB`,
+  `GiB` and `TiB` as sizes (`18.3 GiB`), so prefer them for a time or a size. **Give
+  a percent of a whole its end**: `{"unit": "%", "axis_to": 100}` draws its curve and
+  its sparkline on an axis that reaches 100 whatever the readings are, so two hosts'
+  curves compare; a reading above it grows the axis, so it is never a limit, and a
+  number with no such end — a load, a rate — declares none
+  ([ADR-0117](adr/0117-a-measure-says-where-its-axis-reaches.md)). A
+  declaration of another shape refuses the load like any configuration error.
+- **Key the things your record counts by the names of the nodes they become**
+  ([ADR-0096](adr/0096-a-measure-names-its-node-and-its-things.md) decision 2) —
+  `volumes: {root: {"pct": 51}}`, `drives: {drive3: {"temp_c": 38}}` — never by where
+  a thing stood in one run's output: a curve follows the key, and an index would move
+  it to another thing the day the order moved. A measure picks every key with one `*`,
+  which stands for the key in its node and its label too:
+  `{"volumes.*.pct": {"unit": "%", "label": "Used on *", "node": "disk/*"}}` is a
+  curve per volume the kept readings hold, each on its own node.
+- **Say that a reading failed in its record's `error`**
+  ([ADR-0096](adr/0096-a-measure-names-its-node-and-its-things.md) decision 4). A
+  curve marks exactly the readings whose record carries an `error` that is not null —
+  the key the engine writes when your check raises and the seam writes for a record
+  it refused — so a run that catches its own failure and still hands back a
+  measurement puts its sentence there, and a reading that answered leaves `error`
+  out or null. Keep the record's shape the same on every path, with a null where a
+  number was not read: a reading that answered without a number breaks the line with
+  no mark, a field that is simply missing reads as null too, and neither is ever
+  drawn as a zero.
+- **Say how every run you read stood — the ones you do not show, for the record**
+  ([ADR-0111](adr/0111-a-runs-mark-says-how-the-run-stood.md)). A reading that names an
+  `identity` is a **run**, and the node that stands for its subject draws its runs as
+  marks at their own times: a tick for each, or a stem to its value under a measure you
+  declare. What a mark says is the code the reading kept — a pass, a warning, a failure
+  — and a run that kept none is drawn bare, as a run that happened and nothing more. A
+  reading keeps a code only through a line that carries its record (§2), and every poll
+  that reads a run again replaces what was kept with what stands then. So where one poll
+  reads several runs of a subject — every run in a window, the last hundred of a queue —
+  show the newest on the subject's node and write a line for each of the others in
+  `for_record`:
+
+  ```python
+  CheckResult(name="import", dynamic=True, reason=[line(newest)],
+              for_record=[line(run) for run in older])
+  ```
+
+  where `line(reading)` is
+  `Entry(slug, text, code=…, subject=reading.subject, data=reading.record)`. Each such
+  line carries **its own code** and **the reading's record, unchanged**, and the result
+  is refused without either. No node sees it: it reaches no node's code, no line cap, no
+  envelope and no pin, and its slug need not be unique. The run's reading keeps the
+  line's code and its sentence, which the readings table shows beside the mark. Write
+  the line on every poll that reads the run, since a run you say nothing of is kept
+  without a verdict from that poll on; and where a shown line carries the same reading,
+  that line is what stood. A reading that names a `state` is no run and has no mark: it
+  is a row of its readings table.
 - **`report` — what the run found** ([ADR-0044](adr/0044-run-facts-on-the-node.md)) —
   the outputs field beside `config`'s inputs: the repositories in scope, the volumes
   enumerated, the queues discovered. Markdown, shown on the node's own page — never
@@ -729,13 +887,24 @@ it before importing `little_sister.app`.
   **construction**, so a token value must be a construction-time fact — a label freezes
   at the node's first fill, and text that changes with an observation belongs in
   `reason`.
-- **A label for a child only the run can name.** `CheckResult.about` / `title` stay for
-  the child whose name no declaration could have anticipated — a volume, a repository,
-  a tenant the run discovered. They are read **per field**, and only where the resolved
-  map says nothing for that name. A check that wants such a child to inherit an
-  aspect's text reads the resolved map, `self.subnode_labels[name][field]`, rather than
-  its own constant: that is what carries a deployment's override down to it
-  (`host-metrics`' per-volume leaves under `disk`).
+- **A label for a child only the run can name.** A volume, a repository, a function, an
+  account a deployment configured: where you name a node from what you read, and not
+  from a constant of your own, **say so — `CheckResult(name=…, dynamic=True)`**
+  ([ADR-0118](adr/0118-a-child-a-run-names-takes-nothing-declared-for-its-name.md)).
+  Nothing declared for a name then reaches that node — neither your `subnode_defaults`
+  nor the deployment's `subnodes:` block — so a function its account calls `batch` is
+  not labeled as your `batch` aspect. Its labels are the `about`, `title` and
+  `show_when_quiet` its own result carries, **each field for itself**, and a deployment
+  labels it by path, in `nodes.yaml`. Say it of each such node: it holds for that node
+  and for none beneath it, and a root ignores it. And say it on **every** result you
+  hand back for the node, the one that says it could not be read too: a label fills an
+  empty field and stays, so one run that leaves the word out lets what is declared for
+  the name in until the instance restarts. A child that does not say so is read
+  by its name — its own `about` / `title` then count only where the resolved map says
+  nothing for that name, which lasts until a source calls a thing by a name you declare.
+  A check that wants such a child to inherit an aspect's text reads the resolved map,
+  `self.subnode_labels[name][field]`, rather than its own constant: that is what carries
+  a deployment's override down to it (`host-metrics`' per-volume leaves under `disk`).
 - **Declaring that a node's quiet lines are the reading.** Most reason text is
   diagnostic — while the node is quiet there is nothing to read — but some checks'
   lines are an **inventory**: one line per instance, per volume, per account, read
@@ -762,8 +931,9 @@ it before importing `little_sister.app`.
   like to be more visible — a wall of declared nodes is a configuration smell, and
   dense mode's benefit shrinks by exactly as much as somebody declares.
   `CheckResult.show_when_quiet` stays for the child a run *names* — a volume, an
-  instance — which is the same dynamic-child channel the labels keep; the root's own
-  source is the `show_when_quiet:` key in its YAML, which no result may overrule.
+  instance — which is the same dynamic-child channel the labels keep, and the one source
+  a type has for the flag of a child that says `dynamic`; the root's own source is the
+  `show_when_quiet:` key in its YAML, which no result may overrule.
 - **Ownership** — two checks may not own overlapping nodes; the loader rejects the
   whole load with a named conflict. A branch check that shares a container overrides
   `owned_nodes()` to own its child subtrees only (§2), so peers can coexist (ADR-0015).
@@ -1147,7 +1317,8 @@ The same applies to every other boolean knob beside it: a quoted `show_healthy`
 listing a hundred healthy lines is the identical failure with a friendlier face.
 
 **The shape, in code.** A class-level roster the key is read against, and one
-accessor the tree is built from:
+accessor both halves go by — `measure()` reads the aspects it names and no other,
+and `grade()` builds their nodes:
 
 ```python
 class MyCheck(Check):
@@ -1159,17 +1330,26 @@ class MyCheck(Check):
         return tuple(name for name in self.ASPECTS
                      if self._block(name).enabled)
 
-    def run(self) -> CheckResult:
+    def measure(self) -> list[Measurement]:
+        read = {"pull_requests": self._read_pull_requests,
+                "security_advisories": self._read_security_advisories,
+                "actions": self._read_actions}
+        # An aspect that is off is not read: its call is never made.
+        return [reading for name in self.active_aspects()
+                for reading in read[name]()]
+
+    def grade(self, measurements: Sequence[Measurement],
+              now: datetime) -> CheckResult:
         build = {"pull_requests": self._pull_requests,
                  "security_advisories": self._security_advisories,
                  "actions": self._actions}
         return CheckResult(StatusCode.OK, [self._scope_reason()],
-                           children=tuple(build[name]()
+                           children=tuple(build[name](measurements)
                                           for name in self.active_aspects()))
 ```
 
 `_block(name)` is whatever holds that aspect's parsed settings — a per-aspect frozen
-dataclass, or a slice of one config object. Spell the mapping out rather than
+dataclass, or a slice of one config object. Spell each mapping out rather than
 reaching for `getattr`: the attribute names are already written in the constructor,
 and `getattr` hands a type checker an `Any` at the one seam worth checking.
 

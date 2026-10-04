@@ -1,17 +1,20 @@
-"""Branch pins in the UI (ADR-0014): the card pin control and the subtree
-page's maintenance card. The model, POST /maintenance, persistence and the
-reaper always accepted a container pin — these tests pin the surfaces down."""
+"""Branch pins in the UI (ADR-0014): a card's pause mark and a branch's head.
+The model, POST /maintenance, persistence and the reaper always accepted a
+container pin — these tests pin the surfaces down. Where each stands, and what
+its editor says, is `tests/test_wall_pins.py`'s (ADR-0104)."""
 
 import os
 import re
+import time
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
-from unittest import TestCase, mock
+from unittest import TestCase, mock, skipUnless
 from zoneinfo import ZoneInfo
 
 os.environ.setdefault("SECRET_KEY", "test-key")
 
 from little_sister import app as app_module
+from little_sister import instants
 from little_sister.app import (
     _maintenance_pins,
     _maintenance_rows,
@@ -19,10 +22,11 @@ from little_sister.app import (
 )
 from little_sister.status import StatusCode
 from little_sister.tree import StatusTree
+from tests.page_tree import parse
 
-# The shared maintenance card's heading — distinguishes the card from the pin
-# dialog, whose title reads "Maintenance — <name>".
-CARD_HEADING = 'text-uppercase">Maintenance<'
+# What every editor of a pin is: the form the card at the foot of a branch's
+# page and the wall's dialog once held, and a card and a branch's head hold now.
+EDITOR = "maintenance-editor-form"
 
 
 class BranchPinTests(TestCase):
@@ -42,122 +46,136 @@ class BranchPinTests(TestCase):
             sess["firstname"] = "Vera"
             sess["admin"] = False
 
-    # ----- the card pin control -----
+    # ----- a card's pause mark -----
 
-    def test_admin_card_head_carries_pin_control(self):
+    def test_admin_card_head_carries_the_pause_mark(self):
         self._login()
         self.tree.upsert("/system/alpha/disk", StatusCode.OK)
         body = self.client.get("/status").get_data(as_text=True)
         self.assertIn('class="pin-control"', body)
-        self.assertIn('data-pin-path="/system"', body)
-        self.assertIn('data-pin-kids="1"', body)           # a branch card
-        self.assertIn('aria-haspopup="dialog"', body)
-        # the no-JS fallback is the node's own page
-        self.assertIn('href="/status/system"\n   role="button"', body)
+        self.assertIn('aria-label="set maintenance for /system"', body)
+        # the mark is the summary of the browser's own disclosure: it opens the
+        # editor in the card, with no dialog to script and no link to follow
+        self.assertNotIn('aria-haspopup="dialog"', body)
+        self.assertNotIn('role="button"', body)
+        self.assertIn(
+            "<strong>Maintenance for system and everything beneath it.</strong>",
+            body)
         self.assertIn("Which formats can I use?", body)
 
-    def test_viewer_sees_no_pin_control_or_dialog(self):
+    def test_viewer_sees_no_pause_mark_and_no_editor(self):
         self._viewer()
         self.tree.upsert("/system/alpha", StatusCode.OK)
         body = self.client.get("/status").get_data(as_text=True)
         self.assertNotIn("pin-control", body)
-        self.assertNotIn("pin-card", body)
-        self.assertNotIn("js/pin.js", body)
+        self.assertNotIn(EDITOR, body)
 
-    def test_kiosk_hides_pin_control_and_dialog_even_for_admin(self):
+    def test_kiosk_hides_the_pause_mark_even_for_admin(self):
         # the kiosk is the wall display: no chrome to click (ADR-0029)
         self._login()
         self.client.set_cookie("ls_prefs", "layout=kiosk")
         self.tree.upsert("/system/alpha", StatusCode.OK)
         body = self.client.get("/status").get_data(as_text=True)
         self.assertNotIn("pin-control", body)
-        self.assertNotIn("pin-card", body)
+        self.assertNotIn(EDITOR, body)
 
-    def test_control_rides_the_fragment_dialog_ships_with_the_page(self):
+    def test_mark_and_editor_ride_the_fragment(self):
+        # both stand in what the refresh swaps, so the fragment brings them
         self._login()
         self.tree.upsert("/db", StatusCode.OK)
         frag = self.client.get("/status?fragment=1").get_data(as_text=True)
-        page = self.client.get("/status").get_data(as_text=True)
-        self.assertIn("pin-control", frag)
-        self.assertNotIn('id="pin-card"', frag)
-        self.assertNotIn("js/pin.js", frag)
-        self.assertIn('id="pin-card"', page)
-        self.assertIn("js/pin.js", page)
+        self.assertIn('class="pin-control"', frag)
+        self.assertIn(EDITOR, frag)
+        self.assertIn("<strong>Maintenance for db.</strong>", frag)
 
-    def test_leaf_card_control_has_no_kids_marker(self):
+    def test_leaf_card_names_the_node_alone(self):
         self._login()
         self.tree.upsert("/uplink", StatusCode.OK)
         body = self.client.get("/status").get_data(as_text=True)
-        self.assertIn('data-pin-path="/uplink"', body)
-        self.assertNotIn("data-pin-kids", body)
+        self.assertIn("<strong>Maintenance for uplink.</strong>", body)
+        self.assertNotIn("everything beneath it", body)
 
-    def test_pinned_card_control_carries_pin_state(self):
+    def test_pinned_card_states_the_pin_and_has_no_mark(self):
         self._login()
         self.tree.upsert("/db/ping", StatusCode.OK)
         self.tree.set_maintenance(
-            "/db", "planned", expires_at=datetime.now() + timedelta(hours=2),
+            "/db", "planned", expires_at=datetime.now(UTC) + timedelta(hours=2),
             set_by="pan")
         body = self.client.get("/status").get_data(as_text=True)
-        self.assertIn('data-pin-pinned="1"', body)
-        self.assertIn("data-pin-expires=", body)
+        self.assertIn("Silenced by <strong>pan</strong> until ", body)
+        self.assertIn("1h 59m left", body)
+        self.assertNotIn("pin-control", body)
 
-    # ----- the subtree page's maintenance card -----
+    # ----- a branch's head -----
 
-    def test_branch_page_shows_the_maintenance_card(self):
+    def test_branch_page_sets_maintenance_from_its_head(self):
         self._login()
         self.tree.upsert("/system/alpha/disk", StatusCode.OK)
         body = self.client.get("/status/system/alpha").get_data(as_text=True)
-        self.assertIn(CARD_HEADING, body)
-        self.assertIn("Silences <strong>/system/alpha</strong>", body)
-        self.assertIn("nothing under here will alarm", body)
-        self.assertIn("default 7d", body)                  # the deployment default
+        head = body.split('class="status-node viewed-head', 1)[1].split(
+            'class="status-grid"', 1)[0]
+        self.assertIn("Set maintenance</summary>", head)
+        self.assertIn("<strong>Maintenance for this node.</strong>", head)
+        self.assertIn("nothing under here will alarm", head)
+        self.assertIn('name="path" value="system/alpha"', head)
+        self.assertIn("default 7d", head)                  # the deployment default
 
     def test_branch_page_shows_the_current_pin(self):
         self._login()
         self.tree.upsert("/system/alpha/disk", StatusCode.OK)
         self.tree.set_maintenance(
             "/system/alpha", "rebuild",
-            expires_at=datetime.now() + timedelta(days=1), set_by="pan")
+            expires_at=datetime.now(UTC) + timedelta(days=1), set_by="pan")
         body = self.client.get("/status/system/alpha").get_data(as_text=True)
-        self.assertIn("This node is in maintenance.", body)
-        self.assertIn("Clear maintenance", body)
+        head = body.split('class="status-node viewed-head', 1)[1].split(
+            'class="status-grid"', 1)[0]
+        self.assertIn(
+            "<strong>This node</strong> is silenced by <strong>pan</strong>", head)
+        self.assertIn("<p>rebuild</p>", head)
+        self.assertIn(">Clear<", head)
 
-    def test_overview_root_gets_no_maintenance_card(self):
+    def test_overview_root_gets_no_head(self):
         # a silence-everything form on the overview is a foot-gun; the root
         # stays curl-only
         self._login()
         self.tree.upsert("/db", StatusCode.OK)
         body = self.client.get("/status").get_data(as_text=True)
-        self.assertIn('id="pin-card"', body)               # the dialog ships
-        self.assertNotIn(CARD_HEADING, body)               # the card does not
+        self.assertNotIn("viewed-head", body)
+        # one editor, the card's, for /db
+        self.assertEqual(body.count(f'class="{EDITOR} '), 1)
+        self.assertIn('name="path" value="/db"', body)
 
-    def test_viewer_branch_page_has_no_maintenance_card(self):
+    def test_viewer_branch_page_has_no_editor(self):
         self._viewer()
         self.tree.upsert("/system/alpha/disk", StatusCode.OK)
         body = self.client.get("/status/system/alpha").get_data(as_text=True)
-        self.assertNotIn(CARD_HEADING, body)
+        self.assertNotIn(EDITOR, body)
 
-    def test_missing_branch_page_survives_the_admin_card(self):
+    def test_missing_branch_page_has_no_editor(self):
         self._login()
+        # nothing is pinned at the path, so its page (ADR-0116) has nothing to edit
         body = self.client.get("/status/nope").get_data(as_text=True)
-        self.assertIn("No such branch", body)
-        self.assertNotIn(CARD_HEADING, body)
+        self.assertIn("ls-no-node", body)
+        self.assertNotIn(EDITOR, body)
 
-    def test_kiosk_branch_page_has_no_maintenance_card(self):
+    def test_kiosk_branch_page_has_no_editor(self):
         self._login()
         self.client.set_cookie("ls_prefs", "layout=kiosk")
         self.tree.upsert("/system/alpha/disk", StatusCode.OK)
         body = self.client.get("/status/system/alpha").get_data(as_text=True)
-        self.assertNotIn(CARD_HEADING, body)
+        self.assertNotIn(EDITOR, body)
 
-    def test_leaf_detail_page_keeps_its_form(self):
+    def test_leaf_detail_page_sets_maintenance_from_its_status_line(self):
+        # the card at the foot is gone from a leaf's page (ADR-0104); the form
+        # it held opens from the status line, and tests/test_pin_block.py says
+        # where
         self._login()
         self.tree.upsert("/svc/api", StatusCode.OK)
         body = self.client.get("/status/svc/api").get_data(as_text=True)
-        self.assertIn(CARD_HEADING, body)
+        self.assertNotIn('text-uppercase">Maintenance<', body)
         self.assertIn("Set maintenance", body)
-        self.assertIn("Silences <strong>/svc/api</strong>", body)
-        self.assertIn("The check keeps running", body)     # the leaf sentence
+        self.assertIn("Maintenance for this node.", body)
+        self.assertIn("the check keeps running", body)     # the leaf sentence
         self.assertIn("default 7d", body)
         self.assertIn("Duration or expiry", body)
         self.assertIn("Which formats can I use?", body)
@@ -244,7 +262,7 @@ class EditAndConflictTests(TestCase):
 
     def _pin(self, path="/db", reason="ada wrote this", by="ada"):
         return self.tree.set_maintenance(
-            path, reason, expires_at=datetime.now() + timedelta(days=1),
+            path, reason, expires_at=datetime.now(UTC) + timedelta(days=1),
             set_by=by).current
 
     # ----- the set form is reachable, and prefilled, while pinned -----
@@ -255,12 +273,16 @@ class EditAndConflictTests(TestCase):
         self._pin("/system/alpha", "rebuild")
         body = self.client.get("/status/system/alpha").get_data(as_text=True)
         self.assertIn("Save changes", body)                 # not only "Clear"
-        self.assertIn("Clear maintenance", body)
-        self.assertIn('id="node-maintenance-reason" name="reason"', body)
+        self.assertIn(">Clear<", body)
+        self.assertIn('id="head-maintenance-reason" name="reason"', body)
         self.assertIn('placeholder="why?">rebuild</textarea>', body)
-        # expiry is deliberately NOT prefilled: blank is the configured default
-        # here exactly as it is on an unpinned node
-        self.assertIn('id="node-maintenance-duration" name="duration" value=""', body)
+        # the expiry is filled with the one an untouched edit keeps (ADR-0104
+        # decision 5), which amended "blank is the default" for an edit
+        entry = self.tree.maintenance_entry("/system/alpha")
+        assert entry is not None
+        was = app_module._expiry_input(entry.expires_at)
+        self.assertIn(
+            f'id="head-maintenance-duration" name="duration" value="{was}"', body)
         self.assertIn('placeholder="e.g. 2h or Friday — default 7d"', body)
 
     def test_pinned_node_is_rendered_first_and_keeps_raw_markdown_to_edit(self):
@@ -277,7 +299,9 @@ class EditAndConflictTests(TestCase):
         self.assertIn('href="https://ops.example/runbook"', body)
         self.assertIn("&lt;script&gt;x&lt;/script&gt;", body)
         self.assertNotIn("<script>x</script>", body)
-        self.assertIn(">Edit maintenance</summary>", body)
+        self.assertIn(
+            '>Edit<span class="visually-hidden"> this node\'s maintenance</span>'
+            "</summary>", body)
         self.assertIn("**Rebuild** — [runbook]", body)  # raw textarea source
 
 
@@ -288,7 +312,7 @@ class EditAndConflictTests(TestCase):
         assert entry is not None
         body = self.client.get("/status/system/alpha").get_data(as_text=True)
         self.assertEqual(
-            body.count(f'name="set_at" value="{entry.set_at}"'), 2)
+            body.count(f'name="set_at" value="{entry.token}"'), 2)
 
     def test_unpinned_form_claims_nothing_is_pinned(self):
         self._login()
@@ -296,25 +320,25 @@ class EditAndConflictTests(TestCase):
         body = self.client.get("/status/system/alpha").get_data(as_text=True)
         self.assertIn('name="set_at" value=""', body)
 
-    def test_pinned_card_control_carries_reason_and_token(self):
+    def test_pinned_card_carries_the_note_s_source_and_the_token(self):
         self._login()
         self.tree.upsert("/db/ping", StatusCode.OK)
         entry = self._pin("/db", "planned")
         assert entry is not None
         body = self.client.get("/status").get_data(as_text=True)
-        self.assertIn('data-pin-reason="planned"', body)
-        self.assertIn(f'data-pin-token="{entry.set_at}"', body)
-        self.assertIn('data-pin-by="ada"', body)
+        self.assertIn('placeholder="why?">planned</textarea>', body)
+        # Edit and Clear both name the pin they believe they are changing
+        self.assertEqual(
+            body.count(f'name="set_at" value="{entry.token}"'), 2)
+        self.assertIn("Silenced by <strong>ada</strong>", body)
 
-    def test_pinned_card_carries_server_rendered_read_source(self):
+    def test_pinned_card_reads_first_and_keeps_the_raw_source_to_edit(self):
         self._login()
         self.tree.upsert("/db/ping", StatusCode.OK)
         self._pin("/db", "See **runbook**")
         body = self.client.get("/status").get_data(as_text=True)
-        self.assertIn('class="pin-control__reason-source"', body)
-        self.assertIn("<strong>runbook</strong>", body)
-        self.assertIn('id="pin-card-read"', body)
-        self.assertIn('id="pin-card-edit"', body)
+        self.assertIn("<p>See <strong>runbook</strong></p>", body)
+        self.assertIn('placeholder="why?">See **runbook**</textarea>', body)
 
     def test_editing_keeps_the_reason_and_the_original_author(self):
         self._login()
@@ -323,7 +347,7 @@ class EditAndConflictTests(TestCase):
         assert entry is not None
         response = self.client.post("/maintenance", data={
             "path": "/db", "action": "set", "reason": "planned kernel upgrade",
-            "duration": "3d", "set_at": entry.set_at})
+            "duration": "3d", "set_at": entry.token})
         self.assertEqual(response.status_code, 302)         # no conflict
         after = self.tree.maintenance_entry("/db")
         assert after is not None
@@ -340,7 +364,7 @@ class EditAndConflictTests(TestCase):
         assert entry is not None
         self.client.post("/maintenance", data={
             "path": "/db", "action": "set", "reason": "planned, longer",
-            "duration": "3d", "set_at": entry.set_at})
+            "duration": "3d", "set_at": entry.token})
         body = self.client.get("/status/db").get_data(as_text=True)
         self.assertIn("Pinned by <strong>ada</strong>", body)
         self.assertIn("Last changed by <strong>pan</strong>", body)
@@ -355,7 +379,7 @@ class EditAndConflictTests(TestCase):
         self._pin("/db", "ben wrote this", by="ben")           # ben got there first
         response = self.client.post("/maintenance", data={
             "path": "/db", "action": "set", "reason": "pan wrote this",
-            "duration": "2h", "set_at": stale.set_at, "next": "/status?depth=2"})
+            "duration": "2h", "set_at": stale.token, "next": "/status?depth=2"})
         self.assertEqual(response.status_code, 200)         # not a redirect
         body = response.get_data(as_text=True)
         self.assertIn("Nothing was saved", body)
@@ -377,36 +401,57 @@ class EditAndConflictTests(TestCase):
         assert fresh is not None
         body = self.client.post("/maintenance", data={
             "path": "/db", "action": "set", "reason": "mine",
-            "set_at": stale.set_at}).get_data(as_text=True)
-        self.assertIn(f'name="set_at" value="{fresh.set_at}"', body)
-        self.assertNotIn(f'name="set_at" value="{stale.set_at}"', body)
+            "set_at": stale.token}).get_data(as_text=True)
+        self.assertIn(f'name="set_at" value="{fresh.token}"', body)
+        self.assertNotIn(f'name="set_at" value="{stale.token}"', body)
 
     def test_taking_the_stored_reason_is_one_click(self):
         self._login()
         self.tree.upsert("/db/ping", StatusCode.OK)
         stale = self._pin("/db", "ada wrote this")
         assert stale is not None
-        self._pin("/db", "ben wrote this", by="ben")
+        fresh = self._pin("/db", "ben wrote this", by="ben")
+        assert fresh is not None
         body = self.client.post("/maintenance", data={
             "path": "/db", "action": "set", "reason": "mine", "duration": "2h",
-            "set_at": stale.set_at}).get_data(as_text=True)
-        self.assertIn("Keep the stored reason", body)
+            "set_at": stale.token}).get_data(as_text=True)
+        self.assertIn("Keep the stored note", body)
         self.assertIn('name="reason" value="ben wrote this"', body)
         self.assertIn('name="duration" value="2h"', body)   # my window kept
+        # and the click is taken: its form names the pin as it stands now
+        (form,) = [form for form in parse(body).all(tag="form")
+                   if "Keep the stored note" in form.text()]
+        hidden = {box.attrs["name"]: box.attrs.get("value", "")
+                  for box in form.all(tag="input")}
+        self.assertEqual(hidden["set_at"], fresh.token)
+        taken = self.client.post("/maintenance", data=hidden)
+        self.assertEqual(taken.status_code, 302)
+        entry = self.tree.maintenance_entry("/db")
+        assert entry is not None
+        self.assertEqual(entry.reason, "ben wrote this")
+        self.assertNotEqual(entry.expires_at, fresh.expires_at)
 
     def test_clearing_someone_elses_pin_is_refused_too(self):
         self._login()
         self.tree.upsert("/db/ping", StatusCode.OK)
         stale = self._pin("/db", "ada wrote this")
         assert stale is not None
-        self._pin("/db", "ben wrote this", by="ben")
+        fresh = self._pin("/db", "ben wrote this", by="ben")
+        assert fresh is not None
         response = self.client.post("/maintenance", data={
-            "path": "/db", "action": "clear", "set_at": stale.set_at})
+            "path": "/db", "action": "clear", "set_at": stale.token})
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
         self.assertIn("Clear this pin", body)
         self.assertIn("ben wrote this", body)
         self.assertEqual(self.tree.effective("/db"), StatusCode.MAINTENANCE)
+        # the form that clears it anyway names the pin as it stands now
+        self.assertIn(f'name="set_at" value="{fresh.token}"', body)
+        self.assertNotIn(f'name="set_at" value="{stale.token}"', body)
+        cleared = self.client.post("/maintenance", data={
+            "path": "/db", "action": "clear", "set_at": fresh.token})
+        self.assertEqual(cleared.status_code, 302)
+        self.assertIsNone(self.tree.maintenance_entry("/db"))
 
     def test_a_pin_that_vanished_says_so(self):
         self._login()
@@ -416,7 +461,7 @@ class EditAndConflictTests(TestCase):
         self.tree.clear_maintenance("/db")                  # expired, or cleared
         body = self.client.post("/maintenance", data={
             "path": "/db", "action": "set", "reason": "mine",
-            "set_at": stale.set_at}).get_data(as_text=True)
+            "set_at": stale.token}).get_data(as_text=True)
         self.assertIn("gone — someone cleared it", body)
         self.assertIn('name="set_at" value=""', body)       # re-pin from nothing
         self.assertIn('placeholder="why?">mine</textarea>', body)  # my words survive
@@ -450,11 +495,10 @@ class EditAndConflictTests(TestCase):
         assert entry is not None
         self.client.post("/maintenance", data={
             "path": "/db", "action": "set", "reason": "planned, longer",
-            "set_at": entry.set_at})
+            "set_at": entry.token})
         body = self.client.get("/maintenance").get_data(as_text=True)
-        self.assertIn("pinned by <strong>ada</strong>", body)
-        self.assertIn("last changed by", body)
-        self.assertIn("<strong>pan</strong>", body)
+        self.assertIn("Pinned by <strong>ada</strong>", body)
+        self.assertIn("Last changed by <strong>pan</strong>", body)
 
     def test_maintenance_page_renders_the_explanation_as_markdown(self):
         self._login()
@@ -469,8 +513,8 @@ class EditAndConflictTests(TestCase):
         self.tree.upsert("/db/ping", StatusCode.OK)
         self._pin("/db", "planned")
         body = self.client.get("/maintenance").get_data(as_text=True)
-        self.assertIn("pinned by <strong>ada</strong>", body)
-        self.assertNotIn("last changed by", body)
+        self.assertIn("Pinned by <strong>ada</strong>", body)
+        self.assertNotIn("Last changed by", body)
 
     def test_popover_names_the_last_writer(self):
         self._login()
@@ -489,7 +533,7 @@ class EditAndConflictTests(TestCase):
         self._pin("/db", 'ben\'s "big" upgrade', by="ben")
         body = self.client.post("/maintenance", data={
             "path": "/db", "action": "set", "reason": "pan's turn",
-            "set_at": stale.set_at}).get_data(as_text=True)
+            "set_at": stale.token}).get_data(as_text=True)
         self.assertIn("ben&#39;s &#34;big&#34; upgrade", body)      # the stored text
         self.assertIn('placeholder="why?">pan&#39;s turn</textarea>', body)  # and mine
 
@@ -536,11 +580,14 @@ class EntryPinSurfaceTests(TestCase):
         self.assertIn("Set maintenance", body)
         self.assertIn("reason-pin__toggle", body)
 
-    def test_the_pin_summary_does_not_add_an_inline_line_box_to_the_rail(self):
+    def test_the_pin_summary_takes_no_line_of_its_own(self):
+        # it is drawn on the seat the rail keeps for it, at the line's end, so
+        # the editor it opens can stand beneath the line (ADR-0104 decision 4)
         css = self.client.get(
             "/static/css/overview.css").get_data(as_text=True)
         rule = css.split(".reason-pin > summary {", 1)[1].split("}", 1)[0]
-        self.assertIn("display: flex", rule)
+        self.assertIn("position: absolute", rule)
+        self.assertIn("display: inline-flex", rule)
 
     def test_prose_gets_no_per_line_control(self):
         # its unit of suppression is the node pin; a per-line button there would
@@ -577,7 +624,9 @@ class EntryPinSurfaceTests(TestCase):
         self.assertIn("is-quiet", body)
         self.assertIn("ada is on it", body)
         self.assertIn("1 of 2 in maintenance", body)
-        self.assertIn("Clear maintenance", body)
+        self.assertIn(
+            'Clear<span class="visually-hidden"> this line\'s maintenance</span>',
+            body)
 
     def test_a_pinned_line_can_be_edited_in_place_with_raw_markdown(self):
         self._login()
@@ -593,11 +642,15 @@ class EntryPinSurfaceTests(TestCase):
 
         self.assertIn("<strong>Ada</strong>", body)
         self.assertIn('href="https://issues.example/412"', body)
-        self.assertIn(">Edit maintenance</summary>", body)
-        self.assertIn(f'name="set_at" value="{entry.set_at}"', body)
+        self.assertIn(
+            '>Edit<span class="visually-hidden"> this line\'s maintenance</span>'
+            '</summary>', body)
+        self.assertIn(f'name="set_at" value="{entry.token}"', body)
         self.assertIn("**Ada** has [ticket]", body)  # untouched textarea source
         self.assertIn("Save changes", body)
-        self.assertIn("Clear maintenance", body)
+        self.assertIn(
+            'Clear<span class="visually-hidden"> this line\'s maintenance</span>',
+            body)
 
     def test_silencing_every_line_says_nothing_is_reporting(self):
         self._login()
@@ -619,7 +672,7 @@ class EntryPinSurfaceTests(TestCase):
         assert entry is not None
         self.client.post("/maintenance", data={
             "path": "/wiz", "slug": "acme/pr-77", "action": "clear",
-            "set_at": entry.set_at})
+            "set_at": entry.token})
         self.assertIsNone(self.tree.entry_maintenance("/wiz", "acme/pr-77"))
         self.assertEqual(self.tree.snapshot("/wiz").quiet_reasons, 0)
 
@@ -683,8 +736,9 @@ class EntryPinIndexTests(TestCase):
     any pin existed there. A blue card no index claims is what rule 5 forbids.
 
     The two surfaces answer different questions and so have different shapes: the
-    capped popover summarizes **one row per node**, ``/maintenance`` lists **one row
-    per pin**. Both are pinned down here.
+    capped popover summarizes **one row per node**, ``/maintenance`` lists **every
+    pin**, as a block under its node's path (ADR-0104; `test_maintenance_page.py`
+    holds the page's own shape). Both are pinned down here.
     """
 
     def setUp(self):
@@ -716,7 +770,7 @@ class EntryPinIndexTests(TestCase):
     def _dashboard(self):
         return self.client.get("/status").get_data(as_text=True)
 
-    # ----- /maintenance: one row per pin, and two texts in two columns -----
+    # ----- /maintenance: every pin, and two texts in two places -----
 
     def test_an_entry_pin_reaches_the_maintenance_page(self):
         self._findings()
@@ -727,27 +781,29 @@ class EntryPinIndexTests(TestCase):
         self.assertIn("waiting on review", body)        # what is silenced
         self.assertIn("ada is on it", body)             # why it is
 
-    def test_the_two_texts_are_not_under_one_heading(self):
+    def test_the_two_texts_stand_in_two_places(self):
         # `ReasonLine.text` and `MaintenanceEntry.reason` are both called "reason"
-        # in the model and are not the same kind of thing.
+        # in the model and are not the same kind of thing: the line is what the
+        # block's sentence names, and the pin's note is the block's note.
         self._findings()
         self._pin_line("/site/wiz", "acme/pr-412")
-        body = self._page()
-        self.assertIn("<th>Silenced</th>", body)
-        self.assertIn("<th>Why</th>", body)
-        self.assertNotIn("<th>Reason</th>", body)
+        block = parse(self._page()).one("rule-block")
+        said = block.one("rule-block__what").text()
+        self.assertIn("waiting on review", said)
+        self.assertNotIn("ada is on it", said)
+        self.assertEqual(block.one("rule-block__note").text(), "ada is on it")
 
     def test_a_node_pin_says_it_covers_the_whole_node(self):
         self.tree.upsert("/db", StatusCode.ERROR, "boom")
         self._pin_node("/db")
-        self.assertIn("the whole node", self._page())
+        self.assertIn("The whole node", self._page())
 
     def test_the_slug_is_never_rendered_as_text(self):
-        # ADR-0036 makes it opaque; it may travel in a link and nowhere else.
+        # ADR-0036 makes it opaque; it may travel in a link, and in the field of
+        # the form that changes its pin, and nowhere a reader sees it.
         self._findings()
         self._pin_line("/site/wiz", "acme/pr-412")
-        without_links = re.sub(r'href="[^"]*"', "", self._page())
-        self.assertNotIn("acme/pr-412", without_links)
+        self.assertNotIn("acme/pr-412", parse(self._page()).text())
 
     def test_entry_pins_keep_the_checks_order_not_the_pinning_order(self):
         # The order a check emits its entries in is information (severity, API
@@ -817,7 +873,7 @@ class EntryPinIndexTests(TestCase):
         self.assertNotIn("ada is on it", body)    # not the line's
         # and `/maintenance` still lists both, the node's own pin first
         page = self._page()
-        self.assertLess(page.index("the whole node"), page.index("waiting on review"))
+        self.assertLess(page.index("The whole node"), page.index("waiting on review"))
         self.assertIn("ada is on it", page)
 
     def test_the_view_types_still_order_a_nodes_pins_by_hand(self):
@@ -825,16 +881,31 @@ class EntryPinIndexTests(TestCase):
         # its entries, and it is easier to state here than to arrange in a tree.
         node_pin = _MaintenancePin(path="/site/wiz", title="", note="whole box",
                                    remaining="3d", total=2,
-                                   expires_at="2026-08-05T00:00:00")
+                                   expires_at=datetime(2026, 8, 5, tzinfo=UTC))
         entry_pin = _MaintenancePin(path="/site/wiz", title="", note="ada is on it",
                                     remaining="2d", slug="acme/pr-412",
                                     line="waiting on review", slot=0, total=2,
-                                    expires_at="2026-08-04T00:00:00")
+                                    expires_at=datetime(2026, 8, 4, tzinfo=UTC))
         rows = _maintenance_rows([node_pin], [entry_pin])
         self.assertEqual((len(rows), rows[0].pinned, rows[0].quiet), (1, True, 1))
         self.assertEqual((rows[0].note, rows[0].remaining), ("whole box", "3d"))
         pins = _maintenance_pins([node_pin], [entry_pin])
         self.assertEqual([pin.slug for pin in pins], ["", "acme/pr-412"])
+
+    def test_the_soonest_of_a_nodes_line_pins_is_the_soonest_instant(self):
+        # the row says how long the soonest has left, and soonest is asked of the
+        # instants: as they are spelled, a whole second sorts after its own half
+        whole = datetime(2026, 8, 4, tzinfo=UTC)
+        half = whole + timedelta(milliseconds=500)
+        self.assertGreater(instants.stamp(whole), instants.stamp(half))
+        later = _MaintenancePin(path="/site/wiz", title="", note="ada is on it",
+                                remaining="2d", expires_at=half, slug="pr-412",
+                                total=2)
+        sooner = _MaintenancePin(path="/site/wiz", title="", note="ben is on it",
+                                 remaining="1d 23h", expires_at=whole,
+                                 slug="pr-77", slot=1, total=2)
+        (row,) = _maintenance_rows([], [later, sooner])
+        self.assertEqual(row.remaining, "1d 23h")
 
     def test_several_entry_pins_name_no_single_justification(self):
         # one of three notes shown as if it were the row's is worse than none;
@@ -893,7 +964,10 @@ class EntryPinIndexTests(TestCase):
     def test_the_index_links_to_the_line_and_the_page_marks_it(self):
         self._findings()
         self._pin_line("/site/wiz", "acme/pr-412")
-        href = re.search(r'href="(/status/site/wiz[^"]*)"', self._page()).group(1)
+        # the path heads the node's pins and leads to the node; the line's own
+        # link is the one that names it
+        href = re.search(r'href="(/status/site/wiz\?[^"]*)"',
+                         self._page()).group(1)
         self.assertTrue(href.endswith("#pinned-reason"), href)
         page = self.client.get(href.split("#")[0]).get_data(as_text=True)
         self.assertIn('id="pinned-reason"', page)
@@ -1009,9 +1083,8 @@ class PinnedCardTests(TestCase):
     def test_pinned_and_stale_says_nobody_is_checking(self):
         self.tree.upsert("/site/db", StatusCode.OK, frequency_seconds=60)
         self._pin()
-        with mock.patch("little_sister.tree.datetime") as clock:
-            clock.now.return_value = datetime.now() + timedelta(seconds=200)
-            clock.fromisoformat = datetime.fromisoformat
+        with mock.patch.object(instants, "now", return_value=(
+                datetime.now(UTC) + timedelta(seconds=200))):
             body = self._card()
         self.assertIn("status-stale", body)
         # and it stops contributing nothing: the card above it is no longer green
@@ -1028,30 +1101,38 @@ class PinnedCardTests(TestCase):
         """
         self.tree.upsert("/site/db", StatusCode.OK)
         self._pin("/site")
-        for depth in (0, 1, 3):
+        # the card at depth 0 names the node in its head, so its block opens with
+        # what was done to it; the head at every other depth says *This node*
+        for depth, said in ((0, "Silenced by"), (1, "silenced by"),
+                            (3, "silenced by")):
             with self.subTest(depth=depth):
                 body = self.client.get(
                     f"/status/site?depth={depth}").get_data(as_text=True)
                 grid = body.split('id="status-grid"', 1)[1].split("</main>", 1)[0]
-                self.assertIn("pin-banner", grid)
-                self.assertIn("Silenced by <strong>pan</strong>", grid)
+                self.assertIn('data-rule="maintenance"', grid)
+                self.assertIn(f"{said} <strong>pan</strong>", grid)
 
     def test_a_viewer_sees_the_pin_too(self):
-        # the maintenance card is `{% if is_admin %}`; the head row is not, and the
-        # whole point of an indexed suppression is that everyone can see it.
+        # the head's buttons are an admin's; the block is not, and the whole point
+        # of an indexed suppression is that everyone can see it.
         self.tree.upsert("/site/db", StatusCode.OK)
         self._pin("/site")
         self.client.get("/logout")
         with self.client.session_transaction() as sess:
             sess["username"], sess["firstname"], sess["admin"] = "vera", "Vera", False
         body = self.client.get("/status/site?depth=3").get_data(as_text=True)
-        self.assertIn("Silenced by <strong>pan</strong>", body)
-        self.assertNotIn('text-uppercase">Maintenance<', body)   # no admin card
+        self.assertIn("silenced by <strong>pan</strong>", body)
+        self.assertNotIn("maintenance-editor-form", body)       # nothing to write with
 
     def test_an_unremarkable_container_page_adds_no_head_row(self):
         # a container with no reading, no reasons and no pin has nothing of its own
-        # to say, and its page should still open with its children
+        # to say, and its page should still open with its children — for a reader
+        # who cannot pin it. An admin's page carries the head for the control that
+        # sets one (`tests/test_wall_pins.py`).
         self.tree.upsert("/site/db", StatusCode.OK)
+        self.client.get("/logout")
+        with self.client.session_transaction() as sess:
+            sess["username"], sess["firstname"], sess["admin"] = "vera", "Vera", False
         body = self.client.get("/status/site?depth=3").get_data(as_text=True)
         self.assertNotIn("viewed-head", body)
 
@@ -1124,10 +1205,10 @@ class DurationGuardTests(TestCase):
         self._set("2h")
         entry = self.tree.maintenance_entry("/db")
         assert entry is not None
-        body = self._set("-1d", reason="fixed", token=entry.set_at).get_data(
+        body = self._set("-1d", reason="fixed", token=entry.token).get_data(
             as_text=True)
         # nothing about the stored pin moved, so the form carries the same token
-        self.assertIn(f'name="set_at" value="{entry.set_at}"', body)
+        self.assertIn(f'name="set_at" value="{entry.token}"', body)
         self.assertEqual(self.tree.maintenance_entry("/db").reason,
                          "ada is on it")
 
@@ -1289,7 +1370,7 @@ class IntervalFloorTests(TestCase):
 
 class MaintenanceExpiryInputTests(TestCase):
     """The form accepts a small deterministic calendar grammar and resolves every
-    spelling to the existing naive server-local expiry."""
+    spelling to an instant in UTC, which the tree stores as it is."""
 
     zone = ZoneInfo("Europe/Berlin")
 
@@ -1301,7 +1382,27 @@ class MaintenanceExpiryInputTests(TestCase):
 
     @staticmethod
     def _stored(moment: datetime) -> datetime:
-        return moment.astimezone().replace(tzinfo=None)
+        return moment.astimezone(UTC)
+
+    @skipUnless(hasattr(time, "tzset"), "no tzset on this platform")
+    def test_what_comes_out_is_an_instant_in_utc_on_any_machines_clock(self):
+        # a wall time is the configured zone's, never the machine's: 14:30 in
+        # Berlin is 12:30Z in August, on a machine six hours behind as anywhere
+        now = datetime(2026, 8, 3, 10, 0, tzinfo=UTC)
+        try:
+            with mock.patch.dict(os.environ, {"TZ": "America/New_York"}):
+                time.tzset()
+                for typed, instant in (
+                        ("14:30", datetime(2026, 8, 3, 12, 30, tzinfo=UTC)),
+                        ("2h", datetime(2026, 8, 3, 12, 0, tzinfo=UTC)),
+                        ("", datetime(2026, 8, 10, 10, 0, tzinfo=UTC)),
+                        ("2026-08-17", datetime(2026, 8, 16, 22, 0, tzinfo=UTC))):
+                    with self.subTest(typed=typed):
+                        resolved = self._resolve(typed, now)
+                        self.assertEqual(resolved, instant)
+                        self.assertIs(resolved.tzinfo, UTC)
+        finally:
+            time.tzset()          # back to whatever the real environment says
 
     def test_duration_and_explicit_seconds_are_elapsed_from_now(self):
         now = datetime(2026, 8, 3, 10, 0, tzinfo=UTC)
@@ -1475,11 +1576,25 @@ class BlankReasonTests(TestCase):
         first = self._pin()
         self.client.post("/maintenance", data={
             "path": "/db", "action": "set", "reason": "",
-            "duration": "3d", "set_at": first.set_at})
+            "duration": "3d", "set_at": first.token})
         after = self.tree.maintenance_entry("/db")
         assert after is not None
         self.assertEqual(after.reason, "the real explanation")
         self.assertNotEqual(after.expires_at, first.expires_at)
+
+    def test_the_pages_own_form_keeps_the_reason_too(self):
+        # A page's form names the node as the route's `branch` — no leading
+        # slash — and the stored text was looked up at the path as posted, where
+        # nothing is stored: a blank reason from the form wrote the placeholder
+        # over the explanation.
+        first = self._pin()
+        response = self.client.post("/maintenance", data={
+            "path": "db", "action": "set", "reason": "",
+            "duration": "3d", "set_at": first.token})
+        self.assertEqual(response.status_code, 302)
+        after = self.tree.maintenance_entry("/db")
+        assert after is not None
+        self.assertEqual(after.reason, "the real explanation")
 
     def test_a_new_pin_with_no_reason_still_says_maintenance(self):
         # nothing to keep, so the literal placeholder is the honest answer
@@ -1494,7 +1609,7 @@ class BlankReasonTests(TestCase):
         first = self._pin()
         self.client.post("/maintenance", data={
             "path": "/db", "action": "set", "reason": "new words",
-            "duration": "2h", "set_at": first.set_at})
+            "duration": "2h", "set_at": first.token})
         self.assertEqual(self.tree.maintenance_entry("/db").reason, "new words")
 
     def test_an_entry_pin_keeps_its_reason_the_same_way(self):
@@ -1506,7 +1621,7 @@ class BlankReasonTests(TestCase):
         assert first is not None
         self.client.post("/maintenance", data={
             "path": "/wiz", "slug": "f-1", "action": "set", "reason": "",
-            "duration": "3d", "set_at": first.set_at})
+            "duration": "3d", "set_at": first.token})
         after = self.tree.entry_maintenance("/wiz", "f-1")
         assert after is not None
         self.assertEqual(after.reason, "ada is on it")

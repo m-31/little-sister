@@ -19,6 +19,7 @@ import textwrap
 import unittest
 from pathlib import Path
 
+from little_sister import instants
 from little_sister.lease import Lease
 from tests.running import subprocess_env
 
@@ -224,6 +225,7 @@ class StartTests(unittest.TestCase):
         second = _child(self.directory, """
             import json, time
             import little_sister.app as app
+            from little_sister import instants
             from little_sister.status import HEARTBEAT_PATH
             from little_sister.tree import status_tree
             app.start()
@@ -231,8 +233,8 @@ class StartTests(unittest.TestCase):
                 if len(status_tree.history(HEARTBEAT_PATH)) >= 3:
                     break
                 time.sleep(0.05)
-            periods = [[period.code.name, period.since, period.until,
-                        list(period.reason)]
+            periods = [[period.code.name, instants.stamp(period.since),
+                        instants.stamp(period.until), list(period.reason)]
                        for period in status_tree.history(HEARTBEAT_PATH)]
             app.stop(trigger="the test")
             print(json.dumps({"periods": periods}))
@@ -245,7 +247,8 @@ class StartTests(unittest.TestCase):
         running, down, again = periods
         # the gap opens when the first process was last alive — its stop's stamp or
         # its lease's release, whichever is later — and closes at the first beat
-        self.assertGreaterEqual(down[1], stopped)
+        self.assertGreaterEqual(instants.instant(down[1], "the gap's beginning"),
+                                instants.instant(stopped, "the stop's stamp"))
         self.assertEqual(running[2], down[1])
         self.assertEqual(down[2], again[1])
         self.assertEqual(down[3], ["the instance was not running"])

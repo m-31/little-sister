@@ -17,7 +17,7 @@ import sys
 import tempfile
 import textwrap
 from dataclasses import replace
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest import TestCase, mock
 
@@ -441,6 +441,237 @@ class WorkflowsScenarioTests(TestCase):
                               if "/ci/workflows" in line.text]), 2)
 
 
+class RunsScenarioTests(TestCase):
+    """The ``runs`` scenario is the demo's subject with a history (ADR-0106,
+    ADR-0111): four job names, each a node of its own, each run a reading with an
+    identity — and the one place the demo shows a line written for the record
+    alone, and what a run keeps without one. One of the four comes and goes
+    beneath a node that says its children are complete (ADR-0109)."""
+
+    #: The wall clock the scenario reads: a moment between two runs of every job,
+    #: in a stretch in which `backfill` runs — its fifth run of six.
+    NOW = 1_790_000_010.0
+    #: Two of `backfill`'s intervals on it does not run, and five on it runs again.
+    GONE, BACK = NOW + 40, NOW + 100
+
+    def _check(self) -> DemoCheck:
+        check, = (check for check in load_checks(_DEMO_CONFIG_DIR)
+                  if check.path == "/ci/jobs")
+        assert isinstance(check, DemoCheck)
+        return check
+
+    def _read(self, check: DemoCheck, now: float | None = None) -> list[Measurement]:
+        with mock.patch("tests.demo_check.time") as clock:
+            clock.time.return_value = self.NOW if now is None else now
+            readings = check.measure()
+        assert not isinstance(readings, Measurement)
+        return list(readings)
+
+    def test_it_reads_every_listed_run_of_each_job_name(self):
+        readings = self._read(self._check())
+        by_job: dict[str, list[Measurement]] = {}
+        for reading in readings:
+            by_job.setdefault(reading.subject, []).append(reading)
+        self.assertEqual({subject: len(runs) for subject, runs in by_job.items()},
+                         {"jobs/import": 6, "jobs/export": 6, "jobs/cleanup": 6,
+                          "jobs/backfill": 6})
+        # each names the run it is of, and no two the same
+        self.assertEqual(len({reading.identity for reading in readings}), 24)
+        self.assertTrue(all(reading.identity for reading in readings))
+
+    def test_a_run_finishes_on_the_wall_clock_so_a_restart_finds_it_again(self):
+        check = self._check()
+        first = {reading.identity: reading.record for reading in self._read(check)}
+        # another check, built later, reads the same runs at the same moment
+        again = {reading.identity: reading.record
+                 for reading in self._read(self._check())}
+        self.assertEqual(first, again)
+        # and a poll five seconds on reads them again, before any job has run anew
+        later = {reading.identity for reading in self._read(check, self.NOW + 5)}
+        self.assertEqual(later, set(first))
+
+    def test_a_job_that_says_its_run_time_is_drawn_by_it_and_cleanup_is_not(self):
+        check = self._check()
+        self.assertGreater(check.series_keep, 0)
+        self.assertEqual(check.measures["seconds"].label, "Run time")
+        for reading in self._read(check):
+            with self.subTest(run=reading.identity):
+                self.assertEqual("seconds" in reading.record,
+                                 reading.subject in ("jobs/import", "jobs/export"))
+
+    def test_each_job_name_is_a_node_whose_line_carries_its_newest_run(self):
+        check = self._check()
+        readings = self._read(check)
+        result = run_check(check, measurements=readings)
+        self.assertEqual([child.name for child in result.children],
+                         ["import", "export", "cleanup", "backfill"])
+        for child in result.children:
+            with self.subTest(job=child.name):
+                newest = [reading for reading in readings
+                          if reading.subject == f"jobs/{child.name}"][-1]
+                line, = child.reason_entries
+                self.assertEqual((line.subject, line.data),
+                                 (newest.subject, dict(newest.record)))
+
+    def test_three_job_names_say_how_each_listed_run_stood_and_cleanup_does_not(
+            self):
+        check = self._check()
+        result = run_check(check, measurements=self._read(check))
+        self.assertEqual({child.name: len(child.for_record)
+                          for child in result.children},
+                         {"import": 5, "export": 5, "cleanup": 0, "backfill": 5})
+
+    # ----- the job name that comes and goes (ADR-0109) -----
+
+    def test_the_node_above_the_job_names_says_that_they_are_all_of_them(self):
+        check = self._check()
+        result = run_check(check, measurements=self._read(check))
+        self.assertTrue(result.children_complete)
+        self.assertFalse(any(child.children_complete for child in result.children))
+
+    def test_a_job_name_that_is_not_running_is_not_listed(self):
+        check = self._check()
+        readings = self._read(check, self.GONE)
+        self.assertEqual({reading.subject for reading in readings},
+                         {"jobs/import", "jobs/export", "jobs/cleanup"})
+        result = run_check(check, measurements=readings)
+        self.assertEqual([child.name for child in result.children],
+                         ["import", "export", "cleanup"])
+        self.assertTrue(result.children_complete)
+
+    def test_listed_again_its_newest_runs_reach_into_its_last_stretch(self):
+        check = self._check()
+        before = [reading.identity for reading in self._read(check)
+                  if reading.subject == "jobs/backfill"]
+        after = [reading.identity for reading in self._read(check, self.BACK)
+                 if reading.subject == "jobs/backfill"]
+        # six runs each time, oldest first; none of the three it did not run
+        self.assertEqual((len(before), len(after)), (6, 6))
+        self.assertEqual(before[-1], "backfill-89500000")
+        self.assertEqual(after, [*before[-4:], "backfill-89500001",
+                                 "backfill-89500005"])
+
+    def test_in_the_engine_its_node_is_removed_and_returns_with_its_runs(self):
+        check = self._check()
+        tree = StatusTree()
+        engine = Engine([check], tree)
+
+        def run(now: float) -> list[str]:
+            with mock.patch("tests.demo_check.time") as clock:
+                clock.time.return_value = now
+                engine.run_once()
+            node = tree.snapshot("/ci/jobs")
+            assert node is not None
+            return [child.name for child in node.children]
+
+        def kept() -> list[str]:
+            series, = (series for series in engine.series_near("/ci/jobs")
+                       if series.subject == "jobs/backfill")
+            return [str(placed.record.identity) for placed in series.readings]
+
+        self.assertEqual(run(self.NOW), ["backfill", "cleanup", "export", "import"])
+        before = kept()
+        self.assertEqual(run(self.GONE), ["cleanup", "export", "import"])
+        removed, = (event for event in tree.recent_events()
+                    if event.cause == "removed")
+        self.assertEqual((removed.path, removed.new),
+                         ("/ci/jobs/backfill", StatusCode.UNDEFINED))
+        # what the check kept of it stays, with no node to stand for it
+        self.assertEqual(kept(), before)
+        self.assertEqual(run(self.BACK), ["backfill", "cleanup", "export", "import"])
+        self.assertEqual(kept(), [*before, "backfill-89500001", "backfill-89500005"])
+
+    def test_in_the_engine_an_older_run_of_cleanup_keeps_no_verdict(self):
+        check = self._check()
+        engine = Engine([check], StatusTree())
+        with mock.patch("tests.demo_check.time") as clock:
+            clock.time.return_value = self.NOW
+            engine.run_once()
+        kept = {series.subject: [placed.record.code for placed in series.readings]
+                for series in engine.series_near("/ci/jobs")}
+        self.assertTrue(all(code is not None for code in kept["jobs/import"]))
+        self.assertTrue(all(code is not None for code in kept["jobs/export"]))
+        self.assertEqual([code is None for code in kept["jobs/cleanup"]],
+                         [True] * 5 + [False])
+
+    def test_its_runs_end_in_every_way_a_mark_tells_apart(self):
+        # over a stretch of the wall clock: passed, warned and failed
+        check = self._check()
+        outcomes = {str(reading.record["outcome"])
+                    for step in range(40)
+                    for reading in self._read(check, self.NOW + 20 * step)}
+        self.assertEqual(outcomes, {"succeeded", "slow", "failed"})
+
+
+class OffsetTests(TestCase):
+    """``LITTLE_SISTER_DEMO_OFFSET`` — a start that finds every scenario that far
+    into its cycle. A scenario is a function of the time since its check was built,
+    so a start otherwise finds every node at the top of its cycle, where none of
+    them fails; with it a start finds the waiting node red, which is what it takes
+    to see what a restart does to a wait (ADR-0110, testing-the-gui.md)."""
+
+    VARIABLE = "LITTLE_SISTER_DEMO_OFFSET"
+
+    def _first(self, offset: str | None, scenario: str = "pipelines",
+               period: str = "90s") -> tuple[float, CheckResult]:
+        """How far into its cycle the first reading finds a check built with the
+        variable saying ``offset`` — or unset — and what that reading grades to,
+        on a clock that stands still."""
+        with (mock.patch.dict(os.environ),
+              mock.patch("tests.demo_check.time") as clock):
+            os.environ.pop(self.VARIABLE, None)
+            if offset is not None:
+                os.environ[self.VARIABLE] = offset
+            clock.monotonic.return_value = 5000.0
+            check = DemoCheck.from_config(
+                {"type": "demo", "path": "/x", "scenario": scenario,
+                 "period": period}, Path("."))
+            reading = check.measure()
+        assert isinstance(reading, Measurement)
+        return (float(reading.record["elapsed_seconds"]),
+                run_check(check, measurements=[reading]))
+
+    def _build(self, result: CheckResult) -> StatusCode | None:
+        return next(entry.code for entry in result.reason_entries
+                    if entry.slug == "web-build")
+
+    def test_without_it_a_start_finds_the_top_of_the_cycle(self):
+        elapsed, result = self._first(None)
+        self.assertEqual(elapsed, 0.0)
+        self.assertIs(self._build(result), StatusCode.OK)
+
+    def test_it_starts_a_scenario_that_far_into_its_cycle(self):
+        elapsed, result = self._first("36s")
+        self.assertEqual(elapsed, 36.0)
+        # ... which is where the build has failed: the start finds the node red
+        self.assertIs(self._build(result), StatusCode.ERROR)
+
+    def test_every_scenario_starts_there_by_its_own_period(self):
+        # one offset for the whole tree: past a shorter period it wraps
+        elapsed, result = self._first("36s", scenario="flap", period="20s")
+        self.assertEqual(elapsed, 16.0)
+        self.assertIs(result.code, StatusCode.ERROR)
+
+    def test_an_empty_one_starts_at_the_top(self):
+        self.assertEqual(self._first("")[0], 0.0)
+
+    def test_a_negative_one_counts_back_from_the_top(self):
+        self.assertEqual(self._first("-10s")[0], 80.0)
+
+    def test_a_check_built_by_hand_starts_at_the_top(self):
+        # the variable is read where a config is: a check a test builds has none
+        with mock.patch("tests.demo_check.time") as clock:
+            clock.monotonic.return_value = 5000.0
+            check = DemoCheck(path="/x", scenario="pipelines", period=90.0)
+            reading = check.measure()
+        assert isinstance(reading, Measurement)
+        self.assertEqual(reading.record["elapsed_seconds"], 0.0)
+
+    def test_what_is_no_duration_is_refused_where_the_check_is_built(self):
+        with self.assertRaises(CheckError):
+            self._first("soon")
+
+
 class DemoServerTests(TestCase):
     """The wrapper as Mode 2 serves it (testing-the-gui.md): imported the way
     gunicorn's worker imports it, with none of this suite's configuration, the
@@ -511,6 +742,16 @@ class DemoConfigTests(TestCase):
     def test_the_audit_leaf_declares_its_findings_as_members(self):
         audit = next(c for c in self._checks() if c.path == "/security/audit")
         self.assertTrue(audit.entries)
+
+    def test_the_pipelines_node_waits_before_it_escalates(self):
+        # The one demo node whose lines carry codes and can be pinned is the one
+        # that waits (ADR-0083), so the walk can show what a pinned line does to a
+        # wait and what its pin's end does (ADR-0108). Every other node publishes
+        # at once, which is what a deployment has until it asks.
+        waits = {c.path: c.escalate_after for c in self._checks()
+                 if c.escalate_after is not None}
+        self.assertEqual(waits, {"/ci/pipelines": 3})
+        self.assertEqual(load_config(config_dir=_DEMO_CONFIG_DIR).escalate_after, 1)
 
     def test_the_settings_turn_the_budgeted_retry_on(self):
         config = load_config(config_dir=_DEMO_CONFIG_DIR)
@@ -639,11 +880,12 @@ class DemoCheckTests(TestCase):
         # the WSGI wrapper registers `demo` before this runs; importing DemoCheck
         # above did the same. Every config in the demo dir must load cleanly.
         checks = load_checks(_DEMO_CONFIG_DIR)
-        self.assertEqual(len(checks), 11)
+        self.assertEqual(len(checks), 12)
         self.assertTrue(all(isinstance(c, DemoCheck) for c in checks))
         self.assertEqual({c.path for c in checks},
                          {"/services/api", "/services/web", "/ci/nightly",
                           "/ci/pipelines", "/ci/reviews", "/ci/workflows",
+                          "/ci/jobs",
                           "/network/vpn", "/storage/backup", "/hosts/nas",
                           "/security/audit", "/security/wiz"})
 
@@ -662,7 +904,7 @@ class DemoCheckTests(TestCase):
         assert fresh is not None
         self.assertFalse(any(c.stale for c in fresh.children))
         # a minute on with `cache` never re-observed, it has aged past 5s + 30s
-        later = tree.snapshot("/backup", now=datetime.now() + timedelta(seconds=60))
+        later = tree.snapshot("/backup", now=datetime.now(UTC) + timedelta(seconds=60))
         assert later is not None
         cache = next(c for c in later.children if c.name == "cache")
         self.assertTrue(cache.stale)

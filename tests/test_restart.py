@@ -10,10 +10,11 @@ from __future__ import annotations
 
 import json
 import tempfile
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest import TestCase
 
+from little_sister import instants
 from little_sister.codes import StatusCode
 from little_sister.engine import Engine
 from little_sister.state import EVENTS_FILE, StateLayer
@@ -29,11 +30,11 @@ from little_sister.tree import (
 
 #: Yesterday, as a restored log dates it: every event restored below lies before
 #: anything the restarted tree writes.
-_BEFORE = (datetime.now() - timedelta(days=1)).replace(microsecond=0)
+_BEFORE = (datetime.now(UTC) - timedelta(days=1)).replace(microsecond=0)
 
 
-def _at(minutes: int) -> str:
-    return (_BEFORE + timedelta(minutes=minutes)).isoformat()
+def _at(minutes: int) -> datetime:
+    return _BEFORE + timedelta(minutes=minutes)
 
 
 def _event(path: str, old: StatusCode, new: StatusCode, minutes: int, *,
@@ -120,7 +121,7 @@ class PinReplayTests(TestCase):
     def _pin(self, tree: StatusTree, path: str) -> None:
         entry_tree = StatusTree()
         entry_tree.set_maintenance(path, "planned",
-                                   expires_at=datetime.now() + timedelta(days=1))
+                                   expires_at=datetime.now(UTC) + timedelta(days=1))
         entry = entry_tree.maintenance_entry(path)
         assert entry is not None
         tree.restore_maintenance({path: entry})
@@ -219,19 +220,25 @@ class StopStampTests(TestCase):
         self.assertNotIn("stopped_at", tree.events_payload())
         tree.note_stop(_at(90))
         payload = tree.events_payload()
-        self.assertEqual(payload["stopped_at"], _at(90))
-        self.assertEqual(stopped_at_of(payload), _at(90))
+        self.assertEqual(payload["stopped_at"], instants.stamp(_at(90)))
+        self.assertEqual(stopped_at_of(json.loads(json.dumps(payload))), _at(90))
         # a reader that does not know the key passes over it
         self.assertEqual(len(events_from_payload(payload)), 1)
 
-    def test_a_stamp_that_is_not_a_time_is_none(self) -> None:
-        payloads: list[object] = [{"events": []}, {"events": [], "stopped_at": 5},
-                                  {"events": [], "stopped_at": "yesterday"},
-                                  {"events": [], "stopped_at": "2026-09-27T10:00:00Z"},
-                                  []]
+    def test_a_log_that_carries_no_stamp_says_none(self) -> None:
+        payloads: list[object] = [{"events": []}, []]
         for payload in payloads:
             with self.subTest(payload=payload):
                 self.assertIsNone(stopped_at_of(payload))
+
+    def test_a_stamp_that_is_no_instant_refuses_the_log(self) -> None:
+        # a time without a zone is the wall clock of whichever machine wrote it
+        for stamp in (5, "yesterday", "2026-09-27T10:00:00", None):
+            with self.subTest(stamp=stamp), self.assertRaises(ValueError):
+                stopped_at_of({"events": [], "stopped_at": stamp})
+        self.assertEqual(
+            stopped_at_of({"events": [], "stopped_at": "2026-09-27T12:00:00+02:00"}),
+            datetime(2026, 9, 27, 10, 0, tzinfo=UTC))
 
     def test_the_interval_skips_an_unchanged_log_and_the_stop_writes_it(
             self) -> None:
@@ -249,7 +256,7 @@ class StopStampTests(TestCase):
             tree.note_stop(_at(90))
             layer.flush()
             stamped = json.loads(layer.path(EVENTS_FILE).read_text())
-            self.assertEqual(stamped["stopped_at"], _at(90))
+            self.assertEqual(stamped["stopped_at"], instants.stamp(_at(90)))
             self.assertEqual(stamped["events"], json.loads(written)["events"])
 
     def test_the_engines_stop_stamps_the_log_it_saves(self) -> None:
@@ -258,9 +265,9 @@ class StopStampTests(TestCase):
             tree = StatusTree()
             engine = Engine([], tree, state=layer)
             layer.keep(EVENTS_FILE, tree.events_payload)
-            before = datetime.now()
+            before = datetime.now(UTC)
             engine.stop(trigger="the test")
             payload = json.loads(layer.path(EVENTS_FILE).read_text())
             stamp = datetime.fromisoformat(payload["stopped_at"])
             self.assertLessEqual(before, stamp)
-            self.assertLessEqual(stamp, datetime.now())
+            self.assertLessEqual(stamp, datetime.now(UTC))

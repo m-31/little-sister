@@ -84,6 +84,7 @@ def test_the_promise_block_parses_into_modules_and_names() -> None:
         "little_sister.fetch",
         "little_sister.process",
         "little_sister.reasons",
+        "little_sister.series",
         "little_sister.spans",
         "little_sister.status",
         "little_sister.transport",

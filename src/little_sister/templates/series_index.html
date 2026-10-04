@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html>
+<head>
+    {% from '_status_cue.html' import status_cue %}
+    {% from '_series.html' import spark, summary %}
+    {% set page_title = 'Series' %}
+    {% include '_header.html' %}
+
+    <div class="container-fluid mt-3 px-4">
+        {% include '_page_band.html' %}
+        {#- The Series index (ADR-0097 decision 4): an index and not a page of
+            curves — every node a series is kept on, grouped under its root node,
+            with its status, the checks keeping it, what it draws, how many readings
+            it holds and when the newest was taken. A node's name opens its Status
+            page, as a path does everywhere else, and its row says in words where else
+            it leads: *curves*, its Series view, where a curve stands at or beneath
+            it; *readings*, its History page (ADR-0103 decision 1). The Curves column
+            counts the curves the node's own series draw, the labels folded behind the
+            count, which a browser's find still opens (decision 2) — and beside each
+            label the curve seen small, with its newest, lowest and highest value
+            (ADR-0114 decisions 1 and 2). A root appears
+            once: its heading is its own row, empty where it keeps nothing itself, and
+            the nodes beneath it follow, indented (decision 3). *curves* and *readings*
+            stand in a column each, so each word reads down the page, and where the
+            page is narrower than the table the table scrolls inside its card, in a box
+            that is positioned so its visually hidden headings, absolutely placed,
+            scroll with it rather than widening the page. On a phone it is no table to
+            the eye: each row is laid out as a block of its own — the node, then what
+            keeps it, its fold, what it holds and where it leads, each saying what it
+            is (`data-label`), since the headings are out of sight there — so a fold
+            and its control are on the screen and nothing is scrolled sideways
+            (ADR-0114 decision 3). -#}
+        {%- macro cells(row) -%}
+        <td class="text-muted ls-series-index__kinds" data-label="kept by">{{ row.kinds | join(" · ") }}</td>
+        <td class="ls-series-index__curves">
+            {%- if row.sparks %}<details><summary class="text-nowrap">{{ row.sparks | length }} {{ "curve" if row.sparks | length == 1 else "curves" }}</summary><ul class="ls-sparks list-unstyled mb-0 small">
+                {%- for c in row.sparks %}
+                <li class="ls-spark-row"><span class="ls-spark-row__label">{{ c.label }}</span> {{ spark(c) }} <span class="ls-spark-row__says text-muted">{{ summary(c) }}</span></li>
+                {%- endfor %}
+            </ul></details>
+            {%- else %}<span class="text-muted">—</span>{% endif -%}
+        </td>
+        <td class="text-end ls-series-index__kept" data-label="readings">{{ row.kept }}</td>
+        <td class="text-nowrap text-muted ls-series-index__newest" data-label="newest">{{ row.newest }}</td>
+        {%- endmacro %}
+        <p class="small text-muted mb-3">Where this instance keeps series: every node a check keeps them on, what it draws and how much it holds.</p>
+        {%- if index %}
+        <div class="card"><div class="card-body"><div class="table-responsive position-relative">
+        <table class="table table-sm align-middle mb-0 ls-series-index">
+            <thead>
+                <tr><th scope="col" class="ls-readings__cue"><span class="visually-hidden">Status</span></th><th scope="col">Node</th><th scope="col">Kept by</th><th scope="col">Curves</th><th scope="col" class="text-end">Readings</th><th scope="col">Newest</th><th scope="col" colspan="2"><span class="visually-hidden">Views</span></th></tr>
+            </thead>
+            <tbody>
+            {%- for top in index %}
+                <tr class="ls-series-index__top"><td class="ls-readings__cue">{% if top.node %}{{ status_cue(top.node.code, labeled=true) }}{% endif %}</td><td class="ls-series-index__name"><strong><a class="ls-series-index__node" href="{{ url_for('status', branch=top.name) }}">{{ top.name }}</a></strong></td>
+                {%- if top.own %}{{ cells(top.own) }}{% else %}<td class="ls-series-index__kinds"></td><td class="ls-series-index__curves"></td><td class="text-end ls-series-index__kept"></td><td class="ls-series-index__newest"></td>{% endif -%}
+                <td class="ls-series-index__views">{% if top.curves %}<a href="{{ top.curves }}">curves</a>{% endif %}</td><td class="ls-series-index__views">{% if top.own %}<a href="{{ top.own.readings }}">readings</a>{% endif %}</td></tr>
+                {%- for row in top.rows %}
+                <tr class="ls-series-index__row"><td class="ls-readings__cue">{% if row.node %}{{ status_cue(row.node.code, labeled=true) }}{% endif %}</td><td class="ps-4 ls-series-index__name"><a class="ls-series-index__node" href="{{ url_for('status', branch=row.path) }}">{{ row.path }}</a></td>
+                {{- cells(row) -}}
+                <td class="ls-series-index__views">{% if row.curves %}<a href="{{ row.curves }}">curves</a>{% endif %}</td><td class="ls-series-index__views"><a href="{{ row.readings }}">readings</a></td></tr>
+                {%- endfor %}
+            {%- endfor %}
+            </tbody>
+        </table>
+        </div></div></div>
+        {%- else %}
+        <p class="text-muted">No check keeps a series: <code>series_keep</code> in a check's YAML starts one.</p>
+        {%- endif %}
+    </div>
+{% include '_page_end.html' %}
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="{{ url_for('static', filename='js/rail.js') }}"></script>
+</body>
+</html>

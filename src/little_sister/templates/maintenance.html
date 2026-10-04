@@ -1,66 +1,97 @@
 <!DOCTYPE html>
 <html>
 <head>
+    {% from '_rule_block.html' import pin_block with context %}
+    {% from '_pin_sections.html' import suspended_pins, suspended_sentence with context %}
     {% set page_title = 'Maintenance' %}
     {% include '_header.html' %}
 
-    {#- The full, uncapped maintenance overview (ADR-0014, ADR-0036): **one row per
-        pin** — a node's own, or one of its reasons' — with what it silences, how long
-        is left, why, and who is behind it, read from the whole snapshot so it is
+    {#- The full, uncapped maintenance overview (ADR-0014, ADR-0036): **every pin** —
+        a node's own, or one of its reasons' — with what it silences, how long is
+        left, why, and who is behind it, read from the whole snapshot so it is
         depth- and filter-independent. Viewer-visible and bookmarkable; the strip
         pill's popover "+N more" links here. A plain page (the check.html /
-        events.html pattern), not polled.
+        events.html pattern), not polled — so an open editor has nothing to wait
+        for.
 
         This page is what makes the popover's one-row-per-node summary safe: it is
         where *"what is silenced right now?"* is answered completely, so the capped
         surface is free to fold.
 
-        **Two texts, deliberately in two columns.** *Silenced* is what a pin covers —
-        the whole node, or one reason line — and *Why* is the admin's justification.
-        Both are called "reason" in the model and they are not the same kind of
-        thing; one heading over both would be the confusion this split exists to
-        prevent. The slug appears in neither: ADR-0036 makes it opaque, so it travels
-        only in the link's `?reason=` value.
+        **The same blocks as a node's own page** (ADR-0104 decision 6,
+        `_rule_block.html`), grouped under each node's path: the node's own pin
+        first, then its lines' in the check's order — which is information
+        (severity, API order) that the order they were pinned in is not. Each is
+        read here and, by an admin, changed here: *Edit* opens in the block, and a
+        save or a clear comes back to this page with its node named —
+        `?node=<path>#pinned-node`, the shape `?reason=<slug>#pinned-reason` has
+        on a node's own page. The named node's section, and only it, gets the id
+        and the ring. The node travels in the query and not in the fragment
+        because a refused write is answered *at* this page's own address: from
+        there a link that differed only by its fragment would be a jump within
+        the refusal, and load nothing.
 
-        This is also one of the two places with room for the pin's **whole** reading
-        (ADR-0014) — *pinned by Anna three days ago, last changed by Ben an
-        hour ago*. The second line appears only on a pin that has actually been
-        edited; on the common untouched pin it would just repeat the first. -#}
+        **Two texts, in two places.** What a pin covers is what its block's
+        sentence opens with — *The whole node*, or the reason line itself — and
+        why is the block's note. Both are called "reason" in the model and they
+        are not the same kind of thing. A line's block stands away from its line
+        here, so it names the line and links to it on its node's page; the slug
+        appears in neither as text: ADR-0036 makes it opaque, so it travels only
+        in the link's `?reason=` value and in the field of the form that changes
+        the pin.
+
+        This is also the place with room for the pin's **whole** reading
+        (ADR-0014) for everyone — *pinned by Anna three days ago, last changed by
+        Ben an hour ago* — under the note; a node's own page keeps it in the
+        editor. The second sentence appears only on a pin that has actually been
+        edited; on the common untouched pin it would just repeat the first.
+
+        **A pin whose node is not reported** (ADR-0109 decision 4) stands under its
+        path like any other, and its section says so: the check stopped returning
+        the node, or has not written it yet since the start. Such a pin silences
+        nothing, so its block says what it will silence *when the node is
+        reported*; the path is no link, there being no page to open, and a line's
+        pin names no line, the lines having gone with the node. It is edited and
+        cleared here, where nothing else shows it. -#}
     <div class="container-fluid mt-3 px-4">
         <h1 class="h4 mb-3">Maintenance</h1>
         {% if pins %}
-        <table class="table table-sm align-middle maintenance-page">
-            <thead>
-                <tr><th>Node</th><th>Silenced</th><th>Time left</th><th>Why</th><th>Who</th></tr>
-            </thead>
-            <tbody>
-                {% for pin in pins %}
-                    <tr class="row-maintenance">
-                        <td><a href="{{ url_for('status', branch=pin.path | url_branch, reason=pin.slug) ~ '#pinned-reason' if pin.slug else url_for('status', branch=pin.path | url_branch) }}">{{ pin.path }}</a>{% set shown = pin | node_title %}{% if shown %} <span class="node-title">{{ shown | markdown_inline }}</span>{% endif %}</td>
-                        {#- The reason line an entry pin covers. Rendered as Markdown
-                            and clamped by **CSS**, not by `shorten`: a member's text is
-                            often a link, and cutting the string mid-link leaves the raw
-                            syntax on the page — `[#4821](https://forge.example.org/andro`
-                            is worse than no text at all. The cell is one line wide with
-                            an ellipsis, and `title` carries the whole of it. -#}
-                        <td class="maintenance-line"{% if pin.slug %} title="{{ pin.line }}"{% endif %}>{% if pin.slug %}{{ pin.line | markdown_inline }}{% else %}<span class="text-muted">the whole node</span>{% endif %}</td>
-                        <td class="text-nowrap">{{ pin.remaining }}</td>
-                        <td class="maintenance-why md-body">{% if pin.note and pin.note != 'maintenance' %}{{ pin.note | markdown }}{% else %}<span class="text-muted">—</span>{% endif %}</td>
-                        <td>
-                            {%- if pin.created_by or pin.created_at -%}
-                                pinned by <strong>{{ pin.created_by or 'unknown' }}</strong>
-                                <span class="text-muted text-nowrap">{{ pin.created_at | localtime }}</span>
-                                {%- if pin.edited %}<br><span class="text-muted">last changed by
-                                    <strong>{{ pin.set_by or 'unknown' }}</strong>
-                                    <span class="text-nowrap">{{ pin.set_at | localtime }}</span></span>{% endif -%}
-                            {%- else -%}
-                                <span class="text-muted">—</span>
-                            {%- endif -%}
-                        </td>
-                    </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+        {%- set nodes = pins | map(attribute='path') | unique | list | length %}
+        <p class="pin-count text-muted small mb-3">{{ pins | length }} {{ 'pin' if pins | length == 1 else 'pins' }} on {{ nodes }} {{ 'node' if nodes == 1 else 'nodes' }}.</p>
+        <div class="pin-list">
+        {%- for path, group in pins | groupby('path') %}
+            {#- Whether the node is pinned whole: its lines' blocks then say they
+                are silenced on their own as well, since they stay quiet when the
+                node's pin ends. -#}
+            {%- set covered = group | rejectattr('slug') | list | length > 0 %}
+            {%- set back = url_for('maintenance_overview', node=path) ~ '#pinned-node' %}
+            {%- set place = loop.index %}
+            {%- set suspended = group[0].suspended %}
+            <section class="pin-node{% if suspended %} pin-node--suspended{% endif %}{% if path == focus %} is-focused{% endif %}"{% if path == focus %} id="pinned-node"{% endif %}>
+                <h2 class="pin-node__path">{% if suspended %}{{ path }}{% else %}<a href="{{ url_for('status', branch=path | url_branch) }}">{{ path }}</a>{% endif %}{% set shown = group[0] | node_title %}{% if shown %} <span class="node-title">{{ shown | markdown_inline }}</span>{% endif %}</h2>
+                {%- if suspended %}
+                <p class="pin-node__suspended">{{ suspended_sentence(group) }}</p>
+                {%- endif %}
+                <div class="pin-node__pins">
+                {%- if suspended %}
+                {{ suspended_pins(path, group, place, back, is_admin) }}
+                {%- endif %}
+                {%- for pin in group if not suspended %}
+                    {%- if pin.slug %}
+                        {#- The reason line as its node writes it — rendered, and
+                            whole: a member's text is often a link, and cutting it
+                            would leave raw syntax on the page. -#}
+                        {%- set subject %}{{ pin.line | markdown_inline }} — <a href="{{ url_for('status', branch=path | url_branch, reason=pin.slug) }}#pinned-reason">this line</a>{% endset %}
+                        {{ pin_block(pin.entry, 'line', path, pin.slug, 'pin-' ~ place ~ '-' ~ loop.index, is_admin, also=covered, subject=subject, record=true, next=back, of=path) }}
+                    {%- else %}
+                        {%- set subject %}<strong>The whole node</strong>{% endset %}
+                        {{ pin_block(pin.entry, 'node', path, '', 'pin-' ~ place ~ '-' ~ loop.index, is_admin, subject=subject, record=true, next=back, of=path) }}
+                    {%- endif %}
+                {%- endfor %}
+                </div>
+            </section>
+        {%- endfor %}
+        </div>
         {% else %}
         <p class="text-muted">No nodes are in maintenance.</p>
         {% endif %}
@@ -70,5 +101,6 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     <script src="{{ url_for('static', filename='js/rail.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/maintenance-edit.js') }}"></script>
 </body>
 </html>

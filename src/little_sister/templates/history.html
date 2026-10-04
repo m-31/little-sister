@@ -5,15 +5,23 @@
     {% set page_title = 'History' %}
     {% include '_header.html' %}
 
-    <div class="container-fluid mt-3 px-4" style="max-width: 980px">
-        <h1 class="h4 mb-3">
-            <a href="{{ url_for('status') }}" class="text-decoration-none text-reset">status</a>
-            <span class="text-muted">/ {{ branch }}</span>
-            <span class="text-muted">— history</span>
-        </h1>
-        <p class="mb-3"><a href="{{ url_for('status', branch=branch) }}">&larr; back to check</a></p>
+    <div class="container-fluid mt-3 px-4">
+        {#- The periods keep the measure they had; the readings beneath take the
+            page's width (ADR-0102 decision 1). -#}
+        <div class="ls-history__periods">
+        {#- The same title and tabs as the node's other views (ADR-0097 decision 3):
+            the breadcrumb's crumbs open their History pages, and the Status tab is
+            the way back. -#}
+        {% include '_page_band.html' %}
 
-        <table class="table table-sm align-middle">
+        {#- A path the tree holds no node at is answered with a page of its own
+            (ADR-0116), so there is a node here. -#}
+        {%- if node is not none %}
+        {#- A long reason beside two times kept on one line is wider than a phone:
+            the table scrolls sideways in this box, as the Events table does in its
+            own, and the page does not. -#}
+        <div class="table-responsive position-relative mb-3">
+        <table class="table table-sm align-middle mb-0">
             <thead>
                 <tr><th>Status</th><th>Since</th><th>Until</th><th>Reason</th></tr>
             </thead>
@@ -21,28 +29,50 @@
                 {% for p in periods %}
                     <tr class="row-{{ p.code | status_slug }}">
                         <td>{{ p.code.name.lower() }}</td>
-                        <td class="text-nowrap">{{ p.since | localtime }}</td>
-                        <td class="text-nowrap">{{ p.until | localtime }}</td>
+                        {#- A period is a run of events that show one status (ADR-0099
+                            decision 6), so an edited pin is one row. Where its
+                            instant is a bound the period began before it: a first
+                            reading, which found the node as it was (decision 9), and
+                            a beginning lost before the tree kept it (decision 1). -#}
+                        <td class="text-nowrap">{% if p.before %}before {% endif %}{{ p.since | localtime }}</td>
+                        {#- The first row is the period that still holds — unless the node
+                            stopped declaring and that one is no row (below) — and it
+                            has no end yet: its *until* is the latest reading, which
+                            the Status tab states as when it was last observed
+                            (ADR-0099 decision 2). -#}
+                        <td class="text-nowrap">{% if loop.first and not declares_nothing_since %}current{% else %}{{ p.until | localtime }}{% endif %}</td>
                         <td class="md-body">{{ p.reason | join('; ') | markdown_inline }}</td>
                     </tr>
                 {% else %}
+                    {#- The tree has no period for the node (ADR-0102 decision 3). One
+                        that declares nothing of its own says so; one nothing is kept
+                        of has no period yet. A node a check has written is never
+                        here: the period that holds is a row above, also where the
+                        log no longer holds the row that began it. -#}
+                    {%- if declares_nothing %}
+                    <tr><td colspan="4" class="text-muted">Declares nothing of its own{% if declares_nothing_since %} since {{ declares_nothing_since | localtime }}{% endif %}: its page heads with what its children roll up to.</td></tr>
+                    {%- else %}
                     <tr><td colspan="4" class="text-muted">No status changes recorded.</td></tr>
+                    {%- endif %}
                 {% endfor %}
             </tbody>
         </table>
+        </div>
         {#- A node that declares nothing above nodes that report has no own status for
             a period to name (ADR-0094 decision 5, the Time card's rule): the table
             ends where it stopped declaring, and this says so. -#}
-        {%- if declares_nothing_since %}
+        {%- if declares_nothing_since and periods %}
         <p class="small text-muted">Declares nothing of its own since {{ declares_nothing_since | localtime }}: its page heads with what its children roll up to.</p>
         {%- endif %}
+        {%- endif %}
+        </div>
 
-        {#- Every reading the node's subject kept (ADR-0092 decision 6), beneath its
-            status periods and in the same table its page shows the newest of: this
-            page is not polled, so it carries them all, and no curve — the node's own
-            page draws those. -#}
-        {%- for view in series %}
-        <h2 class="h5 mt-4 mb-2">Readings</h2>
+        {#- Every reading kept by each check mounted on the node — both checks of a
+            mount they share — beneath its status periods and in the same table the
+            Series view shows the newest of (ADR-0097 decision 1): this page is not
+            polled, so it carries them all, and no curve. -#}
+        {%- for view in readings %}
+        <h2 class="h5 mt-4 mb-2">Readings{% if readings | length > 1 %} <span class="text-muted">· {{ view.title }}</span>{% endif %}</h2>
         <p class="small text-muted mb-2">All {{ view.kept }} {{ "reading" if view.kept == 1 else "readings" }} kept of <code>{{ view.subject }}</code>, newest first.</p>
         {{ readings_table(view) }}
         {%- endfor %}

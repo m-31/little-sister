@@ -102,7 +102,7 @@ login list, and the line for it is already in the file.
 **Several ways in are allowed; an ordered list of them to try is not.** A session
 records the door that opened it and only that provider is ever asked, so no
 registration order can decide who somebody is. Every door an install has is on
-`/system`, with the package that registered it.
+`/system/installed`, with the package that registered it.
 
 **`/login` can offer the doors instead of going to the default one** — add
 `identity.choose_at_login()` beside your registrations, and give each door a `label=`
@@ -246,19 +246,26 @@ Display and runtime options live in an optional **`config/settings.yaml`**, read
 at startup and shallow-merged per key across the configuration roots, the later
 winning (override the whole thing with a single file via `LITTLE_SISTER_CONFIG`);
 every key has a default, so a missing file is fine
-([ADR-0006](docs/adr/0006-config-file-and-timezones.md)). A deployment carries
+([ADR-0120](docs/adr/0120-every-stored-time-is-an-instant.md) decision 7). A
+deployment carries
 its **own** copy — the file in this repo configures a local run here and doubles as
 the template. Three of its keys, to show the shape:
 
 ```yaml
-timezone: Europe/Berlin              # IANA name for displayed timestamps
-time_format: "%Y-%m-%d %H:%M:%S"     # strftime for displayed timestamps
+timezone: Europe/Berlin              # IANA name: the zone a time is written in
+time_format: "%Y-%m-%d %H:%M:%S"     # strftime for the times a page shows
 maintenance_default_expiry: 7d       # maintenance window when none is given
 ```
 
+Every time is stored in UTC and written in `timezone`: on a page, and in the stamp of
+the default log's lines, which carries the offset in force —
+`2026-10-04 13:02:35,893 +0200`. Where the machine's clock shows another time than that
+zone, now or from a day within the year ahead, the start says so once in the log, since
+gunicorn's own lines are stamped on the machine's clock.
+
 The shipped file documents the rest inline — the dashboard caps (`reason_cap`,
-`branch_cap`, `maintenance_cap`, and `reading_cap`, the newest readings a node shows
-beneath its curves), whether a failing check keeps its `stacktrace`,
+`branch_cap`, `maintenance_cap`, and `reading_cap`, the newest readings a Series view
+lists beneath its curves), whether a failing check keeps its `stacktrace`,
 the card-head placement (`card_status_line`: compact `beside` by default, or the
 standing second line `below`), how cards spend a wide grid's columns
 (`dashboard_columns`: `flow` by default, or `plain` for the fixed one-track
@@ -318,7 +325,7 @@ connect-src:
   - https://tickets.example.org
 ```
 
-`/system` prints the effective policy with the contributor of every source, so what
+`/system/installed` prints the effective policy with the contributor of every source, so what
 this file did is visible from the running instance. The shipped copy is an example
 with every entry commented out.
 
@@ -380,7 +387,11 @@ state little sister shows you, not a reason to refuse to start. The same node,
 that runs longer than its `frequency`, a pool with checks waiting for a worker, a
 scheduler tick that came late, the entry count and the resident size near their
 limits, and a `timeout` longer than its `frequency` (warned about, never refused)
-— each a line that clears when the condition does, pinnable like any other. Set
+— each a line that clears when the condition does, pinnable like any other. Beside
+them it states what the process holds — the resident size and its peak, the peak alone
+on macOS — which `/system` shows beside the entries and the series held and the log
+carries every ten minutes; a check's own log line adds what rose while it ran, by 1 MiB
+or more, naming the runs that were in flight beside it. Set
 `SECRET_KEY` before
 anyone relies on staying logged in: without one a random key is made per start, so
 sessions end with the process. Runtime state is written to `var/` beside the

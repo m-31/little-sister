@@ -1,13 +1,15 @@
 # ADR-0035 — A dependent package registers its own configuration aspect
 
 - **Status:** Accepted
-- **Date:** 2026-08-29 (accepted 2026-08-01)
+- **Date:** 2026-10-04 (accepted 2026-08-01)
 - **Related:** [ADR-0031](0031-deployment-config-directory.md) (the `config/`
   directory, the aspect vocabulary and the unknown-candidate warning this extends),
   [ADR-0034](0034-template-slots-for-dependent-packages.md) (the sibling seam, decided
   in the same pass — a slot is where an extension's *HTML* goes, an aspect is where its
   *configuration* goes), [ADR-0023](0023-secret-references.md) (a credential in that
-  file is still a secret reference), [ADR-0020](0020-user-list-location.md)
+  file is still a secret reference), [ADR-0020](0020-user-list-location.md),
+  [ADR-0100](0100-system-is-two-views.md) (the *Installed* view of `/system`, which
+  shows the registered aspects)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -57,17 +59,18 @@ package declares an aspect it reads, before the app is imported.
    for the life of the process. That scan is now silent and the report runs at the end of
    the registration window, so a registration made anywhere inside it is in time
    ([ADR-0070](0070-the-unclaimed-file-report-runs-at-the-end-of-registration.md)).
-6. **Registered aspects are visible on `/system`**, beside the slot fillers, for the
-   reason given in ADR-0034 §9. The registration also records **who registered** each
-   aspect. `register_aspect` infers the calling package — the one-line call site in a
-   package's `__init__` already says who it is, and a name the caller had to repeat
-   is a name the caller can get wrong — and only a *winning* registration is
+6. **Registered aspects are visible on `/system`'s *Installed* view**,
+   `/system/installed` ([ADR-0100](0100-system-is-two-views.md)), beside the slot
+   fillers, for the reason given in ADR-0034 §9. The registration also records **who
+   registered** each aspect. `register_aspect` infers the calling package — the one-line
+   call site in a package's `__init__` already says who it is, and a name the caller had
+   to repeat is a name the caller can get wrong — and only a *winning* registration is
    attributed, so a refused one owns nothing. The name alone answers *is this file
    declared*; it does not answer *who reads it*, which is the question when the file
-   is misbehaving and the answer is a package somebody else wrote. `/system` prints
-   the owner beside the name and uses the same attribution to place the aspect on
-   its package inventory, which is where a package that registers no check type gets
-   a version at all.
+   is misbehaving and the answer is a package somebody else wrote. `/system/installed`
+   prints the owner beside the name and uses the same attribution to place the aspect
+   on its package inventory, which is where a package that registers no check type
+   gets a version at all.
 
 ## Consequences
 

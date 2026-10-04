@@ -76,13 +76,16 @@ def grade(value: float, warn: float, error: float) -> StatusCode:
     return StatusCode.OK
 
 
-def unavailable(name: str, description: str, about: str = "") -> CheckResult:
+def unavailable(name: str, description: str, about: str = "", *,
+                dynamic: bool = False) -> CheckResult:
     """A WARN leaf for an aspect the script was expected to report but didn't.
 
     ``about`` is the aspect's optional subject label (ADR-0025), carried so a
-    missing aspect's hover card still explains what the leaf *is*."""
+    missing aspect's hover card still explains what the leaf *is*. ``dynamic``
+    says that the host names the leaf — a volume — and no declaration does
+    (ADR-0118)."""
     return CheckResult(StatusCode.WARN, ["unavailable"], name=name,
-                       description=description, about=about)
+                       description=description, about=about, dynamic=dynamic)
 
 
 def volume_name(mount: str, used: set[str]) -> str:

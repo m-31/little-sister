@@ -2,7 +2,7 @@ import contextlib
 import json
 import tempfile
 import unittest
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from unittest import TestCase
 
@@ -11,23 +11,35 @@ from little_sister.maintenance import RETIRED_PATH, MaintenanceEntry, Maintenanc
 from little_sister.state import MAINTENANCE_FILE, StateLayer
 
 
+def _utc(*moment: int) -> datetime:
+    """An instant, by its date and its time in UTC."""
+    return datetime(*moment, tzinfo=UTC)
+
+
 class MaintenanceEntryTests(TestCase):
     def test_round_trips_through_dict(self):
-        entry = MaintenanceEntry(reason="planned", set_at="2026-01-01T00:00:00",
-                                 expires_at="2026-01-08T00:00:00", set_by="ada")
+        entry = MaintenanceEntry(reason="planned", set_at=_utc(2026, 1, 1),
+                                 expires_at=_utc(2026, 1, 8), set_by="ada")
         self.assertEqual(MaintenanceEntry.from_dict(entry.to_dict()), entry)
 
     def test_is_expired_compares_to_now(self):
-        now = datetime(2026, 6, 1, 12, 0, 0)
-        past = MaintenanceEntry("r", "", (now - timedelta(hours=1)).isoformat())
-        future = MaintenanceEntry("r", "", (now + timedelta(hours=1)).isoformat())
+        now = _utc(2026, 6, 1, 12, 0, 0)
+        past = MaintenanceEntry("r", now, now - timedelta(hours=1))
+        future = MaintenanceEntry("r", now, now + timedelta(hours=1))
         self.assertTrue(past.is_expired(now))
         self.assertFalse(future.is_expired(now))
+        # it is expired once now reaches the instant, and not a moment before
+        self.assertTrue(future.is_expired(now + timedelta(hours=1)))
+        self.assertFalse(future.is_expired(
+            now + timedelta(hours=1) - timedelta(microseconds=1)))
 
-    def test_unparseable_expiry_is_kept(self):
-        # better to keep a pin than drop it on bad data (reaper/admin are backstops)
-        self.assertFalse(MaintenanceEntry("r", "", "not-a-date").is_expired(
-            datetime.now()))
+    def test_is_expired_compares_instants_whatever_zone_they_were_built_in(self):
+        now = _utc(2026, 6, 1, 12, 0, 0)
+        ahead = timezone(timedelta(hours=9))
+        # 21:30 nine hours ahead is 12:30Z: half an hour from now, not nine past
+        entry = MaintenanceEntry("r", now, datetime(2026, 6, 1, 21, 30, tzinfo=ahead))
+        self.assertFalse(entry.is_expired(now.astimezone(ahead)))
+        self.assertTrue(entry.is_expired(datetime(2026, 6, 1, 21, 30, tzinfo=ahead)))
 
 
 class MaintenanceStoreTests(TestCase):
@@ -38,8 +50,8 @@ class MaintenanceStoreTests(TestCase):
         with tempfile.TemporaryDirectory() as directory:
             state = StateLayer(Path(directory) / "sub" / "state")
             store = MaintenanceStore(state)
-            entries = {"db": MaintenanceEntry("planned", "2026-01-01T00:00:00",
-                                              "2026-01-08T00:00:00", "ada")}
+            entries = {"db": MaintenanceEntry("planned", _utc(2026, 1, 1),
+                                              _utc(2026, 1, 8), "ada")}
             store.save(entries)       # also creates the missing directory
             self.assertEqual(store.load(), entries)
             self.assertTrue((state.path(MAINTENANCE_FILE)).exists())
@@ -73,8 +85,8 @@ class MaintenanceStoreTests(TestCase):
         # ADR-0077: the same reader the startup uses, on a payload the layer
         # hands over at a takeover, answering the two tables or refusing in the
         # words the startup read reports.
-        entry = MaintenanceEntry("planned", "2026-01-01T00:00:00",
-                                 "2026-01-08T00:00:00", "ada")
+        entry = MaintenanceEntry("planned", _utc(2026, 1, 1),
+                                 _utc(2026, 1, 8), "ada")
         with tempfile.TemporaryDirectory() as directory:
             state = StateLayer(directory)
             MaintenanceStore(state).save({"/db": entry}, {("/db", "slow"): entry})
@@ -95,7 +107,7 @@ class MaintenanceStoreTests(TestCase):
 
         from little_sister.state import BACKUP_SUFFIX
         from little_sister.tree import StatusTree
-        far = (datetime.now() + timedelta(days=1)).isoformat()
+        far = datetime.now(UTC) + timedelta(days=1)
         with tempfile.TemporaryDirectory() as directory:
             state = StateLayer(directory)
             tree = StatusTree()
@@ -103,7 +115,7 @@ class MaintenanceStoreTests(TestCase):
             tree.use_maintenance_store(store)
             store.save({})
             state.path(MAINTENANCE_FILE + BACKUP_SUFFIX).write_text(json.dumps({
-                "nodes": {"/db": MaintenanceEntry("set aside", "2026-01-01T00:00:00",
+                "nodes": {"/db": MaintenanceEntry("set aside", _utc(2026, 1, 1),
                                                   far, "ada").to_dict()},
                 "entries": {}}))
             state.take_stock()
@@ -153,43 +165,43 @@ class BothDatesTests(TestCase):
     """`created_at` / `created_by` beside `set_at` / `set_by` (ADR-0014)."""
 
     def test_an_absent_creation_defaults_to_the_set(self):
-        entry = MaintenanceEntry(reason="planned", set_at="2026-01-01T00:00:00",
-                                 expires_at="2026-01-08T00:00:00", set_by="ada")
-        self.assertEqual(entry.created_at, "2026-01-01T00:00:00")
+        entry = MaintenanceEntry(reason="planned", set_at=_utc(2026, 1, 1),
+                                 expires_at=_utc(2026, 1, 8), set_by="ada")
+        self.assertEqual(entry.created_at, _utc(2026, 1, 1))
         self.assertEqual(entry.created_by, "ada")
 
     def test_an_entry_without_the_creation_fields_reads_as_its_own_creation(self):
         # the shape an entry dict had before the amendment: it is still a valid
         # entry, and it means "pinned once, never edited"
-        old = {"reason": "planned", "set_at": "2026-01-01T00:00:00",
-               "expires_at": "2026-01-08T00:00:00", "set_by": "ada"}
+        old = {"reason": "planned", "set_at": "2026-01-01T00:00:00Z",
+               "expires_at": "2026-01-08T00:00:00Z", "set_by": "ada"}
         entry = MaintenanceEntry.from_dict(old)
         self.assertEqual(entry.reason, "planned")
-        self.assertEqual(entry.created_at, "2026-01-01T00:00:00")
+        self.assertEqual(entry.created_at, _utc(2026, 1, 1))
         self.assertEqual(entry.created_by, "ada")
 
     def test_an_edited_entry_keeps_both_apart(self):
-        entry = MaintenanceEntry(reason="planned", set_at="2026-01-02T09:00:00",
-                                 expires_at="2026-01-08T00:00:00", set_by="ben",
-                                 created_at="2026-01-01T00:00:00",
+        entry = MaintenanceEntry(reason="planned", set_at=_utc(2026, 1, 2, 9, 0),
+                                 expires_at=_utc(2026, 1, 8), set_by="ben",
+                                 created_at=_utc(2026, 1, 1),
                                  created_by="ada")
         self.assertEqual(MaintenanceEntry.from_dict(entry.to_dict()), entry)
 
     def test_same_pin_as_compares_reason_and_expiry_only(self):
-        base = MaintenanceEntry("planned", "2026-01-01T00:00:00",
-                                "2026-01-08T00:00:00", "ada")
+        base = MaintenanceEntry("planned", _utc(2026, 1, 1),
+                                _utc(2026, 1, 8), "ada")
         # a later write by someone else, saying the same thing, is a no-op
-        same = MaintenanceEntry("planned", "2026-01-02T00:00:00",
-                                "2026-01-08T00:00:00", "ben",
-                                created_at="2026-01-01T00:00:00",
+        same = MaintenanceEntry("planned", _utc(2026, 1, 2),
+                                _utc(2026, 1, 8), "ben",
+                                created_at=_utc(2026, 1, 1),
                                 created_by="ada")
         self.assertTrue(base.same_pin_as(same))
         self.assertFalse(base.same_pin_as(
-            MaintenanceEntry("planned", "2026-01-02T00:00:00",
-                             "2026-01-09T00:00:00", "ben")))
+            MaintenanceEntry("planned", _utc(2026, 1, 2),
+                             _utc(2026, 1, 9), "ben")))
         self.assertFalse(base.same_pin_as(
-            MaintenanceEntry("other", "2026-01-02T00:00:00",
-                             "2026-01-08T00:00:00", "ben")))
+            MaintenanceEntry("other", _utc(2026, 1, 2),
+                             _utc(2026, 1, 8), "ben")))
 
 
 
@@ -203,11 +215,11 @@ class EntryPinFileTests(TestCase):
     def test_node_and_entry_pins_round_trip(self):
         with tempfile.TemporaryDirectory() as directory:
             store = self._store(directory)
-            nodes = {"/db": MaintenanceEntry("planned", "2026-01-01T00:00:00",
-                                             "2026-01-08T00:00:00", "ada")}
+            nodes = {"/db": MaintenanceEntry("planned", _utc(2026, 1, 1),
+                                             _utc(2026, 1, 8), "ada")}
             pins = {("/wiz", "acme/pr-412"):
-                    MaintenanceEntry("on it", "2026-01-02T00:00:00",
-                                     "2026-01-09T00:00:00", "ben")}
+                    MaintenanceEntry("on it", _utc(2026, 1, 2),
+                                     _utc(2026, 1, 9), "ben")}
             store.save(nodes, pins)
             self.assertEqual(store.load(), nodes)
             self.assertEqual(store.load_entries(), pins)
@@ -215,8 +227,8 @@ class EntryPinFileTests(TestCase):
     def test_a_file_with_no_entry_pins_loads_an_empty_table(self):
         with tempfile.TemporaryDirectory() as directory:
             store = self._store(directory)
-            store.save({"/db": MaintenanceEntry("planned", "2026-01-01T00:00:00",
-                                                "2026-01-08T00:00:00")})
+            store.save({"/db": MaintenanceEntry("planned", _utc(2026, 1, 1),
+                                                _utc(2026, 1, 8))})
             self.assertEqual(store.load_entries(), {})
 
     def test_the_old_flat_shape_is_a_clean_break(self):
@@ -239,8 +251,8 @@ class EntryPinFileTests(TestCase):
         with tempfile.TemporaryDirectory() as directory:
             store = self._store(directory)
             key = ("/wiz", "acme/api-pr-412")
-            store.save({}, {key: MaintenanceEntry("on it", "2026-01-02T00:00:00",
-                                                  "2026-01-09T00:00:00")})
+            store.save({}, {key: MaintenanceEntry("on it", _utc(2026, 1, 2),
+                                                  _utc(2026, 1, 9))})
             self.assertIn(key, store.load_entries())
 
 if __name__ == '__main__':

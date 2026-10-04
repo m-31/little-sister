@@ -1,9 +1,11 @@
 # ADR-0005 — Dashboard freshness & engine self-monitoring
 
 - **Status:** Accepted
-- **Date:** 2026-09-20 (accepted 2026-06-20)
+- **Date:** 2026-10-04 (accepted 2026-06-20)
 - **Related:** [ADR-0001](0001-in-process-threaded-engine.md) (the engine),
-  [ADR-0004](0004-status-aggregation-semantics.md) (roll-up).
+  [ADR-0004](0004-status-aggregation-semantics.md) (roll-up),
+  [ADR-0104](0104-a-pin-is-one-block-on-what-it-silences.md) (the editor the poll
+  waits for).
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -46,6 +48,16 @@ ok …"*), a banner rises above the content, the frozen content dims and the tab
 title gains a "(stale) " prefix — all reset by the first good poll, with an
 immediate re-poll on `visibilitychange` so a woken tab self-heals at once. Session
 expiry banners "reload to log in" instead of a misleading age.
+
+The poll waits for an open editor
+([ADR-0104](0104-a-pin-is-one-block-on-what-it-silences.md) decision 7). On the
+dashboard and on a branch's page an editor of a pin opens inside what the poll
+swaps, so while one is open nothing is fetched and nothing is swapped. The line
+says so at once — *updated … — paused while editing* — and after a minute the page
+dims, all of it but the card or the head being edited, as it does under a
+sustained outage. When the editor closes the line drops the words and the next
+poll brings the page up to date; a page that had dimmed is polled at once. The
+promise stands: a page that is not live says so.
 
 **3. The engine monitors itself.** The engine heartbeats a top-level
 `little-sister` node every scheduler tick; if the scheduler stalls, that node goes

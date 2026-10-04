@@ -1,14 +1,15 @@
 # ADR-0025 — Check-provided subnode metadata (`about` / `title` on `CheckResult`)
 
 - **Status:** Accepted
-- **Date:** 2026-08-23 (accepted 2026-07-25)
+- **Date:** 2026-10-04 (accepted 2026-07-25)
 - **Related:** [ADR-0007](0007-check-result-branches.md) (recursive `CheckResult` —
   the branch shape this extends), [ADR-0012](0012-node-metadata.md) (`about`, its
   sources and precedence), [ADR-0017](0017-node-title.md) (`title`, same sources),
   [ADR-0013](0013-check-config-on-node.md) (`config` — the display-metadata-on-result
   sibling, but write-through), [ADR-0019](0019-inspection-popover.md) (the popover that
   already renders these), [ADR-0008](0008-json-output-api.md) (JSON envelope, unchanged
-  here).
+  here), [ADR-0118](0118-a-child-a-run-names-takes-nothing-declared-for-its-name.md)
+  (a child that says a run names it takes its labels from its own result alone).
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -80,9 +81,14 @@ engine or tree learning where a value came from.
    keywords. The library resolves each field once — for text, the configured value when
    present, else the declared default, `{default}` substituted and `{token}`s expanded
    by a plain replace; for the flag, the same merge without the layering — and the
-   engine stores the result per child name; a result-carried label or flag remains only
-   the fallback for a name nothing declared or configured, so a deployment-authored
-   check stamping a dynamic child keeps working. The config may **extend** rather than
+   engine stores the result per child name. What is declared for a subnode's name
+   reaches a child that says nothing
+   ([ADR-0118](0118-a-child-a-run-names-takes-nothing-declared-for-its-name.md)), and
+   for such a child a result-carried label or flag remains only the fallback for a name
+   nothing declared or configured, so a deployment-authored check stamping a dynamic
+   child keeps working. A child that says a run names it, `dynamic=True`, takes its
+   labels from its own result alone, with a `nodes.yaml` entry for its path still above
+   them. The config may **extend** rather than
    replace by writing `{default}` into its own text, which is substituted in place
    (before token expansion, so tokens inside the default still expand; an aspect with no
    default resolves it to nothing). So `host-metrics` ships defaults every deployment

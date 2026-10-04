@@ -6,29 +6,42 @@ single ``RLock``; reads copy an immutable snapshot under the lock and render it
 outside (ADR-0002). Roll-up follows ADR-0039 via ``Status.get_status_code``.
 
 Two histories are kept:
-- the **event log** — every status transition, newest appended (the source), a
-  state file the layer keeps across restarts (:meth:`StatusTree.events_payload`
-  / :meth:`StatusTree.restore_events`, ADR-0071); and
+- the **event log** — every change of what a node shows, and every change of
+  what its check reports that the node did not show (ADR-0107), newest appended
+  (the source), a state file the layer keeps across restarts
+  (:meth:`StatusTree.events_payload` / :meth:`StatusTree.restore_events`,
+  ADR-0071); and
 - per-node **status history** — derived from the event log for one path
-  (:meth:`StatusTree.history`).
+  (:meth:`StatusTree.history`), the beginning of the period a node is in kept
+  beside the log, where it outlives the row that began it (:class:`Beginning`,
+  ADR-0110 decision 5).
 
 **A restart is no transition** (ADR-0094): a node's first write after one is compared
-with what the restored log last recorded for it, not with the ``UNDEFINED`` a restart
-leaves, and the instance's own node alone records the gap
+with what the node last showed and what its check last reported, not with the
+``UNDEFINED`` a restart leaves — the kept file says both for every node, beside the log
+(:func:`nodes_from_payload`, ADR-0110), and the wait before an escalation counts from
+the first. The instance's own node alone records the gap
 (:meth:`StatusTree.close_unobserved`), from when the old process was last alive
 (:func:`last_alive`) — which the stop's one save writes into the log
 (:meth:`StatusTree.note_stop`).
+
+**Every time here is an instant** (ADR-0120): a node's stamp, an event's, a
+period's beginning and its two ends, a pin's three times, and the moment a method
+is asked at. Each knows its zone and is held in UTC; none can be built without
+one. The clock is :func:`little_sister.instants.now`, and the state file spells a
+time through :func:`~little_sister.instants.stamp` and reads it back strictly.
 """
 from __future__ import annotations
 
 import re
 import threading
 from collections import deque
-from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
-from datetime import datetime
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from typing import Any
 
+from little_sister import instants
 from little_sister.codes import RANKED, escalates
 from little_sister.maintenance import (
     MaintenanceEntry,
@@ -87,6 +100,35 @@ UNDEFINED_RULE = "undefined"
 #: would break the one claim damping makes. A dependency shield will belong on this
 #: side too, for the same reason: it keeps the node's own state and marks it.
 HIDES_THE_READING = frozenset({MAINTENANCE_RULE})
+
+#: What moved a node — the value :attr:`Event.cause` carries (ADR-0107 decision 3).
+#: These are the kept log's words; a surface says each cause in its own.
+#:
+#: A **reading** is a check's run. A node's **pin** is written when it is set, when
+#: it is edited and when it ends — cleared, expired or reaped — whatever that does
+#: to what the node shows. A **line's pin** is written only where it changes what
+#: its node shows, set or ended: nothing is written for a line by itself. A
+#: **removal** is written for each node that leaves the tree. And a wait that ends
+#: by its count writes that the node's status **reached** the level above.
+CAUSE_READING = "reading"
+CAUSE_PIN_SET = "pin-set"
+CAUSE_PIN_EDITED = "pin-edited"
+CAUSE_PIN_ENDED = "pin-ended"
+CAUSE_LINE_PIN_SET = "line-pin-set"
+CAUSE_LINE_PIN_ENDED = "line-pin-ended"
+#: A node left the tree: its check said that its children are complete and no
+#: longer returned it (ADR-0109 decision 5).
+CAUSE_REMOVED = "removed"
+#: A node's wait ended by its count (ADR-0119 decision 1): the reading that showed
+#: the held status for the ``escalate_after``-th time in a row. The one row a
+#: reading writes that is no change of what its node shows — the node has shown the
+#: status since the row the wait held back, and what changed is what the level above
+#: counts.
+CAUSE_REACHED = "reached"
+
+#: What a removal's row says for its reason: nothing about the node changed but
+#: that it is gone, and this is why.
+NO_LONGER_REPORTED = "no longer reported by its check"
 
 #: How far back a node's **status changes** are counted, for the number its own page
 #: shows. An hour, because that is the span an operator asking *is this thing
@@ -190,7 +232,12 @@ class RunFacts:
     round (ADR-0008), like ``reported_code`` before it.
     """
     wall_seconds: float | None
-    next_run_at: str | None
+    next_run_at: datetime | None
+
+    def __post_init__(self) -> None:
+        if self.next_run_at is not None:
+            object.__setattr__(self, "next_run_at", instants.utc(
+                self.next_run_at, "a run's next_run_at"))
 
 
 @dataclass(frozen=True)
@@ -214,8 +261,13 @@ class StatusSnapshot:
     ``reasons`` carries the same lines with their keys and pins.
 
     ``timestamp`` is the observation time — ``None`` when no check has written this
-    node (ADR-0027), while ``stale`` and ``age_seconds`` always measure the node's
-    **own** stamp.
+    node (ADR-0027) — and ``age_seconds`` always measures the node's **own** stamp.
+    ``stale`` says that a reading is past its tolerance here **or beneath**: the
+    node's own, or that of any node under it, so a branch is stale while one of its
+    nodes is; ``own_stale`` says it of the node's own reading alone. A node its
+    check stopped returning is such a node for as long as it stays in the tree; one
+    whose parent says that its children are complete is removed instead
+    (ADR-0109), and takes its staleness with it.
 
     ``run`` carries the owning check's last-run facts (ADR-0044) and resolves
     under the same condition as the inherited stamp: it is present exactly where
@@ -239,7 +291,7 @@ class StatusSnapshot:
     code: StatusCode
     reported_code: StatusCode
     reason: tuple[str, ...]
-    timestamp: str | None
+    timestamp: datetime | None
     description: str = ""
     frequency_seconds: int | None = None
     config: str = ""
@@ -299,6 +351,13 @@ class StatusSnapshot:
     #: thing to keep true.
     changes: int = 0
 
+    #: Whether this node's **own** reading is past its tolerance. ``stale`` says
+    #: that of the node *or of one beneath it*, which is the alarm a card carries;
+    #: a surface that states a fact about this node's own reading — how long ago it
+    #: was observed, or that it counts degraded — reads this one, and on a node
+    #: with nothing beneath it the two are one.
+    own_stale: bool = False
+
     @property
     def counted(self) -> StatusCode:
         """The code this node's parent accumulates.
@@ -336,7 +395,27 @@ class StatusSnapshot:
 
 @dataclass(frozen=True)
 class Event:
-    """A recorded transition of a node's own status code.
+    """A recorded change of what a node shows — or of what its check reports, where
+    the node did not show it (ADR-0107).
+
+    ``old`` and ``new`` are the node's **own status** before and after, as the
+    snapshot derives it from the reading, the node's pin and its lines' pins. An
+    event that a rule in :data:`HIDES_THE_READING` marks is the other kind of row:
+    a change of the **reading** that the node did not show, with the reading's own
+    codes. One run can write both, at one instant — the node's change, and beside
+    it the reading's, where a line's pin hides part of what the check reports.
+
+    Two kinds of row change nothing the node shows, and carry one status as both:
+    an edit of a pin (ADR-0107 decision 1), and the row that ends a wait by its
+    count, whose cause is :data:`CAUSE_REACHED` (ADR-0119). Neither begins a period.
+
+    ``cause`` says what moved the node, one of the ``CAUSE_`` words, and
+    ``reported`` what its check reported at that moment — which a restart reads
+    where the kept file carries no table of its nodes (:func:`_last_readings`),
+    and the count of a node's changes. An event read
+    from a log written before them carries neither, ``""`` and ``None``; and the
+    gap the instance's own node records (:meth:`StatusTree.close_unobserved`)
+    names no cause, since none of these is one.
 
     ``suppressed_by`` names the **contribution rule** that kept this transition from
     reaching anybody, and is empty when nothing did. One crisp sentence defines it,
@@ -360,25 +439,46 @@ class Event:
     old: StatusCode
     new: StatusCode
     reason: tuple[str, ...]
-    timestamp: str
+    timestamp: datetime
     suppressed_by: str = ""
+    cause: str = ""
+    reported: StatusCode | None = None
+
+    def __post_init__(self) -> None:
+        """``timestamp`` is an instant, held in UTC (ADR-0120): an event cannot be
+        built with a time without a zone."""
+        object.__setattr__(self, "timestamp", instants.utc(
+            self.timestamp, "an event's timestamp"))
 
     def to_dict(self) -> dict[str, Any]:
         """The event as the state file carries it (ADR-0071): codes by name,
-        the reason texts as a list."""
-        return {"path": self.path, "name": self.name, "old": self.old.name,
-                "new": self.new.name, "reason": list(self.reason),
-                "timestamp": self.timestamp, "suppressed_by": self.suppressed_by}
+        the reason texts as a list, its instant in UTC as
+        :func:`~little_sister.instants.stamp` spells one. The cause and what the
+        check reported are keys only where the event says them, so an event read
+        from a log written before them is written back as it was (ADR-0107
+        decision 6)."""
+        raw: dict[str, Any] = {
+            "path": self.path, "name": self.name, "old": self.old.name,
+            "new": self.new.name, "reason": list(self.reason),
+            "timestamp": instants.stamp(self.timestamp),
+            "suppressed_by": self.suppressed_by}
+        if self.cause:
+            raw["cause"] = self.cause
+        if self.reported is not None:
+            raw["reported"] = self.reported.name
+        return raw
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> Event:
         """One event back from the state file. Raises :class:`ValueError` on a
         shape this reader does not know — a code name it has no member for, a
-        reason that is not a list of text — so the layer can report the file
-        rather than half-read it."""
+        reason that is not a list of text, a time that is not an instant with an
+        offset — so the layer can report the file rather than half-read it."""
+        said = data.get("reported")
         try:
             old = StatusCode[str(data.get("old", ""))]
             new = StatusCode[str(data.get("new", ""))]
+            reported = None if said is None else StatusCode[str(said)]
         except KeyError as error:
             raise ValueError(f"an event carries an unknown code: {error}") from error
         reason = data.get("reason", [])
@@ -387,8 +487,10 @@ class Event:
             raise ValueError("an event's reason is not a list of text")
         return cls(path=str(data.get("path", "")), name=str(data.get("name", "")),
                    old=old, new=new, reason=tuple(reason),
-                   timestamp=str(data.get("timestamp", "")),
-                   suppressed_by=str(data.get("suppressed_by", "")))
+                   timestamp=instants.instant(data.get("timestamp"),
+                                              "an event's timestamp"),
+                   suppressed_by=str(data.get("suppressed_by", "")),
+                   cause=str(data.get("cause", "")), reported=reported)
 
 
 def events_from_payload(payload: object) -> list[Event]:
@@ -407,29 +509,146 @@ def events_from_payload(payload: object) -> list[Event]:
     return events
 
 
-def stopped_at_of(payload: object) -> str | None:
+@dataclass(frozen=True)
+class Beginning:
+    """When the period a node is in began, as far as the tree knows (ADR-0110
+    decision 5, ADR-0099 decisions 1 and 9).
+
+    ``at`` is an instant as the tree stamps its events. Where the tree saw the
+    period begin — a row that changed what the node shows — ``was`` is what the
+    node showed before and ``cause`` what moved it: the two things a surface reads
+    how a period began off (ADR-0099 decision 8). Where it did not, ``before`` says
+    the instant is a **bound** — the period began before it, and nothing says how:
+    a node's first reading with nothing kept of it, the oldest edit of a pin whose
+    set had left the log, or the log's oldest event for a node the log held no row
+    of. A bound is taken once and kept until the node changes."""
+    at: datetime
+    before: bool = False
+    was: StatusCode | None = None
+    cause: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "at", instants.utc(
+            self.at, "a period's beginning"))
+
+    def to_dict(self) -> dict[str, Any]:
+        """The keys an entry carries beside its two codes: ``since``, the instant
+        spelled in UTC, and either ``before`` or how the period began — ``was``,
+        and ``cause`` where the row that began it said one."""
+        since = instants.stamp(self.at)
+        if self.before:
+            return {"since": since, "before": True}
+        raw: dict[str, Any] = {"since": since}
+        if self.was is not None:
+            raw["was"] = self.was.name
+        if self.cause:
+            raw["cause"] = self.cause
+        return raw
+
+
+@dataclass(frozen=True)
+class LastShown:
+    """What the kept log says of one node, beside its rows (ADR-0110 decision 2):
+    what the node last showed and what its check last reported — the two things its
+    first reading in a new process is compared with. ``UNDEFINED`` where there was
+    nothing — a node no check reports to — and where the rows of a file written
+    before the table say only one of the two.
+
+    ``began`` is when the period the node is in began (decision 5), ``None`` where
+    the entry says nothing of it: a file written before an entry did, or a node no
+    beginning is known of yet.
+
+    ``publishes`` is what the node publishes to the level above while it **waits**
+    before it escalates (ADR-0119 decision 4): the status it published before the
+    one it shows. ``None`` for a node that is not waiting — which is every node of a
+    file written before the key."""
+    shows: StatusCode
+    reported: StatusCode
+    began: Beginning | None = None
+    publishes: StatusCode | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        """The entry as the state file carries it: the two codes by name, what the
+        node publishes where it is waiting, and the period's beginning where one
+        is known."""
+        return {"shows": self.shows.name, "reported": self.reported.name,
+                **({} if self.publishes is None
+                   else {"publishes": self.publishes.name}),
+                **({} if self.began is None else self.began.to_dict())}
+
+
+def _beginning_of(raw: Mapping[str, Any]) -> Beginning | None:
+    """The beginning an entry carries, or ``None`` where it carries none.
+    :class:`ValueError` where its keys are not what :meth:`Beginning.to_dict`
+    writes: a time that is not an instant with an offset, a code or a flag that is
+    none, how a period began without when, or a bound that says how."""
+    since, was = raw.get("since"), raw.get("was")
+    before, cause = raw.get("before", False), raw.get("cause", "")
+    if since is None:
+        if was is not None or "before" in raw or "cause" in raw:
+            raise ValueError("a node's entry says how its period began, and not when")
+        return None
+    at = instants.instant(since, "a node's since")
+    if not isinstance(before, bool) or not isinstance(cause, str):
+        raise ValueError("a node's entry says how its period began in no way known")
+    if was is not None and (not isinstance(was, str)
+                            or was not in StatusCode.__members__):
+        raise ValueError(f"a node's entry says no code it showed before: {was!r}")
+    if before and (was is not None or cause):
+        raise ValueError("a node's entry bounds its period, and says how it began")
+    return Beginning(at, before=before,
+                     was=None if was is None else StatusCode[was], cause=cause)
+
+
+def nodes_from_payload(payload: object) -> dict[str, LastShown] | None:
+    """What a state file's payload says every node last showed and last reported
+    (ADR-0110 decision 2), by path — or ``None`` where it carries no such table: a
+    file written before it, which a restart reads by its rows. :class:`ValueError`
+    where the table is not the shape :meth:`StatusTree.events_payload` writes: like
+    an event this reader cannot use, one entry refuses the whole file, and the layer
+    reports it."""
+    if not isinstance(payload, Mapping) or "nodes" not in payload:
+        return None
+    table = payload["nodes"]
+    if not isinstance(table, Mapping):
+        raise ValueError("the table of nodes is not a mapping")
+    kept: dict[str, LastShown] = {}
+    for path, raw in table.items():
+        if not isinstance(raw, Mapping):
+            raise ValueError("a node's entry is not a mapping")
+        codes: list[StatusCode] = []
+        for key in ("shows", "reported"):
+            name = raw.get(key)
+            if not isinstance(name, str) or name not in StatusCode.__members__:
+                raise ValueError(f"a node's entry says no code it {key}: {name!r}")
+            codes.append(StatusCode[name])
+        waits = raw.get("publishes")
+        if waits is not None and (not isinstance(waits, str)
+                                  or waits not in StatusCode.__members__):
+            raise ValueError(f"a node's entry says no code it publishes: {waits!r}")
+        kept[join_path(str(path))] = LastShown(
+            codes[0], codes[1], _beginning_of(raw),
+            None if waits is None else StatusCode[waits])
+    return kept
+
+
+def stopped_at_of(payload: object) -> datetime | None:
     """The moment the stop's one save stamped into a state file's payload
     (:meth:`StatusTree.note_stop`), or ``None`` where it carries none — a log an
-    interval wrote, a process that crashed, a file written before the stamp existed —
-    or one that is not a local time the way the tree stamps its events (ADR-0094
-    decision 4)."""
-    if not isinstance(payload, Mapping):
+    interval wrote, a process that crashed (ADR-0094 decision 4).
+    :class:`ValueError` where it carries one that is not an instant with an offset:
+    like an event this reader cannot use, it refuses the whole file."""
+    if not isinstance(payload, Mapping) or "stopped_at" not in payload:
         return None
-    value = payload.get("stopped_at")
-    if not isinstance(value, str):
-        return None
-    try:
-        moment = datetime.fromisoformat(value)
-    except ValueError:
-        return None
-    return value if moment.tzinfo is None else None
+    return instants.instant(payload["stopped_at"], "the log's stopped_at")
 
 
-def last_alive(stopped_at: str | None, lease_beat: float | None) -> str | None:
+def last_alive(stopped_at: datetime | None,
+               lease_beat: float | None) -> datetime | None:
     """When the old process was **last alive**, the start of the gap the instance's
     own node records (ADR-0094 decision 4): the later of the stop's stamp and the
-    lease's last write before this process took it, as a local time the way the
-    tree stamps its events — or ``None`` where neither is known.
+    lease's last write before this process took it, as an instant — or ``None``
+    where neither is known.
 
     The later wins because each can be the stale one: a stop's stamp stays in the
     log until the next process's first save, so a process that crashed before that
@@ -437,45 +656,71 @@ def last_alive(stopped_at: str | None, lease_beat: float | None) -> str | None:
     a fresh disk has none. The log's own last save is not asked at all — a kept
     file is written only when it changed, so on a quiet night it is hours old.
     """
-    moments = [datetime.fromisoformat(stopped_at)] if stopped_at else []
+    moments = [] if stopped_at is None else [stopped_at]
     if lease_beat is not None:
-        moments.append(datetime.fromtimestamp(lease_beat))
-    return max(moments).isoformat() if moments else None
+        moments.append(datetime.fromtimestamp(lease_beat, UTC))
+    return max(moments) if moments else None
+
+
+def _reported_after(event: Event, before: StatusCode | None) -> StatusCode | None:
+    """What a node's check had last reported once ``event`` was written, given what
+    it had reported ``before`` it.
+
+    The event says so itself (ADR-0107 decision 4). One read from a log written
+    before it could is worked out from its codes, as ADR-0094 decision 1 described:
+    its ``new`` — passing over an admin's pin set, an unmarked event to
+    ``MAINTENANCE``, which moves what a node shows and not what it read, and taking
+    the reading the set left under it instead. A check that itself reported
+    ``MAINTENANCE`` looks the same in such a log, and its first reading after a
+    restart is then a change from the reading before, where none was owed: those
+    rows do not tell the two apart, which is one of the things the field is for.
+    """
+    if event.reported is not None:
+        return event.reported
+    if event.new is StatusCode.MAINTENANCE and not event.suppressed_by:
+        return before if event.old is StatusCode.MAINTENANCE else event.old
+    return event.new
 
 
 def _last_readings(events: Iterable[Event]
                    ) -> tuple[dict[str, StatusCode], dict[str, StatusCode]]:
-    """What a restored log last recorded per path: the node's last **reading**, which
-    its first write after the restart is compared with, and what it last **showed**,
-    which a replayed pin is (ADR-0094 decisions 1 and 2).
+    """What a restored log last recorded per path: what the node's check last
+    **reported** and what the node last **showed** — the two things its first write
+    after the restart is compared with, and a replayed pin with the second
+    (ADR-0094 decisions 1 and 2, ADR-0107 decision 5).
 
-    The reading passes over an admin's pin set — an unmarked event to
-    ``MAINTENANCE``, which moves what a node shows and not what it read — taking the
-    reading the set left under it instead. A check that itself reported
-    ``MAINTENANCE`` looks the same in the log, and its first reading after a restart
-    is then a transition from the reading before, where none was owed: the log does
-    not tell the two apart, and the case is too rare to earn a field that would.
     What a node showed is the code of its current period, as
-    :meth:`StatusTree.history` reads it: the last event no rule hid from the display.
+    :meth:`StatusTree.history` reads it: the last event no rule hid from the
+    display. What its check reported is what its last event says
+    (:func:`_reported_after`).
     """
     read: dict[str, StatusCode] = {}
     shown: dict[str, StatusCode] = {}
     for event in events:
         if event.suppressed_by not in HIDES_THE_READING:
             shown[event.path] = event.new
-        if event.new is StatusCode.MAINTENANCE and not event.suppressed_by:
-            if event.old is not StatusCode.MAINTENANCE:
-                read[event.path] = event.old
-            continue
-        read[event.path] = event.new
+        reported = _reported_after(event, read.get(event.path))
+        if reported is not None:
+            read[event.path] = reported
     return read, shown
 
 
 @dataclass(frozen=True)
+class _RanOut:
+    """The pins of one node that a restart found expired in the pins file: its own,
+    and its lines' by slug. They ran out while the instance was down, and nothing
+    wrote their end; the node's first reading does (ADR-0107 decision 5). A node
+    nothing reports to is not kept here: the restart writes its pin's end itself
+    (:meth:`StatusTree.restore_maintenance`)."""
+    node: bool = False
+    lines: frozenset[str] = frozenset()
+
+
+@dataclass(frozen=True)
 class _Damped:
-    """One node's damping state: what it published upward, the worse code it is
-    holding back (``None`` when it is holding nothing), and how many consecutive
-    readings have said so."""
+    """One node's damping state, in terms of what the node **shows** (ADR-0108):
+    what it published upward, the worse status it is holding back (``None`` when it
+    is holding nothing), and how many consecutive readings have shown it."""
     published: StatusCode
     pending: StatusCode | None
     seen: int
@@ -492,11 +737,29 @@ class StatusPeriod:
     that transition is real while the observation bounding it does not exist. The
     surfaces render the absence as ``—``, which is the honest reading; inventing
     the moment the admin acted would date the period by an act, not a check.
+
+    ``previous`` is what the node showed before the period, as the event that
+    begins it records, and what a surface reads off that a period which came
+    after ``MAINTENANCE`` began where the node's maintenance ended (ADR-0099
+    decision 8).
+
+    ``cause`` is what that first event says moved the node (ADR-0107 decision 3),
+    empty where it says nothing: a period that a line's pin began, set or ended,
+    is neither a failure nor a recovery, and a surface says which it was.
+
+    ``before`` says ``since`` is a **bound** and no beginning (ADR-0099 decisions
+    1 and 9): the period began before that instant, and nothing says how. A first
+    reading is one — the node was already what it showed when it was first seen —
+    and so is the oldest edit of a pin whose set has left the log, and the bound
+    a kept entry holds for a period whose beginning was lost.
     """
     code: StatusCode
-    since: str
-    until: str | None
+    since: datetime
+    until: datetime | None
     reason: tuple[str, ...]
+    previous: StatusCode
+    cause: str = ""
+    before: bool = False
 
 
 class StatusTree:
@@ -508,18 +771,46 @@ class StatusTree:
         self._lock = threading.RLock()
         self._root = Status(path="/", name=root_name)
         self._events: deque[Event] = deque(maxlen=event_log_size)
-        # What the restored log last recorded per path (ADR-0094): the reading a
-        # node's first write after a restart is compared with, consumed by that
-        # write, and what the node last showed, which a replayed pin continues.
+        # What the kept file last said of each node no check has written in this
+        # process yet (ADR-0094, ADR-0107 decision 5): what its check last
+        # reported and what the node last showed — its table's entries, or what
+        # the rows of a file written before the table say (ADR-0110). Its first
+        # write is compared with both and consumes them, and its wait counts from
+        # the second; a pin set or ended before that write is written from the
+        # second, and moves it. A node its check no longer reports is kept here
+        # too, as one that shows nothing since it was removed (ADR-0109 decision
+        # 5), until its row has left the log.
         self._restored_reading: dict[str, StatusCode] = {}
         self._restored_shown: dict[str, StatusCode] = {}
+        # What each of those nodes published while it **waited** before it
+        # escalated, where the kept file says that it was waiting (ADR-0119
+        # decisions 4 and 5): its first write resumes the wait. It is read only
+        # beside a status the node still shows that is worse than this one, so
+        # what a pin or a removal has moved since says nothing, and neither does
+        # what is left here of a node whose entry was forgotten.
+        self._restored_published: dict[str, StatusCode] = {}
+        # When the period each node is in began (ADR-0110 decision 5), for a node
+        # a check has written and for one it has not yet: kept as the tree writes
+        # (:meth:`_log`), restored from the file's table or worked out from its
+        # rows, and written back with the table — so a period's beginning outlives
+        # the row that began it.
+        self._beginnings: dict[str, Beginning] = {}
+        # The branches that begin with this process — the instance's own
+        # (ADR-0099 decision 9): a first reading there is a beginning the tree saw.
+        self._process_branches: tuple[tuple[str, ...], ...] = ()
+        # The pins a restart found expired in their file, per node: nothing wrote
+        # their end, and the node's first reading does.
+        self._ran_out: dict[str, _RanOut] = {}
         # The moment of the stop, once the stop has come (ADR-0094 decision 4): the
         # log's producer writes it beside the events, so the stop's one save is the
         # one save that carries it.
-        self._stopped_at: str | None = None
+        self._stopped_at: datetime | None = None
         # Maintenance side-table: path -> entry, kept in sync with each node's
         # ``maintenance`` bool and written through to ``maintenance_store`` on every
-        # change (ADR-0014). No store (the default) means in-memory only.
+        # change (ADR-0014). No store (the default) means in-memory only. A pin is
+        # held against its **path**, whether or not the tree holds a node there
+        # (ADR-0109 decision 4): none is made for it, and one the tree makes at
+        # the path takes it (:meth:`_furnish`).
         self._maintenance: dict[str, MaintenanceEntry] = {}
         # Per-entry pins (ADR-0036): the same side-table, keyed one level deeper —
         # ``(path, slug)``. Deliberately **outside** the check's output: the check
@@ -537,12 +828,13 @@ class StatusTree:
         # must not be attributed upward as if they were one.
         self._check_mounts: dict[str, int] = {}
         # The damping counter per path (backlog #38 B): what this node last
-        # published upward, the worse code it is holding back, and how many
-        # consecutive readings have said so. Side-table for the same reason the
-        # pins are one — nothing derived is written into the tree (ADR-0032 rule 3)
-        # — and advanced on the **reading**, in `upsert`, because a poll is not a
-        # reading and a counter that advanced per snapshot would escalate a node
-        # nobody had asked about again.
+        # published upward, the worse status it is holding back, and how many
+        # consecutive readings have shown it — the node's **own** status, what it
+        # shows, and not the code its check reported (ADR-0108). Side-table for the
+        # same reason the pins are one — nothing derived is written into the tree
+        # (ADR-0032 rule 3) — and advanced on the **reading**, in `upsert`, because
+        # a poll is not a reading and a counter that advanced per snapshot would
+        # escalate a node nobody had asked about again.
         self._damping: dict[str, _Damped] = {}
         # What each check is reached **through** (backlog #38 A): the mount path of
         # a check, against the mount path of the check it depends on. Seeded at
@@ -557,12 +849,31 @@ class StatusTree:
         self._run_facts: dict[str, RunFacts] = {}
         # How many reason entries the nodes hold between them — the count the
         # engine measures against its entry limit every tick (ADR-0072). Kept
-        # here, on the one write path, so reading it never walks the tree.
+        # here, on the write paths — a reading, and a removal — so reading it
+        # never walks the tree.
         self._entry_count = 0
+        # What the configuration declared for a node, by path and by the node's
+        # field (ADR-0012, ADR-0017, ADR-0055, ADR-0063): seeded once at startup,
+        # and kept here because a node can leave the tree and return (ADR-0109) —
+        # the node the tree makes then is given these again, before its check's own
+        # labels may fill what is empty.
+        self._seeded: dict[str, dict[str, Any]] = {}
 
     def use_maintenance_store(self, store: MaintenanceStore) -> None:
         """Attach the persistence store (once, at startup, before restore)."""
         self._maintenance_store = store
+
+    def set_process_branch(self, path: str) -> None:
+        """Say that the branch at ``path`` begins with this process — the
+        instance's own (ADR-0099 decision 9). Nothing of it was there to be seen
+        before the process, so a first reading at or beneath it is a beginning the
+        tree saw, where any other node's is a bound: that node was already what it
+        shows when it was first seen. Registration only, as a mount is; the engine
+        says it of its own branch, before anything is restored."""
+        segments = tuple(split_path(path))
+        with self._lock:
+            if segments not in self._process_branches:
+                self._process_branches += (segments,)
 
     def upsert(self, path: str, code: StatusCode | str,
                reason: ReasonInput = None, *,
@@ -579,8 +890,10 @@ class StatusTree:
                escalate_after: int | None = None,
                subject: str | None = None,
                record: dict[str, Any] | None = None) -> bool:
-        """Create-or-update the node at ``path`` and record a transition event if
-        its own code changed. ``description`` / ``frequency_seconds`` / ``config``
+        """Create-or-update the node at ``path`` and record what the reading
+        changed: what the node shows, and what its check reports where the node
+        does not show it (:meth:`_record_reading`). Answers whether it recorded
+        anything. ``description`` / ``frequency_seconds`` / ``config``
         / ``report`` (inherited from the check) are stored when given — ``config``
         is static display metadata, never a transition (ADR-0013), and ``report``
         is per-run display metadata, equally never one (ADR-0044: what the run
@@ -663,23 +976,52 @@ class StatusTree:
                 node.subject = subject
             if record is not None or subject is not None:
                 node.record = record
-            old = node.code
-            if node.timestamp is None:
-                # The node's first write in this process: compared with what the
-                # restored log last recorded for it, not with the `UNDEFINED` a
-                # restart leaves (ADR-0094 decision 1).
-                old = self._restored_reading.pop(node.path, old)
+            # What the node showed and what its check had reported, before this
+            # reading. On the node's first write in this process both are what the
+            # restored log last recorded for it, not the `UNDEFINED` a restart
+            # leaves (ADR-0094 decision 1, ADR-0107 decision 5), and the write
+            # consumes them.
+            shown, reported = self._shown(node), self._reported(node)
+            ran_out: _RanOut | None = None
+            first_write = node.timestamp is None
+            kept: StatusCode | None = None
+            if first_write:
+                kept = self._restored_shown.pop(node.path, None)
+                self._restored_reading.pop(node.path, None)
+                ran_out = self._ran_out.pop(node.path, None)
+                # The count starts from what the node last showed (ADR-0110
+                # decision 1): the counter takes it as published, so a worse first
+                # reading waits like any other and a failure that stood stays
+                # published. A node that was **waiting** at the stop goes on
+                # waiting (ADR-0119 decision 5): it publishes what it published
+                # before, and its count resumes with the one reading its held row
+                # records — the readings between that row and the stop are not
+                # kept.
+                waited = self._restored_published.pop(node.path, None)
+                if kept is not None:
+                    self._damping[node.path] = (
+                        _Damped(waited, kept, 1)
+                        if waited is not None and escalates(waited, kept)
+                        else _Damped(kept, None, 0))
             held = len(node.reason_entries)
             node.update(code, reason, members)
             self._entry_count += len(node.reason_entries) - held
             # Every reading advances the counter, including one that changed
             # nothing: *three consecutive readings of ERROR* is three readings, and
             # only the first of them is a transition.
-            self._damp(node)
-            if node.code == old:
-                return False
-            self._emit(node, old)
-            return True
+            reached = self._damp(node)
+            wrote = self._record_reading(node, shown, reported, ran_out)
+            if reached and self._shields(instants.now()).get(node.path) is None:
+                # The wait ended by its count: the one row a reading writes that
+                # is no change of what its node shows (ADR-0119 decision 1).
+                # Behind a shield nothing reached, and nothing is written
+                # (decision 2).
+                shows = self._own(node)
+                self._emit(node, shows, shows, cause=CAUSE_REACHED)
+                wrote = True
+            if first_write:
+                self._settle_period(node, first_sight=kept is None)
+            return wrote
 
     @property
     def entry_count(self) -> int:
@@ -694,14 +1036,12 @@ class StatusTree:
         """Seed a node's ``about`` (subject metadata; ADR-0012). Auto-creates the
         node — `about` may target a container the tree hasn't built yet — and sets
         the field only; it is not status, so no event. Thread-safe."""
-        with self._lock:
-            self._ensure_node(path).about = about
+        self._seed(path, "about", about)
 
     def set_title(self, path: str, title: str) -> None:
         """Seed a node's ``title`` (a short display label; ADR-0017) — like
         :meth:`set_about`, metadata only, no event. Thread-safe."""
-        with self._lock:
-            self._ensure_node(path).title = title
+        self._seed(path, "title", title)
 
     def set_order(self, path: str, order: int) -> None:
         """Seed a node's declared sibling rank (ADR-0055) — like
@@ -719,8 +1059,7 @@ class StatusTree:
         ``1..5``, zeroing one child moves it to the **front**. Restoring plain
         alphabetical order across a ranked set means seeding ``0`` on **every**
         sibling. Thread-safe."""
-        with self._lock:
-            self._ensure_node(path).order = order
+        self._seed(path, "order", order)
 
     def set_show_when_quiet(self, path: str, show_when_quiet: bool) -> None:
         """Seed a node's ``show_when_quiet`` (ADR-0063) — like :meth:`set_about`,
@@ -731,8 +1070,15 @@ class StatusTree:
         the check's result declares. ``False`` is a **real** declaration here and
         not a no-op: it is the only way a deployment can decline a claim a check
         type ships for every one of its installations. Thread-safe."""
+        self._seed(path, "show_when_quiet", show_when_quiet)
+
+    def _seed(self, path: str, field: str, value: Any) -> None:
+        """Set one declared field of the node at ``path``, making the node where
+        the tree has none, and keep the declaration for a node that leaves and
+        returns (:meth:`_furnish`). Thread-safe."""
         with self._lock:
-            self._ensure_node(path).show_when_quiet = show_when_quiet
+            self._seeded.setdefault(join_path(path), {})[field] = value
+            setattr(self._ensure_node(path), field, value)
 
     def set_check_mount(self, path: str) -> None:
         """Register ``path`` as a **check mount** — the node a check writes its
@@ -777,7 +1123,7 @@ class StatusTree:
                                 in self._dependencies.items() if on == key))
 
     def set_run_facts(self, path: str, *, wall_seconds: float | None,
-                      next_run_at: str | None) -> None:
+                      next_run_at: datetime | None) -> None:
         """Record the owning check's last-run facts for the mount at ``path`` —
         the run's wall time and the engine's **armed next slot** (ADR-0044).
 
@@ -797,33 +1143,51 @@ class StatusTree:
                         expires_at: datetime, set_by: str = "",
                         expected_set_at: str | None = None) -> MaintenanceWrite:
         """Pin the node at ``path`` to maintenance (a sticky admin override) until
-        ``expires_at``, recording who set it. Stores the entry and writes it through
-        (ADR-0014). Thread-safe.
+        ``expires_at``, an instant, recording who set it. Stores the entry and
+        writes it through (ADR-0014). Thread-safe.
+
+        The pin is held against the **path** (ADR-0109 decision 4). Where the tree
+        holds no node there, none is made: the pin silences the node from the
+        moment a check writes it, and until then it silences nothing.
 
         Setting a node that is **already pinned** is an edit: it keeps the entry's
         ``created_at`` / ``created_by`` and replaces the rest, so "one more day"
         keeps the original explanation and the original author.
 
         ``expected_set_at`` is the **compare-and-set token** (ADR-0014):
-        the ``set_at`` the caller believes it is replacing, or ``""`` for *"I
-        believe nothing is pinned"*. When it does not match what the table holds,
+        the ``set_at`` the caller believes it is replacing, as it is spelled
+        (:attr:`MaintenanceEntry.token`), or ``""`` for *"I believe nothing is
+        pinned"*. When it does not match what the table holds,
         **nothing is written** and the refusal carries the stored entry. ``None``
         — the default, and what the startup replay uses — writes unguarded.
+
+        A set that says what the stored pin says — the same reason, the same
+        expiry — **changes nothing and writes nothing** (ADR-0104 decision 5): the
+        pin keeps its ``set_at`` and its ``set_by``, since nobody changed it, and
+        with them the token another open form holds. The guard is asked first: a
+        stale token is refused whatever the form says.
+
+        The write has **one instant**, the store's and the log's (ADR-0110 decision
+        6): the row is dated as the entry's ``set_at`` — for a new pin its
+        creation, so a restart finds the period's beginning and the pin's the same.
         """
-        moment = datetime.now().isoformat()
         with self._lock:
             key = join_path(path)
             stored = self._maintenance.get(key)
             if not self._token_matches(stored, expected_set_at):
                 return MaintenanceWrite(False, stored, refused=True)
+            # Taken under the lock, so the log stays in the order it was written.
+            moment = instants.now()
             entry = MaintenanceEntry(
                 reason=reason or "maintenance",
                 set_at=moment,
-                expires_at=expires_at.isoformat(),
+                expires_at=expires_at,
                 set_by=set_by,
                 created_at=stored.created_at if stored else moment,
                 created_by=stored.created_by if stored else set_by)
-            self._apply_maintenance(key, entry)
+            if stored is not None and stored.same_pin_as(entry):
+                return MaintenanceWrite(False, stored)
+            self._apply_maintenance(key, entry, when=moment)
             self._persist()
             return MaintenanceWrite(True, entry)
 
@@ -851,11 +1215,12 @@ class StatusTree:
     def _token_matches(stored: MaintenanceEntry | None,
                        expected_set_at: str | None) -> bool:
         """Whether a guarded write may proceed. ``None`` means unguarded; otherwise
-        the token must equal the stored entry's ``set_at``, with ``""`` standing for
-        *"nothing is pinned"*."""
+        the token must equal the stored entry's ``set_at`` as it is spelled
+        (:attr:`MaintenanceEntry.token`), with ``""`` standing for *"nothing is
+        pinned"*."""
         if expected_set_at is None:
             return True
-        return (stored.set_at if stored is not None else "") == expected_set_at
+        return (stored.token if stored is not None else "") == expected_set_at
 
     def restore_maintenance(self, entries: dict[str, MaintenanceEntry],
                             now: datetime | None = None,
@@ -865,20 +1230,52 @@ class StatusTree:
         """Replay persisted maintenance at startup (single worker, so once —
         ADR-0001): re-pin each **non-expired** entry, preserving its original
         ``set_at`` / ``expires_at``, and drop the rest, rewriting the file once.
-        Replaying before any check has run is safe — the ``upsert`` guard keeps the
-        pin (ADR-0014).
+        Replaying before any check has run makes no node (ADR-0109 decision 4):
+        each pin is held against its path, and the node its check then writes is
+        pinned from its first reading — or stays away, where its check no longer
+        reports it, and the pin with it, suspended.
+
+        **A replayed pin's period begins at the pin's creation** (ADR-0110 decision
+        6), which the store keeps: the tree did not see this pin set, and the row a
+        replay writes, where the restored log does not hold the pin's period, is
+        dated this start (:meth:`_date_pin`).
 
         ``entry_pins`` are the per-entry pins (ADR-0036). They restore into the
         side-table only — there is no node to pin and no status to write, and a
-        slug the next run does not report simply does not apply."""
-        moment = now or datetime.now()
+        slug the next run does not report simply does not apply.
+
+        **Nothing is written for a pin that ran out while the instance was down**,
+        where a check reports to the node: there is no reading yet to say what the
+        node shows without it. Which pins did is remembered per node, and the
+        node's first reading writes their end (ADR-0107 decision 5). A node
+        **nothing reports to** — a branch pinned whole — has no reading to come:
+        its pin's end is written here, at the pin's own expiry, to the
+        ``UNDEFINED`` such a node shows, which claims nothing but that the pin
+        ended. No node is made for it."""
+        moment = _asked_at(now)
         with self._lock:
             for entry_path, entry in entries.items():
+                key = join_path(entry_path)
                 if not entry.is_expired(moment):
                     self._apply_maintenance(entry_path, entry, replay=True)
-            for key, entry in (entry_pins or {}).items():
+                elif (self._restored_shown.get(key) is StatusCode.MAINTENANCE
+                      and self._restored_reading.get(key, StatusCode.UNDEFINED)
+                      is StatusCode.UNDEFINED):
+                    self._log(Event(
+                        path=key, name=leaf_name(key), old=StatusCode.MAINTENANCE,
+                        new=StatusCode.UNDEFINED, reason=(),
+                        timestamp=entry.expires_at, cause=CAUSE_PIN_ENDED,
+                        reported=StatusCode.UNDEFINED))
+                    self._restored_shown[key] = StatusCode.UNDEFINED
+                else:
+                    self._ran_out[key] = _RanOut(node=True)
+            for (entry_path, slug), entry in (entry_pins or {}).items():
                 if not entry.is_expired(moment):
-                    self._entry_maintenance[key] = entry
+                    self._entry_maintenance[entry_path, slug] = entry
+                else:
+                    key = join_path(entry_path)
+                    before = self._ran_out.get(key, _RanOut())
+                    self._ran_out[key] = _RanOut(before.node, before.lines | {slug})
             self._persist()
 
     def adopt_maintenance(self, entries: dict[str, MaintenanceEntry],
@@ -891,11 +1288,24 @@ class StatusTree:
         one lock: every node pin the new table lacks, or carries expired, is
         cleared — a real ``MAINTENANCE -> reading`` transition with its event, as
         a sweep makes — and every non-expired pin it carries is applied, a set or
-        an edit, with the event each earns; the per-entry pins are replaced
-        whole. Nothing is written through: the file on disk is the copy being
-        adopted, and the sweep drops what is expired from it."""
-        moment = now or datetime.now()
+        an edit, with the event each earns, a pin new to this process beginning its
+        period at its creation (:meth:`_date_pin`); the per-entry pins are replaced
+        whole, first, and a node that shows something else for it gets the event
+        of a line's pin that ended, or was set where none of its own went
+        (ADR-0107 decision 1). Nothing is written through: the file on disk is
+        the copy being adopted, and the sweep drops what is expired from it."""
+        moment = _asked_at(now)
         with self._lock:
+            adopted = {key: entry for key, entry in (entry_pins or {}).items()
+                       if not entry.is_expired(moment)}
+            went = {path for path, slug in self._entry_maintenance
+                    if (path, slug) not in adopted}
+            showing = self._showing(
+                path for path, _slug in (*self._entry_maintenance, *adopted))
+            self._entry_maintenance = adopted
+            self._emit_line_pins(
+                showing, lambda node: CAUSE_LINE_PIN_ENDED if node.path in went
+                else CAUSE_LINE_PIN_SET)
             keep = {path for path, entry in entries.items()
                     if not entry.is_expired(moment)}
             for path in [path for path in self._maintenance if path not in keep]:
@@ -903,56 +1313,189 @@ class StatusTree:
             for entry_path, entry in entries.items():
                 if entry_path in keep:
                     self._apply_maintenance(entry_path, entry)
-            self._entry_maintenance = {
-                key: entry for key, entry in (entry_pins or {}).items()
-                if not entry.is_expired(moment)}
 
     def sweep_expired(self, now: datetime | None = None) -> list[str]:
-        """Clear every entry past its ``expires_at`` — a real
-        ``MAINTENANCE -> UNDEFINED`` transition and event; the next check refills the
-        node (ADR-0014). Returns the cleared paths. Called each scheduler tick."""
-        moment = now or datetime.now()
+        """Clear every pin past its ``expires_at``, a node's and a line's — each a
+        real transition of what its node shows, with its event (ADR-0014, ADR-0041
+        decision 4, ADR-0107 decision 1). Returns the paths whose own pin was
+        cleared. Called each scheduler tick."""
+        moment = _asked_at(now)
         with self._lock:
+            # Expiry is the *only* thing that disposes of a per-entry pin, so this
+            # sweep is its whole lifecycle end (ADR-0036 decision 6). It writes no
+            # status — the pin was never in the tree, and the node's own code is
+            # derived (ADR-0032 rule 3) — and it is an event where the node shows
+            # something else for it, one for a node however many of its lines'
+            # pins ran out together (ADR-0107 decision 1). The lines go first: a
+            # node whose own pin runs out in the same sweep then ends on what it
+            # shows without either.
+            stale_entries = [key for key, entry in self._entry_maintenance.items()
+                             if entry.is_expired(moment)]
+            showing = self._showing(path for path, _slug in stale_entries)
+            for key in stale_entries:
+                del self._entry_maintenance[key]
+            self._emit_line_pins(showing, lambda node: CAUSE_LINE_PIN_ENDED)
             expired = [path for path, entry in self._maintenance.items()
                        if entry.is_expired(moment)]
             for path in expired:
                 self._clear_node(path)
-            # Expiry is the *only* thing that disposes of a per-entry pin, so this
-            # sweep is its whole lifecycle end (ADR-0036 decision 6). It writes no
-            # status and emits no event: the pin was never in the tree, and the
-            # node's own code is derived at snapshot time (ADR-0032 rule 3).
-            stale_entries = [key for key, entry in self._entry_maintenance.items()
-                             if entry.is_expired(moment)]
-            for key in stale_entries:
-                del self._entry_maintenance[key]
             if expired or stale_entries:
                 self._persist()
             return expired
 
-    def reap_uncovered(self, check_roots: list[str]) -> list[str]:
-        """Drop maintenance whose path **no check root covers** — segment-wise on one
-        root-to-leaf line (:func:`on_same_line`). Run once at startup against the
-        static check set (ADR-0014/0015); expiry is the backstop. Returns the reaped
-        paths."""
+    def reap_uncovered(self, roots: list[str]) -> list[str]:
+        """Drop maintenance whose path **none of ``roots`` covers** — the configured
+        checks' roots and the instance's own, segment-wise on one root-to-leaf line
+        (:func:`on_same_line`). Run once at startup against the static check set
+        (ADR-0014/0015); expiry is the backstop. Returns the reaped paths."""
         with self._lock:
             def covered(path: str) -> bool:
-                return any(on_same_line(path, root) for root in check_roots)
+                return any(on_same_line(path, root) for root in roots)
 
             uncovered = [path for path in self._maintenance if not covered(path)]
             for path in uncovered:
                 self._clear_node(path)
             orphan_entries = [key for key in self._entry_maintenance
                               if not covered(key[0])]
+            showing = self._showing(path for path, _slug in orphan_entries)
             for key in orphan_entries:
                 del self._entry_maintenance[key]
+            self._emit_line_pins(showing, lambda node: CAUSE_LINE_PIN_ENDED)
             if uncovered or orphan_entries:
                 self._persist()
             return uncovered
 
-    def maintenance_entry(self, path: str) -> MaintenanceEntry | None:
-        """The maintenance entry pinned at ``path``, if any."""
+    def forget_uncovered(self, roots: Iterable[str]) -> list[str]:
+        """Drop what was restored of every node on none of ``roots``' lines — the
+        configured checks' and the instance's own — as a pin no check covers is
+        reaped (ADR-0110 decision 4, ADR-0014): nothing will read such a node, and
+        its entry would be carried in the kept file for good. Run once at startup,
+        after the pins' replay, which reads what was restored. Returns the paths
+        forgotten, in their order."""
+        lines = list(roots)
         with self._lock:
-            return self._maintenance.get(path)
+            gone = sorted(
+                path for path in {*self._restored_shown, *self._restored_reading}
+                if not any(on_same_line(path, root) for root in lines))
+            for path in gone:
+                self._restored_shown.pop(path, None)
+                self._restored_reading.pop(path, None)
+                self._beginnings.pop(path, None)
+            return gone
+
+    def prune(self, path: str, keep: Iterable[str], *,
+              protect: Iterable[str] = ()) -> list[str]:
+        """Remove every direct child of the node at ``path`` that ``keep`` does not
+        name — what a node that says its children are complete no longer returns
+        (ADR-0109 decisions 1 and 2). Answers the paths that left, a node's
+        children before it, whether or not each wrote a row. Thread-safe.
+
+        ``protect`` are the nodes other checks own. A child on the line of one —
+        that node, one above it or one beneath it — is not this node's to remove:
+        a run removes nothing another check wrote. Nothing beneath a child that is
+        kept is looked at.
+
+        **A removal takes the node and nothing kept about it** (decision 3). The
+        subtree leaves the tree, with its lines and its counter. A pin held against
+        a node of it, or against a line, stays in the side table: suspended, until
+        a node returns at its path or the pin expires (decision 4). What the
+        configuration declared for a node is the node's again when it returns
+        (:meth:`_furnish`), and its readings are its check's to keep.
+
+        **Each node removed writes an event** (decision 5): from what it showed to
+        nothing, by the cause *removed*, every row of one call at one instant and
+        a node's children before it. A node no check ever wrote, of which nothing
+        is kept, leaves without one — a label its deployment declared, a container
+        the tree made on the way to another node: nothing is removed that was
+        never there.
+
+        **The first run after a restart writes the same event.** The tree starts
+        empty, so there is no node to remove; a path the kept file says showed
+        something (ADR-0110), beneath this node through a child that is not kept,
+        is ended by its row all the same, and a node that went while the process
+        was down still ends its period. One the file says showed nothing is
+        forgotten without a row, as a node that shows nothing leaves.
+
+        What is kept of a removed node says from then on that it shows nothing
+        since its removal, so its return is a change the tree saw, across a restart
+        too; :meth:`_forget_removed` drops that with the row.
+        """
+        kept = set(keep)
+        owned = [join_path(other) for other in protect]
+
+        def theirs(child: str) -> bool:
+            return any(on_same_line(child, other) for other in owned)
+
+        with self._lock:
+            parent = self._find_node(path)
+            if parent is None:
+                return []
+            base = split_path(parent.path)
+            leaving: dict[str, tuple[StatusCode, bool]] = {}
+            for child in parent.get_children():
+                if child.name in kept or theirs(child.path):
+                    continue
+                parent.remove_child(child.name)
+                nodes = [child]
+                while nodes:
+                    node = nodes.pop()
+                    nodes.extend(node.get_children())
+                    leaving[node.path] = (self._shown(node),
+                                          node.timestamp is not None)
+                    self._entry_count -= len(node.reason_entries)
+                    self._damping.pop(node.path, None)
+            # What was restored of nodes the tree does not hold: beneath a child
+            # that just left, or one that never came back after the restart. What
+            # is kept of a node already removed stays: it is how its return is
+            # told from a first sight (:meth:`_forget_removed`).
+            for restored in {*self._restored_shown, *self._restored_reading}:
+                segments = split_path(restored)
+                if (restored in leaving or len(segments) <= len(base)
+                        or segments[:len(base)] != base
+                        or segments[len(base)] in kept
+                        or self._was_removed(restored)
+                        or theirs(join_path(*segments[:len(base) + 1]))):
+                    continue
+                leaving[restored] = (self._restored_shown.get(
+                    restored, StatusCode.UNDEFINED), False)
+            when = instants.now()
+            gone = sorted(leaving, key=lambda left: (
+                split_path(left)[len(base)], -len(split_path(left)), left))
+            for left in gone:
+                showed, written = leaving[left]
+                if showed is StatusCode.UNDEFINED:
+                    self._restored_shown.pop(left, None)
+                    self._restored_reading.pop(left, None)
+                    self._beginnings.pop(left, None)
+                    if not written:
+                        continue
+                else:
+                    self._restored_shown[left] = StatusCode.UNDEFINED
+                    self._restored_reading[left] = StatusCode.UNDEFINED
+                self._log(Event(
+                    path=left, name=leaf_name(left), old=showed,
+                    new=StatusCode.UNDEFINED, reason=(NO_LONGER_REPORTED,),
+                    timestamp=when, cause=CAUSE_REMOVED,
+                    reported=StatusCode.UNDEFINED))
+            return gone
+
+    def pins(self) -> tuple[dict[str, MaintenanceEntry],
+                            dict[tuple[str, str], MaintenanceEntry]]:
+        """Every pin held: a node's own by its path, and a line's by its path and
+        its slug. A snapshot carries the pins of the nodes and lines it holds; this
+        is the table whole, with the ones **no node stands for** (ADR-0109 decision
+        4) — its node was removed, or no check has written it yet in this process.
+        Such a pin silences nothing now, holds again the moment a node returns at
+        its path, and ends by its own expiry. Thread-safe."""
+        with self._lock:
+            return dict(self._maintenance), dict(self._entry_maintenance)
+
+    def maintenance_entry(self, path: str) -> MaintenanceEntry | None:
+        """The maintenance entry pinned at ``path``, if any — the path read as
+        every write here reads it, with or without its leading slash, so a
+        form's ``branch`` finds the pin its own post made."""
+        with self._lock:
+            return self._maintenance.get(join_path(path))
 
     # --- per-entry pins (ADR-0036) ---
 
@@ -967,10 +1510,17 @@ class StatusTree:
 
         No status is written: the pin lives in the side-table under ``(path,
         slug)`` and the snapshot joins it, so the check's next run cannot destroy
-        it. Carries the same compare-and-set token as the node pin (ADR-0014), and
-        the same expiry rules. Thread-safe.
+        it. Carries the same compare-and-set token as the node pin (ADR-0014), the
+        same expiry rules, and the same answer to a set that changes nothing: it
+        writes nothing (:meth:`set_maintenance`). Thread-safe.
+
+        **It is an event where it changes what the node shows** (ADR-0107 decision
+        1) — the one failing line silenced turns the node green — and its reason
+        is that line, by its text, and the pin's note. A pin that leaves the node
+        showing what it showed writes none: one of two failing lines, an edit of
+        a pin, a slug no run reports, a node no check has written.
         """
-        moment = datetime.now().isoformat()
+        moment = instants.now()
         with self._lock:
             key = (join_path(path), slug)
             stored = self._entry_maintenance.get(key)
@@ -979,25 +1529,36 @@ class StatusTree:
             entry = MaintenanceEntry(
                 reason=reason or "maintenance",
                 set_at=moment,
-                expires_at=expires_at.isoformat(),
+                expires_at=expires_at,
                 set_by=set_by,
                 created_at=stored.created_at if stored else moment,
                 created_by=stored.created_by if stored else set_by)
+            if stored is not None and stored.same_pin_as(entry):
+                return MaintenanceWrite(False, stored)
+            showing = self._showing([key[0]])
             self._entry_maintenance[key] = entry
+            self._emit_line_pins(
+                showing, lambda node: CAUSE_LINE_PIN_SET,
+                lambda node: (*(line.text for line in node.reason_entries
+                                if line.slug == slug), entry.reason))
             self._persist()
             return MaintenanceWrite(True, entry)
 
     def clear_entry_maintenance(self, path: str, slug: str, *,
                                 expected_set_at: str | None = None
                                 ) -> MaintenanceWrite:
-        """Release a per-entry pin. ``applied`` is ``False`` when there was none."""
+        """Release a per-entry pin. ``applied`` is ``False`` when there was none.
+        An event where the node shows something else without it, as its set was
+        (ADR-0107 decision 1), with the node's lines for its reason."""
         with self._lock:
             key = (join_path(path), slug)
             stored = self._entry_maintenance.get(key)
             if not self._token_matches(stored, expected_set_at):
                 return MaintenanceWrite(False, stored, refused=True)
+            showing = self._showing([key[0]])
             existed = self._entry_maintenance.pop(key, None) is not None
             if existed:
+                self._emit_line_pins(showing, lambda node: CAUSE_LINE_PIN_ENDED)
                 self._persist()
             return MaintenanceWrite(existed, None)
 
@@ -1021,12 +1582,12 @@ class StatusTree:
     def snapshot(self, path: str = "",
                  now: datetime | None = None) -> StatusSnapshot | None:
         """An immutable snapshot of the subtree at ``path`` (root by default), or
-        ``None`` if no such node exists. Staleness is computed against ``now``
-        (defaults to the current time), and each node's published ``timestamp`` is
-        resolved against **this** subtree (ADR-0027) — so a branch never inherits
-        from a check outside it. Thread-safe.
+        ``None`` if no such node exists. Staleness is computed against ``now``,
+        an instant (the clock's by default), and each node's published
+        ``timestamp`` is resolved against **this** subtree (ADR-0027) — so a branch
+        never inherits from a check outside it. Thread-safe.
         """
-        moment = now or datetime.now()
+        moment = _asked_at(now)
         with self._lock:
             node = self._find_node(path)
             return None if node is None else self._snapshot(node, moment)
@@ -1062,35 +1623,51 @@ class StatusTree:
         lock, serialized outside it. The producer the layer calls on the
         scheduler tick.
 
+        Beside the events it carries ``nodes``: what every node shows and what its
+        check last reported, by path and in the paths' order (:meth:`_last_shown`,
+        ADR-0110 decision 2). Either changes only with a row, so the table costs no
+        write of its own.
+
         Once the stop has come (:meth:`note_stop`) it carries the moment of the
         stop beside the events, as ``stopped_at`` — new state, so the stop's one
         save writes the log even where no event changed, and the interval writes
         before it still skip an unchanged one (ADR-0094 decision 4)."""
         with self._lock:
             stopped_at = self._stopped_at
+            events = tuple(self._events)
+            self._forget_removed()
+            nodes = self._last_shown()
         payload: dict[str, Any] = {
-            "events": [event.to_dict() for event in self.recent_events()]}
+            "events": [event.to_dict() for event in events],
+            "nodes": {path: nodes[path].to_dict() for path in sorted(nodes)}}
         if stopped_at is not None:
-            payload["stopped_at"] = stopped_at
+            payload["stopped_at"] = instants.stamp(stopped_at)
         return payload
 
-    def note_stop(self, when: str | None = None) -> None:
+    def note_stop(self, when: datetime | None = None) -> None:
         """Say that the stop has come, before its one save (ADR-0088): the log that
-        save writes carries ``when`` — now, by default, as the tree stamps its events
-        — so the next process knows when this one stopped watching (ADR-0094
-        decision 4). Thread-safe."""
+        save writes carries ``when`` — an instant, the clock's by default — so the
+        next process knows when this one stopped watching (ADR-0094 decision 4).
+        Thread-safe."""
+        stopped = (instants.now() if when is None
+                   else instants.utc(when, "the moment of the stop"))
         with self._lock:
-            self._stopped_at = when or datetime.now().isoformat()
+            self._stopped_at = stopped
 
     def adopt_events(self, payload: object) -> None:
         """The event log's ``restore`` direction (ADR-0077): an adopted file's
         payload — the store's at a takeover, the backup's on the way back — read
         by :func:`events_from_payload` and put in place of the log, oldest first,
-        as at startup. A payload of another shape raises, and the layer reports
-        the adoption as failed."""
-        self.restore_events(events_from_payload(payload))
+        as at startup, with the table it carries of what every node last showed
+        (:func:`nodes_from_payload`). A payload of another shape raises — one time
+        in it without a zone is such a shape, the stop's stamp included — and the
+        layer reports the adoption as failed: nothing of it is taken."""
+        events, nodes = events_from_payload(payload), nodes_from_payload(payload)
+        stopped_at_of(payload)
+        self.restore_events(events, nodes)
 
-    def restore_events(self, events: Iterable[Event]) -> int:
+    def restore_events(self, events: Iterable[Event],
+                       nodes: Mapping[str, LastShown] | None = None) -> int:
         """Replace the log with ``events`` — the state file's, at startup before
         anything has written — keeping the bound: with more events than the log
         holds, the oldest are dropped. Nodes are untouched; a restored event
@@ -1102,32 +1679,58 @@ class StatusTree:
         process is compared with it rather than with the ``UNDEFINED`` a restart
         leaves — the same reading keeps its period, any other one changes from the
         old code. A node written already keeps comparing with its own code, which
-        is what an adopted log in a running process meets (ADR-0077)."""
+        is what an adopted log in a running process meets (ADR-0077).
+
+        ``nodes`` is the table the kept file carries beside its events (ADR-0110
+        decisions 2 and 3): what every node last showed and what its check last
+        reported, whether or not the log still holds a row of the node. Where the
+        file carries it, it is what a first write is compared with, and a quiet
+        node writes no ``UNDEFINED -> …`` at a start; a file written before it is
+        read by its rows (:func:`_last_readings`), and a node the log holds no row
+        of then has a first reading.
+
+        With the two codes comes **when each node's period began** (decision 5):
+        what its entry says, or — for an entry that says nothing of it, and for a
+        file without the table — what the rows say (:meth:`_restore_beginnings`)."""
         with self._lock:
             self._events.clear()
             self._events.extend(events)
-            self._restored_reading, self._restored_shown = _last_readings(
-                self._events)
+            told: dict[str, Beginning] = {}
+            waited: dict[str, StatusCode] = {}
+            if nodes is None:
+                read, shown = _last_readings(self._events)
+            else:
+                read = {path: kept.reported for path, kept in nodes.items()}
+                shown = {path: kept.shows for path, kept in nodes.items()}
+                told = {path: kept.began for path, kept in nodes.items()
+                        if kept.began is not None}
+                waited = {path: kept.publishes for path, kept in nodes.items()
+                          if kept.publishes is not None}
+            self._restored_reading, self._restored_shown = read, shown
+            self._restored_published = waited
+            self._restore_beginnings(shown, told)
             return len(self._events)
 
-    def close_unobserved(self, path: str, since: str, reason: str) -> bool:
-        """End the restored period of the node at ``path`` at ``since``, with an
-        event to ``UNDEFINED`` whose reason is ``reason`` — the instance's own node,
-        where the old process stopped watching (ADR-0094 decision 4). Its first
-        write in this process is then a transition from ``UNDEFINED``, and its
-        history reads the gap between.
+    def close_unobserved(self, path: str, since: datetime, reason: str) -> bool:
+        """End the restored period of the node at ``path`` at ``since``, an
+        instant, with an event to ``UNDEFINED`` whose reason is ``reason`` — the
+        instance's own node, where the old process stopped watching (ADR-0094
+        decision 4). Its first write in this process is then a transition from
+        ``UNDEFINED``, and its history reads the gap between.
 
         Writes nothing, and answers ``False``, where the restored log holds no
         reading of the node, or one of ``UNDEFINED`` already: there is no period to
         end. Only the node named is closed — the gap is said once. Thread-safe."""
         key = join_path(path)
+        since = instants.utc(since, "the moment a node was last observed")
         with self._lock:
             reading = self._restored_reading.get(key)
             if reading is None or reading is StatusCode.UNDEFINED:
                 return False
-            self._events.append(Event(
+            self._log(Event(
                 path=key, name=leaf_name(key), old=reading,
-                new=StatusCode.UNDEFINED, reason=(reason,), timestamp=since))
+                new=StatusCode.UNDEFINED, reason=(reason,), timestamp=since,
+                reported=StatusCode.UNDEFINED))
             self._restored_reading[key] = StatusCode.UNDEFINED
             self._restored_shown[key] = StatusCode.UNDEFINED
             return True
@@ -1136,6 +1739,19 @@ class StatusTree:
         """The status history of the node at ``path`` — one period per status it
         has held, oldest first — derived from the event log. The current period's
         ``until`` is the last check time and its reason is the current one.
+
+        **A period is a run of events that show the same status** (ADR-0099
+        decision 6). An edit of a pin is an event — a rewritten note or a longer
+        window leaves its trace in the log (ADR-0014 decision 9) — and no period:
+        the node showed ``MAINTENANCE`` before it and after it, so the period began
+        where the pin was set. Every other event changes what the node shows, and a
+        run of those is one event long.
+
+        **A period's reason is what it said last** (decision 7). An ended one's is
+        its last event's, which for a pin is the note as it stood when the period
+        ended. The one that holds says what the node shows now: under a pin the
+        stored pin's note as it stands — also on a branch nothing writes — and
+        otherwise the node's own lines.
 
         **A transition that was hidden does not start a period** — but only one that
         was hidden from the *display*. History answers *what did this node show over
@@ -1147,6 +1763,19 @@ class StatusTree:
         makes (:data:`HIDES_THE_READING`). Every transition stays in the event log
         either way, where it answers the other question: *did it break during the
         window?*
+
+        **The period a node is in begins where the tree kept it** (ADR-0110
+        decision 5): the log is bounded, and once the row that began the period
+        has left it — or all but the edits of a pin have — the beginning is the
+        one the tree kept as it wrote, or restored from its file. So a node the
+        log holds no row of still has its current period, from that instant or
+        from *before* its bound, and only a node nothing is kept of has none.
+
+        **A first reading is a bound** (ADR-0099 decision 9): a period whose first
+        row is the oldest the log holds of what the node showed, from ``UNDEFINED``
+        and by a reading, began before that row — the node was already what it
+        showed when it was first seen — as one whose first row is an edit of a pin
+        did (decision 6).
         """
         with self._lock:
             node = self._find_node(path)
@@ -1155,8 +1784,6 @@ class StatusTree:
             events = [event for event in self._events
                       if event.path == node.path
                       and event.suppressed_by not in HIDES_THE_READING]
-            if not events:
-                return []
             # A check's transition only ever lands on a node it wrote, so a
             # stamp is the usual case — but an **admin pin** lands on a node
             # nobody has written (a container: `_emit` passes its own `when` for
@@ -1164,95 +1791,461 @@ class StatusTree:
             # end at. This used to be an `assert node.timestamp is not None`,
             # which made `/history/<pinned container>` a 500 and would have made
             # the branch page one the moment it asked for its own history.
+            runs: list[list[Event]] = []
+            for event in events:
+                if runs and runs[-1][-1].new is event.new:
+                    runs[-1].append(event)
+                else:
+                    runs.append([event])
+            pin = self._maintenance.get(node.path)
+            if pin is not None:
+                current: tuple[str, ...] = (pin.reason,) if pin.reason else ()
+            else:
+                current = tuple(node.reason)
             periods: list[StatusPeriod] = []
-            for index, event in enumerate(events):
-                is_current = index == len(events) - 1
-                until = node.timestamp if is_current else events[index + 1].timestamp
-                reason = tuple(node.reason) if is_current else event.reason
+            for index, run in enumerate(runs):
+                is_current = index == len(runs) - 1
+                until = node.timestamp if is_current else runs[index + 1][0].timestamp
+                first = run[0]
                 periods.append(StatusPeriod(
-                    code=event.new, since=event.timestamp, until=until,
-                    reason=reason))
+                    code=first.new, since=first.timestamp, until=until,
+                    reason=current if is_current else run[-1].reason,
+                    previous=first.old, cause=first.cause,
+                    before=self._beginning_of_run(first, index == 0).before))
+            began = self._beginnings.get(node.path)
+            if began is None:
+                return periods
+            shows = self._shown(node)
+            if not periods:
+                # No row of the node is left: the period it is in, from what was
+                # kept of its beginning.
+                periods.append(StatusPeriod(
+                    code=shows, since=began.at, until=node.timestamp,
+                    reason=current,
+                    previous=shows if began.was is None else began.was,
+                    cause=began.cause, before=began.before))
+            elif periods[-1].code is shows:
+                # The rows hold the period and not its beginning — a pin whose set
+                # has left the log — or say of it what the tree knows better. Where
+                # they show something else — a log adopted from an instance that
+                # read the node otherwise — they stand as they are. The period
+                # before it ends where this one began: a pin the tree learned of
+                # at a start began at its creation, before the row that start
+                # wrote (decision 6). And rows that say the node began something
+                # else after that instant stand: a store and a log that do not
+                # belong together.
+                last = periods[-1]
+                if len(periods) > 1:
+                    earlier = periods[-2]
+                    if began.at < earlier.since:
+                        return periods
+                    periods[-2] = replace(earlier, until=began.at)
+                periods[-1] = replace(
+                    last, since=began.at, cause=began.cause, before=began.before,
+                    previous=last.previous if began.was is None else began.was)
             return periods
 
     # --- internals; call only while holding the lock ---
 
-    def _emit(self, node: Status, old: StatusCode,
-              new: StatusCode | None = None, *,
-              reason: tuple[str, ...] | None = None,
-              when: str | None = None) -> None:
-        """Record a transition of what this node **shows**.
+    def _own(self, node: Status, ran_out: _RanOut | None = None) -> StatusCode:
+        """What the node shows: its **own** status, by the one transform the
+        snapshot applies to it (:func:`_own_code`, ADR-0032 rule 3) — the reading,
+        the node's pin and its lines' pins.
 
-        ``new`` defaults to the node's reported code, which is the whole story for a
-        check's own write. An admin pin needs the other two: it moves the *derived*
-        status without touching the reading (ADR-0032 rule 3), and it can land on a
-        container no check has ever written — so it passes ``new`` explicitly and
-        stamps the event with the moment the admin acted rather than with an
-        observation time that may not exist.
+        ``ran_out`` are pins to count as still in force: the ones a restart found
+        expired, which is how a node's first reading tells whether their end is
+        what changed it (ADR-0107 decision 5).
+        """
+        held = ran_out or _RanOut()
+        pins = self._entry_maintenance
+        lines = [((node.path, entry.slug) in pins or entry.slug in held.lines,
+                  entry.code) for entry in node.reason_entries]
+        return _own_code(node.code, lines, node.members,
+                         node.maintenance or held.node)
+
+    def _last_shown(self) -> dict[str, LastShown]:
+        """What every node shows and what its check last reported, as the kept file
+        says it beside the log (ADR-0110 decision 2). For a node a check has written
+        in this process that is its own status, by the one derivation the snapshot
+        and the log read (:meth:`_own`), and its reading; for one not written yet,
+        what was restored. With them, when the node's period began (decision 5). A
+        node that shows nothing and whose check reported nothing has no entry —
+        unless the tree saw it begin to show nothing, which is a period like any
+        other — so the table changes only where a row is written.
+
+        An entry of a node that **waits** before it escalates says also what the
+        node publishes meanwhile (ADR-0119 decision 4): from its counter for a node
+        written in this process, and for one not written yet what was restored,
+        while the node still shows the worse status it was waiting to publish. The
+        key stands from the row the wait held back to the row that ends the wait, so
+        it changes with a row as well — but for a count that completes behind a
+        shield, which writes none."""
+        nothing = StatusCode.UNDEFINED
+
+        def waited(path: str) -> StatusCode | None:
+            published = self._restored_published.get(path)
+            if published is None or not escalates(
+                    published, self._restored_shown.get(path, nothing)):
+                return None
+            return published
+
+        kept = {path: LastShown(self._restored_shown.get(path, nothing),
+                                self._restored_reading.get(path, nothing),
+                                self._beginnings.get(path), waited(path))
+                for path in {*self._restored_shown, *self._restored_reading}}
+        nodes = [self._root]
+        while nodes:
+            node = nodes.pop()
+            nodes.extend(node.get_children())
+            if node.timestamp is not None:
+                state = self._damping.get(node.path)
+                kept[node.path] = LastShown(
+                    self._own(node), node.code, self._beginnings.get(node.path),
+                    state.published if state is not None
+                    and state.pending is not None else None)
+        return {path: entry for path, entry in kept.items()
+                if entry.shows is not nothing or entry.reported is not nothing
+                or entry.began is not None}
+
+    def _forget_removed(self) -> None:
+        """Drop what is kept of each removed node whose removal has left the log
+        (ADR-0110 decision 4, ADR-0109 decision 5). Such an entry says that the
+        node shows nothing since it was removed, which makes its return a change
+        the tree saw; once the log no longer holds the row, nothing reads it, and
+        a deployment whose subjects come and go would carry one for every node
+        that ever left. It stays while a pin is held against the path: a replay
+        reads from it that the pin is suspended."""
+        removed = [path for path in self._restored_shown if self._was_removed(path)]
+        if not removed:
+            return
+        logged = {event.path for event in self._events
+                  if event.cause == CAUSE_REMOVED}
+        for path in removed:
+            if (path in logged or path in self._maintenance
+                    or self._find_node(path) is not None):
+                continue
+            del self._restored_shown[path]
+            self._restored_reading.pop(path, None)
+            self._beginnings.pop(path, None)
+
+    def _log(self, event: Event) -> None:
+        """Append ``event`` to the log, and keep the beginning of the period it
+        begins (ADR-0110 decision 5). A row that changes what its node shows begins
+        one: at its instant, from what the node showed before, by its cause. An
+        edit of a pin and the end of a wait show what the node showed already, and
+        a row that a rule hid from the display is the reading's and not the node's:
+        none of them begins a period (ADR-0099 decision 6, ADR-0119 decision 1)."""
+        self._events.append(event)
+        if (event.new is not event.old
+                and event.suppressed_by not in HIDES_THE_READING):
+            self._beginnings[event.path] = Beginning(
+                event.timestamp, was=event.old, cause=event.cause)
+
+    def _begins_with_process(self, path: str) -> bool:
+        """Whether ``path`` is at or beneath a branch that begins with this
+        process (:meth:`set_process_branch`)."""
+        segments = tuple(split_path(path))
+        return any(segments[:len(branch)] == branch
+                   for branch in self._process_branches)
+
+    def _settle_period(self, node: Status, *, first_sight: bool) -> None:
+        """Say when the period began of a node a check has just written for the
+        first time in this process, where no row said it.
+
+        A node that shows nothing has no status to bound, and nothing is settled.
+
+        **Nothing was kept of the node**: this is the first sight of it, and it was
+        already what it shows (ADR-0099 decision 9). Its period is bounded by this
+        reading, which replaces the beginning its row ``UNDEFINED -> …`` has just
+        kept. The instance's own branch begins with its process, so there the
+        row's beginning stands. A pin set on the node before its first reading is
+        something kept of it (:meth:`_emit`), and what the pin began stands too.
+
+        **Something was kept, and no beginning with it** — a file written before
+        an entry said one, whose rows held none, read where the log was empty: the
+        bound is taken now, once, and is the log's oldest event, or this reading
+        where the log still holds none (ADR-0110 decision 5)."""
+        path = node.path
+        assert node.timestamp is not None
+        if self._own(node) is StatusCode.UNDEFINED:
+            return
+        if first_sight:
+            if not self._begins_with_process(path):
+                self._beginnings[path] = Beginning(node.timestamp, before=True)
+        elif path not in self._beginnings:
+            oldest = self._events[0].timestamp if self._events else node.timestamp
+            self._beginnings[path] = Beginning(oldest, before=True)
+
+    def _first_sight(self, event: Event) -> bool:
+        """Whether ``event``, a node's oldest row in the log, is a first reading of
+        the node rather than a change the tree saw (ADR-0099 decision 9): it comes
+        from ``UNDEFINED``, a reading wrote it, and the node is not on a branch that
+        begins with the process. A row from a log written before a row said its
+        cause is a reading's unless it goes to ``MAINTENANCE``, which there is an
+        admin's pin set (:func:`_reported_after`)."""
+        if (event.old is not StatusCode.UNDEFINED
+                or self._begins_with_process(event.path)):
+            return False
+        if event.cause:
+            return event.cause == CAUSE_READING
+        return event.new is not StatusCode.MAINTENANCE
+
+    def _beginning_of_run(self, first: Event, oldest: bool) -> Beginning:
+        """What ``first``, the first row of a run of rows that show one status,
+        says of when that period began; ``oldest`` says it is the node's oldest
+        row in the log. An edit of a pin, and a first reading, bound the period;
+        every other row began it."""
+        if first.new is first.old or (oldest and self._first_sight(first)):
+            return Beginning(first.timestamp, before=True)
+        return Beginning(first.timestamp, was=first.old, cause=first.cause)
+
+    def _restore_beginnings(self, shown: Mapping[str, StatusCode],
+                            told: Mapping[str, Beginning]) -> None:
+        """Put back when each node's period began, with the log and the two codes
+        just restored (ADR-0110 decision 5).
+
+        An entry that says it is taken at its word. One that does not — a file
+        written before an entry did, or before the table — is read by the rows:
+        the first row of the node's last period, where the log holds it; and where
+        the log holds no row of the node, the bound is the log's oldest event,
+        taken here and kept (ADR-0099 decision 1). With an empty log there is
+        nothing to bound it by yet, and the node's first write takes it
+        (:meth:`_settle_period`). A node that shows nothing has no status to bound,
+        and gets none.
+
+        A node a check has written already — an adopted file meets it in a
+        running process (ADR-0077) — takes the file's beginning only where the
+        file says the node shows what it shows, and says or shows when that began;
+        otherwise it keeps what this process saw of it, as it goes on comparing
+        with itself. What was kept of a node no check has written yet goes with
+        the file it came from."""
+        oldest_row: dict[str, Event] = {}
+        first_of_run: dict[str, Event] = {}
+        showing: dict[str, StatusCode] = {}
+        for event in self._events:
+            if event.suppressed_by in HIDES_THE_READING:
+                continue
+            oldest_row.setdefault(event.path, event)
+            if showing.get(event.path) is not event.new:
+                first_of_run[event.path] = event
+            showing[event.path] = event.new
+        oldest = self._events[0].timestamp if self._events else None
+        began: dict[str, Beginning] = {}
+        for path, beginning in self._beginnings.items():
+            node = self._find_node(path)
+            if node is not None and node.timestamp is not None:
+                began[path] = beginning
+        for path, showed in shown.items():
+            node = self._find_node(path)
+            if (node is not None and node.timestamp is not None
+                    and showed is not self._own(node)):
+                continue
+            first = first_of_run.get(path)
+            if path in told:
+                began[path] = told[path]
+            elif first is not None:
+                began[path] = self._beginning_of_run(first,
+                                                     first is oldest_row[path])
+            elif oldest is not None and showed is not StatusCode.UNDEFINED:
+                began[path] = Beginning(oldest, before=True)
+        self._beginnings = began
+
+    def _shown(self, node: Status) -> StatusCode:
+        """What the node shows, as a change of it is measured from: its own status
+        — or, for a node no check has written in this process, what the log last
+        showed for it, since a restart is no transition (ADR-0094 decision 1)."""
+        if node.timestamp is None:
+            kept = self._restored_shown.get(node.path)
+            if kept is not None:
+                return kept
+        return self._own(node)
+
+    def _reported(self, node: Status) -> StatusCode:
+        """What the node's check last reported: its reading — or, for a node no
+        check has written in this process, what the log says it last reported."""
+        if node.timestamp is None:
+            return self._restored_reading.get(node.path, node.code)
+        return node.code
+
+    def _record_reading(self, node: Status, shown: StatusCode,
+                        reported: StatusCode, ran_out: _RanOut | None) -> bool:
+        """Write what the reading just stored changed, given what the node had
+        ``shown`` and what its check had ``reported`` before it (ADR-0107
+        decisions 1, 2 and 5). Answers whether it wrote anything.
+
+        **What the node shows** is one row, and it reached: whoever looked saw it.
+        It carries a rule's name only where one keeps the change from the node's
+        parent (:meth:`_withholding_rule`). On a node's first reading after a
+        restart its cause is the end of a pin, where one ran out while the instance
+        was down and the node would still show what it showed had that pin held;
+        everywhere else a reading moved it.
+
+        **What its check reports, where the node does not show it,** is a row of
+        its own with the reading's codes, held back: beneath the node's pin, as it
+        always was, and now also where a line's pin hides it. Only a pin can — a
+        node's own status is its reading unless one is in force
+        (:func:`_own_code`) — so the rule that hid it is maintenance. One run
+        writes both rows where it changes what the node shows and, differently,
+        what its check reports.
+        """
+        shows = self._own(node)
+        wrote = False
+        if shows is not shown:
+            cause = CAUSE_READING
+            if ran_out is not None and self._own(node, ran_out) is shown:
+                cause = CAUSE_PIN_ENDED if ran_out.node else CAUSE_LINE_PIN_ENDED
+            self._emit(node, shown, shows, cause=cause,
+                       mark=self._withholding_rule(node))
+            wrote = True
+        if node.code is not reported and (
+                not wrote or (reported, node.code) != (shown, shows)):
+            self._emit(node, reported, node.code, cause=CAUSE_READING,
+                       mark=MAINTENANCE_RULE)
+            wrote = True
+        return wrote
+
+    def _showing(self, paths: Iterable[str]) -> list[tuple[Status, StatusCode]]:
+        """Each node among ``paths`` that the tree holds, with what it shows — taken
+        before its lines' pins change, to see afterwards whether that changed it.
+        A node no check has written in this process has no lines for a pin to
+        act on, so it shows the same after as before, and its first reading
+        settles it (ADR-0107 decision 5)."""
+        showing: list[tuple[Status, StatusCode]] = []
+        for path in sorted(set(paths)):
+            node = self._find_node(path)
+            if node is not None:
+                showing.append((node, self._own(node)))
+        return showing
+
+    def _emit_line_pins(self, showing: list[tuple[Status, StatusCode]],
+                        cause: Callable[[Status], str],
+                        reason: Callable[[Status], tuple[str, ...]] | None = None
+                        ) -> None:
+        """Write the event of each node in ``showing`` that shows something else
+        now that its lines' pins changed (ADR-0107 decision 1): one for a node,
+        however many of its lines' pins went together, and none for one that
+        shows what it showed. It reached, like a node's own pin (ADR-0041 decision
+        8), and it is dated by the act."""
+        when = instants.now()
+        for node, shown in showing:
+            shows = self._own(node)
+            if shows is not shown:
+                self._emit(node, shown, shows, cause=cause(node),
+                           reason=None if reason is None else reason(node),
+                           when=when)
+
+    def _emit(self, node: Status, old: StatusCode, new: StatusCode, *,
+              cause: str, mark: str = "",
+              reason: tuple[str, ...] | None = None,
+              when: datetime | None = None) -> None:
+        """Record an event of this node (ADR-0107): a change of what it **shows**,
+        from ``old`` to ``new`` — or, under a ``mark`` that hides the reading, a
+        change of what its check reports that it did not show.
+
+        The reason defaults to the node's lines, which is the whole story for a
+        reading and for a pin's end. A pin passes its own — its note is *why* the
+        node moved — and stamps the event with the moment the admin acted: it
+        moves the derived status without touching the reading (ADR-0032 rule 3),
+        and it can land on a container no check has ever written, where there is
+        no observation time to borrow.
+
+        Every event says what the check last reported (decision 4). For a node no
+        check has written in this process that is what the log said last, and the
+        event moves what the node's first reading will be compared with.
+
+        **A row that a pin caused is published at once** (ADR-0108 decision 2): the
+        counter that makes a node wait before it escalates takes what the node
+        shows now as published. Only a reading starts a wait, so the readings after
+        a pin's end start none, and a wait under way ends with the failure its pin
+        silences. Every cause but a reading is a pin's here (decision 3) or the end
+        of a wait, which has published the status already (ADR-0119): a removal is
+        no event of a node the tree holds, and :meth:`prune` writes it.
         """
         stamp = when or node.timestamp
         # A check's event is never about an unobserved node (ADR-0027); an admin's
         # carries its own stamp, so one of the two is always there.
         assert stamp is not None
-        self._events.append(Event(
-            path=node.path, name=node.name, old=old,
-            new=node.code if new is None else new,
+        reported = self._reported(node)
+        self._log(Event(
+            path=node.path, name=node.name, old=old, new=new,
             reason=tuple(node.reason) if reason is None else reason,
-            timestamp=stamp,
-            # An admin's own write (`new` given) is never suppressed: setting or
-            # clearing a pin *is* the change, and it is what everyone sees.
-            suppressed_by="" if new is not None else self._suppressing_rule(node)))
+            timestamp=stamp, suppressed_by=mark, cause=cause, reported=reported))
+        if node.timestamp is None:
+            # Only a pin writes about a node no check has written yet, and a pin's
+            # row is what the node shows.
+            self._restored_shown[node.path] = new
+        if cause != CAUSE_READING:
+            self._damping[node.path] = _Damped(new, None, 0)
 
-    def _damp(self, node: Status) -> None:
-        """Advance this node's confidence counter for the reading just stored.
+    def _damp(self, node: Status) -> bool:
+        """Advance this node's confidence counter for the reading just stored, and
+        answer whether that reading **ended a wait by its count** — which is the
+        one way out of a wait that writes a row of its own (ADR-0119).
 
-        The counter compares the reading with what this node **last published**, not
-        with what it last read: while a hold is in force the published value is the
-        older, quieter one, and each further worse reading is another vote for the
-        escalation being real.
+        The counter counts **what the node shows** (ADR-0108 decision 1): its own
+        status, the one derivation the snapshot and the log read (:meth:`_own`),
+        and not the code its check reported. The two differ wherever a line is
+        pinned, and there the reported code counted readings the node did not show
+        — a pinned line's failure spent the wait, and one that flapped restarted it
+        at every reading. Beneath the node's own pin, or with every line pinned, it
+        shows ``MAINTENANCE``, which is unranked: nothing is held there.
 
-        Four cases, and three of them clear the counter. A reading that is equal to
+        It compares that status with what this node **last published**, not with
+        what it last showed: while a hold is in force the published value is the
+        older, quieter one, and each further reading of the worse status is another
+        vote for the escalation being real.
+
+        Four cases, and three of them clear the counter. A status that is equal to
         or better than what is published is published at once — recovery is
-        immediate, which is the convention and what was settled. A reading that is
-        not an *escalation* of a ranked code publishes at once too, so a node's very
-        first reading, and any move through `UNDEFINED`, is never delayed. A
-        **different** worse code restarts the count, because it is a different claim
-        and two readings that disagree are not two votes for either. Only the same
-        worse code, again, advances it — and at ``escalate_after`` it is published
-        and the counter is done.
+        immediate, which is the convention and what was settled. One that is not an
+        *escalation* of a ranked code publishes at once too, so a node's very first
+        reading, and any move through `UNDEFINED` or `MAINTENANCE`, is never
+        delayed. A **different** worse status restarts the count, because it is a
+        different claim and two readings that disagree are not two votes for either.
+        Only the same worse status, again, advances it — and at ``escalate_after``
+        it is published and the counter is done.
 
-        The counter is memory and is lost on a restart, which re-arms the whole
-        delay for a node that was mid-escalation. That is accepted and written down
-        rather than discovered: the alternative is a state file for a value whose
-        whole purpose is to be forgotten within a few minutes.
+        Only a reading comes here. A change of what the node shows that a pin made
+        is published as its row is written (:meth:`_emit`, ADR-0108 decision 2).
+
+        The counter is memory, and a restart does not re-arm it: a node's first
+        reading in a process is counted from what the node last showed, which the
+        kept file says (:meth:`upsert`, ADR-0110 decision 1). A failure a restart
+        finds waits, one that stood stays published, and a wait under way at a stop
+        goes on, counted from the one reading its held row records (ADR-0119
+        decision 5): the kept file says which nodes are waiting, and not how far
+        each count had got — a state file for the counter itself would keep a value
+        whose whole purpose is to be forgotten within a few minutes.
         """
+        shows = self._own(node)
         state = self._damping.get(node.path)
-        if state is None or not escalates(state.published, node.code):
-            self._damping[node.path] = _Damped(node.code, None, 0)
-            return
-        seen = state.seen + 1 if node.code is state.pending else 1
+        if state is None or not escalates(state.published, shows):
+            self._damping[node.path] = _Damped(shows, None, 0)
+            return False
+        seen = state.seen + 1 if shows is state.pending else 1
         if seen >= max(1, node.escalate_after):
-            self._damping[node.path] = _Damped(node.code, None, 0)
-        else:
-            self._damping[node.path] = _Damped(state.published, node.code, seen)
+            self._damping[node.path] = _Damped(shows, None, 0)
+            # A status published at its first reading was never held: only one the
+            # counter was holding ends a wait.
+            return shows is state.pending
+        self._damping[node.path] = _Damped(state.published, shows, seen)
+        return False
 
-    def _suppressing_rule(self, node: Status) -> str:
-        """Which contribution rule, if any, keeps this node's reading from reaching
-        anybody right now — the value :attr:`Event.suppressed_by` carries.
+    def _withholding_rule(self, node: Status) -> str:
+        """Which contribution rule, if any, keeps a change this node shows from
+        reaching its parent right now: a failing dependency, which shields it, or
+        a counter still waiting to escalate — the value
+        :attr:`Event.suppressed_by` carries on a row that whoever looked at the
+        node saw.
 
-        Both flavors of maintenance answer to the same name, because they are the
-        same rule at two grains: a pin on the node, and a pin on every one of its
-        entries so that nothing is left reporting (ADR-0036 decision 7). A node whose
-        *check* reported ``MAINTENANCE`` is **not** marked — nothing suppressed it,
-        it said so itself — and neither is a partly pinned node, whose unpinned
-        entries still alarm.
+        Maintenance is not among them. A pin does not withhold a change the node
+        shows: it keeps the node from showing one, at either grain — on the node,
+        or on a line (ADR-0036 decision 7) — and that change is the other kind of
+        row, which :meth:`_record_reading` marks. A node whose *check* reported
+        ``MAINTENANCE`` is not marked at all — nothing suppressed it, it said so
+        itself.
         """
-        if node.maintenance:
-            return MAINTENANCE_RULE
-        if node.members and node.reason_entries and all(
-                (node.path, entry.slug) in self._entry_maintenance
-                for entry in node.reason_entries):
-            return MAINTENANCE_RULE
-        if self._shields(datetime.now()).get(node.path) is not None:
+        if self._shields(instants.now()).get(node.path) is not None:
             return DEPENDENCY_RULE
         state = self._damping.get(node.path)
         if state is not None and state.pending is not None:
@@ -1260,7 +2253,8 @@ class StatusTree:
         return ""
 
     def _apply_maintenance(self, path: str, entry: MaintenanceEntry, *,
-                           replay: bool = False) -> None:
+                           replay: bool = False,
+                           when: datetime | None = None) -> None:
         """Pin a node and record its entry, emitting a transition on change — and on
         an **edit**, which the code alone cannot see.
 
@@ -1276,45 +2270,138 @@ class StatusTree:
         A changed reason or expiry therefore emits too; a re-submit that changes
         neither does not, so a double-click is not history (ADR-0014).
 
-        A **replay** at startup compares with what the restored log last showed for
-        the node (ADR-0094 decision 2): a pin whose `MAINTENANCE` period the log
-        holds continues it and writes nothing; one the log no longer holds records
-        its set, from the reading the log last recorded.
+        The event is written **from what the node showed** (ADR-0107 decision 1):
+        its own status, which with a line pinned is not what its check reports —
+        and, for a node no check has written in this process, what the log last
+        showed for it. A new pin always writes its set, also over a node that
+        showed ``MAINTENANCE`` already — its lines all pinned, or its check
+        reporting it — because the pin's note is to leave a trace, as an edit's.
+
+        A **replay** at startup is the one set that may write nothing (ADR-0094
+        decision 2): a pin whose `MAINTENANCE` period the restored log holds
+        continues it; one the log no longer holds records its set, from what the
+        log last showed.
+
+        ``when`` is the instant of a write the tree **sees**: an admin's set or
+        edit, whose row is dated as the store dates it. Without it the tree is
+        learning of the pin — at a start's replay, or with an adopted table — and
+        the row is dated now; a pin new to the tree then begins its period at its
+        creation and not at that row (:meth:`_date_pin`, ADR-0110 decision 6).
+
+        **No node is made for a pin** (ADR-0109 decision 4): it is held against a
+        path, and a node the tree makes at that path is pinned from its first
+        moment (:meth:`_furnish`). So a replay brings back no node, and a pin can
+        stand against a node its check no longer reports. That one is
+        **suspended**: the path shows nothing with it or without it, so its set
+        and its edit are written as rows that change nothing, a replay writes
+        none, and it begins no period.
         """
-        node = self._ensure_node(path)
-        previous = self._maintenance.get(node.path)
-        # What the node was showing: its existing pin, or the reading it reported.
-        old = StatusCode.MAINTENANCE if previous is not None else node.code
-        if replay and previous is None and node.timestamp is None:
-            old = (StatusCode.MAINTENANCE
-                   if self._restored_shown.get(node.path) is StatusCode.MAINTENANCE
-                   else self._restored_reading.get(node.path, old))
-        node.maintenance = True
-        self._maintenance[node.path] = entry
+        key = join_path(path)
+        node = self._find_node(key)
+        previous = self._maintenance.get(key)
+        old = self._shows_at(key, node)
+        prior = self._beginnings.get(key)
+        suspended = node is None and self._was_removed(key)
+        if node is not None:
+            node.maintenance = True
+        self._maintenance[key] = entry
         edited = previous is not None and not previous.same_pin_as(entry)
-        if old != StatusCode.MAINTENANCE or edited:
+        continued = replay and (suspended or old is StatusCode.MAINTENANCE)
+        if edited or (previous is None and not continued):
             # The event's reason is the pin's own explanation — *why* it moved — not
             # the check's reading, which did not change and is still on the node.
-            self._emit(node, old, StatusCode.MAINTENANCE,
-                       reason=(entry.reason,) if entry.reason else (),
-                       when=datetime.now().isoformat())
+            self._emit_at(key, node, old,
+                          old if suspended else StatusCode.MAINTENANCE,
+                          cause=CAUSE_PIN_EDITED if edited else CAUSE_PIN_SET,
+                          reason=(entry.reason,) if entry.reason else (),
+                          when=when or instants.now())
+        if previous is None and when is None and not suspended:
+            self._date_pin(key, entry, old, prior)
+
+    def _date_pin(self, path: str, entry: MaintenanceEntry, shown: StatusCode,
+                  prior: Beginning | None) -> None:
+        """Say when the period began of the node at ``path``, whose pin the tree
+        has just learned of and did not see set (ADR-0110 decision 6): at the pin's
+        creation, which the store keeps. ``shown`` is what the node showed before
+        the pin was applied, and ``prior`` what was kept of when that began.
+
+        A node that showed ``MAINTENANCE`` already keeps a beginning no later than
+        the pin's creation — it showed that before it was pinned — and gives up a
+        later one: the date of an earlier replay, or a bound. One that showed
+        something else showed it until the pin was created, whatever instant the
+        row just written carries."""
+        created = entry.created_at
+        was: StatusCode | None = shown
+        if shown is StatusCode.MAINTENANCE:
+            if prior is not None and prior.at <= created:
+                return
+            was = None if prior is None else prior.was
+        self._beginnings[path] = Beginning(created, was=was, cause=CAUSE_PIN_SET)
 
     def _clear_node(self, path: str) -> bool:
         """Unpin a node and drop its entry. Returns whether anything was cleared.
 
         Nothing is restored because nothing was destroyed: the node has been holding
         the check's real reading the whole time, so releasing the pin simply lets it
-        show again — immediately, not at the next run.
+        show again — immediately, not at the next run. The event ends on **what the
+        node shows** without the pin (ADR-0107 decision 1): its reading, less what
+        its lines' pins still silence, and ``UNDEFINED`` for a node no check has
+        written in this process, which shows nothing until one does.
+
+        A pin the tree holds no node for ends with its row all the same (ADR-0107
+        decision 1, ADR-0109 decision 4): to nothing where the path showed
+        ``MAINTENANCE`` — a node not written yet since the start — and from
+        nothing to nothing where the pin was suspended.
         """
         node = self._find_node(path)
         key = node.path if node is not None else join_path(path)
         existed = self._maintenance.pop(key, None) is not None
-        if node is None or not node.maintenance:
+        if node is None:
+            if existed:
+                old = self._shows_at(key, None)
+                self._emit_at(key, None, old,
+                              StatusCode.UNDEFINED
+                              if old is StatusCode.MAINTENANCE else old,
+                              cause=CAUSE_PIN_ENDED, reason=(),
+                              when=instants.now())
+            return existed
+        if not node.maintenance:
             return existed
         node.maintenance = False
-        self._emit(node, StatusCode.MAINTENANCE, node.code,
-                   when=datetime.now().isoformat())
+        self._emit(node, StatusCode.MAINTENANCE, self._own(node),
+                   cause=CAUSE_PIN_ENDED, when=instants.now())
         return True
+
+    def _shows_at(self, path: str, node: Status | None) -> StatusCode:
+        """What the node at ``path`` shows, as a change of it is measured from
+        (:meth:`_shown`) — and, where the tree holds no node there, what was kept
+        of one: what the log last showed for it, or nothing."""
+        if node is not None:
+            return self._shown(node)
+        return self._restored_shown.get(path, StatusCode.UNDEFINED)
+
+    def _was_removed(self, path: str) -> bool:
+        """Whether what is kept of ``path`` says that its node was removed and has
+        not returned (ADR-0109 decision 5): it shows nothing, since a removal."""
+        began = self._beginnings.get(path)
+        return (began is not None and began.cause == CAUSE_REMOVED
+                and self._restored_shown.get(path) is StatusCode.UNDEFINED)
+
+    def _emit_at(self, path: str, node: Status | None, old: StatusCode,
+                 new: StatusCode, *, cause: str, reason: tuple[str, ...],
+                 when: datetime) -> None:
+        """Record a pin's event at ``path``, dated ``when`` — the act's instant:
+        through the node where the tree holds one (:meth:`_emit`), and otherwise as
+        a row of the path alone, which moves what is kept of it as an unwritten
+        node's row does."""
+        if node is not None:
+            self._emit(node, old, new, cause=cause, reason=reason, when=when)
+            return
+        self._log(Event(
+            path=path, name=leaf_name(path), old=old, new=new, reason=reason,
+            timestamp=when, cause=cause,
+            reported=self._restored_reading.get(path, StatusCode.UNDEFINED)))
+        self._restored_shown[path] = new
 
     def _persist(self) -> None:
         if self._maintenance_store is not None:
@@ -1327,9 +2414,19 @@ class StatusTree:
             child = _child_by_name(node, segment)
             if child is None:
                 child = Status(join_path(node.path, segment))
+                self._furnish(child)
                 node.add_child(child)
             node = child
         return node
+
+    def _furnish(self, node: Status) -> None:
+        """Give a node the tree has just made what is held against its path: the
+        labels the configuration declared for it, and the pin on it. Both are kept
+        beside the nodes, so a node that left the tree and returns is what it was
+        to its deployment and to its admin (ADR-0109 decisions 3 and 4)."""
+        for name, value in self._seeded.get(node.path, {}).items():
+            setattr(node, name, value)
+        node.maintenance = node.path in self._maintenance
 
     def _find_node(self, path: str) -> Status | None:
         node = self._root
@@ -1423,10 +2520,27 @@ class StatusTree:
         the history: this number is about the subject's behavior, not about what the
         surface showed, so a check flapping underneath a pin is exactly the thing
         worth seeing.
+
+        So what is counted is a change of **what the check reported**, which every
+        event says (ADR-0107 decision 4): a pin's row is none — the node moved and
+        its check said what it had said — and a run that wrote two rows is one. An
+        event from a log written before it could say so counts by its own codes,
+        as it was counted.
         """
         counts: dict[str, int] = {}
+        last: dict[str, StatusCode] = {}
         for event in self._events:
-            if event.old not in RANKED or event.new not in RANKED:
+            before = last.get(event.path)
+            after = _reported_after(event, before)
+            if after is not None:
+                last[event.path] = after
+            if event.reported is None:
+                before, after = event.old, event.new
+            elif before is None and event.cause == CAUSE_READING:
+                # The node's earlier rows have left the bounded log: a reading's
+                # row is then counted by its own codes.
+                before = event.old
+            if before is after or before not in RANKED or after not in RANKED:
                 continue
             age = _age_seconds(event.timestamp, now)
             if age > CHANGE_WINDOW_SECONDS:
@@ -1436,7 +2550,7 @@ class StatusTree:
 
     def _snapshot_subtree(self, node: Status, now: datetime,
                           changes: dict[str, int], shields: dict[str, str]
-                          ) -> tuple[StatusSnapshot, int, str | None,
+                          ) -> tuple[StatusSnapshot, int, datetime | None,
                                      RunFacts | None]:
         """``node``'s snapshot, plus the values its parent needs to resolve its
         own observation time (ADR-0027) and run facts (ADR-0044): how many
@@ -1465,7 +2579,7 @@ class StatusTree:
         # check's run time to another check's data, so the candidate is dropped
         # rather than chosen.
         mounts = 0
-        mount_stamp: str | None = None
+        mount_stamp: datetime | None = None
         mount_run: RunFacts | None = None
         for _child, child_mounts, child_stamp, child_run in results:
             mounts += child_mounts
@@ -1507,7 +2621,8 @@ class StatusTree:
             for entry in node.reason_entries)
         # Own status is now a **derived** value: the entries are virtual children,
         # and a node whose members are all pinned has nothing left reporting.
-        own = _own_code(node.code, lines, node.members, node.maintenance)
+        own = _own_code(node.code, [(line.quiet, line.code) for line in lines],
+                        node.members, node.maintenance)
         # Staleness judges the **raw** reading and is never suppressed — a check
         # that stopped running escalates whichever policy is holding its result
         # back (ADR-0032 rule 6, ADR-0036 decision 9), so what a stale node gives
@@ -1565,6 +2680,7 @@ class StatusTree:
             show_when_quiet=node.show_when_quiet,
             maintenance=node.maintenance,
             maintenance_entry=self._maintenance.get(node.path), stale=stale,
+            own_stale=stale_self,
             stale_after_seconds=node_stale_after(node),
             age_seconds=age, children=children,
             reasons=lines, members=node.members, run=mount_run,
@@ -1579,7 +2695,8 @@ class StatusTree:
         return snapshot, mounts, mount_stamp, mount_run
 
 
-def _own_code(reported: StatusCode, lines: tuple[ReasonLine, ...],
+def _own_code(reported: StatusCode,
+              lines: Sequence[tuple[bool, StatusCode | None]],
               members: bool, pinned: bool) -> StatusCode:
     """A node's **own** status: the one transform that turns a stored reading into
     what the node shows (ADR-0032 rule 3). Both suppressions live here, which is the
@@ -1606,6 +2723,11 @@ def _own_code(reported: StatusCode, lines: tuple[ReasonLine, ...],
     What this function must never do is *lose* ``reported``. It is the check's real
     answer, it stays on the node, and it travels to the surfaces beside the derived
     value — so a silenced node can still say what it is silencing.
+
+    ``lines`` are the node's entries as this rule reads them: whether each is
+    pinned, and the code it declared. The snapshot and the event log both come
+    here (:meth:`StatusTree._own`), so what a node shows and what its events say
+    it showed are one derivation.
     """
     if pinned:
         return StatusCode.MAINTENANCE
@@ -1613,11 +2735,11 @@ def _own_code(reported: StatusCode, lines: tuple[ReasonLine, ...],
         return reported
     counted: list[StatusCode] = []
     silenced = False
-    for line in lines:
-        if line.quiet:
+    for quiet, declared in lines:
+        if quiet:
             silenced = True
             continue
-        code = line.code if line.code is not None else reported
+        code = declared if declared is not None else reported
         if code is StatusCode.MAINTENANCE:
             silenced = True
             continue
@@ -1657,17 +2779,23 @@ def _child_by_name(node: Status, name: str) -> Status | None:
     return None
 
 
-def _age_seconds(timestamp: str | None, now: datetime) -> float:
-    """Seconds since ``timestamp`` (an ISO-8601 string), never negative. An
-    unobserved node (``None``, ADR-0027) has no age — 0.0, and ``_is_stale`` exempts
-    it anyway, since a node with a real code was necessarily stamped."""
+def _asked_at(now: datetime | None) -> datetime:
+    """The moment a method of the tree is asked at: the instant it was handed, or
+    the clock's where it was handed none (ADR-0120). :class:`ValueError` for a
+    time without a zone — it would be compared with instants, and is none."""
+    if now is None:
+        return instants.now()
+    return instants.utc(now, "the moment the tree is asked at")
+
+
+def _age_seconds(timestamp: datetime | None, now: datetime) -> float:
+    """Seconds from ``timestamp`` to ``now``, never negative: the time between two
+    instants, which a change of no clock adds to or takes from. An unobserved node
+    (``None``, ADR-0027) has no age — 0.0, and ``_is_stale`` exempts it anyway,
+    since a node with a real code was necessarily stamped."""
     if timestamp is None:
         return 0.0
-    try:
-        observed = datetime.fromisoformat(timestamp)
-    except ValueError:
-        return 0.0
-    return max(0.0, (now - observed).total_seconds())
+    return max(0.0, (now - timestamp).total_seconds())
 
 
 def _is_stale(node: Status, age: float) -> bool:

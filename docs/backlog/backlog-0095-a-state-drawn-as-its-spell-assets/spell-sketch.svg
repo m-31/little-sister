@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 132" width="760" height="132" role="img" aria-labelledby="title desc" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif">
+<title id="title">A state drawn as the spell it lasted — a sketch</title>
+<desc id="desc">Thirty days of one object's states on a time axis. While the state stood well, a line runs along the baseline; while it failed, a hollow box in the failure ink stands from the instant that state began to the instant the next one replaced it. Two failing spells: one of ten days, one of six hours.</desc>
+<rect width="760" height="132" fill="#ffffff"/>
+<text x="72" y="18" font-size="14" font-weight="600" fill="#212529">Accounts read</text>
+<rect x="73" y="28" width="12" height="8" fill="#ffffff" stroke="#b02a37" stroke-width="2"/>
+<text x="92" y="37" font-size="12" fill="#6c757d">failed for 10d 12h of 30d · 4 changes</text>
+<g transform="translate(0 44)">
+<line x1="170.8" x2="170.8" y1="6" y2="48" stroke="#dee2e6" stroke-dasharray="2 3"/>
+<line x1="327.6" x2="327.6" y1="6" y2="48" stroke="#dee2e6" stroke-dasharray="2 3"/>
+<line x1="484.4" x2="484.4" y1="6" y2="48" stroke="#dee2e6" stroke-dasharray="2 3"/>
+<line x1="641.2" x2="641.2" y1="6" y2="48" stroke="#dee2e6" stroke-dasharray="2 3"/>
+<line x1="72" x2="744" y1="48.5" y2="48.5" stroke="#dee2e6"/>
+<path d="M72 47H285.6M515.2 47H639.3M644.9 47H744" fill="none" stroke="#212529" stroke-width="2"/>
+<path d="M285.6 17H515.2V47H285.6ZM639.3 17H644.9V47H639.3Z" fill="#ffffff" stroke="#b02a37" stroke-width="2" stroke-linejoin="round"/>
+</g>
+<g font-size="12" fill="#6c757d" text-anchor="middle">
+<text x="170.8" y="116">09-07</text>
+<text x="327.6" y="116">09-14</text>
+<text x="484.4" y="116">09-21</text>
+<text x="641.2" y="116">09-28</text>
+</g>
+</svg>

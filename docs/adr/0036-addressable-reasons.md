@@ -1,7 +1,7 @@
 # ADR-0036 — Addressable reasons: keyed entries, and maintenance on one of them
 
 - **Status:** Accepted
-- **Date:** 2026-09-20 (accepted 2026-08-01)
+- **Date:** 2026-10-04 (accepted 2026-08-01)
 - **Related:** [ADR-0032](0032-status-contribution-boundary.md) (the contribution
   boundary, amended by this decision to reach one level below a node),
   [ADR-0004](0004-status-aggregation-semantics.md) (the roll-up these entries reuse,
@@ -14,7 +14,11 @@
   [ADR-0024](0024-dashboard-layout.md) (`reason_cap`, the display budget these render
   inside), [ADR-0008](0008-json-output-api.md) (the envelope, extended additively),
   [ADR-0025](0025-check-provided-subnode-metadata.md) (the other route — real
-  subnodes — and why it is not this one)
+  subnodes — and why it is not this one),
+  [ADR-0104](0104-a-pin-is-one-block-on-what-it-silences.md) (the block that states a
+  pin on `/maintenance`, where one is edited and cleared),
+  [ADR-0107](0107-an-event-is-a-change-of-what-a-node-shows.md) (a line's pin as an
+  event of its node, and the change beneath one that is held back)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -115,7 +119,9 @@ check replaces its whole reason map with `check error: …`, so a delete-on-abse
 would throw away every pin on the node the moment the check has a bad minute. The
 node says a pinned entry is no longer reported;
 [ADR-0014](0014-maintenance-persistence.md)'s expiry stays the backstop that keeps a
-forgotten pin from lasting forever.
+forgotten pin from lasting forever. An expiry that changes what the node shows is an
+event of the node ([ADR-0107](0107-an-event-is-a-change-of-what-a-node-shows.md)
+decision 1), as decision 11 has it.
 
 **7. The entries are virtual children.** Each unsuppressed entry contributes the
 node's reported status; a suppressed one contributes nothing; the node's **own**
@@ -155,17 +161,26 @@ and the node states how many of its entries are quiet — a card clamps its reas
 the fold and the count is the only thing that always shows
 ([ADR-0032](0032-status-contribution-boundary.md) rule 5). An entry pin **reports**
 everywhere a node pin does — the strip pill, the "contains maintenance" pip and
-`/maintenance`. Setting one stays the leaf page's job (decision 12).
+`/maintenance`, where it is edited and cleared as well as on its node's page
+([ADR-0104](0104-a-pin-is-one-block-on-what-it-silences.md) decision 6). Setting one
+stays the leaf page's job (decision 12).
 
 The **capped popover summarizes per node** — one row with a count (*3 of 20 reasons*,
-or *all 20 reasons* where every member is pinned) — while `/maintenance` lists one row
-per pin. Twenty rows from one node would otherwise evict every other node from a capped
-list. The count is also what keeps the pip honest: without it a row would read as a
-node pin, which it is not.
+or *all 20 reasons* where every member is pinned) — while `/maintenance` states each
+pin as a block under its node's path. Twenty rows from one node would otherwise evict
+every other node from a capped list. The count is also what keeps the pip honest:
+without it a row would read as a node pin, which it is not.
 
 **11. Events and history keep plain strings.** They carry the map's *values*. A slug
 in a historical event means nothing once the entry is gone, and per-entry events are
 what would flood the log. Whether an entry's appearance is ever recorded is left open.
+
+A line's pin is an event where it changes what its node shows — set, cleared or expired
+([ADR-0107](0107-an-event-is-a-change-of-what-a-node-shows.md) decisions 1 to 3). It is
+written as the node's change, and its set carries the line by its text and the pin's
+note; nothing is written for a line by itself, so the log keeps plain strings and does
+not fill with lines. A change beneath a line's pin is held back wherever the node does
+not show it, not only where every line is pinned.
 
 **12. An entry is addressed in a query parameter or a form field — never in a path
 segment.** The surface is the **existing leaf detail page**, which already lists every
@@ -193,9 +208,11 @@ slashes by default), and the natural slug for a discovered entry contains one �
 `/maintenance/a/b/c`: with the parameter absent, the target is the node itself.
 
 The **slug is never rendered as text.** It appears only as that link's value. What
-names an entry in a list is its *line*, and the two texts get two columns: *Silenced*
-(the line) and *Why* (the pin's own explanation). They are both called "reason" in the
-model and are not the same kind of thing.
+names an entry in a list is its *line*, and the two texts stand in two places of the
+block that states its pin on `/maintenance`
+([ADR-0104](0104-a-pin-is-one-block-on-what-it-silences.md) decision 6): the line in
+the sentence the block opens with, the pin's own explanation as its note. They are both
+called "reason" in the model and are not the same kind of thing.
 
 **13. The JSON envelope grows additively.** The existing `reasons` array of strings
 stays, unchanged for every existing client; a new array — `entries`, the working name

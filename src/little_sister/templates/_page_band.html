@@ -86,8 +86,50 @@
         </div>
         {%- endif %}
     </div>
+    {#- What the node is, said once and folded, on every view of it: a line that
+        names it and shows how it begins, cut off where the width runs out, and
+        opened, the text at a reading measure beneath, the preview giving way to it.
+        It was said here in full and again as *About:* in a leaf's status card, so
+        the instance's own nodes, whose `about` is a paragraph, pushed their report
+        down by twice its length. The preview is for the eye alone: a screen reader
+        hears *about*, and opened, the text, never the same words twice. -#}
     {%- if node and node.about %}
-    <div class="ls-band__about md-body text-muted">{{ node.about | markdown }}</div>
+    {%- set about_html = node.about | markdown %}
+    <details class="ls-band__about">
+        <summary><span class="ls-band__about-label">about</span> <span class="ls-band__about-preview" aria-hidden="true">{{ about_html | striptags }}</span></summary>
+        <div class="ls-band__about-body md-body">{{ about_html }}</div>
+    </details>
+    {%- endif %}
+    {#- A node's views (ADR-0097 decision 3): its status, its series, its history
+        and its Copy document, each a route of its own addressed by the node's path.
+        Series stands where a curve can stand at or beneath the node, as the
+        configuration says (`series_tab`), so it does not come and go with the
+        readings, and carries the number of curves its view draws, none where it
+        draws none (ADR-0114 decision 3) — a number that moves with what is declared
+        and what the tree holds, not with a reading; History on every node but the
+        root, which declares nothing of its own and has no periods; Copy on every
+        node and on the root, whose Copy is the tree's document (ADR-0115 decision
+        7) — last, since it hands over what the others show. They close the band,
+        beneath what the node is about, so the band's rule is their track: the views
+        are of what lies below it. -#}
+    {%- if view is defined %}
+    {%- set tabs = [('Status', url_for('status', branch=branch) if branch
+                     else url_for('status'), 'status', 0)] %}
+    {%- if series_tab | default(false) %}
+    {%- set tabs = tabs + [('Series', url_for('series', path=branch) if branch
+                            else url_for('series_index'), 'series',
+                            series_count | default(0))] %}
+    {%- endif %}
+    {%- if branch %}
+    {%- set tabs = tabs + [('History', url_for('history', path=branch), 'history', 0)] %}
+    {%- endif %}
+    {%- set tabs = tabs + [('Copy', url_for('copy', branch=branch) if branch
+                            else url_for('copy'), 'copy', 0)] %}
+    <nav class="ls-views" aria-label="Views of this node">
+        {%- for label, href, name, count in tabs %}
+        <a class="ls-views__tab{% if name == view %} is-current{% endif %}" href="{{ href }}"{% if name == view %} aria-current="page"{% endif %}>{{ label }}{% if count %} <span class="ls-views__count">{{ count }}</span><span class="visually-hidden"> {{ "curve" if count == 1 else "curves" }}</span>{% endif %}</a>
+        {%- endfor %}
+    </nav>
     {%- endif %}
 </div>
 {%- endif %}

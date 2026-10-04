@@ -68,7 +68,7 @@ class JsonApiTests(TestCase):
         show (ADR-0032 rule 5)."""
         self.tree.upsert("/db", StatusCode.ERROR, "connection refused")
         self.tree.set_maintenance("/db", "planned", set_by="ada",
-                                  expires_at=datetime(2999, 1, 1))
+                                  expires_at=datetime(2999, 1, 1, tzinfo=UTC))
         node = self.client.get("/status/db", headers=JSON).get_json()["status"]
         self.assertEqual(node["reported"], "ERROR")
         self.assertEqual(node["own"], "MAINTENANCE")
@@ -98,7 +98,7 @@ class JsonApiTests(TestCase):
             Entry("lint", "lint #4215 passed", code=StatusCode.OK),
         ], members=True)
         self.tree.set_entry_maintenance("/ci", "build", "known",
-                                        expires_at=datetime(2999, 1, 1),
+                                        expires_at=datetime(2999, 1, 1, tzinfo=UTC),
                                         set_by="ada")
         node = self.client.get("/status/ci", headers=JSON).get_json()["status"]
         self.assertTrue(node["entries"]["addressable"])
@@ -315,7 +315,7 @@ class JsonApiTests(TestCase):
         never recorded reads its set (ADR-0014)."""
         self.tree.upsert("/db", StatusCode.OK)
         self.tree.set_maintenance("/db", "planned", set_by="ada",
-                                  expires_at=datetime(2999, 1, 1))
+                                  expires_at=datetime(2999, 1, 1, tzinfo=UTC))
         node = self.client.get("/status/db", headers=JSON).get_json()["status"]
         self.assertNotIn("maintenance_details", node)
         pin = node["maintenance"]
@@ -340,7 +340,7 @@ class JsonApiTests(TestCase):
         self.tree.upsert("/pinned", StatusCode.ERROR, "boom")
         self.tree.upsert("/quiet/leaf", StatusCode.OK)
         self.tree.set_maintenance("/pinned", "planned", set_by="ada",
-                                  expires_at=datetime(2999, 1, 1))
+                                  expires_at=datetime(2999, 1, 1, tzinfo=UTC))
         children = {child["name"]: child for child in self.client.get(
             "/status", headers=JSON).get_json()["status"]["children"]}
         self.assertIsNone(children["ok"]["contribution"])
@@ -513,9 +513,9 @@ class TheSpecIsTheContract(TestCase):
         self.tree.upsert("/db", StatusCode.WARN, "slow", frequency_seconds=60)
         self.tree.upsert("/svc/api", StatusCode.UNDEFINED)
         self.tree.set_maintenance("/db", "planned", set_by="ada",
-                                  expires_at=datetime(2999, 1, 1))
+                                  expires_at=datetime(2999, 1, 1, tzinfo=UTC))
         self.tree.set_entry_maintenance("/ci", "build", "known", set_by="ada",
-                                        expires_at=datetime(2999, 1, 1))
+                                        expires_at=datetime(2999, 1, 1, tzinfo=UTC))
 
     def test_the_served_envelope_and_the_spec_agree_in_both_directions(self):
         self._a_tree_that_uses_every_shape()

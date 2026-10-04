@@ -1,13 +1,14 @@
 # ADR-0074 — This instance has a name, and the library owns it
 
 - **Status:** Accepted
-- **Date:** 2026-09-05
+- **Date:** 2026-10-04 (accepted 2026-09-05)
 - **Related:** [ADR-0071](0071-what-a-restart-keeps-is-a-directory-of-files.md) §5
   (the keeper seam, whose first implementation had to invent one of these),
   [ADR-0072](0072-the-instance-reports-on-itself.md) (the self-report seam, where a
   package says what it knows about this process), [ADR-0035](0035-registering-a-config-aspect.md)
   (`settings` is the library's own aspect), `little-sister-aws` ADR-0004 (the S3
-  keeper, and the mark it invented)
+  keeper, and the mark it invented), [ADR-0095](0095-the-instance-states-its-memory.md)
+  (decision 2, where the runtime figures stand)
 
 ## Context
 
@@ -102,12 +103,13 @@ already exists, in the wrong place — but what it is and where a human reads it
   would be a break with no error message anywhere.
 - **`/system` grows a section, and the argument about what else belongs in it starts
   here.** What this process is *doing* — the entry count, the memory share, the pool
-  wait, the lag — is not on that page at all; those are the engine's own lines on
+  wait, the lag — is not in that section at all; those are the engine's own lines on
   `/little-sister` (ADR-0072). The division has been *what is installed* against *how
   it is running*, and an instance's name is neither. It is put on `/system` because
-  that is where somebody goes to ask what this installation is, and the case for
-  moving the runtime figures beside it is left open rather than answered by this
-  record.
+  that is where somebody goes to ask what this installation is, and whether the
+  runtime figures move beside it is answered by
+  [ADR-0095](0095-the-instance-states-its-memory.md) decision 2: they stand in
+  `/system`'s polled engine block, and *This instance* keeps what is settled at import.
 - A deployment that names two instances the same gets two distinguishable marks and
   two identical names on two dashboards. That is a legible mistake rather than a
   silent one, which is the whole point of decision 3.

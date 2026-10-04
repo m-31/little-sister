@@ -47,14 +47,12 @@ a failed refresh; the engine heartbeats a `little-sister` node each tick, so a s
 scheduler goes red through staleness, and an external supervisor handles whole-process
 death. → [record](adr/0005-dashboard-freshness-and-self-monitoring.md)
 
-### ADR-0006 — General config file & display timezones
+### ADR-0006 — General config file & display timezones — **superseded**
 
-General options live in `config/settings.yaml` (since
-[ADR-0031](adr/0031-deployment-config-directory.md)), read once with defaults:
-`timezone` (default `Europe/Berlin`) and `time_format`. Timestamps are stored
-server-local and converted at display through a `localtime` filter; the same zone
-interprets what an admin writes — an unzoned expiry is read in it, an explicit offset
-wins, a DST hole or fold is refused. → [record](adr/0006-config-file-and-timezones.md)
+Superseded by [ADR-0120](adr/0120-every-stored-time-is-an-instant.md), which restates
+the settings file, the display zone and format and how a typed expiry is read, and
+replaces how a time is stored: no longer the machine's clock without a zone.
+→ [record](adr/0006-config-file-and-timezones.md)
 
 ### ADR-0007 — Checks may report a branch (recursive `CheckResult`)
 
@@ -113,14 +111,14 @@ aggregation, without an event, and not in the JSON envelope. Refines
 
 ### ADR-0014 — Persist maintenance to a file, with auto-expiry
 
-A maintenance side-table written through to a JSON file (atomic, restored before
-the engine runs; `var/state/maintenance.json` since ADR-0071), two tables keyed by
-`path` and by `(path, slug)`; an older file shape is reported and rewritten, never
-migrated. Every entry expires — default one week, at least a second and the slowest
-covered check's interval, at most a year, out of range refused — is swept by the
-scheduler and reaped at startup when no check covers it. A pin is edited in place by
-an exact compare-and-set on `set_at`, carries `created_*` beside `set_*`, and names its
-expiry by duration or a calendar grammar. → [record](adr/0014-maintenance-persistence.md)
+A maintenance side-table written through to `var/state/maintenance.json` and replayed
+before the engine runs, keyed by `path` and by `(path, slug)`; a pin is held against its
+path and makes no node. Its times are instants in UTC, and a file of another shape or
+with a time without a zone is refused, never migrated. Every pin expires — a week by
+default, at least the slowest covered check's interval, at most a year — is swept by the
+scheduler, and is reaped at startup unless a check or the instance's own node covers it.
+An edit is a compare-and-set on `set_at`, keeps an expiry left as it was filled, and
+writes nothing where nothing changed. → [record](adr/0014-maintenance-persistence.md)
 
 ### ADR-0015 — Check discovery: a union of config directories
 
@@ -196,11 +194,12 @@ bounded by reason caps, chips for quiet leaves and a status strip for the heartb
 
 ### ADR-0025 — Check-provided subnode metadata (`about` / `title` on `CheckResult`)
 
-A type declares `subnode_defaults` and `label_tokens` as data; the library resolves
-each field once (configured text, else the default, `{default}` and `{token}`s
-substituted) and the engine stores it per child name. Precedence per field is
-`nodes.yaml` > declared or check-provided > empty, kept by seed-once semantics, and
-labels freeze at first fill. A label on a `CheckResult` child stays the fallback.
+A type declares `subnode_defaults` and `label_tokens` as data; the library resolves each
+field once (configured text, else the default, `{default}` and `{token}`s substituted)
+and the engine stores it per child name. Precedence per field is `nodes.yaml` > declared
+or check-provided > empty, kept by seed-once semantics, and labels freeze at first fill.
+A label on a `CheckResult` child stays the fallback, and beneath `nodes.yaml` it is the
+only source for a child that says a run names it, `dynamic=True` (ADR-0118).
 → [record](adr/0025-check-provided-subnode-metadata.md)
 
 ### ADR-0026 — Reading values from decoded bags (`values.py`)
@@ -289,7 +288,7 @@ filler contributes nothing and the page renders. Slots: `reason.actions` (with t
 `config_dir.register_aspect(name, as_file=…, as_directory=…)` in the import-before-app
 slot makes a package's file an ordinary aspect — same shape enforcement, same layering
 helpers — while its schema stays the package's; a built-in name is refused, the first
-registration of a name wins, and registered aspects show on `/system`.
+registration of a name wins, and registered aspects show on `/system/installed`.
 → [record](adr/0035-registering-a-config-aspect.md)
 
 ### ADR-0036 — Addressable reasons: keyed entries, and maintenance on one of them
@@ -398,11 +397,11 @@ parameters (`notes_keep` 10, `notes_cap` 50, `notes_max_age` 13mo, `notes_min_ag
 
 ### ADR-0048 — The Content-Security-Policy is assembled, never a constant
 
-A `csp` module composes the header at application creation from the library's
-defaults, packages' contributions (`csp.allow(directive, source, by=…)` — an origin,
-never a keyword; a deployment-specific host declared as `csp.origin_of("<aspect>.<field>")`)
-and the deployment's `csp` block, which has the last word. The first policy shipped is
-Report-Only; `/system` shows the effective policy with its contributors.
+A `csp` module composes the header at application creation from the library's defaults,
+packages' contributions (`csp.allow(directive, source, by=…)` — an origin, never a
+keyword; a deployment-specific host declared as `csp.origin_of("<aspect>.<field>")`) and
+the deployment's `csp` block, which has the last word. The first policy shipped is
+Report-Only; `/system/installed` shows the effective policy with its contributors.
 → [record](adr/0048-an-assembled-content-security-policy.md)
 
 ### ADR-0049 — The check-authoring surface is contract, and the gate holds it
@@ -425,11 +424,12 @@ value. Which identifiers a check uses stays with the check.
 
 ### ADR-0051 — What startup refuses at the plugin boundary
 
-A `type:` name is claimed once — a second registration raises naming both classes —
-and the check-authoring surface has an epoch, `API_VERSION`, that a package declares
-with `require_api(n)` and a mismatch refuses naming both numbers; the epoch is held by a
-snapshot of the promised names the gate checks. Both refusals are hard; `/system` lists
-every type with its package and version. → [record](adr/0051-what-startup-refuses.md)
+A `type:` name is claimed once — a second registration raises naming both classes — and
+the check-authoring surface has an epoch, `API_VERSION`, that a package declares with
+`require_api(n)` and a mismatch refuses naming both numbers; the epoch is held by a
+snapshot of the promised names the gate checks. Both refusals are hard;
+`/system/installed` lists every type with its package and version.
+→ [record](adr/0051-what-startup-refuses.md)
 
 ### ADR-0052 — Plugin names: one convention for a git dependency and a published one
 
@@ -502,16 +502,18 @@ pinned and scrolls only its constrained child, and the kiosk is untouched.
 
 An optional tri-state boolean on the node — `nodes.yaml` > the deployment's `subnodes:`
 block > the type's declared default > a stamped child result > unstated — read as a
-common field for every type; a declared node is never a chip and never a fold
-candidate. Display metadata only: no event, no aggregation, no cookie, no envelope
-change; *hide idle* still hides it. → [record](adr/0063-declining-the-density-trade.md)
+common field for every type; a child that says a run names it, `dynamic=True`, takes the
+flag its own result carries, or none, beneath `nodes.yaml` (ADR-0118). A declared node
+is never a chip and never a fold candidate. Display metadata only: no event, no
+aggregation, no cookie, no envelope change; *hide idle* still hides it.
+→ [record](adr/0063-declining-the-density-trade.md)
 
 ### ADR-0064 — A secret resolver is a registration like the others
 
-A scheme claim records the package that made it, a second claim from a different
-package refuses at startup naming both, the same package registering again replaces
-silently, and replacing somebody else's scheme is said out loud with `replace=True`.
-`/system` prints the whole scheme list with its owners.
+A scheme claim records the package that made it, a second claim from a different package
+refuses at startup naming both, the same package registering again replaces silently,
+and replacing somebody else's scheme is said out loud with `replace=True`.
+`/system/installed` prints the whole scheme list with its owners.
 → [record](adr/0064-the-resolver-is-a-registration.md)
 
 ### ADR-0065 — The connection decides what is secure
@@ -580,12 +582,12 @@ succeeds. → [record](adr/0071-what-a-restart-keeps-is-a-directory-of-files.md)
 
 Contributors register a name and a callable; every tick the engine writes each
 contributor's lines onto its own child of `/little-sister`, as member entries whose
-codes derive that child's own and roll up to the root. A report is recorded state,
-never a probe; a contributor that raises is caught and stands as one WARN line naming
-it; a slug is the contributor's own on its own node — the flat view prefixes the
-contributor's name — claimed once under ADR-0064's rules, so a line is pinnable and a
-re-wording moves no pin; a line a contributor stops returning clears. `/system` lists
-each package's contributors. → [record](adr/0072-the-instance-reports-on-itself.md)
+codes derive that child's own and roll up to the root. A report is recorded state, never
+a probe; a contributor that raises is caught and stands as one WARN line naming it; a
+slug is the contributor's own on its own node — the flat view prefixes the contributor's
+name — claimed once under ADR-0064's rules, so a line is pinnable and a re-wording moves
+no pin; a line a contributor stops returning clears. `/system/installed` lists each
+package's contributors. → [record](adr/0072-the-instance-reports-on-itself.md)
 
 ### ADR-0073 — A readiness answer beside `/health`, and it latches
 
@@ -600,7 +602,7 @@ silent failures, and `readiness.saves` (ERROR) a lost state-directory lease. →
 
 ### ADR-0074 — This instance has a name, and the library owns it
 
-`little_sister.instance` resolves one mark per process at import,
+`little_sister.instance` resolves one mark per process on first use,
 `<name>:<pid>:<started>:<tag>`; `/system` says which instance this is, first and in a
 section of its own. `name` comes from `settings.yaml`'s `instance:`, the hostname
 otherwise, and a bad one falls back with a warning rather than refusing the start. The
@@ -740,11 +742,11 @@ read back. → [record](adr/0082-a-line-carries-what-it-is-about-and-what-it-rea
 ### ADR-0083 — A node may wait before it escalates
 
 A node publishes a worse code upward only after `escalate_after` **consecutive
-readings** of it, counted on the reading and on what the check reported. The leaf is
-honest from the first failure; only the escalation waits, and a held node publishes
-**what it published before** — the first rule here that transforms a contribution rather
-than withholding one, so the snapshot carries it and `contribution.code` can be a real
-code (spec 2.2.0). Recovery is immediate, a different worse code restarts the count, an
+readings** of it, counted on the reading and on what the node shows. The leaf is honest
+from the first failure; only the escalation waits, and a held node publishes **what it
+published before** — the first rule here that transforms a contribution rather than
+withholding one, so the snapshot carries it and `contribution.code` can be a real code
+(spec 2.2.0). Recovery is immediate, a different worse code restarts the count, an
 unranked move is none, and staleness goes past it. Default 1 ≡ today; memory, not state.
 → [record](adr/0083-a-node-may-wait-before-it-escalates.md)
 
@@ -835,12 +837,12 @@ stays for a server without an engine, and the epoch does not move.
 
 `measures:` in a check's YAML maps a record field's dotted name to its unit, merged per
 field over the `measure_defaults` its type declares (`null` removes one), as `subnodes:`
-is. A unit is free text; `ms` and `s` are written through `format_span`, `B` through
-`format_weight`. A point sits on its series' own clock, to scale, in the configured
-timezone; a null is a marked break, a hole wider than the freshness tolerance a plain one.
-The node that stands for the subject shows the curves and its newest `reading_cap`
-readings (10, in `settings.yaml` and optionally per check); its History page has them all.
-→ [record](adr/0092-a-check-declares-its-measures.md)
+is. A unit is free text; `ms` and `s` are written through `format_span`, `B` to `TiB`
+through `format_weight`. A point sits on its series' own clock, to scale; a reading with
+an `error` is a marked break, one without a number or a hole a plain one. A node's page
+shows the curves that stand on it, its Series view every curve at or beneath it and the
+newest `reading_cap` readings (10, in `settings.yaml` or per check); History has them
+all. → [record](adr/0092-a-check-declares-its-measures.md)
 
 ### ADR-0093 — A record the seam refuses costs its line, not the run
 
@@ -861,3 +863,273 @@ A change seen across a restart is not marked. `/little-sister` alone records the
 closed at the later of the stop's `stopped_at` stamp and the lease's last beat. On
 `/history`, a container's current `UNDEFINED` is no row, as on its Time card.
 → [record](adr/0094-a-restart-is-no-transition.md)
+
+### ADR-0095 — The instance states its memory, and a rise names what was running
+
+Linux reads the size now and the peak, macOS the peak alone, marked; the `memory` line
+grades as before. `/system`'s engine block and the engine's `report` carry the figures,
+and *This instance* stays what is settled at import. The log carries them every ten
+minutes on the clock, at the first tick and at the stop, with the series and the tree. A
+run's line, and the tick's own, carries what rose from 1 MiB — the size and the peak on
+Linux, the peak on macOS — *while it ran*, naming what else was in flight, never a cost.
+→ [record](adr/0095-the-instance-states-its-memory.md)
+
+### ADR-0096 — A measure names its node and its things, and a curve marks only a reading that failed
+
+A measure's `node` names the node its curve stands on, relative to the one its reading
+stands on. A type keys the things a record counts by their nodes' names — `volumes`,
+`drives`, `processes` — and a declaration's `*` picks the key. `KiB` to `TiB` join `B`
+as family units, through `format_weight`. A reading whose record carries an `error` is
+marked on every curve, and a failed run in the lane; one that answered without a number
+breaks the line plainly, and a measure with no number draws no curve. `host-metrics`
+writes `load1_per_core`, and the library's types declare the numbers they grade.
+→ [record](adr/0096-a-measure-names-its-node-and-its-things.md)
+
+### ADR-0097 — A node's series have a view of their own, beside its status and its history
+
+`/series/<path>` shows every curve at or beneath a node, each under the node it stands
+on, on one time axis, with each series' newest `reading_cap` readings folded beneath; a
+series with no measure links its History page. A node's page shows only the curves that
+stand on it. The breadcrumb starts at `nodes` and keeps the view, tabs switch between
+Status, Series, History and Copy, and the rail gains Series. `/status` stays the
+overview, `/series` is an index, and there is no `/history` root.
+→ [record](adr/0097-a-nodes-series-have-a-view-of-their-own.md)
+
+### ADR-0098 — A Series view is drawn over the window its URL names
+
+`/series/<path>?from=…&to=…`, Grafana-style: `now`, `now-6h` or an instant. The window
+is the Series view's: every curve drawn over it, which curves stand decided by everything
+kept. One bar names it and holds the presets and the moves, each in its place; a window
+ending now stays live, and a stretch chosen on the time axis or by a drag holds still.
+A script adds the drag and a line reading every curve at the pointer, over the links.
+Labels fall on round local times; past 336 readings a column draws its first, last,
+lowest and highest, which a bucket keeps.
+→ [record](adr/0098-a-series-view-is-drawn-over-a-window.md)
+
+### ADR-0099 — A status that still holds says since when
+
+The Time card and a node's Copy document state a status that still holds *since* its
+start, read from the kept table where its row has left the log, and when it was *last
+observed*; History's current row reads *current*. A period is a run of events that show
+one status: a pin's edit is none, and a period a pin's end began says so. A first
+reading is a bound, *since before*, and a bound is kept until the node changes; no gap
+ends a period. A node is observed, not checked; the `file` check writes a long age in
+days; a run's log line adds a roll-up unlike its own code.
+→ [record](adr/0099-a-status-that-still-holds-says-since-when.md)
+
+### ADR-0100 — System is two views: what is running, and what is installed
+
+Tabs beneath one heading, as a node's views are. *Running*, `/system`: which instance
+this is, the engine's figures and the schedule, polled. *Installed*, `/system/installed`:
+check types, packages, extensions, identity and the policy, settled at startup, not
+polled, every section open under an index. The schedule is a row per check — its type
+and what it is reached through beneath its path — with *Declared*, the type's estimate,
+beside *Seen*, the heaviest record the last run carried.
+→ [record](adr/0100-system-is-two-views.md)
+
+### ADR-0101 — The Events page is filtered by its URL
+
+`under`, a node and everything beneath it; `words`, each found in the reason; a switch
+per status an event moved to, *reached* and *held back* apart from them, and one per
+kind of cause — a reading, a pin, a removal; and the Series view's window, with its bar.
+Nothing remembers a filter, and held-back rows stay shown by default — what the log
+keeps is retention's. A line counts what matches in the window, an empty table says
+which empty it is, and *reset* is `/events`.
+→ [record](adr/0101-the-events-page-is-filtered-by-its-url.md)
+
+### ADR-0102 — A readings table keeps time and names in view; a quiet log says what it means
+
+A readings table is a box as wide as the page and about as tall as the window, its
+heading row and Time column held while it scrolls both ways, every reading on the page.
+A declared measure heads its column by label and unit over the field's name, and the
+declared columns lead. Where the log holds no change of a node, History says it
+declares nothing of its own, or shows the period that holds, begun when the kept table
+says or *before* its bound.
+→ [record](adr/0102-a-readings-table-keeps-time-and-names-in-view.md)
+
+### ADR-0103 — The Series index says where each link leads, and names each node once
+
+A node's name opens its Status page, and each row ends with *curves*, its Series view
+where a curve stands at or beneath it, and *readings*, its History page. The Curves
+column counts the curves a node's own series draw, the labels folded behind the count.
+A root appears once: its heading is its own row, the nodes beneath it indented.
+→ [record](adr/0103-the-series-index-says-where-each-link-leads.md)
+
+### ADR-0104 — A pin is one block on what it silences, and it is edited there
+
+One block states a pin wherever one shows — who, until when and what is left, the note
+in full, *Edit* and *Clear* for an admin — and where it stands says what it covers: a
+node's frames its lines, a line's hangs beneath it. A pin is set and edited in place,
+on a node's page, the Maintenance page and the wall, whose refresh waits for an open
+editor, and a write comes back to its block; an edit shows the expiry it would keep,
+and one that changes nothing writes nothing. The block is a rule's, maintenance its
+first kind.
+→ [record](adr/0104-a-pin-is-one-block-on-what-it-silences.md)
+
+### ADR-0105 — A page is laid out at its screen's width, and is no wider
+
+Every document declares its viewport, so a phone lays a page out at its own width, and
+no page is wider than its screen: a table stands in a box that scrolls it, the band's
+filters, trail and title and the wall's strip take another line, and a name with
+nowhere to break breaks inside itself. On a phone a reason in a scrolled table keeps a
+line's width, and a box keeps its place over a poll. Below 576 pixels the rail gives
+way to the top bar's layout, the preference untouched. A browser emulating a phone
+measures every page, and the gate holds the declaration and each table's box.
+→ [record](adr/0105-a-page-is-laid-out-at-its-screens-width.md)
+
+### ADR-0106 — A subject with a history has a node of its own, and a run is a mark at its own time
+
+A subject that one of several measurements names has a node of its own — a status, a
+path and a pin — whether or not it is well; a finding stays a line. A node whose lines
+name one subject and no other stands for it: a type hands back a node where it handed
+back a line, and the check API does not move. Its type says where it hangs and names it
+as its provider does; the series, keyed by the subject, survives a rename. A run is a
+mark at its own time on the view's shared axis — a tick, or a stem to its value with a
+failed run also in the lane beneath. The API reads a series at the Series view's URL.
+→ [record](adr/0106-a-subject-with-a-history-has-a-node-of-its-own.md)
+
+### ADR-0107 — An event is a change of what a node shows
+
+The log records every change of what a node shows — a reading's, its pin's, a line's
+pin set or ended — and nothing for a line by itself. A change of the reading the node
+does not show is a row of its own, held back as `maintenance`, also where only some
+lines are pinned; a run that does both writes two rows. An event carries its cause — a
+chip on Events, *when a line was silenced* on the Time card — and what the check
+reported, which the restart and the count of changes read. A restart replays nothing:
+the first reading is compared with what the log last showed and last reported.
+→ [record](adr/0107-an-event-is-a-change-of-what-a-node-shows.md)
+
+### ADR-0108 — The wait before an escalation counts what a node shows
+
+The counter that makes a node wait before it escalates counts the node's own status —
+what it shows, as the snapshot derives it and the log records it — and no longer the
+code its check reported: a pinned line's readings neither spend a wait nor restart
+one, and the hold a node states is about the status it shows. A change that a pin
+made, set or ended, is published at once; only a reading starts a wait.
+→ [record](adr/0108-the-wait-before-an-escalation-counts-what-a-node-shows.md)
+
+### ADR-0109 — A node says its children are complete, and one it no longer returns is removed
+
+A node in a result may say `children_complete=True`, and only then is a direct child it
+no longer returns removed, at once; a result that says nothing keeps what it leaves out.
+A removal takes the node and nothing kept about it: its readings stay until the ceiling
+forgets them, its history is the log's, and a pin on it — held against its path, making
+no node — is suspended until the node returns or the pin expires. Each node removed
+writes an event with the cause *removed*, the first run after a restart too, which the
+Events page can hide; a series no node stands for is listed on its check's History page.
+→ [record](adr/0109-a-node-says-its-children-are-complete.md)
+
+### ADR-0110 — What every node last showed is kept beside the log, and a wait counts from it
+
+A node's first reading in a process is counted from what the node last showed: a
+failure a restart finds waits like any other, one that stood stays published, and a
+wait under way at a stop goes on, its entry saying what a waiting node publishes.
+`events.json` carries, beside its rows, what every node shows, what its check last
+reported and when its period began — for a pin the tree did not see set, the pin's
+creation — so a quiet node writes no *undefined → …* at a restart and keeps its *since*.
+A file written before is read by its rows; an entry goes when no check covers its node.
+→ [record](adr/0110-what-every-node-last-showed-is-kept-beside-the-log.md)
+
+### ADR-0111 — A run's mark says how the run stood, and a grading may say it for the record alone
+
+A run's mark says how its reading stood: a short tick or a filled head for a pass, the
+warning's triangle, a hollow ring in the failure ink, and a bare mark in the muted ink
+for a run that kept no verdict, which claims nothing. Every run is drawn where it ran,
+and in a crowd a passing run's head gives way. A mark is for a record with an identity;
+a state has none. The summary counts the runs and what did not pass, by kind. A grading
+says how a run it does not show stood in `for_record`: the reading keeps that line's
+code and sentence, and no node sees it.
+→ [record](adr/0111-a-runs-mark-says-how-the-run-stood.md)
+
+### ADR-0112 — Our own stylesheet and scripts carry their content hash, and an open page notices when they moved
+
+Every URL built for one of our stylesheets or scripts carries eight hex digits of the
+file's SHA-256, and is answered as something a browser may keep for good; pictures keep
+their plain names. A page that refreshes itself states one digest of the whole set, the
+registered packages' assets among them, and every part it fetches states the server's:
+where they differ the page loads itself afresh — after an open editor closes, and once
+for a digest.
+→ [record](adr/0112-our-own-assets-carry-their-content-hash.md)
+
+### ADR-0113 — A measurement reads what its check kept, and a grading does not
+
+A check's measuring half reads the window of one of its own subjects, `kept(subject)`:
+every kept record as the store holds it, as copies, and no other check's. It is for
+deciding what to ask a source that keeps a history, and a record stays a fact about the
+world. It answers nothing where the check keeps no series or nothing bound it, and under
+the engine only while its own check is measuring: a grading reads what it is handed and
+fetches nothing. Additive; ADR-0087 decision 7 is amended.
+→ [record](adr/0113-a-measurement-reads-what-its-check-kept.md)
+
+### ADR-0114 — A curve is seen small beside its name, from zero, and the Series tab counts its curves
+
+A sparkline is the curve's own plot with nothing around it, on the curve's scale — from
+zero — and broken where the curve breaks; beside it stand the newest, lowest and highest
+value. The Series index draws one for each curve in a row's fold, writing no instant.
+A node's Series tab carries the number of curves its view draws, and none where it
+draws none.
+→ [record](adr/0114-a-curve-seen-small-and-the-series-tabs-count.md)
+
+### ADR-0115 — A Copy document says where it is from, when it was made and since when
+
+Every Copy document names the address of the page it was made from and the instant it
+was made, and each finding says since when it has stood. The tree's document has a head
+and a count, and is one also where nothing needs attention; an outline says what a
+branch itself holds — a pin, a status of its own, a stale reading — and a branch's
+document hands over what is beneath it. Copy is a tab on every node's views. A period
+is stated wherever there is one, and Copy Rich HTML copies through the copy event where
+a page has no clipboard interface.
+→ [record](adr/0115-a-copy-document-says-where-it-is-from-and-since-when.md)
+
+### ADR-0116 — A path with no node has one page, and it says what is known of the path
+
+`/status/<path>`, `/series/<path>`, `/history/<path>` and `/copy/<path>` with no node
+at the path answer `404` with one page, under the breadcrumb and without tabs; the part
+an open Status page refreshes is still `200`. The page says what the event log and the
+pins know: the removal, with when and why and a link to its rows on Events; every pin
+held against the path or beneath it, edited there by an admin; and the nearest node
+above that stands, where the kept readings of a removed subject are listed. Nothing is
+stored for it.
+→ [record](adr/0116-a-path-with-no-node-says-what-is-known-of-it.md)
+
+### ADR-0117 — A measure says where its axis reaches
+
+`axis_to` is a key of a measure's entry in `measures:` and in a type's
+`measure_defaults`: the value axis of its curve and its sparkline reaches there
+whatever the readings are below it, so two of one kind compare. A reading above it
+grows the axis as before; nothing is cut off or refused. No lower end is declarable,
+and a value that is not a positive number refuses the load. The library's own
+percents of a whole declare 100.
+→ [record](adr/0117-a-measure-says-where-its-axis-reaches.md)
+
+### ADR-0118 — A child a run names says so, and takes nothing declared for its name
+
+`CheckResult(dynamic=True)` says that a node is named by its source, or by what a
+deployment's configuration calls a thing, and not by its type's code. Nothing declared
+for a name reaches it — neither the type's `subnode_defaults` nor the deployment's
+`subnodes:` block — and its labels are the `title`, `about` and `show_when_quiet` its
+own result carries; `nodes.yaml`, by path, still beats them. It is said of one node and
+of none beneath it, a root ignores it, and a result that says nothing is read by its
+name as before.
+→ [record](adr/0118-a-child-a-run-names-takes-nothing-declared-for-its-name.md)
+
+### ADR-0119 — A wait that ends by its count writes a row
+
+The reading that completes a node's wait writes a row: the status the node shows,
+unmarked, by the cause `reached` — a chip on Events, where the page with *held back* off
+lists what alarmed and when. It begins no period and counts as no change. A wait that
+ends another way writes its own row or none, and one behind a shield none. The kept
+table says what a waiting node `publishes`, and a wait under way at a stop goes on after
+the restart, counted from its held row.
+→ [record](adr/0119-a-wait-that-ends-by-its-count-writes-a-row.md)
+
+### ADR-0120 — Every stored time is an instant
+
+A node's, an event's and a pin's times are instants held in UTC: read from one clock,
+spelled `…Z` by one function in both state files and the API, compared as instants, and
+ruff's `DTZ` rules refuse one built without a zone at the gate. A state file that
+carries a time without a zone is refused whole and starts empty, an older version's too:
+nothing migrates. A check type hands over a time with its zone; `spans.local_time`
+refuses one without. Options stay in `config/settings.yaml`: `timezone` and
+`time_format` write a page's times, and that zone reads a typed expiry and stamps the
+log, with its offset. → [record](adr/0120-every-stored-time-is-an-instant.md)

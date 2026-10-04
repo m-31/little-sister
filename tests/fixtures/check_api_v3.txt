@@ -73,3 +73,4 @@ little_sister.fetch Response
 little_sister.fetch fault_for
 little_sister.fetch fetch
 little_sister.fetch retry_after
+little_sister.series SeriesRecord

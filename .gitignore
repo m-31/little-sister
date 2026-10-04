@@ -38,3 +38,4 @@ xcuserdata/
 # not carry "uncommitted on <sha>" without contradicting itself the moment it landed —
 # it would also make every note a commit, and stand between a dirty tree and `prep`.
 /docs/handover.md
+/Claude outputs/

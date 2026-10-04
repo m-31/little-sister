@@ -1,7 +1,7 @@
 # ADR-0063 — A node may decline the density trade (`show_when_quiet`)
 
 - **Status:** Accepted
-- **Date:** 2026-09-20 (accepted 2026-08-22)
+- **Date:** 2026-10-04 (accepted 2026-08-22)
 - **Related:** [ADR-0056](0056-stable-useful-dashboard-flow.md) (the chip, the
   quiet-box fold, and the stability rule this must not disturb),
   [ADR-0012](0012-node-metadata.md) / [ADR-0017](0017-node-title.md) /
@@ -14,7 +14,9 @@
   [ADR-0062](0062-navigation-chrome-is-layout-behavior.md) (what stays the viewer's,
   and what was never a preference), [ADR-0019](0019-inspection-popover.md) (what a
   chip still offers), [ADR-0008](0008-json-output-api.md) (JSON envelope, unchanged
-  here), [ADR-0061](0061-decoration-is-not-a-label.md) (a client draws its own chips).
+  here), [ADR-0061](0061-decoration-is-not-a-label.md) (a client draws its own chips),
+  [ADR-0118](0118-a-child-a-run-names-takes-nothing-declared-for-its-name.md) (a
+  child that says a run names it takes the flag its own result carries).
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -81,7 +83,11 @@ the declaration mirrors the configuration key for key, and an aspect that is a
 roster *by construction* (an `ec2` inventory, one line per instance) is declared
 once in the type and inherited by every account of every installation — **>** the
 value on the child `CheckResult`, the **dynamic-child channel**, stamped by the run
-for a name no declaration could have anticipated **>** unstated.
+for a name no declaration could have anticipated **>** unstated. The deployment's
+block and the type's declared default reach a child by its name where the child says
+nothing ([ADR-0118](0118-a-child-a-run-names-takes-nothing-declared-for-its-name.md));
+a child that says a run names it, `dynamic=True`, takes the flag its own result
+carries, or none, with a `nodes.yaml` entry for its path still above it.
 
 The mechanism is the seed-once / fill-empty write the lattice already uses, and the
 field is a **tri-state** for the reason `order` is `None` rather than `0` when
@@ -106,12 +112,13 @@ through the same growing-common-fields contract every type already honors
 (ADR-0049's `**kwargs` rule). `Check.__init__` merges the block's stated values over
 the type's declared ones into one per-name map — exactly as it resolves the labels,
 and in the same place, so a token of behavior and a line of text ride one
-declaration — and the engine applies that map where it stores each child, by subnode
-**name at any depth**: one `disk: {show_when_quiet: true}` reaches every host's
-`disk` leaf, which is the per-account copy-paste ADR-0025 closed for labels. The
-map's value beats the one the child result carries, for the same reason the root
-ignores its result copy: a declaration — the deployment's file first, the type's map
-beneath it — beats what a run stamps.
+declaration — and the engine applies that map where it stores each child that says
+nothing, by subnode **name at any depth**: one `disk: {show_when_quiet: true}` reaches
+every host's `disk` leaf, which is the per-account copy-paste ADR-0025 closed for
+labels. The map's value beats the one the child result carries, for the same reason
+the root ignores its result copy: a declaration — the deployment's file first, the
+type's map beneath it — beats what a run stamps. A child that says a run names it,
+`dynamic=True`, takes the flag its own result carries, or none (ADR-0118).
 
 Two consequences are the point, and one is the price. A deployment can state the
 field for **any installed branch check** by editing its own YAML — a library upgrade

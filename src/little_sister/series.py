@@ -63,6 +63,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
+from little_sister import instants
 from little_sister.codes import StatusCode
 
 
@@ -342,6 +343,15 @@ class MemoryStore:
         return (written if written is not None else _NEVER,
                 key.type_name, key.mount, key.subject)
 
+    def subjects(self, type_name: str, mount: str) -> tuple[str, ...]:
+        """The subjects whose series the check of ``type_name`` on ``mount`` keeps,
+        in order — what a view that finds a node's series through its checks
+        reads (ADR-0097 decision 1)."""
+        with self._lock:
+            return tuple(sorted(key.subject for key in self._series
+                                if key.type_name == type_name
+                                and key.mount == mount))
+
     def held(self) -> int:
         """What every kept reading weighs together, in bytes — what the ceiling is
         measured against."""
@@ -421,12 +431,6 @@ def _continued(kept: list[_Kept], record: SeriesRecord) -> int | None:
 _NEVER = datetime.min.replace(tzinfo=UTC)
 
 
-def _stamp(moment: datetime) -> str:
-    """An instant as the series file writes it: UTC, with a ``Z`` — the spelling
-    the seam gives a record's own times (ADR-0082)."""
-    return moment.astimezone(UTC).isoformat().replace("+00:00", "Z")
-
-
 def _record_payload(record: SeriesRecord,
                     first_observed: datetime) -> dict[str, Any]:
     """One kept reading as the series file keeps it. ``state`` is written only
@@ -435,7 +439,7 @@ def _record_payload(record: SeriesRecord,
     record in its place across a restart."""
     item: dict[str, Any] = {
         "data": record.data,
-        "observed_at": _stamp(record.observed_at),
+        "observed_at": instants.stamp(record.observed_at),
         "identity": record.identity,
         "code": None if record.code is None else record.code.name,
         "texts": list(record.texts),
@@ -443,7 +447,7 @@ def _record_payload(record: SeriesRecord,
     if record.state:
         item["state"] = record.state
     if first_observed != record.observed_at:
-        item["first_observed_at"] = _stamp(first_observed)
+        item["first_observed_at"] = instants.stamp(first_observed)
     return item
 
 
@@ -487,7 +491,8 @@ def _parsed_record(raw: object, where: str) -> tuple[SeriesRecord, datetime]:
     data = raw.get("data")
     if not isinstance(data, Mapping):
         raise ValueError(f"{where}.data is not an object")
-    observed_at = _instant(raw.get("observed_at"), f"{where}.observed_at")
+    observed_at = instants.instant(raw.get("observed_at"),
+                                   f"{where}.observed_at")
     identity = raw.get("identity", "")
     if not isinstance(identity, str):
         raise ValueError(f"{where}.identity is not a string")
@@ -504,29 +509,8 @@ def _parsed_record(raw: object, where: str) -> tuple[SeriesRecord, datetime]:
         raise ValueError(f"{where}.texts is not a list of strings")
     first = raw.get("first_observed_at")
     first_observed = (observed_at if first is None
-                      else _instant(first, f"{where}.first_observed_at"))
+                      else instants.instant(first, f"{where}.first_observed_at"))
     code = None if code_name is None else StatusCode[code_name]
     return (SeriesRecord(dict(data), observed_at, identity, code, tuple(texts),
                          state),
             first_observed)
-
-
-def _instant(value: object, where: str) -> datetime:
-    """One time the file holds, in UTC — or :class:`ValueError`, which startup
-    reports as a load failure. That includes an instant its offset carries past
-    the edge of the calendar: the conversion raises ``OverflowError`` there, which
-    nothing that reads the file catches, so it would stop the instance where the
-    series should start empty."""
-    if isinstance(value, str):
-        try:
-            moment = datetime.fromisoformat(value)
-        except ValueError:
-            moment = None
-        if moment is not None and moment.tzinfo is not None:
-            try:
-                return moment.astimezone(UTC)
-            except OverflowError:
-                raise ValueError(
-                    f"{where} lies outside the years 1 to 9999 once it is read in "
-                    f"UTC: {value!r}") from None
-    raise ValueError(f"{where} is not an instant with an offset: {value!r}")

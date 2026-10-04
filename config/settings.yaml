@@ -16,10 +16,19 @@
 #
 # instance: web-frontend
 
-# Timezone for displayed timestamps (an IANA name, e.g. Europe/Berlin, UTC).
+# The time zone a time is written in (an IANA name, e.g. Europe/Berlin, UTC): every
+# time a page shows, an expiry an admin types without an offset, and the stamp of the
+# default log's lines, which carries the offset in force (ADR-0120):
+#
+#     2026-10-04 13:02:35,893 +0200
+#
+# Times are stored in UTC whatever stands here. Where the machine's clock shows another
+# time than this zone, now or from a day within the year ahead, the start says so once
+# in the log: gunicorn's own lines are stamped on the machine's clock. An unknown name
+# is said in the log and the default used; default Europe/Berlin.
 timezone: Europe/Berlin
 
-# strftime format for displayed timestamps.
+# strftime format for the times a page shows. The log's stamp keeps its own shape.
 time_format: "%Y-%m-%d %H:%M:%S"
 
 # Reason lines a dashboard card shows before a header chevron reveals the rest (the
@@ -38,10 +47,10 @@ branch_cap: 3
 # every pin straight to the /maintenance page).
 maintenance_cap: 5
 
-# The newest readings a node shows beneath its curves, where it stands for a thing a
-# check keeps a history of (`series_keep`, ADR-0092); every one is on the node's
-# History page. A non-negative integer; default 10 (0 shows the curves alone). A
-# check may state its own `reading_cap`, which wins for that check.
+# The newest readings of each history a check keeps (`series_keep`, ADR-0092) that a
+# node's Series view lists beneath its curves (ADR-0097); every one is on the History
+# page of the check's node. A non-negative integer; default 10 (0 shows the curves
+# alone). A check may state its own `reading_cap`, which wins for that check.
 reading_cap: 10
 
 # Where a dashboard card's status cluster (time, cue and status word) sits relative
@@ -150,8 +159,12 @@ series_limit: 8388608
 # claim that everything above it is broken, which is what a single failed check is not
 # proof of. Recovery is immediate and never waits, a different worse code restarts the
 # count, and a check that stops running altogether escalates on staleness regardless,
-# so the counter cannot hold a door shut on a check nobody is running. The count is
-# memory: a restart mid-escalation re-arms the whole delay. A positive integer;
+# so the counter cannot hold a door shut on a check nobody is running. What is counted
+# is what the node shows: a line in maintenance neither spends the wait nor restarts
+# it, and what a pin's set or end changes is published at once. The count is
+# memory, and a restart does not re-arm it: a failure a restart finds waits like any
+# other, one that had reached stays published, and a wait under way at the stop goes
+# on, counted from the reading its event records. A positive integer;
 # default 1, which publishes at once and is what every deployment had before there was
 # a counter. A check may state its own `escalate_after:` for the nodes it writes.
 escalate_after: 1

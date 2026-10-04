@@ -200,6 +200,33 @@ class SshCheckBase(Check):
         return TRANSPORT_RECORD_BYTES + (
             DEBUG_RECORD_BYTES if self.debug else 0)
 
+    def _say_it_failed(self, record: dict[str, Any], stdout: str, *,
+                       readable: bool, nothing: str) -> None:
+        """Say in the record's ``error`` that this reading did not measure — the key
+        a curve marks a failed reading by (ADR-0096 decision 4) — in the sentence
+        the grading has always written for it: the connection's own error where it
+        died, the script's failure where it exited non-zero, and ``nothing`` from
+        the host where it answered with nothing this type can read.
+
+        For a metrics type only: a command's exit code is the command's reading, not
+        its failure. The detail the sentence carries is not kept beside it as well,
+        so a failed reading weighs what it always did (ADR-0075). A profile the host
+        refused is no failed reading: it answered, and the grading's ``WARN`` says
+        why."""
+        if record.get("error") is not None:
+            return
+        exit_code = record.get("exit_code")
+        if exit_code != 0:
+            detail = record.pop("detail", None) or "no output"
+            sentence = f"ssh to {self._target} failed (exit {exit_code}): {detail}"
+        elif not readable and not record.get("profile_error"):
+            said = oneline(stdout) or "empty output"
+            sentence = f"{nothing} from {self._target}: {said}"
+        else:
+            return
+        record["error"] = clip(sentence, chars=TRANSPORT_TEXT_CHARS,
+                               budget=TRANSPORT_TEXT_BYTES)
+
     def _connection_failure(self, record: Mapping[str, Any]) -> str | None:
         """A reason when ssh couldn't deliver usable output — a dead transport
         (timeout / spawn) or a non-zero exit — else ``None``. Read out of the

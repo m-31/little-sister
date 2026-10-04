@@ -1,7 +1,7 @@
 # ADR-0082 — A line carries what it is about and what it read
 
 - **Status:** Accepted
-- **Date:** 2026-09-27 (accepted 2026-09-19)
+- **Date:** 2026-10-04 (accepted 2026-09-19)
 - **Related:** [ADR-0036](0036-addressable-reasons.md) (the entry, and the rule that
   it is not a node), [ADR-0042](0042-entries-carry-their-own-code.md) (the entry's
   own claim, and the value object this extends),
@@ -11,12 +11,14 @@
   [ADR-0002](0002-rlock-snapshot-synchronization.md) (why the stored record is a
   copy), [ADR-0018](0018-markdown-rendering.md) (escaping moves from the check's
   sentence to the renderer's field), [ADR-0006](0006-config-file-and-timezones.md)
-  (why a record's time carries an offset and the node's need not),
+  (the configured timezone and time format a record's time is shown in),
   [ADR-0075](0075-a-check-declares-what-it-costs.md) (declare-and-measure, the shape
   a later limit negotiation would take),
   [ADR-0093](0093-a-record-the-seam-refuses-costs-its-line.md) (a refused record costs
   its line or its reading, never the run), [ADR-0085](0085-a-measure-is-read-out-of-a-record.md)
-  (the node's measured record, shown beside the line's)
+  (the node's measured record, shown beside the line's),
+  [ADR-0120](0120-every-stored-time-is-an-instant.md) (the node's own stamp, an instant
+  too, and the offset the tree requires of every time it stores)
 - **Register:** [`../decisions.md`](../decisions.md)
 - **Contract:** [`../api/openapi.yaml`](../api/openapi.yaml) — `Entry`, from 2.1.0.
 
@@ -96,8 +98,9 @@ They are recognized at **any depth**. A record is a tree, and a time nested unde
 the run it belongs to is as much a time as one at the top; the first emitter's own
 times are nested exactly so.
 
-**An offset is required**, unlike the node's own stamp, which may be naive-local
-because one process owns it ([ADR-0006](0006-config-file-and-timezones.md)). A
+**An offset is required**, which is what the tree requires of every time it stores:
+the node's own stamp is an instant too, and not the machine's clock without a zone
+([ADR-0120](0120-every-stored-time-is-an-instant.md)). A
 record's time comes from somebody else's clock and is read by a viewer in a third
 zone, so a naive value is an instant only to whoever wrote it. A null is kept
 rather than refused: *this run has not ended* is a fact, and refusing it would push

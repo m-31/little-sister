@@ -20,17 +20,22 @@ process they started, says once what it abandoned, and makes the one final save.
 """
 from __future__ import annotations
 
+import copy
 import json
 import threading
 import time
 import traceback
 import zlib
+from collections import Counter
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from dataclasses import dataclass, replace
-from datetime import UTC, datetime, timedelta
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass, field, replace
+from datetime import date, datetime, timedelta
+from functools import partial
 from typing import Any
 
-from little_sister import process, self_report
+from little_sister import instants, process, self_report
 from little_sister.checks import (
     Check,
     CheckError,
@@ -46,12 +51,16 @@ from little_sister.checks.output import FAILURE_BYTES, failure_text
 from little_sister.codes import RANKED, worst_of
 from little_sister.config import config
 from little_sister.limits import (
+    MEMORY_LINE_MINUTES,
     EngineReport,
     LateRun,
     Limits,
+    Resident,
     SeriesHeld,
     Waiting,
     capacity,
+    resident_size,
+    rise_text,
 )
 from little_sister.logger import logger
 from little_sister.pool import DaemonPool
@@ -72,6 +81,7 @@ from little_sister.status import (
     effective_code,
     join_path,
     leaf_name,
+    split_path,
 )
 from little_sister.tree import StatusTree, stale_after_seconds, status_tree
 
@@ -272,6 +282,29 @@ def _measured(answer: Measurement | Sequence[Measurement]
     return tuple(answer)
 
 
+def _at_or_beneath(path: str, above: str) -> bool:
+    """Whether the node at ``path`` is ``above`` or one of its descendants — every
+    node is beneath the root, whose path is empty."""
+    return not above.strip("/") or path == above or path.startswith(
+        above.rstrip("/") + "/")
+
+
+def _beneath(path: str, above: str) -> str:
+    """``path`` relative to ``above``, which it is at or beneath: empty for the
+    node itself."""
+    return path[len(above):].strip("/")
+
+
+def _names_a_node_at_or_beneath(node: str, relative: str) -> bool:
+    """Whether a measure's ``node`` — relative to its check's node, a ``*`` for any
+    one segment — names a node at or beneath ``relative``, the node in question
+    relative to that same check's node."""
+    named = [segment for segment in node.split("/") if segment]
+    there = [segment for segment in relative.split("/") if segment]
+    return len(named) >= len(there) and all(
+        mine in (theirs, "*") for mine, theirs in zip(named, there, strict=False))
+
+
 def _failure_measurement(check: Check,
                          error: BaseException) -> tuple[Measurement, ...]:
     """The reading a check that **raised** leaves behind: that it could not get
@@ -364,15 +397,18 @@ def _with_lines(result: CheckResult, lines: Sequence[Entry]) -> CheckResult:
                    entries=result.members)
 
 
-def _refused_entries(path: str,
-                     result: CheckResult) -> Iterator[tuple[str, Entry]]:
+def _refused_entries(path: str, result: CheckResult, *, for_record: bool = False
+                     ) -> Iterator[tuple[str, Entry]]:
     """Every line of a result whose record the seam refused, beside the path of
-    the node it hangs on — the root's first, then each child's, depth first."""
-    for entry in result.reason_entries:
+    the node it hangs on — the root's first, then each child's, depth first:
+    the lines the nodes show, or, ``for_record``, the ones written for the record
+    alone (ADR-0111)."""
+    for entry in result.for_record if for_record else result.reason_entries:
         if entry.refused:
             yield path, entry
     for child in result.children:
-        yield from _refused_entries(join_path(path, child.name), child)
+        yield from _refused_entries(join_path(path, child.name), child,
+                                    for_record=for_record)
 
 
 def _say_refused(check: Check, lines: Mapping[int, Entry],
@@ -394,17 +430,34 @@ def _say_refused(check: Check, lines: Mapping[int, Entry],
             slug("refused", path, "line", entry.slug),
             plain(f"{path}: the record of the line {entry.slug} was refused: "
                   f"{entry.refused}"))
+    # A line written for the record alone is said of the reading whose record it
+    # carries (ADR-0111 decision 2): without the record it is said of none, no node
+    # shows it, and this is the one place that says so.
+    for path, entry in _refused_entries(check.path, result, for_record=True):
+        self_report.runtime.see(
+            slug("refused", path, "for-record", entry.slug),
+            plain(f"{path}: the record of the line {entry.slug}, written for the "
+                  f"record, was refused: {entry.refused}"))
 
 
 def _lines_of(result: CheckResult) -> list[tuple[Entry, StatusCode]]:
     """Every line a grading wrote, each beside the code of the node it hangs on —
     the root's first, then each child's, depth first, in the order written. A
-    line that declares no code of its own carries that node's (ADR-0042)."""
-    found: list[tuple[Entry, StatusCode]] = [
-        (entry, result.stored_code) for entry in result.reason_entries]
-    for child in result.children:
-        found.extend(_lines_of(child))
-    return found
+    line that declares no code of its own carries that node's (ADR-0042).
+
+    The lines written **for the record alone** follow, in the same order
+    (ADR-0111 decision 2): each carries its own code, which the seam saw to, and
+    stands behind every shown line, so that a reading both carry keeps what stood
+    on the node."""
+    shown: list[tuple[Entry, StatusCode]] = []
+    kept: list[tuple[Entry, StatusCode]] = []
+    pending = [result]
+    while pending:
+        node = pending.pop()
+        shown.extend((entry, node.stored_code) for entry in node.reason_entries)
+        kept.extend((entry, node.stored_code) for entry in node.for_record)
+        pending.extend(reversed(node.children))
+    return shown + kept
 
 
 def _line_of(measurement: Measurement, lines: Sequence[tuple[Entry, StatusCode]],
@@ -477,6 +530,18 @@ def _detail(result: CheckResult) -> str:
     return " — " + joined
 
 
+def _rose(before: Resident | None, after: Resident | None) -> tuple[int, int]:
+    """How far the size and the peak rose between two reads (ADR-0095): the size
+    only where both reads have one, nothing where either read failed. A fall is a
+    negative number here, and :func:`~little_sister.limits.rise_text` says none of
+    it."""
+    if before is None or after is None:
+        return 0, 0
+    size = (after.now - before.now
+            if after.now is not None and before.now is not None else 0)
+    return size, after.peak - before.peak
+
+
 def _abandoned(paths: Sequence[str], ended: int) -> str:
     """What the stop's one INFO line says about what it left behind (ADR-0088
     decision 4)."""
@@ -518,14 +583,14 @@ class _Scheduled:
     # When the scheduler handed the check to the pool (the engine's clock), so
     # the tick can see how long it has waited for a worker (ADR-0072).
     submitted_mono: float | None = None
-    # The in-flight run: its wall-clock start and the monotonic mate, set when
+    # The in-flight run: the instant it started and the monotonic mate, set when
     # execution begins (queue wait excluded), cleared when it finishes.
-    run_started_at: str | None = None
+    run_started_at: datetime | None = None
     run_started_mono: float | None = None
     # The last completed run attempt: when it started and how long it took —
     # a raising (or timed-out) run records its full wait; a secret-pinned check
     # never runs, so both stay None. Read under the engine lock.
-    last_run_at: str | None = None
+    last_run_at: datetime | None = None
     elapsed_seconds: float | None = None
     # The biggest record the last run carried, in the bytes of its JSON — the
     # measurement that stands beside `expected_record()` (ADR-0075 decision 8).
@@ -542,6 +607,14 @@ class _Scheduled:
     # retry configured: what the readiness report needs is what every check last
     # said, on every completion (ADR-0073). Read under the engine lock.
     last_stored: StatusCode | None = None
+    # What this check's runs are called in another run's log line (ADR-0095
+    # decision 4): its path, and its type beside it where another check shares the
+    # mount (ADR-0015). Set once, at construction.
+    name: str = ""
+    # Every other run in flight at any point of the current one, by name — what its
+    # log line names beside a rise (ADR-0095 decision 4). Written under the engine
+    # lock, by this run's start and by every run that starts while it is in flight.
+    beside: set[str] = field(default_factory=set)
 
 
 @dataclass(frozen=True)
@@ -562,11 +635,11 @@ class CheckInfo:
     type_name: str
     frequency_seconds: int
     running: bool
-    running_since: str | None
+    running_since: datetime | None
     running_seconds: float | None
-    next_run_at: str
+    next_run_at: datetime
     next_in_seconds: float
-    last_run_at: str | None
+    last_run_at: datetime | None
     elapsed_seconds: float | None
     retrying: bool = False
     retry_attempt: int = 0
@@ -608,7 +681,7 @@ class EngineInfo:
     ``series_projection`` what this configuration would need at today's estate,
     both as the last tick measured them, against ``series_limit``.
     """
-    started_at: str | None
+    started_at: datetime | None
     uptime_seconds: float
     max_workers: int
     check_count: int
@@ -624,17 +697,47 @@ class EngineInfo:
     series_held: int = 0
     series_projection: int = 0
     series_limit: int = 0
+    #: What the process held at the last tick (ADR-0095 decision 2): the size now,
+    #: ``None`` where the platform keeps none, and the peak, ``None`` before the
+    #: first tick — against the ``memory`` line's limit and what the machine gives
+    #: the process, each ``None`` where the machine could not say.
+    resident: int | None = None
+    resident_peak: int | None = None
+    memory_limit: int | None = None
+    machine_memory: int | None = None
 
 
 @dataclass(frozen=True)
 class SubjectSeries:
-    """A subject's series as the node that stands for it shows it (ADR-0092): the
-    check that keeps it — whose ``measures`` its curves are drawn by and whose
-    ``reading_cap`` may say how many rows show — and its readings, oldest first,
-    each where its series places it."""
+    """A subject's series as a page shows it (ADR-0092, ADR-0097): the check that
+    keeps it — whose ``measures`` its curves are drawn by and whose
+    ``reading_cap`` may say how many rows show — its readings, oldest first, each
+    where its series places it, and the subject they were read of."""
 
     check: Check
     readings: tuple[Placed, ...]
+    subject: str = ""
+
+
+#: The check whose measuring half this thread is in, or ``None`` — which is
+#: everywhere but inside a ``measure()`` the engine called (ADR-0113 decision 4). A
+#: context variable, as the lenient seam's is (ADR-0093 decision 5): the mark stands
+#: on the run's own thread, and a thread a check starts itself begins without it.
+_MEASURING: ContextVar[Check | None] = ContextVar(
+    "little_sister_measuring", default=None)
+
+
+@contextmanager
+def _measuring(check: Check) -> Iterator[None]:
+    """The measuring half of ``check``, for the duration: the one stretch in which
+    what the engine bound to it as ``kept()`` answers (ADR-0113 decision 4). Opened
+    around ``measure()`` and around nothing else — not around ``grade()``, which
+    reads what it is handed and fetches nothing (ADR-0086 decision 6)."""
+    token = _MEASURING.set(check)
+    try:
+        yield
+    finally:
+        _MEASURING.reset(token)
 
 
 class Engine:
@@ -648,7 +751,9 @@ class Engine:
                  heartbeat_report: str = "",
                  state: StateLayer | None = None,
                  limits: Limits | None = None,
-                 series: MemoryStore | None = None) -> None:
+                 series: MemoryStore | None = None,
+                 resident: Callable[[], Resident | None] = resident_size,
+                 wall: Callable[[], datetime] = instants.now) -> None:
         # The limits this engine measures itself against: what the deployment
         # stated in `settings.yaml`, or the constants in `limits.py` where it
         # said nothing — unless a caller composed its own and passed them.
@@ -695,6 +800,11 @@ class Engine:
         # pass runs later at startup and overrides this default). The children
         # take their labels on the tick, fill-only, so the same pass wins there.
         tree.set_about(HEARTBEAT_PATH, HEARTBEAT_ABOUT)
+        # The instance's own branch begins with this process (ADR-0099 decision
+        # 9): its first beat is a beginning the tree saw, where a check's first
+        # reading finds a node that was already what it shows. Said here, before
+        # the application restores anything, so a kept log is read the same way.
+        tree.set_process_branch(HEARTBEAT_PATH)
         # Tell the tree where each check writes its result root, so a container above
         # exactly one of them can publish that check's run time as its own observation
         # (ADR-0027). Registration only — a node still appears when its result does.
@@ -711,6 +821,18 @@ class Engine:
             tree.set_check_mount(check.path)
             if check.depends_on is not None:
                 tree.set_dependency(check.path, check.depends_on)
+            # What each check may read of what it kept (ADR-0113): its own series,
+            # by its own type and mount, and no other check's.
+            check.bind_kept(partial(self._kept, check))
+        # What a check's run may never remove (ADR-0109 decision 2): the nodes the
+        # other checks own (ADR-0015) — two may share a mount, each owning its own
+        # children — and the instance's own branch. Read once: a check's owned
+        # nodes are its configuration's.
+        self._not_its_own: dict[int, tuple[str, ...]] = {
+            id(check): tuple(sorted({HEARTBEAT_PATH, *(
+                join_path(owned) for other in checks if other is not check
+                for owned in other.owned_nodes())}))
+            for check in checks}
         self._clock = clock
         self._poll_interval = poll_interval
         now = clock()
@@ -726,13 +848,34 @@ class Engine:
                 check, now, stagger=_stagger(check),
                 retry_interval_seconds=retry_interval,
                 retry_attempts=retry_attempts))
+        # What a run is called beside another in the log (ADR-0095 decision 4): its
+        # path, and its type too where two checks share the mount (ADR-0015).
+        mounts = Counter(item.check.path for item in self._scheduled)
+        for item in self._scheduled:
+            item.name = (item.check.path if mounts[item.check.path] == 1
+                         else f"{item.check.path} ({item.check.type_name})")
+        # What the process holds, read by the tick's report, at a run's start and
+        # end and around the tick (ADR-0095); and the wall clock, an instant: when
+        # the engine started and a run did, when a reading was observed, when a
+        # check's next run is due and, read on the clock the log is stamped in, the
+        # ten-minute marks the memory line keeps. A clock that answers a time
+        # without a zone is refused where it is read (ADR-0120).
+        self._resident = resident
+        self._wall: Callable[[], datetime] = lambda: instants.utc(
+            wall(), "the engine's wall clock")
+        # The runs in flight at any point of the tick in progress, by name — ``None``
+        # between ticks (ADR-0095 decision 5). Under the engine lock.
+        self._tick_beside: set[str] | None = None
+        # The ten-minute mark the memory line was last written at, ``None`` before
+        # the first tick. The scheduler thread's alone.
+        self._memory_mark: tuple[date, int] | None = None
         self._lock = threading.Lock()
         self._stop = threading.Event()
         #: Whether :meth:`stop` has run — the second call says nothing.
         self._stopped = False
         self._executor: DaemonPool | None = None
         self._scheduler: threading.Thread | None = None
-        self._started_at: str | None = None
+        self._started_at: datetime | None = None
         self._started_monotonic: float | None = None
         # The engine's own lines (ADR-0072): what it measures against its limits
         # as it runs, recorded on the tick and read there. A `timeout` longer than
@@ -742,7 +885,7 @@ class Engine:
         # run, not a broken one.
         self._report = EngineReport(
             checks, workers=self._max_workers, poll_interval=poll_interval,
-            limits=self._limits, capacity=self._capacity)
+            limits=self._limits, capacity=self._capacity, resident=resident)
         for late in self._report.may_run_late:
             logger.warning(
                 "check %s: timeout %s is longer than its frequency %s, so a run "
@@ -784,30 +927,78 @@ class Engine:
         what the state layer writes to ``series.json`` and restores from it."""
         return self._series
 
-    def series_at(self, path: str, subject: str) -> tuple[SubjectSeries, ...]:
-        """The series the node at ``path`` shows while it stands for ``subject``
-        (ADR-0092 decision 6): every configured check mounted on that node that
-        keeps a series, each with that subject's readings, where it holds any.
+    def _kept(self, check: Check, subject: str) -> tuple[SeriesRecord, ...]:
+        """What ``check`` kept of ``subject``, for its measuring half (ADR-0113):
+        the window of that one series as the store holds it, oldest first — its
+        own, keyed by its type and its mount, so it reads no other check's. Each
+        record is handed with a ``data`` of its own: what a type does to what it
+        was handed never reaches what is kept. Nothing where the check keeps no
+        series, whatever a state file left behind; and nothing for no subject,
+        since a reading without one has no series.
 
-        Asked by the page and answered here because a series is named by the check
-        that took it — its type and its mount — and this is where the checks are.
-        Empty for an empty subject, for a node no check is mounted on, a child
-        below a mount included, and for a check that keeps none, whatever an older
-        series file left behind: the next sweep drops that, and nothing shows it
-        meanwhile.
-        """
-        if not subject:
+        **Only while that check is measuring** (decision 4): anywhere else — its
+        grading, another check's run, a thread the check started, no run at all —
+        the read is refused, whatever it would have found. A grading reads what it
+        is handed (ADR-0086 decision 6), and a refusal there is an exception like
+        any other in a grading: the node's ``ERROR`` (ADR-0040)."""
+        if _MEASURING.get() is not check:
+            raise CheckError(
+                "kept() answers only inside this check's measure(), on the thread "
+                "the engine called it on: a grading reads the records, the "
+                "configuration and the clock it is handed, and fetches nothing "
+                "(ADR-0086 decision 6, ADR-0113 decision 4)")
+        if check.series_keep < 1:
             return ()
+        return tuple(
+            replace(record, data=copy.deepcopy(dict(record.data)))
+            for record in self._series.window(
+                SeriesKey(check.type_name, check.path, subject)))
+
+    def series_near(self, path: str) -> tuple[SubjectSeries, ...]:
+        """Every series whose curves may stand at or beneath the node at ``path``
+        (ADR-0097 decision 1): each configured check that keeps a series and is
+        mounted at that node, beneath it or above it, with every subject its series
+        hold — the root's path, ``""``, reaching all of them.
+
+        Found through the checks rather than the tree, so a mount two checks share
+        shows both, though its node withholds the one subject a last writer would
+        claim for both (ADR-0044). Which curve stands where is the page's: a check
+        above the node is here only because one of its measures may name a node at
+        or beneath it."""
+        where = join_path(path)
         found: list[SubjectSeries] = []
         for item in self._scheduled:
             check = item.check
-            if check.path != path or check.series_keep < 1:
+            if check.series_keep < 1 or not (
+                    _at_or_beneath(check.path, where)
+                    or _at_or_beneath(where, check.path)):
                 continue
-            readings = self._series.placed(
-                SeriesKey(check.type_name, check.path, subject))
-            if readings:
-                found.append(SubjectSeries(check, readings))
+            for subject in self._series.subjects(check.type_name, check.path):
+                readings = self._series.placed(
+                    SeriesKey(check.type_name, check.path, subject))
+                if readings:
+                    found.append(SubjectSeries(check, readings, subject))
         return tuple(found)
+
+    def curves_may_stand(self, path: str) -> bool:
+        """Whether a curve can stand at or beneath the node at ``path``, as the
+        configuration says (ADR-0097 decision 3): a check keeps a series there or
+        beneath it, or above it with a measure naming a node there — a ``*``
+        naming any. Read from the checks and never from the readings, so a view's
+        tab does not come and go with them."""
+        where = join_path(path)
+        for item in self._scheduled:
+            check = item.check
+            if check.series_keep < 1:
+                continue
+            if _at_or_beneath(check.path, where):
+                return True
+            if _at_or_beneath(where, check.path) and any(
+                    _names_a_node_at_or_beneath(measure.node,
+                                                _beneath(where, check.path))
+                    for measure in check.measures.values()):
+                return True
+        return False
 
     def series_keep(self, key: SeriesKey) -> int:
         """How many readings the series ``key`` may keep under this configuration:
@@ -820,7 +1011,7 @@ class Engine:
         now = self._clock()
         # The schedule runs on the monotonic clock; project each next-due onto
         # the wall clock once, here, so the system page can show a time of day.
-        wall = datetime.now()
+        wall = self._wall()
         # What each check declared, read once from the load-time arithmetic
         # rather than by asking the checks again: a declaration is computed from
         # configuration and cannot change while the process runs.
@@ -842,9 +1033,8 @@ class Engine:
                           running_seconds=(now - item.run_started_mono
                                            if item.run_started_mono is not None
                                            else None),
-                          next_run_at=(wall + timedelta(
-                              seconds=max(0.0, item.next_due - now))
-                          ).isoformat(),
+                          next_run_at=wall + timedelta(
+                              seconds=max(0.0, item.next_due - now)),
                           next_in_seconds=max(0.0, item.next_due - now),
                           last_run_at=item.last_run_at,
                           elapsed_seconds=item.elapsed_seconds,
@@ -864,8 +1054,9 @@ class Engine:
                   if self._started_monotonic is not None else 0.0)
         # The series as the last tick measured them, not measured again here: the
         # page then says what the engine's own `series` lines say, and a poll of
-        # it walks no store.
+        # it walks no store. The process's own figures likewise (ADR-0095).
         series = self._report.series
+        memory = self._report.memory
         return EngineInfo(
             started_at=self._started_at, uptime_seconds=uptime,
             max_workers=self._max_workers, check_count=len(self._scheduled),
@@ -877,7 +1068,11 @@ class Engine:
             record_limit=self._limits.record_limit,
             series_held=series.held if series is not None else 0,
             series_projection=series.projection if series is not None else 0,
-            series_limit=self._limits.series_limit)
+            series_limit=self._limits.series_limit,
+            resident=memory.now if memory is not None else None,
+            resident_peak=memory.peak if memory is not None else None,
+            memory_limit=self._limits.memory_limit,
+            machine_memory=self._limits.machine_memory)
 
     def start(self) -> None:
         """Start the scheduler and worker pool (idempotent).
@@ -890,7 +1085,7 @@ class Engine:
         """
         if self._scheduler is not None:
             return
-        self._started_at = datetime.now().isoformat()
+        self._started_at = self._wall()
         self._started_monotonic = self._clock()
         # The engine's own pool (ADR-0088 decision 1): daemon threads the
         # interpreter does not join, so a run in flight never holds the exit.
@@ -935,6 +1130,7 @@ class Engine:
             # decision 4).
             self._tree.note_stop()
             self._state.shutdown()
+        self._log_memory_at_stop()
 
     def run_once(self) -> None:
         """Run every check once, synchronously, and upsert results.
@@ -993,12 +1189,55 @@ class Engine:
                      "this instance runs no more checks and serves the last view it "
                      "had; %s", holder, _abandoned(abandoned, ended))
         self._guarded_tick(submit=False)
+        self._log_memory_at_stop()
 
     def _tick(self, *, submit: bool = True) -> None:
         now = self._clock()
+        # The tick is measured as a run is (ADR-0095 decision 5): what rose across
+        # it, whether it ran the state layer's interval save, and every run in
+        # flight at any point of it — the ones going now, and the ones that start
+        # before it ends, which add themselves.
+        with self._lock:
+            self._tick_beside = {item.name for item in self._scheduled
+                                 if item.run_started_mono is not None}
+        held_before = self._resident()
         if submit:
             self._submit_due(now)
-        self._publish(now)
+        saved = self._publish(now)
+        held_after = self._resident()
+        with self._lock:
+            beside, self._tick_beside = tuple(self._tick_beside or ()), None
+        during = "during the tick" + (", including a state save" if saved else "")
+        rose = rise_text(*_rose(held_before, held_after), beside, during=during)
+        if rose:
+            logger.info("engine: %s", rose)
+        self._log_memory()
+
+    def _log_memory(self) -> None:
+        """The process's figures in the log (ADR-0095 decision 3): at the first
+        tick, as the baseline, and then on the first tick past each mark of
+        :data:`~little_sister.limits.MEMORY_LINE_MINUTES` of the clock the log is
+        stamped in, which is the configured zone's (ADR-0120 decision 9): the
+        engine's instant is read on it. Read from what this tick's report
+        recorded; the scheduler thread's alone, so the mark needs no lock."""
+        wall = self._wall().astimezone(config.tzinfo)
+        mark = (wall.date(), (wall.hour * 60 + wall.minute) // MEMORY_LINE_MINUTES)
+        if mark == self._memory_mark:
+            return
+        first = self._memory_mark is None
+        self._memory_mark = mark
+        figures = self._report.memory_figures(self._report.memory)
+        if figures is not None:
+            logger.info("engine: memory%s — %s", " at the start" if first else "",
+                        figures)
+
+    def _log_memory_at_stop(self) -> None:
+        """The last memory line (ADR-0095 decision 3), read fresh when the engine
+        stops — after the stop's save, so that on a platform that keeps a peak it is
+        the highest the process reached."""
+        figures = self._report.memory_figures(self._resident())
+        if figures is not None:
+            logger.info("engine: memory at the stop — %s", figures)
 
     def _submit_due(self, now: float) -> None:
         executor = self._executor
@@ -1017,7 +1256,7 @@ class Engine:
                 item.retrying = False
                 executor.submit(self._execute, item)
 
-    def _publish(self, now: float) -> None:
+    def _publish(self, now: float) -> bool:
         # Retention on every tick (ADR-0087): each series held to its check's
         # count, a series no configured check keeps dropped — which is how a
         # series file written under another configuration meets this one — and,
@@ -1077,9 +1316,11 @@ class Engine:
         # Expire maintenance pins past their window (ADR-0014); a real transition,
         # so the next check refills the node.
         self._tree.sweep_expired()
-        # The kept state files, at most once per interval (ADR-0071).
+        # The kept state files, at most once per interval (ADR-0071) — and whether
+        # this tick ran that save, which the tick's own line says (ADR-0095).
         if self._state is not None:
-            self._state.tick()
+            return self._state.tick()
+        return False
 
     def _sweep_series(self) -> Swept | None:
         """One sweep of the series under this configuration's retention and the
@@ -1166,8 +1407,22 @@ class Engine:
         # flight, which an injected clock could not do against `time.monotonic`.
         started = self._clock()
         with self._lock:
-            item.run_started_at = datetime.now().isoformat()
+            item.run_started_at = self._wall()
             item.run_started_mono = started
+            # Who else is in flight (ADR-0095 decision 4): every run this one
+            # overlaps at any point names it, and it names them — here for the runs
+            # already going, there for the ones that start after it; and the tick
+            # in progress, likewise.
+            item.beside = set()
+            for other in self._scheduled:
+                if other is not item and other.run_started_mono is not None:
+                    other.beside.add(item.name)
+                    item.beside.add(other.name)
+            if self._tick_beside is not None:
+                self._tick_beside.add(item.name)
+        # What the process holds as the run starts, against what it holds as it
+        # ends: what rose across it is its log line's (ADR-0095 decision 4).
+        held_before = self._resident()
         # **The two halves, in order** (ADR-0086): the check reads the world, then
         # says what it read means. `measured` is not `measurements` being empty —
         # a run that measured nothing on purpose is a reading too — it is whether
@@ -1199,14 +1454,16 @@ class Engine:
                 # marked rather than raised, and costs its line or its reading
                 # instead of the run. The engine's own records — the failure
                 # record below among them — are built outside, strictly.
-                with lenient_records(refusals):
+                # The measuring half alone may read what the check kept (ADR-0113
+                # decision 4): the mark closes before the grading is called.
+                with lenient_records(refusals), _measuring(check):
                     answer = check.measure()
                 measurements = _measured(answer)
                 measured = True
                 # The clock is handed over rather than taken, so the grading is
                 # replayable over old records: same inputs, same verdict — and
                 # the instant it is handed is the reading's own `observed_at`.
-                observed_at = datetime.now(UTC)
+                observed_at = self._wall()
                 # A reading whose record was refused is kept out of the grading,
                 # which may read only records (ADR-0086 decision 6), and is the
                 # engine's to report.
@@ -1246,9 +1503,10 @@ class Engine:
             # run did get right.
             if not measured:
                 measurements = _failure_measurement(check, error)
-                observed_at = datetime.now(UTC)
+                observed_at = self._wall()
         finally:
             elapsed = self._clock() - started
+            held_after = self._resident()
             with self._lock:
                 item.running = False
                 if ran:
@@ -1258,13 +1516,26 @@ class Engine:
                     item.elapsed_seconds = elapsed
                 item.run_started_at = None
                 item.run_started_mono = None
+                beside = tuple(item.beside)
+                item.beside = set()
         if self._stop.is_set():
             # Abandoned by the stop (ADR-0088 decision 1): what a run delivers
             # after it is dropped — neither recorded nor saved.
             return
         elapsed_ms = elapsed * 1000
-        logger.info("check %s: %s (%.0f ms)%s", check.path,
-                    result.stored_code.name, elapsed_ms, _detail(result))
+        # What rose while it ran, the process's, inside the parentheses — before
+        # the reasons, whose truncation cannot reach it (ADR-0095 decision 4).
+        rose = rise_text(*_rose(held_before, held_after), beside,
+                         during="while it ran")
+        # The node's own code, and what the run rolls up to beside it wherever the
+        # two differ (ADR-0099 decision 5): a root that declares nothing above
+        # children that grade said `UNDEFINED` on every run, full disk or not.
+        rolled = _rolled_up(result)
+        logger.info("check %s: %s%s (%.0f ms%s)%s", check.path,
+                    result.stored_code.name,
+                    "" if rolled is result.stored_code
+                    else f", rolls up to {rolled.name}",
+                    elapsed_ms, f"; {rose}" if rose else "", _detail(result))
         _say_refused(check, refused, result)
         with self._lock:
             # Every completion, whatever it stored: this is what `outcomes` reads
@@ -1326,8 +1597,8 @@ class Engine:
         else:
             with self._lock:
                 next_due = item.next_due
-            next_run_at = (datetime.now() + timedelta(
-                seconds=max(0.0, next_due - self._clock()))).isoformat()
+            next_run_at = self._wall() + timedelta(
+                seconds=max(0.0, next_due - self._clock()))
         self._tree.set_run_facts(check.path,
                                  wall_seconds=elapsed if ran else None,
                                  next_run_at=next_run_at)
@@ -1459,7 +1730,8 @@ class Engine:
         field: a resolved ``title`` and a stamped ``about`` coexist on one node,
         because that is how every other precedence in this pair works. The result's
         label is read where that map is silent for the name — the dynamically named
-        child, which no declaration could have anticipated.
+        child — and, whatever the map holds, for a child that says a run names it
+        (the last paragraph).
 
         ``order`` (ADR-0055) fills an unset field the same way but is read on the
         **root too**, deliberately unlike the labels: a rank is not identity, and
@@ -1482,18 +1754,28 @@ class Engine:
         still beats both. Nothing is coerced on the way: a stated ``False``
         travels as ``False``, because here it is a statement and not the "said
         nothing" that ``order``'s zero is.
+
+        **A child a run names takes nothing declared for its name** (ADR-0118).
+        Both maps are keyed by the names a type always emits, and a subject's node
+        is named by its source (ADR-0106): a function called ``batch`` is not the
+        ``batch`` aspect. A result that says ``dynamic`` is therefore read from
+        itself alone — its own ``title``, ``about`` and ``show_when_quiet`` — and
+        neither map is asked for its name. It is said of that node and of none
+        beneath it, and ``nodes.yaml``, seeded by path, still beats it.
         """
         description = (check.description or None) if is_root else result.description
         config = (check.config_summary() or None) if is_root else result.config
         # One guard per field, below: this lookup is harmless on a root (whose
         # name is a node path's last segment like any other) and the root's
         # exemption is stated where it is applied, once per label.
-        labels: Mapping[str, str] = check.subnode_labels.get(leaf_name(path), {})
+        labels: Mapping[str, str] = (
+            {} if result.dynamic
+            else check.subnode_labels.get(leaf_name(path), {}))
         about = None if is_root else (labels.get("about") or result.about or None)
         title = None if is_root else (labels.get("title") or result.title or None)
         order = result.order or None
-        declared = None if is_root else check.subnode_show_when_quiet.get(
-            leaf_name(path))
+        declared = (None if is_root or result.dynamic
+                    else check.subnode_show_when_quiet.get(leaf_name(path)))
         show_when_quiet = None if is_root else (
             declared if declared is not None else result.show_when_quiet)
         # The pre-normalized entries travel, not the raw input: the check has
@@ -1528,6 +1810,28 @@ class Engine:
                                   else dict(measurement.record)))
         for child in result.children:
             self._store(join_path(path, child.name), child, check)
+        # **What this node no longer returns is removed, where it says that its
+        # children are complete** (ADR-0109 decisions 1 and 2) — after they are
+        # written, so the tree holds every child the run returned, and never a
+        # node another check owns. A result that says nothing leaves every child
+        # where it is. A child named by several segments stands beneath a node the
+        # tree made for its first, and that node is what the run returned here.
+        if result.children_complete:
+            returned = {segments[0] for child in result.children
+                        if (segments := split_path(child.name))}
+            gone = self._tree.prune(
+                path, returned, protect=self._not_its_own.get(id(check), ()))
+            # One line for each child that went, however much went with it.
+            depth = len(split_path(path))
+            beneath: dict[str, int] = {}
+            for left in gone:
+                top = join_path(*split_path(left)[:depth + 1])
+                beneath[top] = beneath.get(top, 0) + (left != top)
+            for top, count in beneath.items():
+                logger.info(
+                    "check %s: %s is no longer reported, and was removed%s",
+                    check.path, top,
+                    f" with {count} node(s) beneath it" if count else "")
 
 
 def create_engine(config_dir: str | None = None, *,

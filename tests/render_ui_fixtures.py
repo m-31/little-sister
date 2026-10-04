@@ -24,7 +24,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from datetime import datetime
+from datetime import UTC, datetime
 from html import escape
 from pathlib import Path
 
@@ -48,18 +48,18 @@ from flask import render_template, session  # noqa: E402
 from little_sister import app as app_module  # noqa: E402
 from little_sister.app import (  # noqa: E402
     MAX_DEPTH,
+    _containers,
+    _copy_origin,
     _copy_style,
     _maintenance_rows,
     _maintenance_view,
+    _node_curves,
     _node_meta_map,
-    _series_views,
+    _series_tab,
     _split_heartbeat,
     app,
 )
-from little_sister.copy_status import (  # noqa: E402
-    format_copy_markdown,
-    format_node_markdown,
-)
+from little_sister.copy_status import format_tree_markdown  # noqa: E402
 from little_sister.render import render_markdown  # noqa: E402
 from tests.ui_fixtures import FIXTURES, FIXTURES_BY_NAME, Fixture  # noqa: E402
 
@@ -88,7 +88,7 @@ def render_page(fixture: Fixture) -> str:
     # the harness renders the strip exactly as a live request does.
     node, heartbeat = _split_heartbeat(node)
     node_pins, entry_pins, maintenance_ancestors = _maintenance_view(
-        node, datetime.now())
+        node, datetime.now(UTC))
     maintenance_rows = _maintenance_rows(node_pins, entry_pins)
     path = f"/status/{fixture.branch}" if fixture.branch else "/status"
     previous_error = app_module.engine_error
@@ -103,15 +103,8 @@ def render_page(fixture: Fixture) -> str:
             session["firstname"] = "Harness"
             session["admin"] = True
             template = "check.html" if fixture.detail else "status.html"
-            # The detail page's own hand-off, from the fixture's snapshot, so the
-            # sheet shows the real buttons and the real document behind them
-            # rather than an empty pair. The overview page has neither.
-            copy_markdown = (format_node_markdown(node, _copy_style())
-                             if fixture.detail else "")
             return render_template(
                 template,
-                copy_markdown=copy_markdown,
-                copy_html_text=str(render_markdown(copy_markdown)),
                 username="harness",
                 firstname="Harness",
                 node=node,
@@ -125,6 +118,10 @@ def render_page(fixture: Fixture) -> str:
                 is_admin=True,
                 maintenance_default=app_module.config.maintenance_default_expiry,
                 maintenance_timezone=app_module.config.timezone,
+                # What a pin's editor in a card says and comes back to, as the
+                # view hands them over.
+                here=path,
+                containers=_containers(node),
                 heartbeat=heartbeat,
                 node_meta=_node_meta_map(node) | _node_meta_map(heartbeat),
                 rendered_at=_RENDERED_AT,
@@ -142,9 +139,10 @@ def render_page(fixture: Fixture) -> str:
                 since=None,
                 focus="",
                 focus_orphan=None,
-                # What the node read over time (ADR-0092), where it stands for a
-                # subject a fixture's engine keeps.
-                series=_series_views(node) if fixture.branch else (),
+                # The curves that stand on the node (ADR-0097 decision 2), where a
+                # fixture's engine keeps a series, and the views beside this one.
+                node_curves=_node_curves(node) if fixture.branch else None,
+                view="status", series_tab=_series_tab(fixture.branch),
             )
     finally:
         app_module.engine_error = previous_error
@@ -153,17 +151,19 @@ def render_page(fixture: Fixture) -> str:
 
 def render_copy_page() -> str:
     """Render the Copy page with the realistic multi-front incident fixture."""
-    markdown = format_copy_markdown(
-        FIXTURES_BY_NAME["wall_incident"].build(), _copy_style())
-    rich = render_markdown(markdown)
     with app.test_request_context("/copy"):
+        root = FIXTURES_BY_NAME["wall_incident"].build()
+        markdown = format_tree_markdown(root, _copy_style(), _copy_origin())
+        rich = render_markdown(markdown)
         session["username"] = "harness"
         session["firstname"] = "Harness"
         session["admin"] = True
+        # in the root's band, as the route draws the tree's page (ADR-0115 decision 7)
         return render_template(
             "text.html", username="harness", firstname="Harness",
             copy_markdown=markdown, copy_html=rich,
-            copy_html_text=str(rich), copy_preview=True)
+            copy_html_text=str(rich), copy_kind="tree",
+            node=root, branch="", view="copy")
 
 
 def _localize_static(html: str, out_dir: Path) -> str:

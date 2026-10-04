@@ -1,7 +1,7 @@
 # ADR-0094 — A restart is no transition, and the instance's own node records the gap
 
 - **Status:** Accepted
-- **Date:** 2026-09-27
+- **Date:** 2026-10-04 (accepted 2026-09-27)
 - **Related:** [ADR-0071](0071-what-a-restart-keeps-is-a-directory-of-files.md) (the
   restored log, and the consequence this reverses),
   [ADR-0001](0001-in-process-threaded-engine.md) (the bound on the log a restart
@@ -16,7 +16,12 @@
   [ADR-0039](0039-status-rollup-semantics.md) (the Time card's rule for a container,
   which the history page now follows),
   [ADR-0083](0083-a-node-may-wait-before-it-escalates.md) (decision 7, the changes a
-  node counts)
+  node counts), [ADR-0099](0099-a-status-that-still-holds-says-since-when.md)
+  (decision 1, the Time card's *since* for a period that still holds),
+  [ADR-0107](0107-an-event-is-a-change-of-what-a-node-shows.md) (decision 5, the two
+  things a first reading is compared with, and the end of a pin that ran out during
+  the gap), [ADR-0110](0110-what-every-node-last-showed-is-kept-beside-the-log.md)
+  (the entry kept beside the log for every node, and decision 6, a pin's creation)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -46,14 +51,25 @@ running is its fact, and a subject's history is the wrong place to say it.
 
 ### 1. The first reading after a restart is compared with what the log last recorded
 
-The tree keeps, from the restored log, each node's last **reading**: the `new` of its
-last event, passing over an admin's pin set — an unmarked event to `MAINTENANCE`, which
-moves what the node shows and not what it read. A node's **first write in this process**
-is compared with that rather than with the `UNDEFINED` a restart leaves. A reading that
-is what it was keeps its period across the restart; any other — `UNDEFINED` included,
-the case that showed it — is a transition from the old code, dated by the reading that
-saw it, as every reading's change is. Where the log holds nothing for a node, its first
-reading is a first reading, as before.
+The tree keeps what the restored log last recorded for each node, and a node's **first
+write in this process** is compared twice
+([ADR-0107](0107-an-event-is-a-change-of-what-a-node-shows.md)) — what the node shows
+with what the log last showed, and what its check reports with what the log says it
+last reported — rather than with the `UNDEFINED` a restart leaves. A reading that is
+what it was keeps its period across the restart; any other — `UNDEFINED` included, the
+case that showed it — is a transition from the old code, dated by the reading that saw
+it, as every reading's change is.
+
+What every node last showed and last reported is kept beside the log, an entry for each
+node ([ADR-0110](0110-what-every-node-last-showed-is-kept-beside-the-log.md)), so the
+rule holds for a node the log has no row of: its first reading is compared with that
+entry, and a restart writes it no *undefined → …*. A log that carries no entries is
+read by its rows. An event says its cause and what the check reported, so what a check
+last reported is read from the node's last event, and worked out from codes only for a
+log written before events said so: the `new` of the node's last event, passing over an
+admin's pin set — an unmarked event to `MAINTENANCE`, which moves what the node shows
+and not what it read. Where nothing is kept of a node, its first reading is a first
+reading, as before.
 
 Only a node's first write reads it. A log adopted in a running process (ADR-0077)
 arrives where the nodes are written, and changes nothing about how they compare.
@@ -61,9 +77,11 @@ arrives where the nodes are written, and changes nothing about how they compare.
 ### 2. A pin in force before the restart writes nothing at its replay
 
 The pins' replay at startup compares with what the restored log last *showed* for the
-node — the code of its current period, as the history reads it. A pin whose
-`MAINTENANCE` period the log holds continues it; one whose set the log no longer holds —
-evicted by the bound, or a log that was lost — records its set, as today.
+node — the code of its current period, as the history reads it — or, for a node the log
+has no row of, with its entry. A pin whose `MAINTENANCE` period the log or the entry
+holds continues it; one whose set neither holds — a log that was lost — records its set,
+as today, dated the start; the period that row begins is dated by the pin's creation,
+which the store keeps (ADR-0110 decision 6).
 
 ### 3. A change seen across a restart is not marked
 
@@ -72,6 +90,9 @@ one period late, and a restart's gap differs from it in size only. `Event` does 
 change, and the one sentence that defines its one marker — *an unmarked event is one
 that alarmed* (ADR-0032) — is not bent to carry a second meaning. Where a reader needs
 to know whether the instance was watching, it asks the instance's own node (decision 4).
+
+A pin that ran out during the gap ends at the node's first reading, and a branch's at
+its own expiry (ADR-0107).
 
 ### 4. The instance's own node records the gap
 
@@ -117,7 +138,9 @@ reads it.
   on `/little-sister`, and one per pin whose set the log lost — where it wrote one per
   node.
 - **A node's Time card reaches back across a restart**: a node reading what it read
-  before says *from* the moment its period began, before the restart.
+  before says *since* the moment its period began, before the restart, and states its
+  latest reading on a line of its own
+  ([ADR-0099](0099-a-status-that-still-holds-says-since-when.md)).
 - **A change across a restart counts as the change it is**: `changes`, which counts
   transitions between `OK`, `WARN` and `ERROR` (ADR-0083 decision 7), counts an `OK →
   ERROR` seen by the first reading after a restart, which it could not while that

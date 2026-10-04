@@ -10,14 +10,17 @@ import json
 import os
 import stat
 import tempfile
+import tracemalloc
 import unittest
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest import TestCase
 
 from little_sister.codes import StatusCode
 from little_sister.lease import Lease
 from little_sister.reasons import Entry
-from little_sister.state import BACKUP_SUFFIX, EVENTS_FILE, StateLayer
+from little_sister.state import BACKUP_SUFFIX, EVENTS_FILE, SERIES_FILE, StateLayer
+from little_sister.status import HEARTBEAT_PATH
 
 
 class _Clock:
@@ -149,6 +152,29 @@ class KeptFileTests(TestCase):
             clock.now += 1
             state.tick()
             self.assertNotEqual(state.path(EVENTS_FILE).stat().st_ino, first)
+
+    def test_a_save_leaves_no_copy_of_the_file_s_text_in_the_process(self):
+        """The layer knows an unchanged state by what it last wrote, and what it
+        keeps of that is a digest, never the text: a kept file's text — the
+        series' megabytes among them — held for the life of the process only to be
+        compared with the next one is memory the process carries for nothing.
+        Measured, as the process holds it after the save."""
+        payload = {"series": [f"reading {number:06d} " + "x" * 90
+                              for number in range(20_000)]}
+        with tempfile.TemporaryDirectory() as directory:
+            state = StateLayer(directory, clock=_Clock())
+            state.keep(SERIES_FILE, lambda: payload)
+            tracemalloc.start()
+            try:
+                before, _peak = tracemalloc.get_traced_memory()
+                state.flush()
+                after, _peak = tracemalloc.get_traced_memory()
+            finally:
+                tracemalloc.stop()
+            size = state.path(SERIES_FILE).stat().st_size
+            self.assertGreater(size, 2 * 1024 ** 2)
+            self.assertLess(after - before, size // 100)
+            self.assertEqual(json.loads(state.path(SERIES_FILE).read_text()), payload)
 
     def test_flush_writes_what_changed_regardless_of_the_interval(self):
         # The graceful-shutdown write.
@@ -314,7 +340,8 @@ class RestoreAtStartupTests(TestCase):
         from little_sister.tree import StatusTree
         state = StateLayer(directory)
         MaintenanceStore(state).save({"/x": MaintenanceEntry(
-            "planned", "2026-01-01T00:00:00", "2999-01-01T00:00:00", "ada")})
+            "planned", datetime(2026, 1, 1, tzinfo=UTC),
+            datetime(2999, 1, 1, tzinfo=UTC), "ada")})
         written = StatusTree()
         written.upsert("/x", StatusCode.OK)
         written.upsert("/x", StatusCode.ERROR, "down")
@@ -342,6 +369,64 @@ class RestoreAtStartupTests(TestCase):
                 state.path(EVENTS_FILE).read_text())["events"]]
             self.assertEqual(codes[-1], "OK")
             self.assertGreater(len(codes), 2)
+
+    def _pinned_yesterday(self, directory: str) -> StateLayer:
+        """Yesterday's pins: on a check's node and on a path that no check covers,
+        and on the instance's own line — its node, a child of it, and a line of
+        another child — each with a line's pin beside the node's."""
+        from little_sister.maintenance import MaintenanceEntry, MaintenanceStore
+        state = StateLayer(directory)
+        pin = MaintenanceEntry("planned", datetime(2026, 1, 1, tzinfo=UTC),
+                               datetime(2999, 1, 1, tzinfo=UTC), "ada")
+        MaintenanceStore(state).save(
+            {"/x": pin, "/gone": pin, HEARTBEAT_PATH: pin,
+             f"{HEARTBEAT_PATH}/keeper": pin},
+            {(f"{HEARTBEAT_PATH}/state", "keeper-behind"): pin,
+             ("/x", "line"): pin, ("/gone", "line"): pin})
+        return state
+
+    def test_a_pin_on_the_instances_own_line_is_no_orphan(self):
+        # the instance's own node and its children are no check's, so a pin on one
+        # of them, a node's or a line's, was restored and then reaped at every
+        # start, the log naming it an orphaned pin
+        from little_sister.maintenance import MaintenanceStore
+        state_child = f"{HEARTBEAT_PATH}/state"
+        keeper = f"{HEARTBEAT_PATH}/keeper"
+        with tempfile.TemporaryDirectory() as directory:
+            state = self._pinned_yesterday(directory)
+            with self.assertLogs(level="INFO") as logged:
+                self._app._restore_state(_Roots("/x"), state)  # type: ignore[arg-type]
+            for path in (HEARTBEAT_PATH, keeper):
+                with self.subTest(path=path):
+                    held = self.tree.maintenance_entry(path)
+                    assert held is not None, path
+                    self.assertEqual(held.reason, "planned")
+            self.assertEqual(sorted(self.tree.entry_maintenance_at(state_child)),
+                             ["keeper-behind"])
+            # what the file holds after the start is what the tree holds
+            nodes, lines = MaintenanceStore(state).load_all()
+            self.assertEqual(sorted(nodes), sorted(["/x", HEARTBEAT_PATH, keeper]))
+            self.assertEqual(sorted(lines),
+                             sorted([("/x", "line"), (state_child, "keeper-behind")]))
+            # and the log names no pin of the instance's as orphaned
+            for line in logged.output:
+                if "orphaned pin" in line:
+                    self.assertNotIn(HEARTBEAT_PATH, line)
+
+    def test_a_pin_that_no_check_covers_is_still_reaped(self):
+        # the other half: the instance's own line is the one exception
+        with tempfile.TemporaryDirectory() as directory:
+            state = self._pinned_yesterday(directory)
+            with self.assertLogs(level="INFO") as logged:
+                self._app._restore_state(_Roots("/x"), state)  # type: ignore[arg-type]
+            self.assertIsNone(self.tree.maintenance_entry("/gone"))
+            self.assertEqual(self.tree.entry_maintenance_at("/gone"), {})
+            self.assertIsNotNone(self.tree.maintenance_entry("/x"))
+            self.assertEqual(sorted(self.tree.entry_maintenance_at("/x")), ["line"])
+            reaped = [line for line in logged.output if "orphaned pin" in line]
+            self.assertEqual(len(reaped), 1, logged.output)
+            self.assertTrue(reaped[0].endswith("reaped 1 orphaned pin(s): /gone"),
+                            reaped[0])
 
     def test_an_unreadable_log_starts_empty_and_is_a_line_and_the_pins_still_load(self):
         with tempfile.TemporaryDirectory() as directory:

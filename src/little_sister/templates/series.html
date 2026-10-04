@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html>
+<head>
+    {% from '_series.html' import curve, quiet_line, readings_table %}
+    {% from '_status_cue.html' import status_cue %}
+    {% from '_window_bar.html' import window_bar %}
+    {% set page_title = 'Series' %}
+    {% include '_header.html' %}
+
+    <div class="container-fluid mt-3 px-4">
+        {% include '_page_band.html' %}
+        {#- A node's Series view (ADR-0097 decision 1): every curve that stands at or
+            beneath the node, each under the node it stands on, in the tree's order,
+            all on one time axis so that curves read by different checks at different
+            moments stand one above the other. Each group is headed by its node's
+            status and sentence as they are now and opens its Status view. Beneath
+            them, the newest readings of each series they were drawn from, folded;
+            and each check beneath whose series draw no curve, with its History page.
+            Not polled: it is read, as History is. -#}
+        {%- if first and last %}
+        <p class="small text-muted mb-2">Every curve that stands at or beneath this node, on one time axis. Each node heads its curves with the status it has now.</p>
+        {%- else %}
+        <p class="small text-muted mb-3">No curves to display.</p>
+        {%- endif %}
+        {#- The bar that names the window the view is drawn over and moves it
+            (`_window_bar.html`, ADR-0098 decision 3). -#}
+        {%- if first and last and bar %}
+        {{ window_bar(bar) }}
+        {%- endif %}
+        <div class="ls-series-grid"{% if start %} data-start="{{ start }}" data-end="{{ end }}" data-zone="{{ zone }}"{% endif %}>
+        {%- for group in groups %}
+            {%- set outer = loop %}
+            <section class="card ls-series-group" id="{{ group.anchor }}">
+                <div class="card-body">
+                    <h2 class="ls-series-group__head">
+                        {%- if group.node %}{{ status_cue(group.node.code, labeled=true) }}{% endif %}
+                        <a class="ls-series-group__node" href="{{ url_for('status', branch=group.path) }}">{{ group.name }}</a>
+                        {%- if group.node and group.node.reason %}
+                        <span class="ls-series-group__said md-body">{{ group.node.reason[0] | markdown_inline }}</span>
+                        {%- endif %}
+                    </h2>
+                    {#- Every curve's time axis holds the same links: the first curve's
+                        are the keyboard's, and the rest are for the pointer. -#}
+                    {%- for c in group.curves %}
+                    {{ curve(c, zoom, times, group.anchor, outer.first and loop.first) }}
+                    {%- endfor %}
+                </div>
+            </section>
+        {%- endfor %}
+        </div>
+        {%- for one in quiet %}
+        {{ quiet_line(one) }}
+        {%- endfor %}
+        {%- if readings %}
+        <h2 class="h6 text-muted text-uppercase mt-4">Newest readings</h2>
+        {%- for view in readings %}
+        <details class="card mb-2 ls-series-readings">
+            {%- set noun = "reading" if view.kept == 1 else "readings" %}
+            <summary class="card-body py-2"><strong>{{ view.title }}</strong> <span class="text-muted">· <code>{{ view.subject }}</code> —
+            {%- if view.rows and view.within is not none %} the newest {{ view.rows | length }} of {{ view.within }} in this window, of {{ view.kept }} {{ noun }} kept; every one is on its <a href="{{ url_for('history', path=view.path) }}">History</a> page
+            {%- elif view.rows %} the newest {{ view.rows | length }} of {{ view.kept }} {{ noun }} kept; every one is on its <a href="{{ url_for('history', path=view.path) }}">History</a> page
+            {%- else %} {{ view.kept }} {{ noun }} kept, every one on its <a href="{{ url_for('history', path=view.path) }}">History</a> page
+            {%- endif %}</span></summary>
+            {%- if view.rows %}
+            <div class="px-3">{{ readings_table(view) }}</div>
+            {%- endif %}
+        </details>
+        {%- endfor %}
+        {%- endif %}
+    </div>
+{% include '_page_end.html' %}
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="{{ url_for('static', filename='js/rail.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/series.js') }}"></script>
+</body>
+</html>

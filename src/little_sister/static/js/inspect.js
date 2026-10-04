@@ -19,17 +19,35 @@
     try { META = JSON.parse(dataEl.textContent || "{}"); } catch (e) { return; }
     var FUI = window.FloatingUIDOM;
 
+    // What stands inside a node's row and is a control of its own: the maintenance
+    // pip (its own click-popover, maintenance.js), and a pin's block and editors
+    // (ADR-0104), which a card's head and a branch's head carry. None of them asks
+    // for the node's inspection card — on touch that would take the first tap from
+    // *Edit*, *Clear* and the pause mark.
+    var OWN_CONTROLS = ".maintenance-pip, .pin-setter, .rule-setter, .rule-block";
+
+    // A pin's editor, open: the shape the refresh waits for (poll.js, ADR-0104
+    // decision 7).
+    var EDITOR = "details[open] form.maintenance-editor-form";
+
     var current = null;            // the trigger the card is currently shown for
     var cleanup = null;            // Floating UI autoUpdate teardown
     var showTimer = null, hideTimer = null;
     var lastPointerType = "mouse";
 
+    function ownControl(el) {
+        return !!(el && el.closest && el.closest(OWN_CONTROLS));
+    }
+
     function metaFor(el) {
-        // The maintenance pip is its own click-popover (maintenance.js); don't also
-        // open the node inspection card for it on hover / tap.
-        if (el && el.closest && el.closest(".maintenance-pip")) { return null; }
+        if (ownControl(el)) { return null; }
         var t = el && el.closest ? el.closest("[data-path]") : null;
         if (!t) { return null; }
+        // A node whose pin is being written says nothing else about itself. The
+        // control that opened the editor has given way to it, so the pointer that
+        // clicked is left on the node's own row — and the row's card would come up
+        // over the one above and stand there while the note is typed.
+        if (t.querySelector(EDITOR)) { return null; }
         var m = META[t.getAttribute("data-path")];
         return m ? { trigger: t, meta: m } : null;
     }
@@ -94,6 +112,9 @@
     grid.addEventListener("mouseover", function (e) {
         var hit = metaFor(e.target);
         if (hit) { scheduleShow(hit); }
+        // An editor open in a card's head is still inside the head: the pointer
+        // moving into it has left the node's name behind, and its card with it.
+        else if (ownControl(e.target)) { scheduleHide(); }
     });
     grid.addEventListener("mouseout", function (e) {
         var t = e.target.closest ? e.target.closest("[data-path]") : null;

@@ -4,14 +4,24 @@
 # node code at all — the seam derives it from the lines. Watch the failed build's
 # retry run in italic while its line stays red, and pin the one red line to see
 # the node read the worst of what is left.
+#
+# It is also the demo's one node that **waits before it escalates** (ADR-0083): a
+# turn for the worse shows on the node at once and reaches /ci after three
+# readings of it. The wait counts what the node shows (ADR-0108), so here a pinned
+# line and a wait meet — a red line beneath its pin spends none of it, and what
+# the pin's end uncovers is published at once. A restart does not re-arm the wait
+# (ADR-0110): started with `LITTLE_SISTER_DEMO_OFFSET=36s` the demo's first reading
+# finds the build failed, and where this node last showed ok that failure waits its
+# three readings like any other.
 type: demo
 path: /ci/pipelines
 title: Pipelines
 about: |
   The latest GitHub-Actions-style run per workflow (a *synthetic* demo node).
   Each line is a **member** with its **own status code**; the node's color is
-  derived from the lines, so silencing the one failing workflow turns the node
-  green while the rest keep reporting.
+  derived from the lines, so silencing the one failing workflow takes its red
+  off the node while the rest keep reporting.
 scenario: pipelines
 frequency: 5s
 period: 90s
+escalate_after: 3

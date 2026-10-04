@@ -1,8 +1,8 @@
 # ADR-0048 — The Content-Security-Policy is assembled, never a constant
 
 - **Status:** Accepted
-- **Date:** 2026-08-08 (decided in the design round on what a Content-Security-Policy
-  would actually cost)
+- **Date:** 2026-10-04 (accepted 2026-08-08, decided in the design round on what a
+  Content-Security-Policy would actually cost)
 - **Related:** [ADR-0037](0037-extension-static-assets.md) (same-origin extension
   assets — why `'self'` already covers a dependent package's *scripts*, and the
   unbounded trust this starts to bound),
@@ -15,7 +15,9 @@
   [ADR-0029](0029-per-user-presentation-preferences.md) (the preferences form whose
   inline handlers this displaces),
   [ADR-0031](0031-deployment-config-directory.md) (`config/` is operator input — where
-  a deployment's own sources are written)
+  a deployment's own sources are written),
+  [ADR-0100](0100-system-is-two-views.md) (the *Installed* view of `/system`, which
+  shows the effective policy)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -103,7 +105,8 @@ ships, not after.
    Enforcement — including which directives graduate first — is a separate, later
    decision.
 
-7. **`/system` shows the effective policy and who contributed each source.** The page
+7. **`/system`'s *Installed* view shows the effective policy and who contributed each
+   source**, at `/system/installed` ([ADR-0100](0100-system-is-two-views.md)). The view
    already lists what registered. Without this, a request blocked inside someone else's
    package is undebuggable from here.
 
@@ -125,8 +128,8 @@ ships, not after.
 - **A dependency can widen the policy for the whole application.** That is not a new
   trust boundary — [ADR-0037](0037-extension-static-assets.md) says plainly that an
   extension already runs with the page's full authority — but it becomes *visible*, on
-  `/system`, rather than implicit. This is the first written bound on what an extension
-  may do to a page.
+  `/system/installed`, rather than implicit. This is the first written bound on what an
+  extension may do to a page.
 - **The header is a value, so it is testable without a browser.** The assembled policy
   can be asserted in a unit test: defaults present, a contributed origin accepted, a
   contributed keyword refused, a configured source added.

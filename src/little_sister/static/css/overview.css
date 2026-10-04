@@ -337,10 +337,22 @@ body[data-ls-theme] {
 /* Which copy of the sections is showing. The `!important` is not decoration:
    Bootstrap's `.navbar-expand-lg .navbar-collapse` is itself `display: flex
    !important` above the breakpoint, so a plain rule here would lose and the
-   sections would appear in both places at once. */
-body[data-ls-layout="rail"] .ls-bar__nav,
-body[data-ls-layout="rail"] .ls-bar__toggler { display: none !important; }
+   sections would appear in both places at once.
+
+   On a phone the rail gives way: below 576 pixels its 52 are a seventh of the
+   screen, so a viewer whose layout is the rail gets the top bar's — no rail, the
+   sections folded behind the bar's toggler, the page at the screen's width. The
+   preference is not touched: the body still says `rail`, and the rail is back
+   when the window is wide again. So the rail's rule holds from 576 pixels, and
+   each rule of the top bar's below is also the rail's beneath them. */
+@media (min-width: 576px) {
+    body[data-ls-layout="rail"] .ls-bar__nav,
+    body[data-ls-layout="rail"] .ls-bar__toggler { display: none !important; }
+}
 body[data-ls-layout="topbar"] .ls-rail { display: none; }
+@media (max-width: 575.98px) {
+    body[data-ls-layout="rail"] .ls-rail { display: none; }
+}
 
 /* Below Bootstrap's lg breakpoint the top-bar sections open below its first
    row. On a short window the list scrolls within the space left by that row and
@@ -351,6 +363,17 @@ body[data-ls-layout="topbar"] .ls-rail { display: none; }
     body[data-ls-layout="topbar"] .ls-bar__nav { order: 2; }
     body[data-ls-layout="topbar"] .ls-bar__nav.show,
     body[data-ls-layout="topbar"] .ls-bar__nav.collapsing {
+        max-height: calc(100vh - var(--ls-bar-row-budget));
+        max-height: calc(100dvh - var(--ls-bar-row-budget));
+        overflow-y: auto;
+        overscroll-behavior: contain;
+    }
+}
+@media (max-width: 575.98px) {
+    body[data-ls-layout="rail"] .ls-bar__who { order: 1; }
+    body[data-ls-layout="rail"] .ls-bar__nav { order: 2; }
+    body[data-ls-layout="rail"] .ls-bar__nav.show,
+    body[data-ls-layout="rail"] .ls-bar__nav.collapsing {
         max-height: calc(100vh - var(--ls-bar-row-budget));
         max-height: calc(100dvh - var(--ls-bar-row-budget));
         overflow-y: auto;
@@ -376,12 +399,24 @@ body[data-ls-layout="topbar"] .ls-rail { display: none; }
 }
 .ls-band__title {
     display: flex;
+    flex-wrap: wrap;
     align-items: baseline;
     column-gap: 0.4rem;
     min-width: 0;
     margin: 0;
     font-size: 1.3125rem;
     font-weight: 600;
+}
+/* The trail (`_breadcrumb.html`) keeps one line while the band has the room, and
+   gives none of it up to the title beside it: the title asks for none (below).
+   Where the band is narrower than the trail — a deep path on a phone — the trail is
+   as wide as the band and takes as many lines as it needs, breaking after a slash,
+   and inside a name only where that name alone is wider than a line. The title then
+   takes the next line, which is why the heading wraps. Nothing here may keep the
+   trail on one line or forbid it to shrink: that is what made a page as wide as its
+   path. */
+.ls-crumbs {
+    overflow-wrap: anywhere;
 }
 .ls-band__meta {
     margin-left: auto;
@@ -401,7 +436,58 @@ body[data-ls-layout="topbar"] .ls-rail { display: none; }
     padding-right: 0.9rem;
     border-right: 1px solid var(--ls-line);
 }
-.ls-band__about { margin-top: 0.35rem; }
+/* Alone at the right of a band — the System pages have no filters — the stamp has
+   nothing to be ruled off from. */
+.ls-band__updated:last-child {
+    padding-right: 0;
+    border-right: 0;
+}
+/* Nor on a phone, where the filters never fit beside it and stand beneath. */
+@media (max-width: 575.98px) {
+    .ls-band__updated {
+        padding-right: 0;
+        border-right: 0;
+    }
+}
+/* What the node is, folded (`_page_band.html`): the summary names it and shows how
+   it begins, muted and cut off where the band runs out of width; opened, the text
+   reads at a comfortable measure beneath, and the preview gives way to it. */
+.ls-band__about {
+    margin-top: 0.35rem;
+    font-size: 0.875rem;
+    color: var(--ls-muted);
+}
+.ls-band__about > summary {
+    cursor: pointer;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+.ls-band__about > summary:hover,
+.ls-band__about > summary:focus-visible { color: var(--ls-ink); }
+.ls-band__about-label { font-weight: 600; }
+.ls-band__about[open] .ls-band__about-preview { display: none; }
+.ls-band__about-body {
+    max-width: 72ch;
+    margin: 0.3rem 0 0.15rem 1rem;
+}
+.ls-band__about-body > :last-child { margin-bottom: 0; }
+
+/* The Installed view's index (ADR-0100): its sections as a row of links, each with
+   a muted count where one helps, the way a Series view's window controls sit above
+   its curves. */
+.ls-sections {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 1.2rem;
+    margin: 0 0 0.9rem;
+    font-size: 0.875em;
+}
+.ls-sections__link { text-decoration: none; }
+.ls-sections__count { color: var(--ls-muted); }
+/* The Running view's schedule: a time and its interval read as one fact, so a cell
+   holding one never breaks between them. */
+.ls-schedule__time { white-space: nowrap; }
 
 /* ----- /status dashboard ----- */
 
@@ -485,10 +571,14 @@ body[data-ls-layout="topbar"] .ls-rail { display: none; }
     }
 }
 
+/* A name with nowhere to break — `backup_of_the_primary_cluster` — and wider than
+   its card breaks inside itself: a card is as wide as its column, and on a phone
+   the column is the screen. */
 .status-card__name {
     color: inherit;
     font-weight: 600;
     text-decoration: none;
+    overflow-wrap: anywhere;
 }
 
 .status-card__name:hover {
@@ -542,13 +632,13 @@ body[data-ls-card-state="below"] .status-card__state {
    row. (A float dropped out of the box under width pressure and overlaid the
    next one — action chips made that real.) The state never breaks internally,
    and the **title yields first**: it shrinks into its ellipsis so the state
-   keeps its row. Pin banner and reason rows stay full-width lines below. */
+   keeps its row. The pin's block and the reason rows stay full-width lines below. */
 .status-node__self {
     display: flex;
     flex-wrap: wrap;
     align-items: baseline;
 }
-.status-node__self > .pin-banner,
+.status-node__self > .rule-block,
 .status-node__self > .reason-block,
 .status-node__self > .reason-quiet-count { flex-basis: 100%; }
 .status-node__state {
@@ -586,6 +676,8 @@ body[data-ls-card-state="below"] .status-card__state {
    right-aligned beneath the controls. */
 .strip-band {
     display: flex;
+    flex-wrap: wrap;       /* on a phone the strip takes the next line: kept on one,
+                              the pill was pushed out at the left of its column */
     justify-content: flex-end;
     align-items: baseline;
     gap: 0.5rem;
@@ -691,26 +783,47 @@ body[data-ls-card-state="below"] .status-card__state {
     opacity: 0.8;
 }
 
-/* The admin pin control in a card head (ADR-0014): an outline pause-bars
-   button-link, quiet until the card is hovered — a wall of cards must not grow
-   a wall of buttons — but always visible to keyboard focus, and simply shown
-   where there is no hover to reveal it (touch). Muted, not maintenance-blue:
-   blue is the *state*; this is the door to it. pin.js upgrades the click to
-   the #pin-card dialog; without JavaScript it is a link to the node's page. */
+/* An admin's pause mark in a card head (ADR-0104 decision 3): the summary of the
+   disclosure that opens the pin's editor in the card. Outline pause bars, quiet
+   until the card is hovered — a wall of cards must not grow a wall of buttons —
+   but always visible to keyboard focus, and simply shown where there is no hover
+   to reveal it (touch). Muted, not maintenance-blue: blue is the *state*; this is
+   the door to it.
+
+   The disclosure is a child of the head and follows the state cluster. Closed, it
+   is the mark alone, and the mark has to stay with the cluster: the head wraps, and
+   a mark on a line by itself would be a row of nothing. So it stands on a **seat**
+   — the cluster keeps the mark's width free at its end and the mark is pulled back
+   onto it, which makes the two one piece however the head wraps, the standing
+   second line of `card_status_line: below` included. Open, the disclosure takes a
+   row of its own beneath the head line, the card's whole width, and the editor
+   stands in it. Where script runs the mark then yields to Cancel and Escape
+   (`.maintenance-edit-enhanced`, below); without script it stays, at the row's
+   end, as the way to close. */
+.status-card__state--seat { padding-right: 1.25rem; }
+.status-card__head > .pin-setter {
+    flex: none;
+    align-self: center;
+    width: 1.25rem;
+    margin-left: -1.25rem;
+}
+.status-card__head > .pin-setter[open] {
+    flex-basis: 100%;
+    margin-left: 0;
+}
 .pin-control {
-    display: inline-flex;
+    display: flex;
+    justify-content: flex-end;
     align-items: center;
     color: inherit;
     opacity: 0;
-    margin-left: 0.45em;
     padding: 1px 2px;
     border-radius: 4px;
     line-height: 0;
-    vertical-align: -0.2em;
     transition: opacity 0.15s ease;
 }
 .status-card:hover .pin-control,
-.pin-control[aria-expanded="true"] { opacity: 0.75; }
+.pin-setter[open] > .pin-control { opacity: 0.75; }
 .pin-control:hover { opacity: 1; }
 .pin-control:focus-visible {
     outline: 2px solid var(--ls-tint-maintenance-ink);
@@ -722,24 +835,6 @@ body[data-ls-card-state="below"] .status-card__state {
 }
 @media (prefers-reduced-motion: reduce) {
     .pin-control { transition: none; }
-}
-
-/* The pin dialog (#pin-card): the maintenance popover chrome carrying a small
-   form instead of a list (pin.js). */
-.pin-card {
-    width: 24rem;
-    max-height: calc(100vh - 1.5rem);
-    overflow-y: auto;
-}
-.pin-card__title { color: inherit; }
-.pin-card__path { font-size: 0.75rem; word-break: break-all; }
-.pin-card__promise { opacity: 0.9; }
-.pin-card__pinned { opacity: 0.9; }
-.pin-card__actions {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    flex-wrap: wrap;
 }
 .maintenance-pop__reason {
     display: block;
@@ -777,11 +872,27 @@ body[data-ls-card-state="below"] .status-card__state {
 }
 
 /* In the page header the title is a flex item (baseline-aligned with the
-   breadcrumb); it has far more room than a card, so let it run longer. */
+   breadcrumb); it has far more room than a card, so let it run longer.
+
+   The heading wraps, for a trail wider than the band (`.ls-crumbs`), and wrapping
+   preempts shrinking: left at its own width, the title would take the next line
+   wherever the two did not fit one, instead of being cut short. Basis 0 gives it
+   no say in that, as it does the middle of a card's head: the title takes what
+   the trail leaves of the line and ellipses there, and takes the next line only
+   where the trail leaves nothing. */
 .node-title--header {
+    flex: 1 1 0;
     max-width: min(60ch, 55vw);
     min-width: 0;          /* allow it to shrink and ellipse within the flex row */
     margin-left: 0;        /* the header row spaces items with a flex gap */
+}
+/* On a phone the trail leaves little: a title with less room than a word needs
+   takes the next line, and all of that line. */
+@media (max-width: 575.98px) {
+    .node-title--header {
+        min-width: 8ch;
+        max-width: 100%;
+    }
 }
 
 /* breadcrumb segments read as the trail text but underline on hover to show
@@ -840,6 +951,7 @@ body[data-ls-card-state="below"] .status-card__state {
 
 .status-node__name {
     font-weight: 600;
+    overflow-wrap: anywhere;   /* as the card's own name, above */
 }
 
 /* a node that carries inspectable metadata hints it with the help cursor; the
@@ -961,13 +1073,6 @@ body[data-ls-card-state="below"] .status-card__state {
     background: var(--ls-tint-maintenance);
     color: var(--ls-tint-maintenance-ink);
 }
-/* Sits inside the tinted line, so it takes that surface and that ink. Smaller and
-   a shade quieter — by opacity, which is measured here rather than assumed, because
-   dimming an ink nobody re-measured is the defect above. */
-.reason-quiet-note {
-    font-size: 0.75rem;
-    opacity: 0.85;
-}
 .maintenance-explanation {
     overflow-wrap: anywhere;
 }
@@ -986,10 +1091,11 @@ body[data-ls-card-state="below"] .status-card__state {
 }
 /* Why a node is blue, and what it is silencing (the maintenance keystone).
 
-   `.pin-banner` sits above the reason block and outside its clamp: the explanation
-   for the color must not be the line that gets cut. Like every other maintenance
-   surface it paints its own tint, so it reads the same on a vivid card, on a pale
-   one and inside Bootstrap's alert on the leaf page.
+   The pin's block (`.rule-block`, below) stands above the reason block and outside
+   its clamp: the explanation for the color must not be the line that gets cut.
+   Like every other maintenance surface it paints its own tint, so it reads the
+   same on a vivid card, on a pale one and inside Bootstrap's alert on the leaf
+   page.
 
    `.status-reported` is the other half — the reading the pin is covering, printed
    beside the status word as `maintenance · error`. It takes the *card's* ink, not
@@ -997,19 +1103,6 @@ body[data-ls-card-state="below"] .status-card__state {
    stay legible on whatever fill that word is on. Slightly quieter by weight rather
    than by opacity, because dimming an ink nobody re-measured is how the last
    contrast defect happened. */
-.pin-banner {
-    display: -webkit-box;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
-    overflow: hidden;
-    font-size: 0.75rem;
-    margin: 0 0 0.35rem 0.5rem;
-    padding: 0.15rem 0.4rem;
-    border-radius: 3px;
-    background: var(--ls-tint-maintenance);
-    color: var(--ls-tint-maintenance-ink);
-}
-.pin-banner__reason { overflow-wrap: anywhere; }
 .status-reported {
     font-weight: 400;
     white-space: nowrap;
@@ -1024,6 +1117,37 @@ body[data-ls-card-state="below"] .status-card__state {
     background: var(--ls-tint-maintenance);
     color: var(--ls-tint-maintenance-ink);
     white-space: nowrap;
+}
+/* What moved a node, where a pin did (ADR-0107 decision 3): *set*, *line silenced*,
+   *maintenance ended*. The same surface of its own as the chip above — a pin is
+   maintenance, whichever of them it says — and a rule of its ink round it, because
+   this row reached and that one was held back. */
+.event-cause {
+    font-size: 0.7rem;
+    padding: 0 0.3rem;
+    border: 1px solid;
+    border-radius: 3px;
+    background: var(--ls-tint-maintenance);
+    color: var(--ls-tint-maintenance-ink);
+    white-space: nowrap;
+}
+/* A node that left the tree (ADR-0109 decision 5): no pin did it, so its chip
+   wears the pair of the nothing its row moved to, ruled in its ink like the others. */
+.event-cause--removed {
+    background: var(--ls-tint-undefined);
+    color: var(--ls-tint-undefined-ink);
+}
+/* A wait that ended by its count (ADR-0119 decision 3): its row says when the status
+   reached the level above. No pin wrote that row, so its chip wears the pair of the
+   status the row shows — one of two, since only a worse status is ever held back —
+   on a surface of its own, ruled in its ink like the others. */
+.row-error .event-cause--reached {
+    background: var(--ls-tint-error);
+    color: var(--ls-tint-error-ink);
+}
+.row-warn .event-cause--reached {
+    background: var(--ls-tint-warn);
+    color: var(--ls-tint-warn-ink);
 }
 /* The viewed node's own state, above its children on a subtree page. A `status-node`
    for the fill and ink, full width rather than a grid cell, because it is not one of
@@ -1042,26 +1166,9 @@ body[data-ls-card-state="below"] .status-card__state {
     margin-left: auto;
     font-size: 0.8rem;
 }
-.viewed-head .pin-banner,
 .viewed-head .reason-block {
     flex-basis: 100%;
     margin-left: 0;
-}
-/* /maintenance's "Silenced" column: what an entry pin covers (ADR-0036). Clamped
-   here rather than by shortening the string, because a member's text is often a
-   link and cutting it mid-link puts the raw Markdown on the page. One line, an
-   ellipsis, and the `title` attribute carries the whole of it; the node page is
-   where it is read in full. */
-.maintenance-page .maintenance-line {
-    max-width: 34rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-.maintenance-page .maintenance-why {
-    min-width: 12rem;
-    max-width: 34rem;
-    overflow-wrap: anywhere;
 }
 /* A pin whose line the current run did not report: suspended, not deleted (ADR-0036
    decision 6). The pin is real and there is nothing to anchor to, so the page says
@@ -1103,19 +1210,275 @@ body[data-ls-card-state="below"] .status-card__state {
     gap: 0.35rem;
     flex-wrap: wrap;
 }
-.maintenance-card__actions {
-    display: flex;
-    align-items: flex-start;
-    gap: 0.5rem;
-    flex-wrap: wrap;
+/* The note's source grows with what it holds where the browser can size a field
+   by its content, so *Edit* shows the whole note rather than its first three
+   lines; elsewhere it is three rows and a scrollbar, as before. Sized by its
+   content, an empty field would be one line — its `rows` no longer count — so
+   the floor is stated here, and as a `textarea.form-control` rule because
+   Bootstrap states a lower one at that weight. */
+textarea.form-control.maintenance-reason-source {
+    min-height: 5.5rem;
+    max-height: 24rem;
+    resize: vertical;
+    field-sizing: content;
 }
-.maintenance-card__actions .maintenance-editor-disclosure[open] {
+
+/* ----- A rule's block (ADR-0104) -----
+
+   One block states a rule at the contribution boundary where it acts, and
+   maintenance is its first kind: a pin on a node, or on one of its lines. On a
+   node's own page the node's block heads a **frame** that runs round every line
+   the pin covers, and a line's block hangs beneath its line.
+
+   **The block paints its own tint and the frame is a border**, so both stand on a
+   node of any color (decision 8): the leaf page's surface is Bootstrap's `.alert-*`,
+   which changes with the node's status and is not ours to measure against. The
+   kind is data — `data-rule` picks the pair — and the pair for maintenance is the
+   one every maintenance surface paints, measured by `tests/test_contrast.py`. The
+   frame and the buttons draw from `currentColor`, like the action chips, so they
+   read on whatever they land on and introduce no ink of their own. The **editor**
+   is a panel on the panel's own pair, where Bootstrap's labels, muted help and
+   link-colored Cancel already stand; a rendered note keeps the block's ink for its
+   links and code, which Bootstrap would otherwise color for a white page.
+
+   The editor is the browser's own disclosure. Open, it takes the block's full
+   width and stands in for the note and for *Clear* — that is what *Edit* turning
+   the note into its source looks like — and `maintenance-edit.js` hides the
+   summary that opened it once Cancel and Escape can close it (the rule above).
+   Full width and no wider: an open disclosure is a flex item, which would
+   otherwise keep the width of its fields and widen a phone's page. */
+.status-line {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.35rem 0.75rem;
+    margin-bottom: 0.35rem;
+}
+.status-line__what { flex: 1 1 auto; }
+.status-line > .rule-setter[open] {
     flex-basis: 100%;
+    min-width: 0;
     order: 2;
 }
-.maintenance-reason-source {
-    min-height: 5.5rem;
-    resize: vertical;
+.rule-mark {
+    flex: none;
+    vertical-align: -0.08em;
+}
+.rule-block__what > .rule-mark,
+.rule-block__scope > .rule-mark,
+.rule-setter__toggle > .rule-mark { margin-right: 0.3em; }
+.rule-button {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.05rem 0.55rem;
+    border: 1px solid color-mix(in srgb, currentColor 45%, transparent);
+    border-radius: 0.375rem;
+    background: none;
+    color: inherit;
+    font-size: 0.8rem;
+    line-height: 1.5;
+    white-space: nowrap;
+    cursor: pointer;
+}
+.rule-button:hover { border-color: currentColor; }
+.rule-button:focus-visible {
+    outline: 2px solid currentColor;
+    outline-offset: 1px;
+}
+.rule-frame {
+    margin: 0.45rem 0 0.2rem;
+    padding: 0 0.45rem 0.35rem;
+    border: 2px solid color-mix(in srgb, currentColor 40%, transparent);
+    border-radius: 8px;
+}
+.rule-list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+.rule-frame > .rule-list { margin: 0 -0.45rem 0.4rem; }
+.rule-frame > .rule-list > .rule-block {
+    margin: 0;
+    border-width: 0 0 1px;
+    border-radius: 0;
+}
+.rule-frame > .rule-list > .rule-block:first-child { border-radius: 6px 6px 0 0; }
+.rule-block {
+    margin: 0.45rem 0 0.5rem;
+    padding: 0.5rem 0.7rem;
+    border: 1px solid color-mix(in srgb, currentColor 22%, transparent);
+    border-radius: 6px;
+    font-size: 0.875rem;
+    font-style: normal;
+    text-align: left;
+}
+.rule-block[data-rule="maintenance"] {
+    background: var(--ls-tint-maintenance);
+    color: var(--ls-tint-maintenance-ink);
+}
+.rule-block--line {
+    margin: 0.3rem 0 0.2rem 1.35rem;
+    padding: 0.35rem 0.6rem;
+    font-size: 0.8rem;
+}
+.rule-block__head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.35rem 0.6rem;
+}
+/* The sentence names what it silences and who silenced it, and the record
+   beneath who and when: a line's own words, a path, a login name. One of them with
+   nowhere to break is wider than a phone, so both break inside a word where they
+   must — as the note between them does (`.maintenance-explanation`). */
+.rule-block__what {
+    flex: 1 1 16rem;
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+.rule-block__edit[open] {
+    flex-basis: 100%;
+    min-width: 0;
+    order: 2;
+}
+.rule-block__clear { margin: 0; }
+.rule-block__head:has(> .rule-block__edit[open]) > .rule-block__clear { display: none; }
+.rule-block:has(.rule-block__edit[open]) > .rule-block__note { display: none; }
+.rule-block__note { margin-top: 0.3rem; }
+.rule-block__note p { margin-bottom: 0.4rem; }
+.rule-block__what a,
+.rule-block__what code,
+.rule-block__note a,
+.rule-block__note code { color: inherit; }
+.rule-block__scope { margin: 0; }
+.rule-block__editor {
+    margin-top: 0.5rem;
+    padding: 0.6rem 0.7rem;
+    border: 1px solid var(--ls-panel-line);
+    border-radius: 6px;
+    background: var(--ls-panel);
+    color: var(--ls-ink);
+}
+.rule-block__record {
+    margin: 0 0 0.5rem;
+    font-size: 0.8rem;
+    overflow-wrap: anywhere;
+}
+.rule-block > .rule-block__record { margin: 0.3rem 0 0; }
+.rule-block:has(.rule-block__edit[open]) > .rule-block__record { display: none; }
+
+/* The block on the wall and in a branch's head (ADR-0104 decisions 2, 3 and 7): the
+   same block, where a node is one of many. In a **card** it is the first thing in
+   the card's body, above the reason lines and the boxes it covers; in a **box**
+   inside a card and in a branch's **head** it is a full row of the node's own row,
+   which wraps. A card is narrower than a page and its lines are smaller, so there
+   the block takes the card's measure: the reason lines' size and a tighter
+   padding. A branch's head is one node on its own page and keeps the page's.
+
+   A node's row may be an inspection trigger (`cursor: help`, above), and a block
+   or an editor inside it is not what the hint is about.
+
+   On a card *Edit* and *Clear* show on hover or keyboard focus, as the pause mark
+   does: a wall of pinned cards is read far more often than it is operated, and a
+   wall of buttons would be the loudest thing on it. They keep their place while
+   hidden, so nothing moves when they show, and they are shown outright where there
+   is no hover to reveal them. A branch's head shows them always, as a leaf's page
+   does. */
+.status-panel > .rule-block,
+.status-node__self > .rule-block,
+.status-card__head > .pin-setter > .rule-block {
+    padding: 0.35rem 0.55rem;
+    font-size: 0.8rem;
+    cursor: auto;
+}
+.status-panel > .rule-block { margin: 0 0 0.4rem; }
+.status-node__self > .rule-block { margin: 0.3rem 0 0.25rem; }
+.status-card__head > .pin-setter > .rule-block { margin: 0.45rem 0 0; }
+.viewed-head .status-node__self > .rule-block {
+    margin: 0.2rem 0 0.25rem;
+    padding: 0.5rem 0.7rem;
+    font-size: 0.875rem;
+}
+.viewed-head .status-node__self > .rule-setter { cursor: auto; }
+.viewed-head .status-node__self > .rule-setter[open] {
+    flex-basis: 100%;
+    min-width: 0;
+}
+/* A branch's head runs the page's whole width, and a sentence, a note or a form that
+   did would be past reading. The block's tint fills the head, and what stands in it
+   keeps a measure: the Maintenance page's for the words, a form's for the editor. */
+.viewed-head .rule-block__head,
+.viewed-head .rule-block__note,
+.viewed-head .rule-block__scope { max-width: 60rem; }
+.viewed-head .rule-block__editor { max-width: 48rem; }
+/* In a card the sentence gives way to its buttons and wraps beside them; on a page
+   it keeps a line's worth of width and the buttons take the next row. */
+.status-card .rule-block__what { flex-basis: 8rem; }
+/* A box's links are plain until hovered — a box is a wall of them — but a note is
+   prose somebody wrote, and a link in it reads as one wherever the block stands. */
+.status-node .rule-block__note a { text-decoration: underline; }
+.status-card .rule-block__edit > summary,
+.status-card .rule-block__clear > button {
+    opacity: 0;
+    transition: opacity 0.15s ease;
+}
+.status-card:hover .rule-block__edit > summary,
+.status-card:hover .rule-block__clear > button,
+.status-card .rule-block__head:focus-within > .rule-block__edit > summary,
+.status-card .rule-block__head:focus-within > .rule-block__clear > button { opacity: 1; }
+@media (hover: none) {
+    .status-card .rule-block__edit > summary,
+    .status-card .rule-block__clear > button { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .status-card .rule-block__edit > summary,
+    .status-card .rule-block__clear > button { transition: none; }
+}
+
+/* The Maintenance page (ADR-0104 decision 6): every pin as its block, under its
+   node's path — the node's own first, then its lines'. The blocks are the rule's
+   (above); what is the page's is the column they stand in, a reading measure
+   rather than the canvas's width, and one metric for a node's block and a line's,
+   which stand side by side here and not one inside the other. A node's section is
+   where a saved edit lands back (`?node=<path>#pinned-node`), so it keeps clear of
+   the bar and wears the ring a named line wears on its node's page — a ring, not a
+   fill, for the reason given there. */
+.pin-list {
+    display: grid;
+    gap: 1.1rem;
+    max-width: 60rem;
+}
+.pin-node { scroll-margin-top: calc(var(--ls-bar-height) + 1rem); }
+.pin-node.is-focused {
+    outline: 2px solid var(--ls-vivid-edge);
+    outline-offset: 6px;
+    border-radius: 2px;
+}
+.pin-node__path {
+    margin: 0 0 0.35rem;
+    font-size: 1rem;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+}
+/* A node that is not reported at present (ADR-0109 decision 4): its pins are
+   held and silence nothing. The sentence that says so stands between the path and
+   the blocks, in the muted ink a page's own notes take; the path is no link, and
+   says so by being plain. */
+.pin-node__suspended {
+    max-width: 44rem;
+    margin: 0 0 0.4rem;
+    color: var(--ls-muted);
+    font-size: 0.875rem;
+}
+.pin-node__pins {
+    display: grid;
+    gap: 0.4rem;
+}
+.pin-node__pins > .rule-block {
+    min-width: 0;
+    margin: 0;
+    padding: 0.5rem 0.7rem;
+    font-size: 0.875rem;
 }
 .maintenance-expiry-help {
     margin-top: 0.25rem;
@@ -1144,12 +1507,18 @@ body[data-ls-card-state="below"] .status-card__state {
 }
 .maintenance-expiry-help__table code { white-space: nowrap; }
 
-/* The per-line maintenance control now shares one stable end rail with extension
-   actions. The small summary is present at rest and never changes the reason's
-   geometry on hover; an explicit click opens the editor as an anchored panel. This
-   also avoids rendering 150 permanently expanded forms on the audit fixture while
-   retaining a native, no-JS disclosure. */
-.check-reason { position: relative; }
+/* The per-line maintenance control shares one stable end rail with extension
+   actions: a pause mark at the line's end, present at rest, which never changes
+   the reason's geometry on hover. It opens its editor **beneath the line, in the
+   flow** (ADR-0104 decisions 3 and 4) — the panel it replaces hung from the rail
+   and floated over the lines below — so the disclosure stands after the line's
+   text and only its summary is placed up here: on the **seat** the rail keeps for
+   it, a margin as wide as the mark and a height the rail has even when no action
+   fills it, so no chip sits under the mark and no text runs into it. The box is
+   what the mark is placed in, because the line's own paddings differ with its
+   state and the rail sits inside all of them. Still a native disclosure, closed
+   at rest, so the audit fixture's 150 editors are 150 collapsed forms. */
+.check-reason__box { position: relative; }
 .check-reason__rail {
     position: relative;
     z-index: 5;
@@ -1159,8 +1528,11 @@ body[data-ls-card-state="below"] .status-card__state {
     gap: 0.15rem;
     margin-left: 0.4rem;
 }
-.check-reason:has(.reason-pin[open]) .check-reason__rail,
 .check-reason__rail:focus-within { z-index: 80; }
+.check-reason__rail--seat {
+    min-height: 1.2rem;
+    margin-right: 1.75rem;
+}
 .check-reason__rail .reason-actions {
     float: none;
     margin-left: 0;
@@ -1207,15 +1579,28 @@ body[data-ls-card-state="below"] .status-card__state {
 .ls-curve__swatch { vertical-align: -0.1em; }
 /* Scaled to the card, but never below 30rem: under that the axes' words would
    shrink past reading, so a card narrower than that — a phone — scrolls the drawing
-   sideways inside itself, as `.table-responsive` does the readings beneath it. */
-.ls-curve__frame { overflow-x: auto; }
-.ls-curve__plot {
+   sideways inside itself, as `.table-responsive` does the readings beneath it.
+   The frame opens at the drawing's right end, where the newest reading stands and
+   the summary's first word is about: a box that scrolls starts at the end its
+   direction begins at, so the frame is turned and what it holds is turned back, and
+   no script has to run — nor run again each time a refresh brings a new frame. */
+.ls-curve__frame { overflow-x: auto; direction: rtl; }
+.ls-curve__frame > * { direction: ltr; }
+/* The drawings are pictures, not text: a drag across one selects nothing and picks
+   up no link, with the view's script or without it (ADR-0098 decision 6). */
+.ls-curve__plot,
+.ls-curve__axis {
     display: block;
     min-width: 30rem;
     max-width: 100%;
     height: auto;
+    -webkit-user-select: none;
+    user-select: none;
 }
 .ls-curve__grid { stroke: var(--ls-line); stroke-width: 1; }
+/* A round time across the plot (ADR-0098 decision 4): the hairline, broken, so it
+   reads as a mark of time and not as a value. */
+.ls-curve__grid--time { stroke-dasharray: 2 3; }
 .ls-curve__line {
     fill: none;
     stroke: var(--ls-ink);
@@ -1229,6 +1614,33 @@ body[data-ls-card-state="below"] .status-card__state {
     stroke-width: 2;
 }
 .ls-curve__none { stroke: var(--ls-danger-ink); stroke-width: 2; }
+/* A run is a mark at its own time (ADR-0106 decision 5, ADR-0111): a stem from the
+   baseline, in the body ink — in the failure ink for a run that failed, in the muted
+   ink for one that kept no verdict, which claims nothing — and a head that says how
+   it stood. A run that passed has the curve's own dot. One that failed has a hollow
+   ring, the card's surface inside the failure ink, so that it is told by its shape as
+   well as by its ink. One that warned has the status cue's triangle, filled in the
+   warning's own color and outlined in the body ink: the yellow cannot be an ink on a
+   card, so the outline is what carries the contrast. */
+.ls-curve__stem {
+    fill: none;
+    stroke: var(--ls-ink);
+    stroke-width: 2;
+    stroke-linecap: round;
+}
+.ls-curve__stem--failed { stroke: var(--ls-danger-ink); }
+.ls-curve__stem--unjudged { stroke: var(--ls-muted); }
+.ls-curve__failed {
+    fill: var(--bs-card-bg, var(--bs-body-bg));
+    stroke: var(--ls-danger-ink);
+    stroke-width: 2;
+}
+.ls-curve__warned {
+    fill: var(--ls-warn);
+    stroke: var(--ls-ink);
+    stroke-width: 1.5;
+    stroke-linejoin: round;
+}
 .ls-curve__tick,
 .ls-curve__time,
 .ls-curve__unit {
@@ -1236,10 +1648,356 @@ body[data-ls-card-state="below"] .status-card__state {
     font-size: 12px;
     font-variant-numeric: tabular-nums;
 }
-/* The pointer's layer: transparent, and a faint wash of the ink over the reading
-   it has found — the only response the drawing gives, with no script to give it. */
+/* The pointer's layer: transparent, the titles its strips carry the only answer it
+   gives. Nothing is drawn where the pointer is — a band that followed it across the
+   plot read as a crosshair to drag a stretch out of, which the view does not have
+   (ADR-0098 decision 3). */
 .ls-curve__hover rect { fill: transparent; }
-.ls-curve__hover rect:hover { fill: color-mix(in srgb, var(--ls-ink) 8%, transparent); }
+/* The time axis beneath a plot: its labels leave the pointer to the stretch under
+   them, and on a Series view each stretch between two labels is a link into it,
+   drawn as a segment of a track that parts where the labels stand — the muted ink,
+   faint, at rest, and whole under the pointer and on focus, with the ink's faint
+   wash over the stretch it chooses. The pointer there is a zoom, which is what the
+   link does (ADR-0098 decision 3). */
+.ls-curve__axis .ls-curve__time { pointer-events: none; }
+.ls-curve__stretch { cursor: zoom-in; -webkit-user-drag: none; }
+.ls-curve__hit { fill: transparent; }
+.ls-curve__segment { fill: color-mix(in srgb, var(--ls-muted) 40%, transparent); }
+.ls-curve__stretch:hover .ls-curve__hit,
+.ls-curve__stretch:focus .ls-curve__hit {
+    fill: color-mix(in srgb, var(--ls-ink) 8%, transparent);
+}
+.ls-curve__stretch:hover .ls-curve__segment,
+.ls-curve__stretch:focus .ls-curve__segment { fill: var(--ls-muted); }
+/* With the view's script (series.js, ADR-0098 decision 6) a plot takes a drag, so
+   the pointer there is a crosshair; its strips give the pointer up, since their
+   words now reach each curve's summary and a tooltip would say them twice. The line
+   at the pointer's instant is the muted ink; the stretch a drag marks is the ink's
+   wash beneath the curve, and its two ends, in the body ink, stand in for the
+   axis's own labels while it is chosen. */
+.ls-series-grid.is-enhanced .ls-curve__plot { cursor: crosshair; }
+.ls-series-grid.is-enhanced .ls-curve__hover { pointer-events: none; }
+.ls-curve__cross { stroke: var(--ls-muted); stroke-width: 1; pointer-events: none; }
+.ls-curve__band {
+    fill: color-mix(in srgb, var(--ls-ink) 12%, transparent);
+    pointer-events: none;
+}
+.ls-curve__axis.is-choosing .ls-curve__time { visibility: hidden; }
+.ls-curve__chosen {
+    fill: var(--ls-ink);
+    font-size: 12px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    pointer-events: none;
+}
+/* The line's reading of a curve (series.js) wears the summary's look and lies over
+   it rather than in its place: out of the caption's flow, from where the summary
+   begins (the script writes `left` and `top`) to the caption's end, on one line cut
+   short rather than wrapped. The summary keeps its room beneath it, hidden while the
+   reading shows, so no caption grows or shrinks and nothing below it moves. */
+.ls-series-grid.is-enhanced .ls-curve__head { position: relative; }
+.ls-curve__reading {
+    position: absolute;
+    right: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+/* A Series view's window bar (ADR-0098 decision 3): the window named on the left —
+   its words in the body ink, its ends in the muted ink — and two groups of controls,
+   each control in its place whether or not it applies. It stays beneath the page's
+   own bar while the curves scroll past, on the canvas so nothing shows through, with
+   the hairline beneath it; below the md breakpoint it scrolls away with the page,
+   whose phone-sized view it would otherwise take a third of. A current control is
+   the ink and the canvas swapped, the pair every page's text is measured as; one
+   that does not apply is the muted ink, with no hover and no pointer. */
+.ls-window {
+    position: sticky;
+    top: var(--ls-bar-height);
+    z-index: 20;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem 1rem;
+    margin: 0 0 1rem;
+    padding: 0.5rem 0;
+    background-color: var(--ls-canvas);
+    border-bottom: 1px solid var(--ls-line);
+    font-size: 0.875em;
+}
+.ls-window__range {
+    margin: 0 auto 0 0;
+    font-variant-numeric: tabular-nums;
+}
+.ls-window__name { font-weight: 600; }
+.ls-window__ends { color: var(--ls-muted); }
+/* two instants have no name, and their ends stand in its place */
+.ls-window__ends:first-child { color: var(--ls-ink); font-weight: 600; }
+.ls-window__group {
+    display: inline-flex;
+    flex-wrap: wrap;
+    border: 1px solid var(--ls-line);
+    border-radius: 0.375rem;
+    overflow: hidden;
+}
+.ls-window__link {
+    padding: 0.15rem 0.6rem;
+    color: var(--ls-ink);
+    text-decoration: none;
+    white-space: nowrap;
+}
+.ls-window__link + .ls-window__link { border-left: 1px solid var(--ls-line); }
+.ls-window__link:hover { background-color: color-mix(in srgb, var(--ls-ink) 8%, transparent); }
+.ls-window__link.is-current {
+    background-color: var(--ls-ink);
+    color: var(--ls-canvas);
+    font-weight: 600;
+}
+.ls-window__link.is-disabled { color: var(--ls-muted); cursor: default; }
+.ls-window__link.is-disabled:hover { background-color: transparent; }
+@media (max-width: 767.98px) {
+    .ls-window { position: static; }
+}
+/* The Events page's filters and its window (ADR-0101): one block that stays in view
+   while the log scrolls — the filter row, the window's bar beneath it, and the line
+   that counts what they leave. Inside it the bar is one of its rows rather than a
+   sticky band of its own. */
+.ls-events__controls {
+    position: sticky;
+    top: var(--ls-bar-height);
+    z-index: 20;
+    margin: 0 0 0.75rem;
+    padding-top: 0.25rem;
+    background-color: var(--ls-canvas);
+    border-bottom: 1px solid var(--ls-line);
+}
+.ls-events__controls .ls-window {
+    position: static;
+    margin: 0;
+    padding: 0.4rem 0;
+    border-bottom: 0;
+}
+.ls-events-filter {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem 1rem;
+    font-size: 0.875em;
+}
+.ls-events-filter__field {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin: 0;
+}
+.ls-events-filter__label { color: var(--ls-muted); }
+.ls-events-filter__field .form-control { width: 12rem; }
+.ls-events-filter__group {
+    position: relative;
+    display: inline-flex;
+    flex-wrap: wrap;
+    border: 1px solid var(--ls-line);
+    border-radius: 0.375rem;
+    overflow: hidden;
+}
+/* The checkbox stays in the form and in the tab order; its label is what shows,
+   struck through when the switch is off, so that off does not rest on color. */
+.ls-events-filter__check {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    pointer-events: none;
+}
+.ls-events-filter__switch {
+    margin: 0;
+    padding: 0.15rem 0.6rem;
+    color: var(--ls-muted);
+    text-decoration: line-through;
+    white-space: nowrap;
+    cursor: pointer;
+    user-select: none;
+}
+.ls-events-filter__switch ~ .ls-events-filter__switch { border-left: 1px solid var(--ls-line); }
+.ls-events-filter__switch:hover { background-color: color-mix(in srgb, var(--ls-ink) 8%, transparent); }
+.ls-events-filter__check:checked + .ls-events-filter__switch {
+    color: var(--ls-ink);
+    text-decoration: none;
+    background-color: color-mix(in srgb, var(--ls-ink) 8%, transparent);
+}
+/* a status that is on wears the tint its rows wear; reached and held back stay neutral */
+.ls-events-filter__check:checked + .ls-events-filter__switch--ok { background: var(--ls-tint-ok); color: var(--ls-tint-ok-ink); }
+.ls-events-filter__check:checked + .ls-events-filter__switch--warn { background: var(--ls-tint-warn); color: var(--ls-tint-warn-ink); }
+.ls-events-filter__check:checked + .ls-events-filter__switch--error { background: var(--ls-tint-error); color: var(--ls-tint-error-ink); }
+.ls-events-filter__check:checked + .ls-events-filter__switch--maintenance { background: var(--ls-tint-maintenance); color: var(--ls-tint-maintenance-ink); }
+.ls-events-filter__check:checked + .ls-events-filter__switch--undefined { background: var(--ls-tint-undefined); color: var(--ls-tint-undefined-ink); }
+.ls-events-filter__check:focus-visible + .ls-events-filter__switch {
+    outline: 2px solid var(--ls-ink);
+    outline-offset: -2px;
+}
+.ls-events__summary {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0 0.75rem;
+    padding-bottom: 0.4rem;
+    font-size: 0.875em;
+}
+.ls-events__count {
+    margin: 0;
+    color: var(--ls-muted);
+    font-variant-numeric: tabular-nums;
+}
+@media (max-width: 767.98px) {
+    .ls-events__controls { position: static; }
+}
+/* A node's views (ADR-0097 decision 3): Status, Series, History and Copy as tabs
+   closing its band — the muted ink, and the view this page is in the body ink,
+   underlined on the band's own rule rather than on a second rule of its own. */
+.ls-band:has(> .ls-views) { padding-bottom: 0; }
+.ls-views {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 1.5rem;
+    margin-top: 0.35rem;
+}
+.ls-views__tab {
+    padding: 0.25rem 0 0.4rem;
+    margin-bottom: -1px;
+    border-bottom: 2px solid transparent;
+    color: var(--ls-muted);
+    text-decoration: none;
+}
+.ls-views__tab:hover { color: var(--ls-ink); }
+.ls-views__tab.is-current {
+    color: var(--ls-ink);
+    border-bottom-color: var(--ls-ink);
+    font-weight: 600;
+}
+/* The number on a node's Series tab (ADR-0114 decision 3): how many curves the view
+   draws, quieter than the tab's word and in figures of one width, so the tabs do
+   not shift when it changes. */
+.ls-views__count {
+    margin-left: 0.15rem;
+    font-size: 0.8em;
+    font-variant-numeric: tabular-nums;
+    color: var(--ls-muted);
+}
+/* A curve seen small (ADR-0114 decisions 1 and 2): the curve's own plot squeezed into
+   a strip the height of a line of text, its strokes keeping their width whatever the
+   squeeze, on a hairline where its zero stands. In the index's fold each curve is its
+   label, its strip and what it reads, each on a line of its own, and what it reads
+   wraps: the strips stand in a column, and the fold asks for no more width than a
+   strip, so opening one does not widen the table past its box. */
+.ls-spark {
+    display: block;
+    overflow: visible;
+    margin: 0.3rem 0 0.2rem;
+    border-bottom: 1px solid var(--ls-line);
+}
+.ls-spark__line,
+.ls-spark__dot,
+.ls-spark__stem {
+    fill: none;
+    stroke: var(--ls-ink);
+    stroke-width: 1.5;
+    stroke-linejoin: round;
+    stroke-linecap: round;
+    vector-effect: non-scaling-stroke;
+}
+.ls-spark__dot { stroke-width: 3; }
+.ls-spark__stem--failed { stroke: var(--ls-danger-ink); }
+.ls-spark__stem--unjudged { stroke: var(--ls-muted); }
+.ls-spark-row { padding: 0.2rem 0; }
+.ls-spark-row__label,
+.ls-spark-row__says { display: block; }
+/* A row whose fold is open is as tall as its curves, and what stands beside the fold —
+   the node, its links — belongs to the fold's first line: every cell at its top,
+   where a closed row's one line stands anyway. And where the window is a desk's, the
+   three numbers beneath a strip keep one line; narrower, they wrap in the strip's
+   width, so that an open fold never widens the table past its box. */
+.ls-series-index > tbody > tr > td { vertical-align: top; }
+@media (min-width: 1200px) {
+    .ls-spark-row__says { white-space: nowrap; }
+}
+/* The Series index on a phone (ADR-0114 decision 3). A table of eight columns is wider
+   than the screen whatever its folds do, and the column the folds stand in was out of
+   sight. So below the width a phone has, a row is a block of its own: its status and
+   its node on the first line, and beneath the node what keeps it, its fold, what it
+   holds and where it leads — each on a line of its own, each saying what it is, since
+   the headings are kept for a reader that hears the page and are out of sight. A cell
+   with nothing in it takes no line. */
+@media (max-width: 575.98px) {
+    .ls-series-index thead {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+    }
+    .ls-series-index,
+    .ls-series-index > tbody { display: block; }
+    .ls-series-index > tbody > tr {
+        display: grid;
+        grid-template-columns: 1.5rem minmax(0, 1fr);
+        column-gap: 0.25rem;
+        padding: 0.5rem 0;
+        border-bottom: 1px solid var(--ls-line);
+    }
+    .ls-series-index > tbody > tr > td {
+        display: block;
+        grid-column: 2;
+        padding: 0.05rem 0;
+        border: 0;
+        text-align: left !important;
+        white-space: normal !important;
+        overflow-wrap: anywhere;
+    }
+    .ls-series-index > tbody > tr > td.ls-readings__cue { grid-column: 1; grid-row: 1; }
+    .ls-series-index > tbody > tr > td.ls-series-index__name { padding-left: 0 !important; }
+    .ls-series-index > tbody > tr > td:empty,
+    .ls-series-index > tbody > tr > td.ls-series-index__curves:not(:has(details)) {
+        display: none;
+    }
+    .ls-series-index > tbody > tr > td[data-label]::before {
+        content: attr(data-label) " ";
+        color: var(--ls-muted);
+    }
+    /* the two views on one line, as they stand side by side in the table */
+    .ls-series-index > tbody > tr > td.ls-series-index__views {
+        display: inline-block;
+        justify-self: start;
+    }
+}
+/* The Series view: a card per node its curves stand on, as many to a row as fit a
+   curve at the width it is drawn at, and one to a row where fewer do. */
+.ls-series-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 34rem), 1fr));
+    gap: 1rem;
+}
+/* A stretch of a time axis returns to its curve's group: the page's bar and the
+   window's, two rows of it at most, stay above the group's head. */
+.ls-series-group { scroll-margin-top: calc(var(--ls-bar-height) + 6rem); }
+@media (max-width: 767.98px) {
+    .ls-series-group { scroll-margin-top: calc(var(--ls-bar-height) + 1rem); }
+}
+.ls-series-group__head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.25rem 0.5rem;
+    margin-bottom: 0.5rem;
+    font-size: 1rem;
+    font-weight: 600;
+}
+.ls-series-group__said {
+    color: var(--ls-muted);
+    font-size: 0.875rem;
+    font-weight: 400;
+}
+.ls-series-readings > summary { cursor: pointer; }
 /* The readings keep their natural width and scroll sideways in their card where it
    is narrower (`.table-responsive`): breaking a value anywhere would fold every row
    into a column of characters before the scroll ever began. */
@@ -1248,46 +2006,73 @@ body[data-ls-card-state="below"] .status-card__state {
     font-variant-numeric: tabular-nums;
     margin-bottom: 0.5rem;
 }
-/* The cue column takes the cue's width and no more, so it stays beside the time
-   it qualifies rather than floating in a share of the table. */
-.ls-readings .ls-readings__cue { width: 1%; }
+/* A readings table's box (ADR-0102 decision 1): as wide as the page and about as tall
+   as the window, scrolling both ways inside itself, so its scrollbars stand at its
+   edges; its heading row and its Time column hold still. Separate borders, so a held
+   cell's rule moves with it; every held cell painted the canvas, so what scrolls
+   beneath it does not show through. */
+.ls-readings-box {
+    max-height: calc(100vh - var(--ls-bar-height) - 3rem);
+    overflow: auto;
+    margin-bottom: 0.75rem;
+    border: 1px solid var(--ls-line);
+    border-radius: 0.375rem;
+}
+.ls-readings-box:focus-visible { outline: 2px solid var(--ls-ink); outline-offset: 2px; }
+.ls-readings-box .ls-readings {
+    margin-bottom: 0;
+    border-collapse: separate;
+    border-spacing: 0;
+}
+.ls-readings-box thead th {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    --bs-table-bg: var(--ls-canvas);
+    vertical-align: bottom;
+    white-space: nowrap;
+}
+.ls-readings-box th:first-child,
+.ls-readings-box td:first-child {
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    --bs-table-bg: var(--ls-canvas);
+    border-right: 1px solid var(--ls-line);
+}
+.ls-readings-box thead th:first-child { z-index: 3; }
+.ls-readings__time { white-space: nowrap; }
+.ls-readings__time .status-cue { margin-left: 0.35rem; vertical-align: -1px; }
+/* a declared column: its measure's label and unit, the field's name beneath it */
+.ls-readings__label { display: block; }
+.ls-readings__field {
+    display: block;
+    font-size: 0.75em;
+    font-weight: normal;
+    color: var(--ls-muted);
+}
+.ls-readings__name { color: inherit; font-size: 0.875em; }
+.ls-readings__unit { font-weight: normal; color: var(--ls-muted); }
+/* History's periods keep their measure; its readings take the page's width */
+.ls-history__periods { max-width: 980px; }
 
-.reason-pin { position: relative; }
+/* A line's pause mark, on its seat in the rail (see `.check-reason__rail--seat`).
+   The chip shape is `.reason-action`'s — an action is an action — at a fixed width
+   so the seat can be kept for it; the mark stays lit while its editor is open. */
 .reason-pin > summary {
-    display: flex;
+    position: absolute;
+    top: 0;
+    right: 0;
+    display: inline-flex;
+    justify-content: center;
+    width: 1.5rem;
+    padding: 0;
     list-style: none;
     cursor: pointer;
 }
 .reason-pin > summary::-webkit-details-marker { display: none; }
 .reason-pin > summary::marker { content: ""; }
 .reason-pin[open] > .reason-pin__toggle { opacity: 1; }
-.reason-pin__panel {
-    position: absolute;
-    z-index: 70;
-    top: calc(100% + 0.35rem);
-    right: 0;
-    width: min(30rem, calc(100vw - 2rem));
-    padding: 0.75rem;
-    color: var(--ls-ink);
-    background: var(--ls-panel);
-    border: 1px solid var(--ls-panel-line);
-    border-radius: 8px;
-    box-shadow: 0 6px 20px var(--ls-panel-shadow);
-    text-align: left;
-    max-height: calc(100vh - 2rem);
-    overflow-y: auto;
-}
-.reason-pin__clear {
-    margin-top: 0.6rem;
-    padding-top: 0.6rem;
-    border-top: 1px solid var(--ls-panel-line);
-}
-@media (max-width: 575.98px) {
-    /* The compact rail remains beside the fixed 50px navigation strip. Keep
-       the anchored editor inside the remaining canvas instead of letting a
-       desktop-width panel disappear underneath that strip. */
-    .reason-pin__panel { width: min(30rem, calc(100vw - 5.5rem)); }
-}
 
 /* Slot actions on a reason line (ADR-0034). The frame is ours, the contents are a
    dependent package's: core emits the `.reason-actions` rail on every reason line
@@ -1390,9 +2175,9 @@ body[data-ls-card-state="below"] .status-card__state {
 @media (prefers-reduced-motion: reduce) {
     .node-action { transition: none; }
 }
-/* On the detail page the rail sits with the status word, so it floats to the far
-   end of that line rather than crowding it. */
-.alert > .node-actions { float: right; }
+/* On the detail page the rail sits with the status word, at the far end of the
+   status line rather than crowding it (`.status-line`, with the rule's block). */
+.status-line > .node-actions { margin-left: 0; }
 
 /* Reason separation (tight rows + rule). Stacked reasons blur together: each reason is a
    block whose wrapped lines share the body leading (ADR-0018 keeps them compact), so with
@@ -1593,7 +2378,27 @@ body[data-ls-card-state="below"] .status-card__state {
     align-self: center;
     opacity: 0.85;
 }
-.ls-strip__name { font-weight: 600; color: inherit; text-decoration: none; }
+/* The name and the state are the pill: neither breaks, neither gives way. */
+.ls-strip__name { font-weight: 600; color: inherit; text-decoration: none; white-space: nowrap; }
+.ls-strip__state { flex: none; white-space: nowrap; }
+/* The title gives way, whole. Its frame is one line high, wraps, and begins with a
+   strut of no width: a title that fits stands beside the strut, and one that does
+   not goes to a second line the frame does not show — so it is never squeezed to a
+   few letters and dots between a name and a state that have no room to spare. */
+.ls-strip__title {
+    display: flex;
+    flex-wrap: wrap;
+    flex: 0 1 auto;
+    min-width: 0;
+    /* one line of the pill's own, centered on it: a frame that hides what
+       overflows has no baseline of its text to be aligned by */
+    align-self: center;
+    align-items: center;
+    height: 1.5em;
+    overflow: hidden;
+}
+.ls-strip__title::before { content: ""; width: 0; height: 1.5em; }
+.ls-strip__title > .node-title { flex: none; margin-left: 0; }
 .ls-strip__name:hover { text-decoration: underline; }
 .ls-strip__state { margin-left: 0.15rem; opacity: 0.8; }
 .ls-strip.s-error       { background: var(--ls-error); color: var(--ls-error-ink); }
@@ -1651,13 +2456,24 @@ body[data-ls-card-state="below"] .status-card__state {
 .row-error       > td { background: var(--ls-tint-error); }
 .row-maintenance > td { background: var(--ls-tint-maintenance); }
 .row-undefined   > td { background: var(--ls-tint-undefined); }
+/* A table wider than its box (`.table-responsive`) gives every column its
+   narrowest, and a reason's narrowest is its longest word: a column of single
+   words, in rows a screen tall. On a phone, where these tables are wider than
+   their boxes, a reason keeps a line's worth of width instead — most of the
+   screen's. Not on a desk: there a table shares its width out by what its columns
+   hold, and a floor under one of them would move the others. */
+@media (max-width: 575.98px) {
+    .table-responsive td.md-body { min-width: 16rem; }
+}
 
-/* filter toggles */
+/* filter toggles. They take a second line where the band is narrower than the
+   four of them: a form that may not shrink, around a row that may not wrap, made
+   the page as wide as they are on a phone. */
 .status-filters {
     display: flex;
-    gap: 1.25rem;
+    flex-wrap: wrap;
+    gap: 0.35rem 1.25rem;
     align-items: center;
-    flex-shrink: 0;        /* shrink the title in the header, not the filter bar */
 }
 
 /* keep each toggle's label on one line ("hide ok", not "hide" / "ok") */
@@ -1710,6 +2526,15 @@ body[data-ls-card-state="below"] .status-card__state {
 /* Sustained poll failure (ADR-0005): poll.js dims the frozen
    content under its banner — still readable, no longer mistakable for live. */
 .poll-stale { opacity: 0.45; transition: opacity 0.3s ease; }
+/* The poll waits while a pin's editor is open in what it would swap (ADR-0104
+   decision 7), and after a minute poll.js marks the container: everything in it
+   dims as above — a wall left with an editor open must not read as live — but for
+   the card or the head that holds the open editor, which somebody is typing in. */
+.poll-waiting > :not(.status-grid):not(:has(details[open] .maintenance-editor-form)),
+.poll-waiting > .status-grid > :not(:has(details[open] .maintenance-editor-form)) {
+    opacity: 0.45;
+    transition: opacity 0.3s ease;
+}
 
 /* ----- the settings menu (ADR-0029) -----
 
@@ -2009,6 +2834,8 @@ body[data-ls-theme="cyberpunk"] .ls-brand__wordmark { text-shadow: 0 0 9px var(-
    deliberately still — anything moving there competes with the single signal
    that should — so the gaze blinks here and the hero watches here, and the grid
    never does either. Both stop for `prefers-reduced-motion`. */
+/* The page's whole width, for the hero's rings to measure themselves against. */
+.ls-about-page { container-type: inline-size; }
 .ls-about {
     max-width: 44rem;
     padding-bottom: 2rem;
@@ -2086,6 +2913,9 @@ body[data-ls-theme="cyberpunk"] .ls-brand__wordmark { text-shadow: 0 0 9px var(-
     --ls-ring-height: 9.4rem;
     --ls-inner-height: 8.6rem;
     --ls-label-height: 1.2rem;
+    /* the room a term at a ring's end needs past the ring, both ends together: the
+       longest term's width, and a little air */
+    --ls-term-room: 8.5rem;
     /* the air we insist on above the highest term and below the lowest */
     --ls-field-clear: 1.6rem;
     /* how far a term reaches beyond the eyes, plus that air */
@@ -2134,13 +2964,20 @@ body[data-ls-theme="cyberpunk"] .ls-brand__wordmark { text-shadow: 0 0 9px var(-
    the outer ring has to stay **above the wordmark**, which is why the gaze
    carries the margin below. Between those two numbers there is about a rem of
    room, and that rem is the whole composition. */
+/* And the widths are what the **page** allows, not a share of the window: the page
+   is narrower than the window by the rail and its own margins, and a term stands
+   centered on its ring's end, half of it beyond. So a ring is as wide as the page's
+   width (`100cqi`: `.ls-about-page`, around the column, is the container, since the
+   rings are wider than the column on purpose) less `--ls-term-room` — the width
+   of the longest term a ring carries, with a little air — and the term at either
+   end stays on the page at every width. */
 .ls-hero__ring--1 {
-    width: min(58rem, 94vw);
+    width: min(58rem, calc(100cqi - var(--ls-term-room)));
     height: var(--ls-ring-height);
     border-color: color-mix(in srgb, var(--ls-line) 50%, transparent);
 }
 .ls-hero__ring--2 {
-    width: min(38rem, 74vw);
+    width: min(38rem, calc((100cqi - var(--ls-term-room)) * 0.66));
     height: var(--ls-inner-height);
 }
 /* A station travels **along** its ellipse rather than the ring turning under it,
@@ -2158,7 +2995,9 @@ body[data-ls-theme="cyberpunk"] .ls-brand__wordmark { text-shadow: 0 0 9px var(-
    its tagline. */
 @media (max-width: 575.98px) {
     .ls-hero__ring--1 { display: none; }
-    .ls-hero__ring--2 { width: min(18rem, 62vw); }
+    /* the four it keeps are shorter words, and the ring has to stay outside the eyes */
+    .ls-hero { --ls-term-room: 5.75rem; }
+    .ls-hero__ring--2 { width: min(18rem, calc(100cqi - var(--ls-term-room))); }
 }
 .ls-hero__signal {
     position: absolute;
@@ -2492,6 +3331,20 @@ body[data-bs-theme="dark"] .ls-links__icon--dark { display: block; }
 }
 .ls-links__problems,
 .ls-links__empty { max-width: 46rem; }
+/* The setup guide's folds (ADR-0030): the browser's own disclosures, each a card.
+   The summary is the whole control, so it says so under the pointer; what it adds
+   beside its name is muted from our own token, because a card's surface is
+   Bootstrap's and `.text-muted` on it is an ink `tests/test_contrast.py` cannot
+   vouch for. Under a page that has links the fold keeps the empty page's measure
+   — a roster as wide as the columns would put a name a hand from its drawing —
+   and its distance from the last group. */
+.ls-links__fold > summary { cursor: pointer; }
+.ls-links__aside { color: var(--ls-muted); }
+.ls-links__fold .card-body > :last-child { margin-bottom: 0.25rem; }
+.ls-links__foot {
+    max-width: 46rem;
+    margin-top: 2.5rem;
+}
 .ls-links__sample {
     background: var(--ls-code-bg);
     border-radius: 6px;
@@ -2537,3 +3390,10 @@ body[data-bs-theme="dark"] .ls-links__icon--dark { display: block; }
     padding-left: 1.1rem;
     margin-top: 0.25rem;
 }
+
+/* The page a path no node stands at is answered with (ADR-0116): sentences at a
+   reading measure, and between them the pins held against the path, in the blocks
+   the Maintenance page states them in. */
+.ls-no-node { max-width: 46rem; margin-top: 0.75rem; }
+.ls-no-node__lead { font-size: 1.05rem; }
+.ls-no-node__pins { margin-bottom: 1rem; }

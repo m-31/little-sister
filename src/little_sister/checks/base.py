@@ -17,7 +17,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from little_sister import secrets
 from little_sister.checks.metadata import (
@@ -43,6 +43,7 @@ from little_sister.reasons import (
     RecordRefused,
     check_subject,
     derive_code,
+    for_the_record,
     marked,
     normalize,
     normalize_record,
@@ -52,6 +53,9 @@ from little_sister.reasons import (
 )
 from little_sister.status import StatusCode, join_path, leaf_name, split_path
 from little_sister.values import number, strict_flag
+
+if TYPE_CHECKING:
+    from little_sister.series import SeriesRecord
 
 DEFAULT_FREQUENCY_SECONDS = 900   # 15 minutes — most checks run infrequently
 DEFAULT_TIMEOUT_SECONDS = 30.0
@@ -150,8 +154,9 @@ class CheckResult:
     library resolves it against the deployment's ``subnodes:`` block and stores it
     per child *name*. What is left for these two fields is the child whose name
     nothing could have declared: the **dynamic** one, a volume or a repository the
-    run discovered. A stamped label is read per field, and only where the resolved
-    map says nothing for that name.
+    run discovered. A stamped label is read per field: where the resolved map says
+    nothing for that name, and — whatever the map says — on a child that says
+    ``dynamic`` (below).
 
     ``order`` is a **declared rank** among a node's siblings (ADR-0055). Siblings
     render alphabetically, which destroys the one order a severity band set has:
@@ -200,6 +205,41 @@ class CheckResult:
     shows here — it matters one layer down, where a stated ``false`` — the
     deployment's ``subnodes:`` or a ``nodes.yaml`` entry — must be able to
     overrule a shipped ``true``.
+
+    ``for_record`` holds the lines a grading writes **for the record alone**
+    (ADR-0111): what it says of a reading it does not show. A check that reads
+    every run of a job name on each poll shows one line, the newest run's, and
+    says how each older run stood here — ``for_record=[Entry(slug, text, code=…,
+    subject=…, data=…), …]`` — so that every kept run carries its code and its
+    sentence, and a run that failed last week still says so in its series. Each
+    line carries its own code and the record of the reading it is said of, and is
+    refused without either. **No node sees it**: it is no entry of ``reason``, so
+    it reaches neither the node's code nor its line cap, the envelope or a pin, and
+    it may be written on any node of the result. A shown line that carries the same
+    reading is what stood, and wins.
+
+    ``children_complete`` says that the ``children`` of this node are **all of
+    them** (ADR-0109): the run read every one, so a child an earlier run wrote and
+    this one does not return is gone, and the engine removes it. It is a statement
+    about this node's direct children alone, as far as this check writes them, and
+    each node of a result makes it for itself. A result that says nothing — the
+    default — removes nothing: a child it leaves out stays, which is what a run
+    that could not read it wants (ADR-0060 decision 3). So say it where the run
+    listed every child, and leave it unsaid in a run that could not.
+
+    ``dynamic`` says that this child is one **a run names** (ADR-0118): a volume,
+    a repository, a function — named by what its source calls it, or by what a
+    deployment's configuration does, and not by the type's own code. Nothing
+    declared for a *name* reaches such a node: neither the label and the
+    ``show_when_quiet`` a type declares in ``subnode_defaults`` nor a deployment's
+    ``subnodes:`` block, both of which are keyed by a subnode's name and mean the
+    child the type always emits under it. A function called ``batch`` is not the
+    ``batch`` aspect. Its labels are the ones this result carries — ``title``,
+    ``about``, ``show_when_quiet`` — and a ``nodes.yaml`` entry for its path still
+    beats them. It is said of this node alone: a child beneath it that says
+    nothing is read by its name, as every node is that says nothing — the
+    default. Like ``name`` and the labels it is **ignored on the root**, which a
+    check's ``path:`` names.
     """
     code: StatusCode | None = None
     reason: ReasonInput = field(default_factory=list)
@@ -213,6 +253,9 @@ class CheckResult:
     order: int = 0
     show_when_quiet: bool | None = None
     entries: bool = False
+    for_record: Sequence[ReasonEntry] = ()
+    children_complete: bool = False
+    dynamic: bool = False
     #: Derived in :meth:`__post_init__` — the one internal form (ADR-0036).
     reason_entries: tuple[ReasonEntry, ...] = field(
         init=False, default=(), repr=False, compare=False)
@@ -226,16 +269,31 @@ class CheckResult:
         for child in self.children:
             if not child.name:
                 raise CheckError("a child CheckResult must have a 'name'")
+        # A statement the engine removes nodes on: it is said, or it is not, and a
+        # value that merely reads as true would be believed (ADR-0109).
+        if not isinstance(self.children_complete, bool):
+            raise CheckError(
+                "children_complete is True or False: a node says that its children "
+                f"are complete, or says nothing — not {self.children_complete!r} "
+                "(ADR-0109)")
+        # A statement the engine reads a node's labels by, so it is refused the way
+        # a quoted flag is: `"false"` reads as true (ADR-0118).
+        if not isinstance(self.dynamic, bool):
+            raise CheckError(
+                "dynamic is True or False: a child says that a run names it, or "
+                f"says nothing — not {self.dynamic!r} (ADR-0118)")
         # Normalize where the outside world enters (ADR-0026): five accepted input
         # forms, one internal one. A malformed slug is the check author's error and
         # surfaces as a failing check, not as a silent re-key.
         try:
             entries, members = normalize(self.reason, self.entries,
                                          record_limit=_record_limit())
+            kept = for_the_record(self.for_record, record_limit=_record_limit())
         except ReasonError as error:
             raise CheckError(str(error)) from error
         object.__setattr__(self, "reason_entries", entries)
         object.__setattr__(self, "members", members)
+        object.__setattr__(self, "for_record", kept)
         # The ADR-0042 seam: a node with coded entries declares no code of its
         # own — every claim it makes is attributable to a line — and declaring
         # both is refused rather than silently resolved, the way a check YAML
@@ -615,8 +673,9 @@ class Check(abc.ABC):
         # **deployment** stated in the `subnodes:` block of the check's YAML,
         # which `_parse_common` parsed for every type. The deployment's value
         # wins per name, because a file somebody edits beats a map somebody
-        # released; both beat the value a child result stamps, and `nodes.yaml`
-        # beats all three by being seeded before the first tick.
+        # released; both beat the value a child result stamps — unless that child
+        # says that a run names it, and the map is not asked (ADR-0118) — and
+        # `nodes.yaml` beats all three by being seeded before the first tick.
         #
         # One merge, no layering: unlike a label there is nothing to extend, so
         # a stated value replaces a declared one outright.
@@ -707,6 +766,10 @@ class Check(abc.ABC):
         # non-empty ⇒ the engine pins this check to ERROR and never calls
         # measure().
         self.secret_errors: list[str] = []
+        # The read of this check's own series (ADR-0113), which whoever runs the
+        # check hands it (:meth:`bind_kept`) — the engine, or a type's own test;
+        # ``None`` where nobody did.
+        self._kept_reader: Callable[[str], tuple[SeriesRecord, ...]] | None = None
 
     @property
     def name(self) -> str:
@@ -824,6 +887,47 @@ class Check(abc.ABC):
         except secrets.SecretError as error:
             self.secret_errors.append(str(error))
             return ""
+
+    def bind_kept(self,
+                  reader: Callable[[str], tuple[SeriesRecord, ...]]) -> None:
+        """Hand this check the read of its own series: ``reader(subject)`` answers
+        what is kept of that subject, for this check and for no other (ADR-0113
+        decision 1). Whoever runs the check calls it: the engine, once for every
+        check it runs, with a read that answers only while that check measures —
+        and a type's own test, which stands in the engine's place and binds what
+        it wants the type to find. A check nothing bound is answered nothing."""
+        self._kept_reader = reader
+
+    def kept(self, subject: str = "") -> tuple[SeriesRecord, ...]:
+        """**What this check kept of a subject** (ADR-0113): the window of one of
+        its own series as the store holds it — every kept record, oldest first,
+        each with its record (``data``), its own time (``at``), the moment it was
+        observed, its identity or its state, and the code and the texts that stood
+        where it landed. With no argument, of the object this check declares.
+
+        **It is for deciding what to ask, and for nothing else.** A type that reads
+        a history from its source asks from where its own history ends, instead of
+        asking for the whole of it on every poll; what it hands back is still what
+        the source said. A record stays a fact about the world: what a type derived
+        from its history is not written into one, because two instances would then
+        keep different records of one world.
+
+        The records are copies — writing to one changes nothing that is kept. The
+        answer is empty where this check keeps no series (``series_keep``), where
+        nothing of the subject is kept yet, and outside an engine; a type asks for
+        its whole window then.
+
+        **Under an engine it answers only inside** :meth:`measure`, on the thread
+        the engine called that on, and raises :class:`CheckError` anywhere else. A
+        grading reads the records, the configuration and the clock it is handed
+        (ADR-0086 decision 6); one that read the store would grade an old reading
+        differently when it is graded again. A thread this check starts carries no
+        such mark, so read before fanning out.
+        """
+        reader = self._kept_reader
+        if reader is None:
+            return ()
+        return reader(subject or self.subject)
 
     @abc.abstractmethod
     def measure(self) -> Measurement | Sequence[Measurement]:
@@ -968,9 +1072,10 @@ def _resolve_subnode_labels(
 
     A field that resolves to **nothing is left out** rather than stored empty, and
     the two are different things one layer up: the engine reads a child result's
-    own label only where this map is silent for that name, which is what keeps a
+    own label where this map is silent for that name, which is what keeps a
     dynamically named child — a volume, a repository the run discovered — labeled
-    by the check that discovered it.
+    by the check that discovered it. A child that says so is read from its own
+    result whatever this map holds (ADR-0118).
     """
     configured = configured or {}
     declared = declared or {}

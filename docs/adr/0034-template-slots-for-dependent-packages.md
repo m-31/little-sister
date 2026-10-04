@@ -1,7 +1,7 @@
 # ADR-0034 — Template slots for dependent packages
 
 - **Status:** Accepted
-- **Date:** 2026-09-05 (accepted 2026-08-01)
+- **Date:** 2026-10-04 (accepted 2026-08-01)
 - **Related:** [ADR-0001](0001-in-process-threaded-engine.md) (the import-before-app
   registration slot this reuses), [ADR-0018](0018-markdown-rendering.md) (what a
   reason is made of, and why raw HTML is escaped there),
@@ -10,7 +10,9 @@
   [ADR-0024](0024-dashboard-layout.md) (the surfaces a slot appears on),
   [ADR-0035](0035-registering-a-config-aspect.md) (where an extension's *configuration*
   goes — the sibling seam taken in the same pass),
-  [ADR-0008](0008-json-output-api.md) (untouched: a slot is presentation only)
+  [ADR-0008](0008-json-output-api.md) (untouched: a slot is presentation only),
+  [ADR-0100](0100-system-is-two-views.md) (the *Installed* view of `/system`, which
+  lists what registered)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -125,8 +127,9 @@ dependent package fills a slot with **a template of its own** plus an optional
    administrative act on the monitor, and the person who spots the failure is often not
    the admin.
 
-9. **Registration is visible.** `/system` lists slot, package, template and whether a
-   provider is attached. Registration is import-order sensitive and all its failures
+9. **Registration is visible.** `/system`'s *Installed* view, `/system/installed`
+   ([ADR-0100](0100-system-is-two-views.md)), lists slot, package, template and whether
+   a provider is attached. Registration is import-order sensitive and all its failures
    are log warnings; a seam nobody can see from the running instance is
    indistinguishable from one that silently did not take.
 

@@ -54,13 +54,14 @@ from concurrent.futures import Future, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from little_sister import self_report
+from little_sister import instants, self_report
 from little_sister.checks import CheckError, parse_duration
 from little_sister.fetch import USER_AGENT, fetch
 from little_sister.links import DEFAULT_PROBE_INTERVAL, LinksConfig
 from little_sister.logger import logger
 from little_sister.pool import DaemonPool
 from little_sister.reasons import plain
+from little_sister.spans import local_time
 from little_sister.transport import RemoteError
 
 #: How long one request may take. A probe pass now starts from a **request**
@@ -131,7 +132,8 @@ MAX_STUCK_PASSES = 3
 
 @dataclass(frozen=True)
 class Verdict:
-    """One target's last answer, and when it was given.
+    """One target's last answer, and when it was given — an instant, held in UTC
+    (ADR-0120), so that how long ago it was does not jump when a clock changes.
 
     ``alive`` is ``True`` (an agreed status), ``False`` (gone) or ``None`` (no
     answer). :attr:`detail` is short plain text for the page — never Markdown, and
@@ -148,6 +150,10 @@ class Verdict:
     alive: bool | None
     detail: str
     checked_at: datetime
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "checked_at", instants.utc(
+            self.checked_at, "a verdict's checked_at"))
 
     @property
     def failed(self) -> bool:
@@ -293,12 +299,12 @@ def refresh_now(config: LinksConfig,
             # are not going to arrive at all. Fall through, and let `start_pass`
             # supersede it.
             running = None
-            _last_forced = datetime.now()
+            _last_forced = instants.now()
         elif running is None:
             if _last_forced is not None and (
-                    datetime.now() - _last_forced).total_seconds() < MIN_FORCED_GAP:
+                    instants.now() - _last_forced).total_seconds() < MIN_FORCED_GAP:
                 return True
-            _last_forced = datetime.now()
+            _last_forced = instants.now()
     if running is not None:
         return running.done.wait(deadline)
     # Outside the lock on purpose: `start_pass` takes it, and it either starts the
@@ -363,7 +369,7 @@ def start_pass(config: LinksConfig) -> threading.Event:
             self_report.runtime.see(
                 "links.overrun",
                 plain(f"a reachability pass started "
-                      f"{running.started_at.isoformat(timespec='seconds')} has "
+                      f"{local_time(running.started_at)} has "
                       f"not honored its own {running.deadline:.0f}s deadline — a "
                       f"new one was started (ADR-0030)"))
         _prune_stuck()
@@ -378,7 +384,7 @@ def start_pass(config: LinksConfig) -> threading.Event:
             return refused
         _generation += 1
         current = _Pass(generation=_generation, done=threading.Event(),
-                        started_at=datetime.now(),
+                        started_at=instants.now(),
                         deadline=_pass_deadline(count))
         _running = current
     thread = threading.Thread(target=_run_pass, args=(config, current),
@@ -471,7 +477,7 @@ class _Pass:
     def overdue(self) -> bool:
         """Whether this pass is so far past its own deadline that it has stopped
         enforcing it — the only case in which a new pass takes the slot by force."""
-        return (datetime.now() - self.started_at).total_seconds() > (
+        return (instants.now() - self.started_at).total_seconds() > (
             self.deadline + PASS_ABANDON_GRACE)
 
 
@@ -546,7 +552,7 @@ def _is_due(urls: tuple[str, ...], interval: int) -> bool:
         answers = [_results[url].checked_at for url in urls if url in _results]
     if len(answers) < len(urls):
         return True
-    return (datetime.now() - max(answers)).total_seconds() >= interval
+    return (instants.now() - max(answers)).total_seconds() >= interval
 
 
 def _pass_deadline(count: int) -> float:
@@ -684,7 +690,7 @@ def _abandon(current: _Pass, pool: DaemonPool,
     what is left is a leftover the page counts and :func:`start_pass` refuses to add
     a fourth of.
     """
-    now = datetime.now()
+    now = instants.now()
     canceled = {future for future in futures if future.cancel()}
     for future, url in futures.items():
         if future in canceled:
@@ -741,7 +747,7 @@ def _probe(url: str, alive: frozenset[int]) -> Verdict:
     ``HEAD`` first — a probe has no use for the body — falling back to ``GET`` when
     the server's answer is about the *method* rather than about the resource.
     """
-    now = datetime.now()
+    now = instants.now()
     try:
         status = _request(url, "HEAD")
         if status in RETRY_WITH_GET:

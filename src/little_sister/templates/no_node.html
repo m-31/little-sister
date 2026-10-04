@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+<head>
+    {% set page_title = 'No node' %}
+    {% include '_header.html' %}
+
+    {#- The page a path no node stands at is answered with (ADR-0116), under the
+        breadcrumb, which says where the path would stand and opens what stands
+        above it. No tabs: they are a node's views, and there is none. Not polled:
+        an editor of a pin may be open in it, and a node that returns is a reload
+        away. -#}
+    <div class="container-fluid mt-3 px-4">
+        {% include '_page_band.html' %}
+        {#- What a write that came back here has to say: a refused action names
+            the node it was sent for, whether or not one stands there. -#}
+        {% include '_said.html' %}
+        {% include '_no_node.html' %}
+    </div>
+
+{% include '_page_end.html' %}
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="{{ url_for('static', filename='js/rail.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/maintenance-edit.js') }}"></script>
+</body>
+</html>

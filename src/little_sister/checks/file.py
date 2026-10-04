@@ -20,6 +20,7 @@ from little_sister.checks.base import (
     register,
 )
 from little_sister.checks.output import FAILURE_BYTES, failure_text
+from little_sister.spans import format_duration, format_span
 from little_sister.status import StatusCode
 
 DEFAULT_MAX_AGE_SECONDS = 1200   # 20 minutes
@@ -75,7 +76,7 @@ class FileFreshnessCheck(Check):
     def config_summary(self) -> str:
         return config_markdown({
             "file": self.file_path,
-            "max age": _format_age(self.max_age_seconds),
+            "max age": format_duration(self.max_age_seconds),
             "stale code": self.stale_code.name.lower(),
         })
 
@@ -128,19 +129,14 @@ class FileFreshnessCheck(Check):
         age = (now - datetime.fromisoformat(moment)).total_seconds()
         if age <= self.max_age_seconds:
             return CheckResult(StatusCode.OK)
+        # The age is a measured span and the maximum a configured interval, each
+        # in the library's words for it (ADR-0099 decision 4): past a day in days
+        # and the hour beside them, where "1987h14m" was eighty-two days — and the
+        # maximum as it was written, where a week read "168h00m".
         return CheckResult(self.stale_code, [
-            f"stale: last changed {_format_age(age)} ago "
-            f"(max {_format_age(self.max_age_seconds)})"])
+            f"stale: last changed {format_span(age)} ago "
+            f"(max {format_duration(self.max_age_seconds)})"])
 
     def expected_record(self) -> int:
         """A timestamp and, on a bad read, a short reason (ADR-0075)."""
         return RECORD_BYTES
-
-
-def _format_age(seconds: float) -> str:
-    total = int(seconds)
-    if total < 60:
-        return f"{total}s"
-    if total < 3600:
-        return f"{total // 60}m"
-    return f"{total // 3600}h{(total % 3600) // 60:02d}m"

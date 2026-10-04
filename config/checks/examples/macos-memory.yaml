@@ -21,7 +21,14 @@ path: /mymac/system          # absolute node path (ADR-0016)
 frequency: 2m                # how often to run
 timeout: 30s                 # per-run timeout
 # series_keep: 60            # readings kept per subject as its history (default 0: keep none)
-# reading_cap: 10            # of those, the newest its page lists (default: settings.yaml's)
+# reading_cap: 10            # of those, the newest its Series view lists (default: settings.yaml's)
+#
+# What the kept readings are drawn by (ADR-0092, ADR-0096): macos-memory declares the
+# pressure level, the compressed share, the swap used and each watched process's
+# resident memory, each curve on the node that grades it. Name a field to relabel
+# it, `null` to draw none:
+# measures:
+#   swap_used_mb: null
 
 # --- connection (same fields as the ssh checks) -----------------------------
 host: mymac-ssh-alias        # SSH target — ~/.ssh/config alias or hostname/FQDN

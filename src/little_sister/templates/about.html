@@ -12,6 +12,9 @@
         still — anything moving there competes with the one signal that should —
         so the gaze blinks here and the hero watches here, and nowhere else.
         Everything still stops for `prefers-reduced-motion`. -#}
+    {#- `.ls-about-page` is the page's whole width, which the hero's rings measure
+        themselves against: the column inside it is narrower than they are. -#}
+    <div class="ls-about-page">
     <div class="container-fluid mt-3 px-4 ls-about">
         {#- **One hero, and the page is the animation.** The identity used to be
             told three times over — the bar, this block, and an eye of its own
@@ -97,6 +100,7 @@
             <a href="https://github.com/m-31/little-sister"
                rel="noopener noreferrer" target="_blank">github.com/m-31/little-sister</a>
         </p>
+    </div>
     </div>
 {% include '_page_end.html' %}
 

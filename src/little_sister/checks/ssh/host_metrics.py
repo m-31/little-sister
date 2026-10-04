@@ -15,6 +15,7 @@ The basic metrics need no elevated rights; ``sudo: true`` runs the script under
 """
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
@@ -39,7 +40,6 @@ from little_sister.checks.ssh.metrics import (
     grade,
     human_duration,
     human_kb,
-    oneline,
     parse_metrics,
     reading,
     readings,
@@ -70,12 +70,30 @@ DEFAULT_PROFILE = "linux"
 ALL_VOLUMES = "all"
 
 #: What one reading costs beside the transport half, in the bytes the seam counts
-#: (ADR-0075): seven numbers and two short strings under their own key names, with
-#: room — and, per filesystem of a `disk_path` list, three numbers and a mount
-#: point. Both are ceilings: every string in this record is either clipped or a
-#: mount path the host already keeps short.
-BASE_RECORD_BYTES = 384
-VOLUME_RECORD_BYTES = 128
+#: (ADR-0075): eight numbers and two short strings under their own key names, with
+#: room — and, per filesystem of a `disk_path` list, three numbers under their keys
+#: beside the volume's name and its mount point, which the configuration gives and
+#: `expected_record` counts. Both are ceilings: every string in this record is
+#: either clipped or one the configuration names.
+BASE_RECORD_BYTES = 416
+VOLUME_RECORD_BYTES = 96
+
+#: What this type's nodes are graded on, each on the node that grades it — the
+#: curves it draws by default (ADR-0096 decision 6). A volume is keyed by its
+#: node's name, so one declaration is a curve for each (decision 2).
+# Each percent here is of a whole — memory of what is installed, CPU as 100 % less
+# idle over all cores, space of a filesystem — so its axis reaches 100 and two hosts'
+# curves compare (ADR-0117). Load per core has no such end: it passes 1.
+MEASURES: dict[str, dict[str, object]] = {
+    "mem_pct": {"unit": "%", "label": "Memory in use", "node": "memory",
+                "axis_to": 100},
+    "cpu_pct": {"unit": "%", "label": "CPU busy", "node": "cpu", "axis_to": 100},
+    "load1_per_core": {"unit": "per core", "label": "Load per core", "node": "load"},
+    "disk_pct": {"unit": "%", "label": "Disk space used", "node": "disk",
+                 "axis_to": 100},
+    "volumes.*.pct": {"unit": "%", "label": "Disk space used on *",
+                      "node": "disk/*", "axis_to": 100},
+}
 
 # (warn, error) — a value at or above the bound takes that status. Disk/memory/cpu
 # are percentages; load is the 1-minute average per CPU core. Sensible defaults;
@@ -154,7 +172,8 @@ class HostMetricsCheck(SshScriptCheck):
         # the library resolves them against the deployment's `subnodes:` block and
         # the engine writes the result per child name, so nothing below reads a
         # config key or layers a default.
-        super().__init__(subnode_defaults=SUBNODE_DEFAULTS, **kwargs)
+        super().__init__(subnode_defaults=SUBNODE_DEFAULTS,
+                         measure_defaults=MEASURES, **kwargs)
         self.thresholds = thresholds
         self.descriptions = descriptions or {}
         self.disk_path = disk_path
@@ -205,9 +224,11 @@ class HostMetricsCheck(SshScriptCheck):
         over nothing. A volume is named by the *host* (``root``, ``data``, whatever
         `df` reported), which no declaration could have anticipated, so it takes
         the one channel left for a dynamic child: the label rides its
-        ``CheckResult``. It reads the aspect's **resolved** text — the deployment's
-        override included — rather than ``ABOUT``, so a `subnodes: {disk: …}` entry
-        reaches the volumes exactly as it reaches the branch above them."""
+        ``CheckResult``, which says that a run names it (ADR-0118) — so a volume
+        the host calls ``memory`` is not labeled as that aspect. It reads the
+        aspect's **resolved** text — the deployment's override included — rather
+        than ``ABOUT``, so a `subnodes: {disk: …}` entry reaches the volumes exactly
+        as it reaches the branch above them."""
         return self.subnode_labels.get("disk", {}).get("about", "")
 
     def _script_args(self) -> list[str]:
@@ -229,6 +250,12 @@ class HostMetricsCheck(SshScriptCheck):
     #: And of each filesystem of a `disk_path: all` (or list) run, per volume.
     VOLUME_KEYS = ("pct", "avail_kb", "total_kb")
 
+    @property
+    def _counts_volumes(self) -> bool:
+        """Whether this check reads several filesystems, so its record keys them by
+        name even on a run that read none (one shape per check)."""
+        return self.disk_path == ALL_VOLUMES or "\n" in (self.disk_path or "")
+
     def measure(self) -> Measurement:
         """One SSH call, one script, **one flat reading** — and that is the whole
         point of this type as the case ADR-0085 decision 2 was written against.
@@ -246,10 +273,11 @@ class HostMetricsCheck(SshScriptCheck):
         record = self._transport_record(result)
         metrics = parse_metrics(result.stdout)
         record.update(readings(metrics, *self.BASE_KEYS))
+        record["load1_per_core"] = _per_core(record)
         record["os"] = metrics.get("os") or None
         record["hostname"] = metrics.get("hostname") or None
-        if "disk_count" in metrics:
-            record.update(self._volume_readings(metrics))
+        if "disk_count" in metrics or self._counts_volumes:
+            record["volumes"] = self._volume_readings(metrics)
         else:
             record.update(readings(metrics, *self.DISK_KEYS))
             record["disk_path"] = metrics.get("disk_path") or None
@@ -259,14 +287,13 @@ class HostMetricsCheck(SshScriptCheck):
             record["profile_error"] = clip(metrics["profile_error"],
                                            chars=TRANSPORT_TEXT_CHARS,
                                            budget=TRANSPORT_TEXT_BYTES)
-        # Kept only where nothing parsed, which is the one sentence that needs
-        # it: *connected, but no metrics — here is what it said instead*. On
-        # every other run the script's own output is working state and stays
+        # Where nothing parsed, the reading failed and says so — with what the
+        # host said instead, which is the one sentence that needs the script's
+        # output. On every other run that output is working state and stays
         # inside the check.
-        if not self._has_readings(record):
-            record["output"] = clip(oneline(result.stdout),
-                                    chars=TRANSPORT_TEXT_CHARS,
-                                    budget=TRANSPORT_TEXT_BYTES)
+        self._say_it_failed(record, result.stdout,
+                            readable=self._has_readings(record),
+                            nothing="connected, but no metrics")
         # Anything the script labelled `debug*` rides through untouched, so the
         # `debug` lines can be rebuilt from the reading like every other line.
         record.update({key: value for key, value in metrics.items()
@@ -274,23 +301,25 @@ class HostMetricsCheck(SshScriptCheck):
         return Measurement(record=record)
 
     def _volume_readings(self, metrics: dict[str, str]) -> dict[str, Any]:
-        """The per-filesystem numbers of a `disk_path: all` (or list) run, flat
-        and under the script's own names, because a record renders as its keys
-        and `disk2_pct` is what a reader of one should see."""
-        volumes: dict[str, Any] = {
-            "disk_count": reading(metrics.get("disk_count"))}
-        count = volumes["disk_count"] or 0
+        """The filesystems of a `disk_path: all` (or list) run, each keyed by the
+        name of the node it becomes and holding its mount point and its numbers
+        (ADR-0096 decision 2): the index the script numbered them by is where a
+        volume stood in one run's output, and a curve that followed it would swap
+        volumes when the order moved."""
+        volumes: dict[str, Any] = {}
+        used: set[str] = set()
+        count = reading(metrics.get("disk_count")) or 0
         for index in range(1, int(count) + 1):
             prefix = f"disk{index}_"
-            volumes.update({
-                f"{prefix}{key}": reading(metrics.get(f"{prefix}{key}"))
-                for key in self.VOLUME_KEYS})
-            volumes[f"{prefix}path"] = metrics.get(f"{prefix}path") or None
+            path = metrics.get(f"{prefix}path") or None
+            volumes[volume_name(str(path or ""), used)] = {
+                "path": path, **{key: reading(metrics.get(f"{prefix}{key}"))
+                                 for key in self.VOLUME_KEYS}}
         return volumes
 
     def _has_readings(self, record: Mapping[str, Any]) -> bool:
         """Did the script give us a single number worth grading?"""
-        if record.get("disk_count") is not None:
+        if record.get("volumes"):
             return True
         return any(record.get(key) is not None
                    for key in ("disk_pct", "mem_pct", "cpu_pct", "load1"))
@@ -335,10 +364,11 @@ class HostMetricsCheck(SshScriptCheck):
         """
         if self.disk_path == ALL_VOLUMES:
             return None
-        volumes = (len(self.disk_path.split("\n"))
-                   if self.disk_path and "\n" in self.disk_path else 0)
-        return (self._transport_record_bytes() + BASE_RECORD_BYTES
-                + volumes * VOLUME_RECORD_BYTES)
+        paths = (self.disk_path or "").split("\n") if self._counts_volumes else []
+        used: set[str] = set()
+        volumes = sum(VOLUME_RECORD_BYTES + len(json.dumps(path))
+                      + len(json.dumps(volume_name(path, used))) for path in paths)
+        return self._transport_record_bytes() + BASE_RECORD_BYTES + volumes
 
     def _failed(self, reason: str, record: Mapping[str, Any], *,
                 code: StatusCode = StatusCode.ERROR) -> CheckResult:
@@ -382,20 +412,13 @@ class HostMetricsCheck(SshScriptCheck):
         """The ``disk`` aspect: a single leaf for one filesystem, or — when the
         reading holds ``disk_count`` (``disk_path: all``) — a branch with one
         graded child per real filesystem, each named by its volume."""
-        count = record.get("disk_count")
-        if count is None:
+        volumes = record.get("volumes")
+        if not isinstance(volumes, Mapping):
             return self._percent_child(
                 record, "disk", "disk_pct",
                 "Disk space used on the monitored filesystem", self._disk_reason)
-        used: set[str] = set()
-        children = []
-        for index in range(1, int(count) + 1):
-            prefix = f"disk{index}_"
-            sub = {key[len(prefix):]: value for key, value in record.items()
-                   if key.startswith(prefix)}
-            children.append(
-                self._volume_child(volume_name(str(sub.get("path") or ""), used),
-                                   sub))
+        children = [self._volume_child(str(name), sub)
+                    for name, sub in volumes.items() if isinstance(sub, Mapping)]
         if not children:
             return unavailable("disk", "Disk space per filesystem")
         return CheckResult(StatusCode.UNDEFINED, name="disk",
@@ -408,7 +431,8 @@ class HostMetricsCheck(SshScriptCheck):
         description = "Disk space used"
         pct = sub.get("pct")
         if pct is None:
-            return unavailable(name, description, self._volume_about())
+            return unavailable(name, description, self._volume_about(),
+                               dynamic=True)
         warn, error = self.thresholds["disk"]
         free = human_kb(sub.get("avail_kb"))
         total = human_kb(sub.get("total_kb"))
@@ -419,7 +443,7 @@ class HostMetricsCheck(SshScriptCheck):
                            [f"{float(pct):.0f}% used{detail}{suffix}"],
                            name=name, description=description,
                            about=self._volume_about(),
-                           config=self._threshold_md("disk"))
+                           config=self._threshold_md("disk"), dynamic=True)
 
     def _percent_child(self, record: Mapping[str, Any], name: str, key: str,
                        description: str,
@@ -453,14 +477,14 @@ class HostMetricsCheck(SshScriptCheck):
     def _load_child(self, record: Mapping[str, Any]) -> CheckResult:
         name = "load"
         description = self._describe("load", "Load average per CPU core")
-        load1 = record.get("load1")
-        if load1 is None:
+        per_core = record.get("load1_per_core")
+        if not isinstance(per_core, (int, float)):
             return unavailable(name, description)
+        per_core = float(per_core)
+        load1 = float(record.get("load1") or 0)
         ncpu = max(1, int(record.get("ncpu") or 1))
-        per_core = float(load1) / ncpu
         warn, error = self.thresholds["load"]
-        reason = (f"{per_core:.2f} per core — load1 {float(load1):.2f} over "
-                  f"{ncpu} CPUs")
+        reason = f"{per_core:.2f} per core — load1 {load1:.2f} over {ncpu} CPUs"
         return CheckResult(grade(per_core, warn, error), [reason],
                            name=name, description=description,
                            config=self._threshold_md("load"))
@@ -475,6 +499,17 @@ class HostMetricsCheck(SshScriptCheck):
             bits.append("up " + human_duration(float(record["uptime_seconds"])))
         host = str(record.get("hostname") or "") or self.host
         return f"{plain(host)} reachable" + (" — " + ", ".join(bits) if bits else "")
+
+
+def _per_core(record: Mapping[str, Any]) -> float | None:
+    """The one-minute load over the CPUs the host had at this reading — at least
+    one — as the load node grades it (ADR-0096 decision 5): written into the record
+    so that the curve, the sentence and the thresholds read one number. Three
+    places, which is as fine as `load1`'s two over the cores a host has."""
+    load1 = record.get("load1")
+    if not isinstance(load1, (int, float)):
+        return None
+    return round(float(load1) / max(1, int(record.get("ncpu") or 1)), 3)
 
 
 def _parse_profile(value: Any) -> str:

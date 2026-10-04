@@ -1,7 +1,7 @@
 # ADR-0071 — What a restart keeps is a directory of files, and a keeper carries it
 
 - **Status:** Accepted
-- **Date:** 2026-09-27 (accepted 2026-09-05)
+- **Date:** 2026-10-04 (accepted 2026-09-05)
 - **Related:** [ADR-0001](0001-in-process-threaded-engine.md) (one process, in
   memory — the event log this record gives a life across restarts),
   [ADR-0002](0002-rlock-snapshot-synchronization.md) (the lock the writer stays
@@ -15,7 +15,9 @@
   what the process writes), [ADR-0088](0088-a-stop-ends-at-its-save.md) (the stop's
   one save), [ADR-0090](0090-one-state-directory-one-writer.md) (the directory's one
   writer), [ADR-0094](0094-a-restart-is-no-transition.md) (what the first reading after
-  a restart records)
+  a restart records),
+  [ADR-0110](0110-what-every-node-last-showed-is-kept-beside-the-log.md) (the table
+  `events.json` carries beside the log)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -53,7 +55,11 @@ Three layers hold what this process wants to survive a restart.
    sitting there is named once at startup); `events.json` (the bounded event log of
    ADR-0001, from which node history is derived, so one file covers both and a
    restart no longer empties the log); `notes.json` (ADR-0047, when it is built);
-   `series.json` (the series' memory tier, when it is built). Run facts stay
+   `series.json` (the series' memory tier, when it is built). `events.json`
+   carries, beside the log, what every node last showed and what its check last
+   reported ([ADR-0110](0110-what-every-node-last-showed-is-kept-beside-the-log.md)):
+   a table written with the log, which a restart reads for the nodes the bounded
+   log has no row of. Run facts stay
    ephemeral — a wall time and an armed slot belong to the process that measured
    them. JSON because these files are machine-written and machine-read; YAML stays
    for what a person authors. Nothing else loose in `var/` is state: logs, pids and

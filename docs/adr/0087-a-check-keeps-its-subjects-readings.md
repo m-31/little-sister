@@ -1,7 +1,7 @@
 # ADR-0087 — A check keeps its subjects' readings, and an identity keeps each event once
 
 - **Status:** Accepted
-- **Date:** 2026-09-20
+- **Date:** 2026-10-04 (accepted 2026-09-20)
 - **Related:** [ADR-0086](0086-a-check-measures-and-grades.md) (the measurement a
   series keeps, and the subject that picks its series),
   [ADR-0085](0085-a-measure-is-read-out-of-a-record.md) (whole records under a count,
@@ -22,7 +22,10 @@
   through), [ADR-0075](0075-a-check-declares-what-it-costs.md) (what a sum at startup
   can and cannot promise, and the page the projection stands on beside it),
   [ADR-0072](0072-the-instance-reports-on-itself.md) (the engine's own node, where the
-  ceiling speaks)
+  ceiling speaks), [ADR-0111](0111-a-runs-mark-says-how-the-run-stood.md) (the line a
+  grading writes for the record alone),
+  [ADR-0113](0113-a-measurement-reads-what-its-check-kept.md) (the window a check's
+  measuring half may read)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -193,8 +196,11 @@ and **sweeps**: by retention, and, given a ceiling (decision 10), by evicting wh
 series until what it holds fits. The engine sweeps on every tick, before it reads its
 own lines. Memory is the first tier to speak it and stays the front of any tier behind
 it; a store whose retention is its own business may leave the ceiling to the memory in
-front of it. None of it is on the check-authoring surface: a check hands back
-measurements and never sees a store, and a type never sets `series_keep`.
+front of it. Only the read is on the check-authoring surface: a check hands back
+measurements and writes to no store, a type never sets `series_keep`, and its measuring
+half may read the window of one of its own subjects, `kept(subject)`, to decide what to
+ask its source for ([ADR-0113](0113-a-measurement-reads-what-its-check-kept.md)). A
+grading may not: it reads what it is handed.
 
 ### 8. A kept reading keeps what stood where it landed
 
@@ -204,13 +210,18 @@ would otherwise have to guess what *OK* meant on the Tuesday. Beside the record 
 identity a kept reading therefore carries the **code** and the **sentence** of the
 place it stood, as they stood there:
 
-- **A line.** A reading among several that the grading carried onto a line keeps that
-  line's text and its code — the line's own, or its node's where it declared none
+- **A line, shown or written for the record.** A reading among several that the grading
+  carried onto a line keeps that line's text and its code — the line's own, or its
+  node's where it declared none
   ([ADR-0042](0042-entries-carry-their-own-code.md)). The line is found by what the
   grading already writes on it: the reading's record as the line's `data`, and its
   subject as the line's ([ADR-0086](0086-a-check-measures-and-grades.md) decision 2).
   Two readings carrying the same record pair with two such lines in the order both
-  were written.
+  were written. A grading may write a line for the record alone, in `CheckResult`'s
+  `for_record` ([ADR-0111](0111-a-runs-mark-says-how-the-run-stood.md) decisions 2
+  and 7), and the reading whose record that line carries keeps the line's code and its
+  sentence as it keeps a shown line's, while no node carries the line. Where a shown
+  line carries the same reading, that one is what stood.
 - **The node.** The one reading the engine placed keeps its node's code and the root's
   texts as the result wrote them, and so does a reading **among several that names the
   object its check declared** at construction, where no line carried it: it is the
@@ -315,9 +326,7 @@ already stand beside what the process measured
   no series, so no reading is held beyond its node and nothing weighs more than it did;
   `var/state/` gains a `series.json` that holds an empty list.
 - **A check with `series_keep` set holds up to that many records per subject, and a
-  restart keeps them.** Nothing reads them back yet: a subject's page and its curve are
-  what they are for, and until those exist a kept series is visible in its file and
-  nowhere else.
+  restart keeps them.** A subject's page and its curve are what they are for.
 - **A kept reading weighs more than its record** — its code, its texts, both clocks and
   its identity or state stand beside it — and all of it counts against the ceiling.
 - **The total is bounded, and a curve can be shortened.** Past the ceiling the series
@@ -333,13 +342,13 @@ already stand beside what the process measured
   that reshapes the record on the way to its line, or puts none there, leaves its
   readings kept with neither code nor sentence; the authoring guide says to carry the
   record through unchanged.
-- **Nor does a reading that its grading shows on no line, unless it names the
+- **Nor does a reading that its grading carries onto no line, unless it names the
   check's own object.** little-sister-github's `actions` aspect writes no line for a
   passing run unless `show_healthy` is set, so with its default that check's series
   keep every passing run without its code, and only the failures with theirs. Taking
-  an absence for *OK* is what no reader may do, so a window over such a series grades
-  those records again. The same check's estate reading, graded into the root's
-  sentence rather than onto a line, stood on the node and keeps what it said there.
+  an absence for *OK* is what no reader may do. The same check's estate reading, graded
+  into the root's sentence rather than onto a line, stood on the node and keeps what it
+  said there.
 - **`Measurement` gains two fields, additively.** A type that names neither an identity
   nor a state is unchanged, and the check API epoch does not move: the surface gains no
   name, and nothing a type already does behaves differently.

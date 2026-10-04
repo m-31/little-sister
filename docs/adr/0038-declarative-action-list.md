@@ -1,7 +1,7 @@
 # ADR-0038 — The declarative action list: `config/actions.yaml`
 
 - **Status:** Accepted
-- **Date:** 2026-08-02
+- **Date:** 2026-10-04 (accepted 2026-08-02)
 - **Related:** [ADR-0034](0034-template-slots-for-dependent-packages.md) (the slot
   seam this is built **on top of**, and which rejected a config-only list as the
   *sole* answer), [ADR-0036](0036-addressable-reasons.md) (the members/prose split
@@ -11,7 +11,9 @@
   resolves through — reused, not duplicated),
   [ADR-0037](0037-extension-static-assets.md) (what a filler needs when a link is not
   enough — the case this one deliberately does not serve),
-  [ADR-0008](0008-json-output-api.md) (untouched: an action is presentation)
+  [ADR-0008](0008-json-output-api.md) (untouched: an action is presentation),
+  [ADR-0100](0100-system-is-two-views.md) (the *Installed* view of `/system`, which
+  lists both kinds of filler)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -60,10 +62,11 @@ The library ships a **filler of its own**, driven by configuration.
    and an action written today keeps working when it arrives.
 7. **It registers through the slot seam**, as a `builtin` filler, rather than being
    rendered beside it. So a configured chip and a deployment's coded one land in one
-   rail in one order, `/system` lists both (marked *built-in* or *extension*), and
-   there is one render path to reason about. It is the one registration
-   `slots.forget_fillers()` puts back — the posture the icon registry already takes
-   with its built-in pack.
+   rail in one order, `/system`'s *Installed* view at `/system/installed`
+   ([ADR-0100](0100-system-is-two-views.md)) lists both (marked *built-in* or
+   *extension*), and there is one render path to reason about. It is the one
+   registration `slots.forget_fillers()` puts back — the posture the icon registry
+   already takes with its built-in pack.
 8. **`icon` resolves through the existing icon registry**
    ([ADR-0030](0030-curated-links.md) §3), so a mark a deployment dropped in
    `config/links/icons/` is usable here by name. An unknown name is an ordinary
@@ -109,8 +112,8 @@ The library ships a **filler of its own**, driven by configuration.
   node.
 - **Render it beside the slot seam rather than through it.** Fewer moving parts — no
   self-registration, no `builtin` flag. Rejected: two render paths for one rail means
-  two orderings, two failure modes and two places for `/system` to look, to save one
-  boolean.
+  two orderings, two failure modes and two places for `/system/installed` to look, to
+  save one boolean.
 - **Template more than the URL** — a label with `{name}` in it, say. Rejected for now:
   every templated field is a new escaping question, and the label is written by the
   operator, who already knows which node they aimed the action at.

@@ -5,6 +5,8 @@ from collections.abc import Iterable
 from datetime import datetime
 from typing import Any, Self
 
+from little_sister import instants
+
 # The vocabulary lives in the leaf module `codes` (it must be importable from
 # `reasons.py`, which this module imports — ADR-0042); these re-exports keep the
 # published spelling, `from little_sister.status import StatusCode`, working
@@ -124,10 +126,11 @@ class Status:
         # form; `reason` stays the list of texts every existing surface reads, now
         # as a view onto it — so nothing moved when the key arrived.
         self.reason_entries, self.members = normalize(reason, members)
-        # The observation time — when the check behind this node ran. ``None`` until
-        # the first :meth:`update` / :meth:`touch`, so *having* a timestamp means a
-        # check has written the node; construction never stamps (ADR-0027).
-        self.timestamp: str | None = None
+        # The observation time — when the check behind this node ran, an instant
+        # the clock answered (ADR-0120). ``None`` until the first :meth:`update` /
+        # :meth:`touch`, so *having* a timestamp means a check has written the
+        # node; construction never stamps (ADR-0027).
+        self.timestamp: datetime | None = None
         # **The measurement this node's check took, and the object it took it on**
         # (ADR-0085). A check run reads one object and the result is one record;
         # what stands on this node — its code, its lines, its children — is derived
@@ -203,7 +206,7 @@ class Status:
     def touch(self) -> None:
         """Record a fresh observation without changing code or reason — stamps
         ``timestamp`` to now (ADR-0027)."""
-        self.timestamp = datetime.now().isoformat()
+        self.timestamp = instants.now()
 
     def __str__(self) -> str:
         suffix = ' - ' + ', '.join(self.reason) if self.reason else ''
@@ -220,7 +223,7 @@ class Status:
         """
         self.code = _coerce_code(code)
         self.reason_entries, self.members = normalize(reason, members)
-        self.timestamp = datetime.now().isoformat()
+        self.timestamp = instants.now()
 
     def get_status_code(self) -> StatusCode:
         """Effective status of this node, rolled up per ADR-0039:
@@ -253,6 +256,12 @@ class Status:
                 f"'{child.path}' instead")
 
         self.__children[child.name] = child
+
+    def remove_child(self, name: str) -> Status | None:
+        """Take the child named ``name`` out of this node and answer it with its
+        subtree, or ``None`` where there is none — how a node its check no longer
+        reports leaves the tree (ADR-0109)."""
+        return self.__children.pop(name, None)
 
     def get_children(self) -> list[Status]:
         return list(self.__children.values())

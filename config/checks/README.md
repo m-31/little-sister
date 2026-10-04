@@ -45,8 +45,8 @@ the Python class behind `type:` — is
 | `frequency` | how often to run — `30s`, `15m`, `2h`, `1d`, or a number of seconds | `15m` |
 | `timeout` | per-run timeout (same duration format) | `30s` |
 | `series_keep` | how many readings of each thing the check reads — a URL, a host — it keeps as that thing's **history**, the oldest dropped first, and a restart keeps them. A whole number; `0` keeps none, and there is no deployment-wide default, because where a history is wanted is a choice per check. What every history together may weigh is bounded by `series_limit` in `settings.yaml` | `0` |
-| `measures` | which fields of what the check read its node **draws** as a curve, over the readings `series_keep` keeps — each field by the dotted name its record list shows (`response_ms`, `timing.total_ms`), mapped to its **unit** or to `{unit, label}`. A unit is free text; `ms` and `s` are written as spans (`1.9 s`). A type may declare its own — `http` draws `response_ms` in `ms` — and this block merges over them per field: naming a field takes it whole, `field: null` draws it no more, and every field it does not name keeps the type's. A block of another shape refuses the start, naming the file | the type's |
-| `reading_cap` | how many of those readings — the newest — the node's page lists beneath its curves; every one is on its **History** page. A whole number, `0` the curves alone; a bad value refuses the start, naming the file | `reading_cap` in `settings.yaml` (10) |
+| `measures` | which fields of what the check read are **drawn** as curves, over the readings `series_keep` keeps — each field by the dotted name its record list shows (`response_ms`, `timing.total_ms`), mapped to its **unit** or to `{unit, label, node}`. `node` is the node the curve stands on, a path from the check's own (`memory`, `disk/root`), which it stands on where it names none; every curve at or beneath a node is on that node's **Series** view. A `*` in the field picks every key of the things a record counts by name, and stands for it in the node and the label too: `volumes.*.avail_kb: {unit: KiB, label: Free space on *, node: disk/*}` is a curve per volume, on that volume's node. A unit is free text; `ms` and `s` are written as spans (`1.9 s`), `B`, `KiB`, `MiB`, `GiB` and `TiB` as sizes (`18.3 GiB`). A type may declare its own — `http` draws `response_ms` in `ms`, and `host-metrics`, `qnap-metrics` and `macos-memory` the numbers they grade — and this block merges over them per field: naming a field takes it whole, `field: null` draws it no more, and every field it does not name keeps the type's. A block of another shape refuses the start, naming the file | the type's |
+| `reading_cap` | how many of those readings — the newest — the Series view lists of each series beneath its curves; every one is on the **History** page of the check's node. A whole number, `0` the curves alone; a bad value refuses the start, naming the file | `reading_cap` in `settings.yaml` (10) |
 
 A non-`OK` result always carries a reason. A failed or timed-out run becomes
 `ERROR` (ADR-0040 / ADR-0001).
@@ -257,7 +257,12 @@ severity legend) expand in either.
 **`little-sister` itself reads this block**, for every branch check type: the type
 declares its defaults and the library resolves yours over them, so an entry here works
 whatever the type is and needs no release of it. Entries apply by subnode *name* —
-every leaf named `disk`, on every host this check reports, at any depth.
+every leaf named `disk`, on every host this check reports, at any depth. A volume is
+no aspect, and no entry reaches it by its name, whatever the host calls it: where
+`disk_path` is `all` or a list, a filesystem mounted at `/mnt/memory` is a volume named
+`memory`, and takes nothing you write for the `memory` leaf. Label a volume by its path,
+in `nodes.yaml`
+([ADR-0118](../../docs/adr/0118-a-child-a-run-names-takes-nothing-declared-for-its-name.md)).
 
 The same block carries the one non-label key:
 **`show_when_quiet`** (`subnodes: {disk: {show_when_quiet: true}}`), the per-aspect

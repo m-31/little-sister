@@ -1,0 +1,35 @@
+# Live-demo check (Mode 2) — see tests/demo_check.py and docs/testing-the-gui.md.
+# The demo's **runs** (ADR-0106, ADR-0111): four job names, each a node of its own
+# beneath this one, each of their runs a reading with an identity. A node that stands
+# for a subject draws its runs as marks at their own times: `import` and `export`
+# carry a run time, which the `measures:` block below draws as a stem for each run,
+# and `cleanup` carries none and is drawn as ticks. A run that failed has a hollow
+# ring in the failure ink, one that warned the warning's triangle.
+#
+# The source lists a job name's six newest runs, and each poll reads all of them.
+# `import` and `export` say how every listed run stood, for the record alone
+# (`for_record`); `cleanup` says it of its newest run only — so its older runs lose
+# their verdict when a newer one takes the line, and are drawn as bare, muted ticks.
+#
+# `backfill` comes and goes (ADR-0109): it runs for two minutes and then not for
+# one, and the source does not list a job name that is not running. This node says
+# that its children are complete, so `backfill`'s node is removed while it is gone —
+# a row on /events, its kept runs on /history/ci/jobs — and returns with its runs.
+type: demo
+path: /ci/jobs
+title: Batch jobs
+about: |
+  Four job names and their runs (a *synthetic* demo node). Each job name is a
+  node of its own and draws its runs: a stem to its run time, or a tick where a
+  job says none. Open one and its **Series** view. `backfill` comes and goes: its
+  node is removed while its source does not list it.
+scenario: runs
+subject: ci-queue
+frequency: 5s
+# how long `import` and `backfill` take from one run to the next; `cleanup` runs
+# every second period and `export` every third
+period: 20s
+series_keep: 80
+reading_cap: 8
+measures:
+  seconds: {unit: s, label: Run time}

@@ -56,13 +56,14 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
+from little_sister import instants
 from little_sister.codes import StatusCode, worst_of
 
 # A declared slug is opaque and never rendered as text — it lives in `data-`
@@ -503,10 +504,10 @@ def _record_instant(value: object, where: str) -> str | None:
     refusing it would push a check into omitting the key, which loses the
     difference between a time that is absent and one that was never asked for.
 
-    An **offset is required**. A naive stamp is an instant only to whoever wrote
-    it; the node's own timestamp may be naive-local because one process owns it
-    (ADR-0006), but a record's time comes from somebody else's clock and travels
-    to a viewer in a third zone. And the offset can carry an instant at the edge of
+    An **offset is required**. A time without one is an instant only to whoever
+    wrote it, and a record's time comes from somebody else's clock and travels to
+    a viewer in a third zone — the rule every time the tree stores follows too
+    (ADR-0120). And the offset can carry an instant at the edge of
     the calendar past it — the first hour of the year 1 at +01:00 is the year 0 in
     UTC — which is refused as a time too, never raised as ``OverflowError``.
     """
@@ -519,7 +520,7 @@ def _record_instant(value: object, where: str) -> str | None:
             moment = None
         if moment is not None and moment.tzinfo is not None:
             try:
-                return moment.astimezone(UTC).isoformat().replace("+00:00", "Z")
+                return instants.stamp(moment)
             except OverflowError:
                 raise RecordRefused(
                     f"record field {where!r} names a time that lies outside the "
@@ -761,3 +762,40 @@ def normalize(reason: ReasonInput, entries: bool = False, *,
     raise ReasonError(
         "a reason sequence must be all strings, all (slug, text) pairs or all "
         "Entry — not a mixture")
+
+
+def for_the_record(lines: Iterable[object], *,
+                   record_limit: int | None = None) -> tuple[Entry, ...]:
+    """The lines a grading wrote **for the record alone** (ADR-0111 decisions 2 and
+    7), as a result keeps them: each an :class:`Entry` that carries its own code and
+    the record of the reading it is said of.
+
+    Such a line is what the grading says of a reading it does not show — a run that
+    is no longer the newest — and it is kept with that reading and nowhere else: no
+    node carries it. So it has no node's code to take, and a line without one is
+    refused; and it is found by the record it carries, as a shown line's reading is
+    (ADR-0087 decision 8), so one without a record is refused too. Its slug is not a
+    key here: a slug is what a pin holds, nothing pins a line no node shows, and two
+    of them may share one. Its record goes through the seam a shown line's goes
+    through (``record_limit``): refused, it raises — or, inside a run the engine
+    drives, the line stands without it and says why, and is said of no reading.
+    """
+    kept: list[Entry] = []
+    for item in lines:
+        if not isinstance(item, Entry):
+            raise ReasonError(
+                f"a line written for the record is an Entry, not "
+                f"{type(item).__name__}: it carries a code and a record, which a "
+                f"text alone cannot (ADR-0111)")
+        if item.code is None:
+            raise ReasonError(
+                f"a line written for the record carries its own code — it stands "
+                f"on no node whose code it could take: {item.text!r} (ADR-0111)")
+        if item.data is None and not item.refused:
+            raise ReasonError(
+                f"a line written for the record carries the record of the reading "
+                f"it is said of, as its data — a reading is found by it: "
+                f"{item.text!r} (ADR-0111)")
+        kept.append(item if record_limit is None
+                    else _through_the_seam(item, record_limit))
+    return tuple(kept)

@@ -12,6 +12,7 @@
     layouts at once. -#}
 {%- set entries = [
         ('/status',      'Status',      'grid'),
+        ('/series',      'Series',      'chart'),
         ('/events',      'Events',      'rows'),
         ('/maintenance', 'Maintenance', 'pause'),
         ('/links',       'Links',       'link'),
@@ -29,6 +30,9 @@
     {%- if name == 'grid' -%}
         <rect x="1" y="1" width="6" height="6" rx="1"/><rect x="9" y="1" width="6" height="6" rx="1"/>
         <rect x="1" y="9" width="6" height="6" rx="1"/><rect x="9" y="9" width="6" height="6" rx="1"/>
+    {%- elif name == 'chart' -%}
+        <polyline points="1,12 5,7 8,10 11,4 15,8" fill="none" stroke="currentColor"
+                  stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"/>
     {%- elif name == 'rows' -%}
         <rect x="1" y="2" width="14" height="2" rx="1"/><rect x="1" y="7" width="14" height="2" rx="1"/>
         <rect x="1" y="12" width="10" height="2" rx="1"/>

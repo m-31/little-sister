@@ -1,6 +1,6 @@
 """The canonical incident-copy documents — the tree's, and one node's."""
 from dataclasses import replace
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from unittest import TestCase
 from zoneinfo import ZoneInfo
 
@@ -20,6 +20,11 @@ from little_sister.tree import StatusTree
 # timezone: one hour off UTC in winter and two in summer, so a test can tell an
 # offset that was computed from the instant apart from one that was pasted on.
 BERLIN = TimeStyle(ZoneInfo("Europe/Berlin"))
+
+
+def _utc(*moment: int) -> datetime:
+    """An instant, by its date and its time in UTC."""
+    return datetime(*moment, tzinfo=UTC)
 
 
 class CopyStatusTests(TestCase):
@@ -149,7 +154,7 @@ class CopyStatusTests(TestCase):
         self.assertNotIn("<strong>literal</strong>", rich)
 
     def test_node_and_reason_maintenance_are_attributed(self):
-        expiry = datetime.now() + timedelta(days=1)
+        expiry = datetime.now(UTC) + timedelta(days=1)
         self.tree.upsert(
             "/ci/reviews", StatusCode.ERROR,
             {"pr-1": "PR one failed", "pr-2": "PR two failed"},
@@ -200,28 +205,28 @@ class TimeStyleTests(TestCase):
         # Not a constant pasted onto the string: the same zone is one hour off
         # UTC in January and two in August, and a reader elsewhere is entitled to
         # the one that was actually true.
-        self.assertEqual(BERLIN.at("2026-01-15T09:00:00+00:00"),
+        self.assertEqual(BERLIN.at(_utc(2026, 1, 15, 9, 0)),
                          "2026-01-15 10:00:00 +01:00")
-        self.assertEqual(BERLIN.at("2026-08-15T09:00:00+00:00"),
+        self.assertEqual(BERLIN.at(_utc(2026, 8, 15, 9, 0)),
                          "2026-08-15 11:00:00 +02:00")
 
-    def test_a_naive_stored_instant_is_read_as_the_servers_own(self):
-        # What the tree stores is naive server-local (ADR-0006), so the document
-        # has to take it that way — the same reading the `localtime` filter makes.
-        naive = "2026-01-15T09:00:00"
-        aware = datetime.fromisoformat(naive).astimezone().isoformat()
-        self.assertEqual(BERLIN.at(naive), BERLIN.at(aware))
+    def test_an_instant_reads_alike_whatever_zone_it_was_built_in(self):
+        # What the tree stores is an instant (ADR-0120): the document writes the
+        # one moment, in its own zone, however the instant came to be held.
+        held = _utc(2026, 1, 15, 9, 0)
+        for built in (held.astimezone(ZoneInfo("America/New_York")),
+                      held.astimezone(ZoneInfo("Asia/Kathmandu"))):
+            self.assertEqual(BERLIN.at(built), "2026-01-15 10:00:00 +01:00")
 
-    def test_absent_and_unparsable_answer_like_the_page(self):
-        # A hand-off is not where somebody should discover that a timestamp is
-        # malformed, and raising here would 500 a page that worked a moment ago.
+    def test_absent_answers_like_the_page(self):
         self.assertEqual(BERLIN.at(None), "—")
-        self.assertEqual(BERLIN.at(""), "—")
-        self.assertEqual(BERLIN.at("no such moment"), "no such moment")
 
     def test_the_zone_and_the_format_are_the_deployments(self):
         style = TimeStyle(ZoneInfo("UTC"), "%H:%M")
-        self.assertEqual(style.at("2026-08-15T09:30:00+02:00"), "07:30 +00:00")
+        self.assertEqual(
+            style.at(datetime(2026, 8, 15, 9, 30,
+                              tzinfo=timezone(timedelta(hours=2)))),
+            "07:30 +00:00")
 
     def test_the_tree_document_dates_a_pin_the_same_way(self):
         # One formatter, so /copy gained the offset with the node document: an
@@ -230,7 +235,7 @@ class TimeStyleTests(TestCase):
         tree.upsert("/database", StatusCode.ERROR, "connection refused")
         tree.set_maintenance(
             "/database", "planned migration",
-            expires_at=datetime.fromisoformat("2026-01-20T09:00:00+00:00"),
+            expires_at=_utc(2026, 1, 20, 9, 0),
             set_by="robin")
 
         copied = format_copy_markdown(tree.snapshot(""), BERLIN)
@@ -283,18 +288,46 @@ class NodeCopyTests(TestCase):
         self.tree.upsert("/services/api", StatusCode.ERROR, "down")
 
         document = self._document(
-            self._leaf(timestamp="2026-01-15T09:00:00+00:00"),
-            since="2026-01-15T07:30:00+00:00")
+            self._leaf(timestamp=_utc(2026, 1, 15, 9, 0)),
+            since=_utc(2026, 1, 15, 7, 30))
 
-        self.assertIn("- **Status error** from 2026-01-15 08:30:00 +01:00 "
-                      "until 2026-01-15 10:00:00 +01:00", document)
+        self.assertIn("- **Status error** since 2026-01-15 08:30:00 +01:00\n"
+                      "- **Last observed:** 2026-01-15 10:00:00 +01:00", document)
+
+    def test_a_status_that_still_holds_has_no_until(self):
+        # The later instant is the latest reading, not an end: a period that has
+        # not ended says since when, and when it was last observed — also where the
+        # two are one instant, which read "from 09:00 until 09:00".
+        self.tree.upsert("/services/api", StatusCode.ERROR, "down")
+
+        for since in (_utc(2026, 1, 15, 7, 30), _utc(2026, 1, 15, 9, 0)):
+            with self.subTest(since=since):
+                document = self._document(
+                    self._leaf(timestamp=_utc(2026, 1, 15, 9, 0)), since=since)
+                self.assertIn("- **Status error** since ", document)
+                self.assertIn("- **Last observed:** 2026-01-15 10:00:00 +01:00",
+                              document)
+                self.assertNotIn("until", document)
+
+    def test_a_period_the_log_holds_no_start_of_holds_since_before_its_oldest_event(
+            self):
+        # Where the log keeps no change of the node, the furthest back it can vouch
+        # that nothing changed is its oldest event (ADR-0099 decision 1).
+        self.tree.upsert("/services/api", StatusCode.ERROR, "down")
+
+        document = format_node_markdown(
+            self._leaf(timestamp=_utc(2026, 1, 15, 9, 0)), BERLIN,
+            _utc(2026, 1, 15, 7, 30), before=True)
+
+        self.assertIn("- **Status error** since before 2026-01-15 08:30:00 +01:00\n"
+                      "- **Last observed:** 2026-01-15 10:00:00 +01:00", document)
 
     def test_without_a_transition_of_its_own_it_reports_the_observation(self):
         # ADR-0027: no period to bound, so it does not invent a from/until of one
         # instant — the same answer the page's Time card gives.
         self.tree.upsert("/services/api", StatusCode.ERROR, "down")
 
-        document = self._document(self._leaf(timestamp="2026-01-15T09:00:00+00:00"))
+        document = self._document(self._leaf(timestamp=_utc(2026, 1, 15, 9, 0)))
 
         self.assertIn("- **Observed:** 2026-01-15 10:00:00 +01:00", document)
         self.assertNotIn("from", document)
@@ -312,7 +345,7 @@ class NodeCopyTests(TestCase):
                          frequency_seconds=900)
         self.tree.set_check_mount("/services/api")
         self.tree.set_run_facts("/services/api", wall_seconds=3.14159,
-                                next_run_at="2026-01-15T09:15:00+00:00")
+                                next_run_at=_utc(2026, 1, 15, 9, 15))
 
         document = self._document(self._leaf())
 
@@ -334,12 +367,16 @@ class NodeCopyTests(TestCase):
         self.assertIn("- **Goes stale after:** 31s", document)
         self.assertNotIn("Checked every", document)
 
-    def test_a_stale_node_says_how_long_ago_it_was_checked(self):
+    def test_a_stale_node_says_how_long_ago_it_was_observed(self):
+        # Observed, as the Time card says it: a node the instance re-asserts on its
+        # own tick goes stale too, and nothing checks it.
         self.tree.upsert("/services/api", StatusCode.ERROR, "down")
 
-        document = self._document(self._leaf(stale=True, age_seconds=7620))
+        # both flags, as the tree hands over a node whose own reading is the stale one
+        document = self._document(self._leaf(stale=True, own_stale=True,
+                                             age_seconds=7620))
 
-        self.assertIn("- **Stale** — last checked 2h 7m ago", document)
+        self.assertIn("- **Stale** — last observed 2h 7m ago", document)
 
     def test_a_pin_keeps_the_measurement_and_says_a_pin_is_in_force(self):
         # A pin changes what the tree *reports*; it does not change what the check
@@ -347,7 +384,7 @@ class NodeCopyTests(TestCase):
         self.tree.upsert("/services/api", StatusCode.ERROR, "connection refused")
         self.tree.set_maintenance(
             "/services/api", "waiting on the vendor",
-            expires_at=datetime.fromisoformat("2026-01-20T09:00:00+00:00"),
+            expires_at=_utc(2026, 1, 20, 9, 0),
             set_by="robin")
 
         document = self._document(self._leaf())
@@ -378,7 +415,7 @@ class NodeCopyTests(TestCase):
                          {"pr-1": "PR one failed", "pr-2": "PR two failed"})
         self.tree.set_entry_maintenance(
             "/ci/reviews", "pr-1", "ticket filed",
-            expires_at=datetime.fromisoformat("2026-01-20T09:00:00+00:00"),
+            expires_at=_utc(2026, 1, 20, 9, 0),
             set_by="pan")
 
         document = self._document(self._leaf("/ci/reviews"))
@@ -551,7 +588,7 @@ class CodedLineTests(TestCase):
         self._workflows()
         self.tree.set_entry_maintenance(
             "/ci/actions", "build", "rebuilding the runner",
-            expires_at=datetime.fromisoformat("2026-01-20T09:00:00+00:00"),
+            expires_at=_utc(2026, 1, 20, 9, 0),
             set_by="pan")
 
         document = self._node()
@@ -579,7 +616,7 @@ class ReasonCopyTests(TestCase):
     def _document(self, slug="pr-412") -> str:
         node = self.tree.snapshot("/ci/reviews")
         assert node is not None
-        node = replace(node, timestamp="2026-01-15T09:00:00+00:00")
+        node = replace(node, timestamp=_utc(2026, 1, 15, 9, 0))
         line = next(r for r in node.reasons if r.slug == slug)
         return format_reason_markdown(node, line, BERLIN)
 
@@ -618,7 +655,7 @@ class ReasonCopyTests(TestCase):
     def test_a_pinned_line_brings_its_pin_with_it(self):
         self.tree.set_entry_maintenance(
             "/ci/reviews", "pr-412", "waiting on the author",
-            expires_at=datetime.fromisoformat("2026-01-20T09:00:00+00:00"),
+            expires_at=_utc(2026, 1, 20, 9, 0),
             set_by="pan")
 
         document = self._document()

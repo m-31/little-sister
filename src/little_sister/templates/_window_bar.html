@@ -1,0 +1,33 @@
+{#- The bar that names the window a page is drawn over and moves it, in view while
+    the page scrolls (ADR-0098 decision 3): the window in words where it has any and
+    by its ends, to the minute with its zone; the presets up to the first that reaches
+    past what is kept, and everything kept; and earlier, zoom out, later and now, each
+    in its place whether or not it applies. A node's Series view draws it above its
+    curves, and the Events page above its log (ADR-0101 decision 4). -#}
+
+{#- One control of the bar: a link, or — where it does not apply — the same words in
+    the same place, leading nowhere and saying so. -#}
+{%- macro window_link(link) -%}
+{%- if link.href -%}
+<a class="ls-window__link{% if link.current %} is-current{% endif %}" href="{{ link.href }}"{% if link.current %} aria-current="true"{% endif %}{% if link.rel %} rel="{{ link.rel }}"{% endif %}>{{ link.words }}</a>
+{%- else -%}
+<a class="ls-window__link is-disabled" role="link" aria-disabled="true">{{ link.words }}</a>
+{%- endif -%}
+{%- endmacro %}
+
+{%- macro window_bar(bar) -%}
+<nav class="ls-window" aria-label="Time window">
+            <p class="ls-window__range">
+                {%- if bar.name %}<strong class="ls-window__name">{{ bar.name }}</strong> · {% endif -%}
+                <span class="ls-window__ends">
+                {%- for end in bar.ends %}{% if not loop.first %} – {% endif %}<time datetime="{{ end.stored }}">{{ end.text }}</time>{% if end.zone %} {{ end.zone }}{% endif %}{% endfor -%}
+                </span>
+            </p>
+            <div class="ls-window__group" role="group" aria-label="Presets">
+                {%- for link in bar.presets %}{{ window_link(link) }}{% endfor -%}
+            </div>
+            <div class="ls-window__group" role="group" aria-label="Moves">
+                {%- for link in bar.moves %}{{ window_link(link) }}{% endfor -%}
+            </div>
+        </nav>
+{%- endmacro %}

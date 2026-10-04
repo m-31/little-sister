@@ -6,7 +6,9 @@ registers its own types (``implementing-checks.md`` §4): the dev WSGI wrapper
 the checks like any other. Each ``run()`` is a **pure function of elapsed time** —
 a monotonic start captured at construction — so a check replays its scenario on a
 loop with no I/O and no stored state, fast enough that the transitions land on the
-dashboard's ~10s poll. The scenarios drive the dynamics the static render harness
+dashboard's ~10s poll. ``LITTLE_SISTER_DEMO_OFFSET`` moves that start back, so a
+server's start finds every scenario part-way into its cycle
+(:data:`OFFSET_VARIABLE`). The scenarios drive the dynamics the static render harness
 can't show: poll/swap, a growing reason list, an eruption's layout shift,
 server-side staleness, and multi-node roll-up.
 
@@ -43,11 +45,21 @@ configured timezone, while the demo runs.
 where the demo shows what a record the seam refuses costs (ADR-0093): twice a cycle
 one repository's answer breaks the seam, and it costs that reading and nothing else.
 
+``runs`` is the demo's **subject with a history** (ADR-0106, ADR-0111): four job
+names, each handed back as a node of its own, each of their runs a reading with an
+identity, so each node draws its runs as marks. Its source lists a job name's newest
+few runs, and the grading says how each of them stood in ``for_record`` — but for
+one job name, whose older runs so lose their verdict the moment a newer run takes
+the line. One job name **comes and goes**, and the node above them says that its
+children are complete (ADR-0109): that job name's node leaves the tree with the
+first poll that does not find it, and is back with the first that does.
+
 Dev-only: lives under ``tests/`` and never ships in the package.
 """
 from __future__ import annotations
 
 import math
+import os
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import replace
@@ -70,6 +82,15 @@ from little_sister.reasons import slug
 from little_sister.status import StatusCode
 
 _DEFAULT_PERIOD = 60.0
+
+#: The environment variable that starts every scenario this far into its cycle — a
+#: duration, written as a check config writes one (``LITTLE_SISTER_DEMO_OFFSET=36s``),
+#: and wrapped by each scenario's own period. A scenario is a function of the time
+#: since its check was built, so a start otherwise finds every node at the top of
+#: its cycle, where none of them fails. With it a start finds the waiting node red:
+#: the one thing the demo could not show was what a restart does to a wait
+#: (ADR-0110), because no start of it ever found a failure.
+OFFSET_VARIABLE = "LITTLE_SISTER_DEMO_OFFSET"
 
 #: The one scenario whose reading is not the clock but a site's answer (ADR-0092):
 #: what `http` records — a status and a response time, both null where the request
@@ -96,6 +117,88 @@ WORKFLOWS = "workflows"
 _REPOSITORIES = ("octo/api", "octo/web", "octo/docs")
 _WORKFLOWS_NAIVE = (0.25, 0.60)
 _WORKFLOWS_HEAVY = (0.45, 0.85)
+
+#: The scenario whose subjects have a **history of runs** (ADR-0106, ADR-0111). Each
+#: job name runs on the wall clock — its run *n* finishes *n* intervals after the
+#: epoch — so a restart finds the runs it left and their series go on, and each
+#: reading names the run it is of. Per job name: how many of the check's periods lie
+#: between two of its runs; whether a run carries its run time, which the check's
+#: ``measures:`` draws as a stem — a job name without one is drawn as ticks; and
+#: whether the grading says how each listed run stood, in ``for_record``. `cleanup`
+#: says it of its newest run alone, on its line: an older run of it is read again on
+#: every poll and stands on no line, so it keeps no verdict.
+RUNS = "runs"
+_JOBS = (("import", 1, True, True), ("export", 3, True, True),
+         ("cleanup", 2, False, False), ("backfill", 1, False, True))
+#: The job name that **comes and goes** (ADR-0109): it runs for six intervals and
+#: then not for three, and while it does not run its source does not list it. The
+#: check hands back a node for each job name the source lists and says that these
+#: are all of them, so this one's node is removed and returns — its kept runs
+#: staying where they are, on its check's History page while it is gone.
+_COMES_AND_GOES = "backfill"
+_THERE, _GONE = 6, 3
+#: How many of a job name's newest runs its source still lists.
+_RUNS_LISTED = 6
+#: Past this many seconds a run warns.
+_RUNS_SLOW_SECONDS = 60
+_RUN_CODES = {"succeeded": StatusCode.OK, "slow": StatusCode.WARN,
+              "failed": StatusCode.ERROR}
+
+
+def _ran(name: str, number: int) -> bool:
+    """Whether run ``number`` of a job name took place: every one, but for the job
+    name that comes and goes, which runs `_THERE` times and then `_GONE` times
+    not."""
+    return name != _COMES_AND_GOES or number % (_THERE + _GONE) < _THERE
+
+
+def _run_record(name: str, number: int, interval: float,
+                timed: bool) -> dict[str, Any]:
+    """Run ``number`` of a job name as its source answers: how it ended, when, and
+    — for a job that says so — how long it took. Every seventh run fails, early; a
+    timed one that takes longer than the limit warns."""
+    seconds = round(38 + 22 * math.sin(number * 0.9) + 9 * math.sin(number * 0.37))
+    failed = number % 7 == 3
+    record: dict[str, Any] = {
+        "job": name, "run": number,
+        "outcome": ("failed" if failed
+                    else "slow" if timed and seconds > _RUNS_SLOW_SECONDS
+                    else "succeeded"),
+        "at": datetime.fromtimestamp(number * interval, UTC).isoformat()}
+    if timed:
+        record["seconds"] = 4 if failed else seconds
+    return record
+
+
+def _run_line(reading: Measurement) -> Entry:
+    """What the grading says of one run, carrying its reading: on the job name's
+    node for its newest run, and for the record alone for an older one."""
+    record = reading.record
+    took = f" in {record['seconds']}s" if "seconds" in record else ""
+    return Entry("newest", f"run {record['run']} {record['outcome']}{took}",
+                 _RUN_CODES[str(record["outcome"])], subject=reading.subject,
+                 data=dict(record))
+
+
+def _runs_graded(measurements: Sequence[Measurement]) -> CheckResult:
+    """A node for each job name the source lists (ADR-0106): its line carries its
+    newest run, and each older run the source still lists has a line for the record
+    alone (ADR-0111) — where the job name's grading says so. The source was read
+    whole, so these are every job name there is, and the node says so: one it no
+    longer hands back is removed (ADR-0109)."""
+    children: list[CheckResult] = []
+    for name, _every, _timed, said in _JOBS:
+        lines = [_run_line(reading) for reading in measurements
+                 if reading.subject == f"jobs/{name}"]
+        if lines:
+            children.append(CheckResult(
+                name=name, reason=[lines[-1]],
+                for_record=lines[:-1] if said else ()))
+    return CheckResult(StatusCode.OK, children=tuple(children),
+                       children_complete=True,
+                       report=f"Read the newest {_RUNS_LISTED} runs of "
+                              f"**{len(children)} job names**.")
+
 
 # scenario name -> phase function: (elapsed-within-period, period) -> CheckResult.
 Scenario = Callable[[float, float], CheckResult]
@@ -153,8 +256,10 @@ def _silent(t: float, period: float) -> CheckResult:
     """A branch whose ``cache`` child *falls silent* mid-cycle: it is dropped from
     the result, so the tree stops re-observing it and it ages past the freshness
     threshold and shows **stale** (ADR-0005). It reappears fresh next cycle. This
-    is the faithful, non-blocking way to demo staleness — the engine never prunes
-    an omitted child, it just lets it age."""
+    is the faithful, non-blocking way to demo staleness: the result says nothing
+    of whether its children are complete, so the engine keeps the child it leaves
+    out and lets it age (ADR-0109 decision 1) — where `runs` says so, and its
+    missing child is removed."""
     f = t / period
     children = [CheckResult(StatusCode.OK, name="db")]
     if not (0.3 <= f < 0.8):
@@ -510,7 +615,7 @@ class DemoCheck(Check):
 
     def __init__(self, *, scenario: str = "escalate",
                  period: float = _DEFAULT_PERIOD, entries: bool = False,
-                 **kwargs: Any) -> None:
+                 offset: float = 0.0, **kwargs: Any) -> None:
         # The band labels this type ships, declared for the library to resolve
         # (ADR-0025). Every scenario declares them, and only the `severity` one
         # emits children by those names — a declaration for a name a run never
@@ -524,22 +629,29 @@ class DemoCheck(Check):
         # already hands over a mapping any more member-shaped than it is.
         self.entries = entries
         self._period = period
-        self._start = time.monotonic()
+        # `offset` seconds into the cycle already, as the environment said when
+        # this check was built (OFFSET_VARIABLE).
+        self._start = time.monotonic() - offset
 
     @classmethod
     def _extra_from_config(cls, config: dict[str, Any],
                            base_dir: Path) -> dict[str, Any]:
         scenario = str(config.get("scenario", "escalate"))
-        if scenario not in SCENARIOS and scenario not in (LATENCY, WORKFLOWS):
-            known = ", ".join(sorted({*SCENARIOS, LATENCY, WORKFLOWS}))
+        if scenario not in SCENARIOS and scenario not in (LATENCY, WORKFLOWS, RUNS):
+            known = ", ".join(sorted({*SCENARIOS, LATENCY, WORKFLOWS, RUNS}))
             raise CheckError(
                 f"unknown demo scenario {scenario!r} (known: {known})")
         period = parse_duration(config.get("period"), int(_DEFAULT_PERIOD))
         if period <= 0:
             raise CheckError("demo 'period' must be positive")
+        # Where the cycle starts is the environment's to say, not a config's: it
+        # is one start's, and a walk asks for it without editing a committed file.
+        # Read here, so that what is no duration is refused as a bad `period` is.
+        offset = parse_duration(os.environ.get(OFFSET_VARIABLE), 0)
         # `subject` is this type's to read, as a URL is `http`'s: the object a
         # scenario that reads one names, so its readings have a series (ADR-0087).
         return {"scenario": scenario, "period": float(period),
+                "offset": float(offset),
                 "entries": values.flag(config, "entries"),
                 "subject": str(config.get("subject", ""))}
 
@@ -562,6 +674,8 @@ class DemoCheck(Check):
             return self._answer()
         if self.scenario == WORKFLOWS:
             return self._workflows()
+        if self.scenario == RUNS:
+            return self._runs()
         return Measurement(record={
             "elapsed_seconds": round(
                 (time.monotonic() - self._start) % self._period, 3),
@@ -609,11 +723,41 @@ class DemoCheck(Check):
             readings.append(Measurement(record=record, subject=repository))
         return readings
 
+    def _runs(self) -> list[Measurement]:
+        """The `runs` scenario's readings: every run of each job name its source
+        still lists, each naming the run it is of — so a run read again on the next
+        poll stays one record (ADR-0087 decision 3). The period is how long the
+        fastest job name takes from one run to the next.
+
+        A job name that is not running now is not listed, and has no reading. When
+        it is listed again, its newest runs are: the ones of its last stretch among
+        them, read again as the records they were."""
+        now = time.time()
+        readings: list[Measurement] = []
+        for name, every, timed, _said in _JOBS:
+            interval = every * self._period
+            newest = int(now // interval)
+            if not _ran(name, newest):
+                continue
+            listed: list[int] = []
+            number = newest
+            while number >= 0 and len(listed) < _RUNS_LISTED:
+                if _ran(name, number):
+                    listed.append(number)
+                number -= 1
+            for number in reversed(listed):
+                readings.append(Measurement(
+                    record=_run_record(name, number, interval, timed),
+                    subject=f"jobs/{name}", identity=f"{name}-{number}"))
+        return readings
+
     def grade(self, measurements: Sequence[Measurement],
               now: datetime) -> CheckResult:
         """The scenario, read off that one number — and so a demonstration of the
         seam as well as of a dashboard: hand this grading yesterday's record and
         it answers what it answered yesterday."""
+        if self.scenario == RUNS:
+            return _runs_graded(measurements)
         if self.scenario == WORKFLOWS:
             # one line per repository that was read, carrying its reading
             return CheckResult(reason=[

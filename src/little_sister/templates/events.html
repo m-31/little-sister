@@ -1,12 +1,88 @@
 <!DOCTYPE html>
 <html>
 <head>
+    {% from '_window_bar.html' import window_bar %}
     {% set page_title = 'Events' %}
     {% include '_header.html' %}
 
     <div class="container-fluid mt-3 px-4">
         <h1 class="h4 mb-3">Events</h1>
-        <table class="table table-sm align-middle">
+        {#- What the log shows is what the URL names (ADR-0101): a node and everything
+            beneath it, words in the reason, a switch per status an event moved to,
+            one each for *reached* and *held back*, one per kind of cause, and the
+            window the Series view reads, with its bar. The switches submit their
+            form as they change (prefs.js, `data-ls-submit`); the fields submit on
+            Enter; a browser without script has Apply. The form carries the window,
+            and every link the bar draws carries the filters. Nothing remembers them:
+            `/events` alone is the whole log. A log with nothing in it has nothing to
+            filter, and says so below. -#}
+        {%- if bar %}
+        {%- set statuses_on = wanted.statuses or status_words %}
+        {%- set held_on = [wanted.held] if wanted.held else held_words %}
+        {%- set causes_on = wanted.causes or cause_words %}
+        <div class="ls-events__controls">
+            <form method="get" action="{{ url_for('events') }}" class="ls-events-filter" role="search" aria-label="Filter events">
+                <label class="ls-events-filter__field">
+                    <span class="ls-events-filter__label">under</span>
+                    <input class="form-control form-control-sm" type="search" name="under" value="{{ wanted.under }}" placeholder="a node's path" spellcheck="false" autocomplete="off">
+                </label>
+                <label class="ls-events-filter__field">
+                    <span class="ls-events-filter__label">words</span>
+                    <input class="form-control form-control-sm" type="search" name="words" value="{{ wanted.words }}" placeholder="words in the reason" spellcheck="false" autocomplete="off">
+                </label>
+                <div class="ls-events-filter__group" role="group" aria-label="Status">
+                    {%- for word in status_words %}
+                    <input class="ls-events-filter__check" type="checkbox" name="status" value="{{ word }}" id="status-{{ word }}"{% if word in statuses_on %} checked{% endif %} data-ls-submit>
+                    <label class="ls-events-filter__switch ls-events-filter__switch--{{ word }}" for="status-{{ word }}">{{ word }}</label>
+                    {%- endfor %}
+                </div>
+                {#- Apart from the statuses and in neutral ink: *maintenance* is a status
+                    an event moved to and also a rule that held one back, and turning off
+                    the one does not hide the other. -#}
+                <div class="ls-events-filter__group ls-events-filter__group--held" role="group" aria-label="Held back">
+                    {%- for word, label in [('no', 'reached'), ('yes', 'held back')] %}
+                    <input class="ls-events-filter__check" type="checkbox" name="held" value="{{ word }}" id="held-{{ word }}"{% if word in held_on %} checked{% endif %} data-ls-submit>
+                    <label class="ls-events-filter__switch" for="held-{{ word }}">{{ label }}</label>
+                    {%- endfor %}
+                </div>
+                {#- What wrote a row (ADR-0107 decision 3, ADR-0109 decision 5): a
+                    check's reading, an admin's pin, or a node leaving the tree. A
+                    check whose subjects come and go writes a removal for each that
+                    went, and this is where they are hidden. -#}
+                <div class="ls-events-filter__group ls-events-filter__group--cause" role="group" aria-label="Cause">
+                    {%- for word, label in [('reading', 'readings'), ('pin', 'pins'), ('removed', 'removals')] %}
+                    <input class="ls-events-filter__check" type="checkbox" name="cause" value="{{ word }}" id="cause-{{ word }}"{% if word in causes_on %} checked{% endif %} data-ls-submit>
+                    <label class="ls-events-filter__switch" for="cause-{{ word }}">{{ label }}</label>
+                    {%- endfor %}
+                </div>
+                {%- for name, value in window_args.items() %}
+                <input type="hidden" name="{{ name }}" value="{{ value }}">
+                {%- endfor %}
+                {#- The default button: with two fields and no submit button, Enter in
+                    either submits nothing, and the Apply below is none where script
+                    runs. Out of sight and out of the tab order, it is only what Enter
+                    presses. -#}
+                <button class="visually-hidden" type="submit" tabindex="-1" aria-hidden="true">Apply</button>
+                <noscript>
+                    <button class="btn btn-sm btn-primary" type="submit">Apply</button>
+                </noscript>
+            </form>
+            {{ window_bar(bar) }}
+            <div class="ls-events__summary">
+                <p class="ls-events__count">{{ line }}</p>
+                {%- if anything_set %}
+                <a class="ls-events__reset" href="{{ url_for('events') }}">reset</a>
+                {%- endif %}
+            </div>
+        </div>
+        {%- endif %}
+        {#- In a box that scrolls it sideways where its rows are wider than the page —
+            on a phone — so the page itself is never wider than its screen. The box
+            is what anything placed absolutely inside it is placed in, as on the
+            Series index, and it carries the margin the table had: one kept inside a
+            box that scrolls would stop collapsing with what follows. -#}
+        <div class="table-responsive position-relative mb-3">
+        <table class="table table-sm align-middle mb-0">
             <thead>
                 <tr><th>When</th><th>Status</th><th>Service</th><th>Reason</th></tr>
             </thead>
@@ -18,21 +94,43 @@
                     pin to record — and they are the answer to *did it break during
                     the window?* The row keeps the status color it would have had,
                     because that is what it would have alarmed as; the chip is what
-                    says it did not. Defaulting the page to hide them, with a toggle,
-                    is still an open question and rides its own change, not this
-                    one. -#}
+                    says it did not. They are shown unless the *held back* switch is
+                    off: whether the log keeps them at all is retention's question
+                    (ADR-0101 decision 3).
+
+                    A row that a pin caused says so in a chip of its own (ADR-0107
+                    decision 3) — *set*, *edited*, *maintenance ended* for the
+                    node's, *line silenced* and *line's maintenance ended* for a
+                    line's: a silenced line turns its node green, and that row is
+                    no recovery. A reading's row has none, and neither has one from
+                    a log written before an event said its cause.
+
+                    A removal's row says *removed* (ADR-0109 decision 5): the node
+                    left the tree, which is another thing than a check that read
+                    nothing. Its chip wears the ink of the nothing it moved to, not
+                    a pin's, and its path is no link: there is no page to open.
+
+                    The row that ends a wait says *reached* (ADR-0119 decision 3).
+                    Its node has shown the status since the row the wait held back,
+                    and this one is when the level above began to count it: the
+                    one row of a reading that changes nothing its node shows. No
+                    pin wrote it either, so its chip wears the pair of the status
+                    the row shows. -#}
                 {% for e in events %}
                     <tr class="row-{{ e.new | status_slug }}">
                         <td class="text-nowrap">{{ e.timestamp | localtime }}</td>
-                        <td>{{ e.new.name.lower() }}{% if e.suppressed_by %} <span class="event-suppressed">{{ e.suppressed_by }}</span>{% endif %}</td>
-                        <td class="text-muted">{{ e.path }}</td>
+                        <td>{{ e.new.name.lower() }}{% if cause_chips.get(e.cause) %} <span class="event-cause{% if e.cause == 'removed' %} event-cause--removed{% elif e.cause == 'reached' %} event-cause--reached{% endif %}">{{ cause_chips[e.cause] }}</span>{% endif %}{% if e.suppressed_by %} <span class="event-suppressed">{{ e.suppressed_by }}</span>{% endif %}</td>
+                        <td class="text-muted">{% if e.path in existing_paths %}<a href="{{ url_for('status', branch=(e.path | url_branch) or none) }}">{{ e.path }}</a>{% else %}{{ e.path }}{% endif %}</td>
                         <td class="md-body">{{ e.reason | join('; ') | markdown_inline }}</td>
                     </tr>
                 {% else %}
-                    <tr><td colspan="4" class="text-muted">No events yet.</td></tr>
+                    {#- Which empty it is (ADR-0101 decision 5): an empty log, a window
+                        the log holds nothing in, or filters that left nothing. -#}
+                    <tr><td colspan="4" class="text-muted">{{ empty }}</td></tr>
                 {% endfor %}
             </tbody>
         </table>
+        </div>
     </div>
 
 {% include '_page_end.html' %}

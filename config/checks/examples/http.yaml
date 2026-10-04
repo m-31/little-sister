@@ -12,10 +12,10 @@ description: HTTP endpoint returns an expected status
 frequency: 5m                # how often to run
 timeout: 10s                 # per-run timeout
 # series_keep: 60            # readings kept per subject as its history (default 0: keep none)
-# reading_cap: 10            # of those, the newest its page lists (default: settings.yaml's)
+# reading_cap: 10            # of those, the newest its Series view lists (default: settings.yaml's)
 #
-# What the kept readings are drawn by: a curve per measure on this node's page
-# (ADR-0092). `http` declares its response time itself, so a kept series draws it
+# What the kept readings are drawn by: a curve per measure on this node's page and
+# its Series view (ADR-0092, ADR-0097). `http` declares its response time itself, so a kept series draws it
 # with no key of its own. Name a field to relabel it, `null` to draw none, or
 # another field of the record to add a curve.
 # measures:

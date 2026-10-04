@@ -11,7 +11,7 @@ import os
 import tempfile
 from collections.abc import Sequence
 from dataclasses import replace
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest import TestCase, mock
 
@@ -249,12 +249,12 @@ class RunFactsScheduleTests(TestCase):
         check = _Probe(path="/svc", frequency_seconds=300)
         check.result = CheckResult(StatusCode.OK)
         engine, tree, item = self._engine(check)
-        before = datetime.now()
+        before = datetime.now(UTC)
         self._run(engine, item)
-        after = datetime.now()
+        after = datetime.now(UTC)
         facts = self._facts(tree)
         assert facts.next_run_at is not None
-        got = datetime.fromisoformat(facts.next_run_at)
+        got = facts.next_run_at
         self.assertGreaterEqual(got, before + timedelta(seconds=300))
         self.assertLessEqual(got, after + timedelta(seconds=300))
         self.assertIsNotNone(facts.wall_seconds)
@@ -266,12 +266,12 @@ class RunFactsScheduleTests(TestCase):
         check = _Probe(path="/svc", frequency_seconds=300,
                        retry_interval_seconds=30, retry_attempts=2)
         engine, tree, item = self._engine(check)
-        before = datetime.now()
+        before = datetime.now(UTC)
         self._run(engine, item)
-        after = datetime.now()
+        after = datetime.now(UTC)
         facts = self._facts(tree)
         assert facts.next_run_at is not None
-        got = datetime.fromisoformat(facts.next_run_at)
+        got = facts.next_run_at
         self.assertGreaterEqual(got, before + timedelta(seconds=30))
         self.assertLessEqual(got, after + timedelta(seconds=30))
 
@@ -406,7 +406,8 @@ class SystemRetryDisplayTests(TestCase):
                          data={"username": "pan", "password": "12345678"})
 
     def _body(self, check):
-        info = EngineInfo(started_at="2026-07-31T10:00:00", uptime_seconds=5.0,
+        info = EngineInfo(started_at=datetime(2026, 7, 31, 10, 0, tzinfo=UTC),
+                          uptime_seconds=5.0,
                           max_workers=8, check_count=1, running=0,
                           checks=(check,))
         stub = mock.Mock()
@@ -418,8 +419,10 @@ class SystemRetryDisplayTests(TestCase):
         body = self._body(CheckInfo(
             path="/svc/a", type_name="http", frequency_seconds=300,
             running=False, running_since=None, running_seconds=None,
-            next_run_at="2026-07-31T10:01:00+00:00", next_in_seconds=30.0,
-            last_run_at="2026-07-31T10:00:30+00:00", elapsed_seconds=0.2,
+            next_run_at=datetime(2026, 7, 31, 10, 1, tzinfo=UTC),
+            next_in_seconds=30.0,
+            last_run_at=datetime(2026, 7, 31, 10, 0, 30, tzinfo=UTC),
+            elapsed_seconds=0.2,
             retrying=True, retry_attempt=1, retry_attempts=2))
         self.assertIn("· retry 1/2", body)
 
@@ -427,6 +430,6 @@ class SystemRetryDisplayTests(TestCase):
         body = self._body(CheckInfo(
             path="/svc/a", type_name="http", frequency_seconds=300,
             running=False, running_since=None, running_seconds=None,
-            next_run_at="2026-07-31T10:05:00+00:00", next_in_seconds=300.0,
+            next_run_at=datetime(2026, 7, 31, 10, 5, tzinfo=UTC), next_in_seconds=300.0,
             last_run_at=None, elapsed_seconds=None))
         self.assertNotIn("retry", body.split("<tbody>", 1)[1])

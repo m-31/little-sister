@@ -27,7 +27,8 @@ from little_sister import identity, local_login
 GATED_ENDPOINTS = frozenset({
     "about", "copy", "events", "extension_asset", "history", "link_icon", "links",
     "links_check", "maintenance", "maintenance_overview", "preferences",
-    "self_report_action", "system", "user_avatar",
+    "self_report_action", "series", "series_index", "system", "system_installed",
+    "user_avatar",
 })
 
 #: The one method each endpoint is exercised with, where GET is not it.

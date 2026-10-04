@@ -7,10 +7,11 @@ line has three parts — a number that bounds it, a measurement the engine recor
 as it runs, and the sentence ``/little-sister`` carries while the measurement is
 near or past the bound. Nothing here probes (ADR-0072 decision 2): the entry
 count is a counter the tree keeps, the pool and the schedule are the engine's own
-records read on the tick, and the one syscall — the process asking the kernel for
-its own resident size — is local, bounded and answered from what the kernel
-already holds. Every line clears when its condition does, like every line on the
-seam.
+records read on the tick, and the reads of the process's own resident size — the
+process asking the kernel about itself — are local, bounded and answered from what
+the kernel already holds. Every line clears when its condition does, like every line
+on the seam. The same figures stand on `/system`, in the engine's report and in the
+log, and a run's line says what rose while it ran (ADR-0095).
 
 The numbers are constants today, gathered in :class:`Limits` so that turning them
 into settings, when a check can declare what it costs, is one construction site.
@@ -77,6 +78,19 @@ SERIES_LIMIT = 8 * 1024 ** 2
 
 #: The share of either limit at which its line first stands, at WARN.
 AMBER_SHARE = 0.8
+
+#: How often the log carries the process's figures (ADR-0095 decision 3): on the
+#: first tick past each mark of this many minutes of the clock the log is stamped
+#: in, so the lines of two instances, or of one across a restart, stand at the same
+#: minutes. `memory.sh`'s own background cadence, and about one line in a hundred of
+#: a busy log. A divisor of sixty, so that every hour begins on a mark.
+MEMORY_LINE_MINUTES = 10
+
+#: The smallest rise a run's line, or the tick's own, says (ADR-0095 decisions 4
+#: and 5) — of the size and of the peak alike. Below it a rise is pages; a fall is
+#: never said, since it is some other run's memory given back; and the ten-minute
+#: line carries the drift either way.
+RISE_LOGGED = 1024 ** 2
 
 #: How long a check may wait for a pool worker before the pool counts as
 #: saturated. Ten poll intervals: a queue that drains within them is the ordinary
@@ -146,11 +160,20 @@ class Limits:
 
 @dataclass(frozen=True)
 class Resident:
-    """The process's resident size, and whether the figure is a high-water mark
-    rather than the size now."""
+    """The process's resident size as its platform can say it (ADR-0095 decision
+    1): the **peak**, the high-water mark ``getrusage`` keeps, and the size **now**
+    where the kernel keeps one — Linux's ``/proc/self/statm`` — or ``None`` where it
+    does not, as on macOS. The peak is never below the size now."""
 
-    bytes: int
-    peak: bool
+    peak: int
+    now: int | None = None
+
+    @property
+    def graded(self) -> int:
+        """What the ``memory`` line grades: the size now where there is one, the
+        peak where it is all there is. A line that graded a high-water mark could
+        never clear once it had stood."""
+        return self.peak if self.now is None else self.now
 
 
 @dataclass(frozen=True)
@@ -235,22 +258,38 @@ def _cgroup_memory_limit() -> int | None:
 
 
 def resident_size() -> Resident | None:
-    """The process's resident size now, from ``/proc/self/statm`` where the
-    kernel keeps one (Linux); elsewhere the high-water mark ``getrusage`` reports
-    — in bytes on macOS, kilobytes on every other platform — marked as the peak
-    it is. ``None`` where nothing can say."""
-    try:
-        with open("/proc/self/statm", encoding="ascii") as handle:
-            resident_pages = int(handle.read().split()[1])
-        return Resident(resident_pages * os.sysconf("SC_PAGE_SIZE"), peak=False)
-    except (OSError, ValueError, IndexError):
-        pass
+    """The process's resident size (ADR-0095 decision 1): the size now where the
+    kernel keeps one, and the peak on every platform that has one — raised to the
+    size now where the two, read a moment apart, disagree, and the size now itself
+    where no peak can be read. ``None`` where nothing can say."""
+    now = _statm_resident()
+    peak = peak_resident()
+    if peak is None:
+        return None if now is None else Resident(peak=now, now=now)
+    return Resident(peak=peak if now is None else max(peak, now), now=now)
+
+
+def peak_resident() -> int | None:
+    """The process's high-water mark as ``getrusage`` keeps it — in bytes on
+    macOS, in kilobytes on every other platform — or ``None`` where the platform
+    keeps none."""
     try:
         import resource
         peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     except (ImportError, OSError, ValueError):
         return None
-    return Resident(peak if sys.platform == "darwin" else peak * 1024, peak=True)
+    return peak if sys.platform == "darwin" else peak * 1024
+
+
+def _statm_resident() -> int | None:
+    """The process's resident size now, from ``/proc/self/statm`` where the
+    kernel keeps one (Linux), or ``None``."""
+    try:
+        with open("/proc/self/statm", encoding="ascii") as handle:
+            resident_pages = int(handle.read().split()[1])
+        return resident_pages * os.sysconf("SC_PAGE_SIZE")
+    except (OSError, ValueError, IndexError):
+        return None
 
 
 def may_run_late(checks: Iterable[object]) -> tuple[MayRunLate, ...]:
@@ -575,6 +614,25 @@ class EngineReport:
         would need at that tick's estate — ``None`` before the first tick."""
         return self._series
 
+    @property
+    def memory(self) -> Resident | None:
+        """What the process held at the last tick — ``None`` before the first,
+        and where nothing could say."""
+        return self._memory
+
+    def memory_figures(self, resident: Resident | None) -> str | None:
+        """The log's memory line after its prefix (ADR-0095 decision 3): the
+        process's figures as ``resident`` gives them, then what the series hold and
+        the tree's entry count as the last tick recorded them — the card's figures in
+        one line. ``None`` where nothing can say what the process holds."""
+        if resident is None:
+            return None
+        held = self._series.held if self._series is not None else 0
+        entries = self._entries
+        noun = "entry" if entries == 1 else "entries"
+        return (f"{resident_text(resident, self._limits)}; the series hold "
+                f"{format_weight(held)}, the tree {entries:,} {noun}")
+
     def observe(self, now: float, *, entries: int, waiting: Sequence[Waiting],
                 late: Sequence[LateRun], series: SeriesHeld | None = None) -> None:
         """Record one tick: ``now`` is the engine's clock at the tick, the rest is
@@ -640,19 +698,20 @@ class EngineReport:
                                code=StatusCode.WARN))
         memory, memory_limit = self._memory, limits.memory_limit
         if memory is not None and memory_limit:
-            what = "peak resident size" if memory.peak else "resident size"
-            given = (f" (of the {_size(limits.machine_memory)} the machine gives "
-                     f"the process)" if limits.machine_memory else "")
-            if memory.bytes >= memory_limit:
-                lines.append(Entry("memory", f"{what} {_size(memory.bytes)}, past "
-                                             f"the limit of {_size(memory_limit)}"
-                                             f"{given}",
+            what = "peak resident size" if memory.now is None else "resident size"
+            size = memory.graded
+            given = (f" (of the {format_size(limits.machine_memory)} the machine "
+                     f"gives the process)" if limits.machine_memory else "")
+            if size >= memory_limit:
+                lines.append(Entry("memory", f"{what} {format_size(size)}, past "
+                                             f"the limit of "
+                                             f"{format_size(memory_limit)}{given}",
                                    code=StatusCode.ERROR))
-            elif memory.bytes >= memory_limit * limits.amber_share:
-                lines.append(Entry("memory", f"{what} {_size(memory.bytes)}, "
-                                             f"{_percent(memory.bytes, memory_limit)} "
-                                             f"of the limit of {_size(memory_limit)}"
-                                             f"{given}",
+            elif size >= memory_limit * limits.amber_share:
+                lines.append(Entry("memory", f"{what} {format_size(size)}, "
+                                             f"{_percent(size, memory_limit)} "
+                                             f"of the limit of "
+                                             f"{format_size(memory_limit)}{given}",
                                    code=StatusCode.WARN))
         lines.extend(self._series_lines())
         if self._waiting:
@@ -740,6 +799,12 @@ class EngineReport:
                 f"- the series hold {format_weight(series.held)} of their ceiling of "
                 f"{format_weight(self._limits.series_limit)}; at today's estate this "
                 f"configuration would need {format_weight(series.projection)}")
+        # The process's own figures, beside the series' (ADR-0095 decision 2): a
+        # fact every tick, in the `memory` line's words, and never a line — below
+        # the amber share they claim nothing.
+        if self._memory is not None:
+            facts.append(
+                f"- {resident_text(self._memory, self._limits, machine=True)}")
         return "\n".join(facts)
 
 
@@ -749,26 +814,85 @@ def _percent(part: float, whole: float) -> str:
 
 def format_weight(size: int) -> str:
     """A weight in bytes at the resolution a series line needs — from a few
-    hundred bytes, a test's ceiling, to the mebibytes a deployment's is. Named
-    without an underscore for the system page's `weight` filter, which writes the
-    figures the engine's own lines write: one figure spelled two ways is two
-    figures to a reader comparing them."""
+    hundred bytes, a test's ceiling, to the mebibytes a deployment's is, and since a
+    curve writes its sizes through it too, the tebibytes a volume holds (ADR-0096
+    decision 3). Named without an underscore for the system page's `weight`
+    filter, which writes the figures the engine's own lines write: one figure
+    spelled two ways is two figures to a reader comparing them."""
     if size < 1024:
         return f"{size:,} B"
     if size < 1024 ** 2:
         return f"{size / 1024:,.1f} KiB"
     if size < 1024 ** 3:
         return f"{size / 1024 ** 2:,.1f} MiB"
-    return f"{size / 1024 ** 3:,.1f} GiB"
+    if size < 1024 ** 4:
+        return f"{size / 1024 ** 3:,.1f} GiB"
+    return f"{size / 1024 ** 4:,.1f} TiB"
 
 
-def _size(size: int | None) -> str:
-    """A byte count in binary units, at the resolution a memory line needs."""
+def format_size(size: int | None) -> str:
+    """A process's size in binary units, at the resolution a memory line needs:
+    ``312 MiB``, ``8.0 GiB``. Named for the system page's `size` filter, which
+    writes the figures the engine's `memory` line writes — one figure spelled two
+    ways is two figures to a reader comparing them."""
     if size is None:
         return "?"
     if size < 1024 ** 3:
         return f"{size / 1024 ** 2:,.0f} MiB"
     return f"{size / 1024 ** 3:,.1f} GiB"
+
+
+def resident_text(resident: Resident, limits: Limits, *,
+                  machine: bool = False) -> str:
+    """The process's figures as every surface names them (ADR-0095): ``resident
+    size 312 MiB, peak 369 MiB`` where the platform has both, ``peak resident size
+    369 MiB`` where the peak is all it has — then ``of a limit of 8.0 GiB`` where the
+    machine said what it gives the process, and, with ``machine``, what that is.
+    The `memory` line's own words, so that a figure reads the same wherever it
+    stands."""
+    if resident.now is None:
+        said = f"peak resident size {format_size(resident.peak)}"
+    else:
+        said = (f"resident size {format_size(resident.now)}, "
+                f"peak {format_size(resident.peak)}")
+    if limits.memory_limit:
+        said += f", of a limit of {format_size(limits.memory_limit)}"
+        if machine and limits.machine_memory:
+            said += (f" (of the {format_size(limits.machine_memory)} the machine "
+                     f"gives the process)")
+    return said
+
+
+def rise_text(size_rise: int, peak_rise: int, beside: Sequence[str], *,
+              during: str) -> str:
+    """What rose while something was in flight (ADR-0095 decisions 4 and 5):
+    ``resident +38.2 MiB, peak +12.1 MiB while it ran, beside /a and /b``. The
+    size's rise and the peak's, each only from :data:`RISE_LOGGED` — a fall is
+    never said — and ``""`` where neither reaches it. The rises are the process's,
+    never a run's, so ``during`` says what was measured and ``beside`` names every
+    run that was in flight at any point of it, five and a count."""
+    rose = [f"{name} +{format_weight(rise)}"
+            for name, rise in (("resident", size_rise), ("peak", peak_rise))
+            if rise >= RISE_LOGGED]
+    if not rose:
+        return ""
+    said = f"{', '.join(rose)} {during}"
+    if beside:
+        said += f", beside {_listed(beside)}"
+    return said
+
+
+def _listed(names: Sequence[str]) -> str:
+    """Names in order, joined as prose — ``/a``, ``/a and /b``, ``/a, /b and
+    /c`` — capped at :data:`NAMED_IN_A_LINE` with a count for the rest."""
+    ordered = sorted(names)
+    shown = ordered[:NAMED_IN_A_LINE]
+    rest = len(ordered) - len(shown)
+    if rest:
+        return f"{', '.join(shown)} and {rest} more"
+    if len(shown) == 1:
+        return shown[0]
+    return f"{', '.join(shown[:-1])} and {shown[-1]}"
 
 
 def _plain(text: str) -> str:

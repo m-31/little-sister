@@ -1,4 +1,4 @@
-{#- The `→ 22:30` next-update suffix (ADR-0044 decision 5, as amended): the check
+{#- The `→ 22:30` next-update suffix (ADR-0044 decision 5): the check
     time's companion wherever that time shows, for the nodes that carry run facts —
     the sole-check mount and the ancestors that inherit its stamp. **Absolute, at
     minute precision like the check time itself** (seconds earn their room nowhere
@@ -16,9 +16,9 @@
     timezone. Kept in its own side-effect-free partial: importing a macro executes
     the source template's body, so shared macros must not live in a page partial
     (the `_status_cue.html` lesson). -#}
-{% macro next_update(next_iso, moment_hm) -%}
-{%- if next_iso -%}
-{%- set next_hm = next_iso | localtime("%H:%M") -%}
+{% macro next_update(next_at, moment_hm) -%}
+{%- if next_at -%}
+{%- set next_hm = next_at | localtime("%H:%M") -%}
 {%- if next_hm != moment_hm %} → {{ next_hm }}{% endif -%}
 {%- endif -%}
 {%- endmacro %}

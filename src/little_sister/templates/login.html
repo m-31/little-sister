@@ -1,10 +1,12 @@
 <!DOCTYPE html>
 <html>
 <head>
-    {# This page includes no header — it is the one standalone document — so it
-       carries its own title and icon links. Same shape as _header.html's. #}
+    {# This page includes no header — it is one of the two standalone documents,
+       `choose_door.html` the other — so it carries its own title, its viewport
+       declaration and its icon links. Same shape as _header.html's. #}
     <title>Login · {{ brand_name | default('little sister') }}</title>
     <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png">
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
     <link rel="icon" href="/static/favicon.ico" sizes="32x32">
@@ -12,7 +14,7 @@
     <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16x16.png">
     <link rel="manifest" href="/static/site.webmanifest">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="/static/css/overview.css" rel="stylesheet">
+    <link href="{{ url_for('static', filename='css/overview.css') }}" rel="stylesheet">
 </head>
 {#- The login page wears the browser's theme too — the look is this browser's,
     not this session's, so it survives a logout and greets the next login the

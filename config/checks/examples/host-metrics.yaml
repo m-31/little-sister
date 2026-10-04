@@ -19,7 +19,17 @@ description: System resources (disk, memory, CPU, load) over SSH
 frequency: 2m                # how often to run
 timeout: 30s                 # per-run timeout
 # series_keep: 60            # readings kept per subject as its history (default 0: keep none)
-# reading_cap: 10            # of those, the newest its page lists (default: settings.yaml's)
+# reading_cap: 10            # of those, the newest its Series view lists (default: settings.yaml's)
+#
+# What the kept readings are drawn by (ADR-0092, ADR-0096): host-metrics declares the
+# numbers it grades itself — memory, CPU and disk used in %, the load per core, and
+# with `disk_path: all` or a list each volume's use — each curve on the aspect that
+# grades it. Name a field to add a curve or relabel one, `null` to draw none; `node`
+# puts a curve on a node beneath this one, and a `*` draws one per volume, on that
+# volume's node:
+# measures:
+#   disk_avail_kb: {unit: KiB, label: Free space, node: disk}
+#   volumes.*.avail_kb: {unit: KiB, label: Free space on *, node: disk/*}
 
 # --- connection ------------------------------------------------------------
 host: my-ssh-alias           # SSH target: a ~/.ssh/config alias or a hostname/FQDN

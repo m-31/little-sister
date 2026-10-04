@@ -1,8 +1,8 @@
 # ADR-0051 — What startup refuses at the plugin boundary
 
 - **Status:** Accepted
-- **Date:** 2026-08-08 (decided while writing the procedure for moving a check type
-  into a repository of its own)
+- **Date:** 2026-10-04 (accepted 2026-08-08, decided while writing the procedure for
+  moving a check type into a repository of its own)
 - **Related:** [ADR-0049](0049-the-check-authoring-surface.md) (the surface this
   versions, and the gate this completes),
   [ADR-0022](0022-generated-release-branch.md) (the tag a dependent pins),
@@ -10,7 +10,9 @@
   [ADR-0034](0034-template-slots-for-dependent-packages.md) (the neighboring
   registration seams, whose failures are a warning and a skip — and why these two
   are not), [ADR-0021](0021-script-resolution.md) (the other place where "which of
-  these two things is answering" had to be made explicit)
+  these two things is answering" had to be made explicit),
+  [ADR-0100](0100-system-is-two-views.md) (the *Installed* view of `/system`, which
+  names who answers for each type)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -82,11 +84,12 @@ would still not say what the plugin actually depends on.
    operator believes it measures. A monitoring tool that is wrong is worse than one
    that is down, so these refuse.
 
-6. **`/system` names who answers for each type** — every registered type with its
-   module, its distribution and that distribution's version. Once a type can come
-   from a package released elsewhere, this is not derivable from this repository at
-   all; the running process is the only source. It sits beside the slot fillers and
-   the assembled policy, for the same reason they are there.
+6. **`/system`'s *Installed* view names who answers for each type**, at
+   `/system/installed` ([ADR-0100](0100-system-is-two-views.md)) — every registered
+   type with its module, its distribution and that distribution's version. Once a type
+   can come from a package released elsewhere, this is not derivable from this
+   repository at all; the running process is the only source. It sits beside the slot
+   fillers and the assembled policy, for the same reason they are there.
 
 ## Consequences
 

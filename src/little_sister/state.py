@@ -121,8 +121,11 @@ class _Registered:
     both — a written-through file registers only the latter."""
     producer: Callable[[], object] | None = None
     restore: Restore | None = None
-    #: The text last written by the periodic write, so an unchanged state is not
-    #: rewritten every interval — a file that did not change is not a file to touch.
+    #: The digest of what the periodic write last wrote — or of the copy an
+    #: adoption put in its place — so an unchanged state is not rewritten every
+    #: interval: a file that did not change is not a file to touch. The digest and
+    #: never the text, which for the series is megabytes the process would hold
+    #: for its whole life only to compare them with the next text.
     written: str | None = None
 
 
@@ -313,30 +316,34 @@ class StateLayer:
         with self._lock:
             self._files.setdefault(name, _Registered()).restore = restore
 
-    def tick(self) -> None:
+    def tick(self) -> bool:
         """The scheduler's call, once per tick: write the kept files when an
-        interval has passed since the last time. The first tick only starts the
-        interval — there is nothing to write yet that startup did not just read."""
+        interval has passed since the last time, and say whether this tick ran
+        that save — the engine's tick line says so (ADR-0095 decision 5). The first
+        tick only starts the interval — there is nothing to write yet that startup
+        did not just read."""
         now = self._clock()
         with self._lock:
             if self._last_flush is None:
                 self._last_flush = now
-                return
+                return False
             if now - self._last_flush < self._interval:
-                return
+                return False
             self._last_flush = now
-        self.flush()
+        return self.flush()
 
-    def flush(self) -> None:
+    def flush(self) -> bool:
         """Write every kept file whose state changed since its last write — the
         periodic write, and the one at graceful shutdown. A producer that raises is
         a failed save of its file, reported like any other, and the rest are still
         written. Then the keeper: its tick, the adoption where that tick is a
-        takeover (ADR-0077), and the saves it takes."""
+        takeover (ADR-0077), and the saves it takes. ``False`` where the layer may
+        no longer write and nothing ran."""
         with self._swap_lock:
             if not self._may_write():
-                return
+                return False
             self._flush()
+            return True
 
     def _flush(self) -> None:
         # Call only while holding the swap lock.
@@ -353,10 +360,12 @@ class StateLayer:
                     self._outcome(name).save_error = (
                         f"its producer raised: {error!r}")
                 continue
-            if text == item.written:
+            data = text.encode("utf-8")
+            digest = _digest(data)
+            if digest == item.written:
                 continue
-            if self._write_text(name, text):
-                item.written = text
+            if self._write_bytes(name, data):
+                item.written = digest
         # The keeper, after the writer and on the same interval (ADR-0071 §5), so
         # what it takes is what this tick just wrote rather than the tick before —
         # and only when its tick says so: a keeper that is not the holder of its
@@ -439,9 +448,12 @@ class StateLayer:
             self._stamps[name] = self._wall()
 
     def _write_text(self, name: str, text: str) -> bool:
+        return self._write_bytes(name, text.encode("utf-8"))
+
+    def _write_bytes(self, name: str, data: bytes) -> bool:
         path = self.path(name)
         try:
-            self._atomic_write(name, text.encode("utf-8"))
+            self._atomic_write(name, data)
         except OSError as error:
             with self._lock:
                 self._outcome(name).save_error = str(error)
@@ -763,10 +775,7 @@ class StateLayer:
             else:
                 outcome.adopted = ""
             if registered is not None and registered.producer is not None:
-                try:
-                    registered.written = data.decode("utf-8")
-                except UnicodeDecodeError:
-                    registered.written = None
+                registered.written = _digest(data)
         return True
 
     def _adoption_failed(self, name: str, line: str, *, hold: bool = False) -> None:

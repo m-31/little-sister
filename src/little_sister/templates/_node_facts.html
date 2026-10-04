@@ -9,9 +9,9 @@
     had nowhere to land. Same partial on both pages, so the two can no longer drift.
 
     Five cards, in the order a reader wants them: **when** it ran, **what it read**
-    (`record` — the reading, where the run kept one, ADR-0085), **what it has read
-    over time** (the series, where the node stands for a subject that keeps one,
-    ADR-0092), **what it found** (`report` — the run's outputs), **what it ran with**
+    (`record` — the reading, where the run kept one, ADR-0085), **how it has read
+    over time** (the curves that stand on this node, where any do, ADR-0097),
+    **what it found** (`report` — the run's outputs), **what it ran with**
     (`config` — its inputs). Report before config on purpose: the outputs are why you
     opened the page, the inputs are the reference beside them. Those two are Markdown
     through the hardened renderer (ADR-0018) — checks author them with
@@ -19,21 +19,39 @@
     leftover from before the renderer landed. The record is data, not Markdown, and
     is shown in the one list a line's record is shown in (`_record_list.html`).
 
-    Context: ``node`` (a StatusSnapshot), ``branch`` (its path, for the history
-    link), ``since`` (the start of the current own-status period, or None) and
-    ``series`` (what the node's subject read over time, empty where it stands for
-    none — and allowed to be absent, for a caller that has no engine to ask).
-    Never included by the kiosk, which keeps none of this. -#}
+    Context: ``node`` (a StatusSnapshot), ``branch`` (its path), ``since`` (the
+    start of the current own-status period, or None) and ``node_curves`` (the curves
+    that stand on the node, or None — and allowed to be absent, for a caller that
+    has no engine to ask). Never included by the kiosk, which keeps none of this. -#}
 {%- from '_record_list.html' import record_list %}
-{%- from '_series.html' import curve, readings_table %}
+{%- from '_series.html' import curve %}
 <div class="card mb-3">
     <div class="card-body">
         <h3 class="h6 text-muted text-uppercase">Time</h3>
         {#- Observation time (ADR-0027). No timestamp means no check has ever
             written this node — say so, rather than inventing an instant. With
             a timestamp but no recorded transition of its own (``since`` is
-            None) there is no period to bound either, so report the single
-            observation instead of a from/until of one moment.
+            None) there is no period to state either, so report the single
+            observation.
+
+            A status that still holds is stated by when it began and when it was
+            last observed, on two lines, also where the two are one instant
+            (ADR-0099 decision 1). Where the tree did not see the period begin —
+            a first reading, or a beginning lost before the tree kept it — it began
+            *before* a bound, the furthest back the tree can vouch that nothing
+            changed, which History's row for the period states too (ADR-0102
+            decision 3). A period that a pin's end began
+            says so — *since …, when its maintenance ended* — because the node began
+            to show its status then, which is not when its check began to read it;
+            an edit of a pin begins no period, so a pinned node holds *since* its
+            pin was set (decisions 6 and 8). So does one that a line's pin began:
+            *when a line was silenced*, *when a line's maintenance ended*
+            (ADR-0107 decision 3). The words are `_began`'s, in `app.py`, and
+            the Copy document writes the same. It read *from … until …*, and the
+            second instant was the latest reading, never an end: an active failure
+            read as one that had stopped, and a node read once in its period as
+            *from 19:32:39 until 19:32:39*. *Until* belongs to a period that has
+            ended, which the History tab lists.
 
             The period is bounded by the **own**-status event log, so it names the
             own status: on a container the rolled-up code is a statement about the
@@ -41,14 +59,26 @@
             container that declares nothing has no own status for a period to name —
             its `UNDEFINED` is the roll-up's to skip, and its page heads with what it
             rolls up to — so it states the observation, as a node with no transition
-            of its own does. A leaf's `UNDEFINED` is its own, and keeps its period. -#}
-        {% if node.timestamp is none %}
-            <p class="mb-1 text-muted">Not yet observed.</p>
-        {% elif since and not (node.own_code.name == 'UNDEFINED' and node.children) %}
+            of its own does: the route hands it no ``since``. That is decided once, in
+            `_since_of`, from the node before a filter takes its children away, and
+            the Copy document takes its period from the same place, so the two cannot
+            differ. A leaf's `UNDEFINED` is its own, and keeps its period.
+
+            **A period is stated wherever there is one** (ADR-0115 decision 6): a
+            pinned node that no check has written has shown *maintenance* since its
+            pin, and *Not yet observed* alone would say nothing of that. The
+            sentence is for a node with neither an observation nor a period. -#}
+        {% if since %}
             <p class="mb-1">
                 Status <strong>{{ node.own_code.name.lower() }}</strong>
-                from {{ since | localtime }} until {{ node.timestamp | localtime }}
+                since {% if since.before %}before {% endif %}{{ since.at | localtime }}
+                {%- if since.began %}, {{ since.began }}{% endif %}
             </p>
+            {% if node.timestamp is not none %}
+            <p class="mb-1">Last observed {{ node.timestamp | localtime }}</p>
+            {% endif %}
+        {% elif node.timestamp is none %}
+            <p class="mb-1 text-muted">Not yet observed.</p>
         {% else %}
             <p class="mb-1">Observed {{ node.timestamp | localtime }}.</p>
         {% endif %}
@@ -119,10 +149,9 @@
         {%- set reached = dependents | length %}
         <p class="mb-2 text-muted">{{ reached }} {{ "check is" if reached == 1 else "checks are" }} reached through this{% if node.code.name == 'ERROR' %}, and not reaching the level above while it is failing{% endif %}.</p>
         {%- endif %}
-        {# Secondary, like the maintenance buttons below it, rather than the
-           off-palette `btn-info` cyan it used to wear — the one color on this
-           page that belonged to no theme and followed none of them. #}
-        <a class="btn btn-outline-secondary" href="{{ url_for('history', path=branch) }}">History</a>
+        {#- The History page is a tab of its own now (ADR-0097 decision 3), beside
+            Status and Series under the node's title; this card keeps the numbers
+            that ask the same question, and no second way there. -#}
     </div>
 </div>
 
@@ -145,34 +174,29 @@
 </div>
 {% endif %}
 
-{%- for view in (series if series is defined else ()) %}
-{#- **What it has read over time** (ADR-0092 decision 6): the node stands for a
-    subject whose check keeps its readings, so the page shows them — a curve for each
-    measure the check is drawn by, and the newest readings as a table, as many as
-    `reading_cap` says. Every one of them is on the History page, which is not polled;
-    this card is, on a branch page, so it carries no more rows than the cap. -#}
+{%- set here = node_curves if node_curves is defined else none %}
+{%- if here %}
+{#- **How it has read over time** (ADR-0097 decision 2): the curves that stand on
+    this node — an aspect's own, or a check's own node's for a measure that names no
+    other — beside its status, its reasons and its configuration. The rest, and the
+    readings they were drawn from, are on the Series view; every reading is on the
+    History page. A polled branch page renders it again, curves and nothing more. -#}
 <div class="card mb-3 ls-series">
     <div class="card-body">
-        <h3 class="h6 text-muted text-uppercase">Readings</h3>
-        {%- for c in view.curves %}
+        <h3 class="h6 text-muted text-uppercase">Series</h3>
+        {%- for c in here.curves %}
         {{ curve(c) }}
         {%- endfor %}
-        {%- if view.rows %}
-        {{ readings_table(view) }}
-        {%- endif %}
-        {%- set noun = "reading" if view.kept == 1 else "readings" %}
         <p class="small text-muted mb-0">
-        {%- if not view.rows -%}
-            {{ view.kept }} {{ noun }} kept — every one is on the <a href="{{ url_for('history', path=branch) }}">History page</a>.
-        {%- elif view.rows | length < view.kept -%}
-            The newest {{ view.rows | length }} of {{ view.kept }} {{ noun }} kept — every one is on the <a href="{{ url_for('history', path=branch) }}">History page</a>.
+        {%- if here.source == branch -%}
+            Beside every curve beneath this node on its <a href="{{ url_for('series', path=here.source) }}#{{ here.anchor }}">Series</a> view; every reading is on its <a href="{{ url_for('history', path=here.source) }}">History</a> page.
         {%- else -%}
-            {{ view.kept }} {{ noun }} kept.
+            Drawn from the readings of <a href="{{ url_for('status', branch=here.source) }}">{{ here.source }}</a> — beside the rest on its <a href="{{ url_for('series', path=here.source) }}#{{ here.anchor }}">Series</a> view, every reading on its <a href="{{ url_for('history', path=here.source) }}">History</a> page.
         {%- endif -%}
         </p>
     </div>
 </div>
-{%- endfor %}
+{%- endif %}
 
 {% if node.report %}
 {#- What the run **found** (ADR-0044 decision 6) — the roster, the scope, the

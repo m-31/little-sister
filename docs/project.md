@@ -238,13 +238,20 @@ The app offers:
   can make. An admin can set/clear **maintenance** here.
 - **Status history** (`/history/<path>`) — a node's status periods over time, and
   every reading kept of the thing it stands for.
-- **Events** (`/events`) — the transition log across all checks, newest first.
+- **Events** (`/events`) — the transition log across all checks, newest first,
+  narrowed by a node, words in the reason, the status an event moved to, whether a
+  rule held it back and a time window, all in its URL.
 - **About** (`/about`) — who this is, why it is called that, and the version of the
   instance in front of you.
-- **System** (`/system`, admin) — engine uptime, worker-pool size, check counts,
-  and per-check next-run.
-- **Copy** — a compact non-OK outline with the minimum ancestor chain, copied as
-  Markdown for chat or rich text for a ticket.
+- **System** (`/system`, admin) — two views. *Running*: which instance this is, engine
+  uptime, worker-pool size, check counts, what the process holds, and per check when
+  it runs next and what it declared beside what it did — refreshing itself like the
+  dashboard. *Installed* (`/system/installed`): what the installation settled at
+  startup — the check types and who answers for each, the packages, the extensions,
+  the ways in and the page policy.
+- **Copy** (`/copy`, `/copy/<path>`) — a compact non-OK outline with the minimum
+  ancestor chain, copied as Markdown for chat or rich text for a ticket; and every
+  node's own document, behind the Copy tab of its page.
 - **Links** — a curated set of runbook/dashboard links.
 - **JSON / backend mode** (§2.9) — the same status routes answer with JSON to a
   token-bearing client, read-only; **satellite federation** on top of it is planned.

@@ -11,6 +11,7 @@ field and a default here and reading them in :func:`load_config`.
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -27,7 +28,7 @@ from little_sister.limits import (
     RECORD_LIMIT,
     SERIES_LIMIT,
 )
-from little_sister.logger import logger
+from little_sister.logger import logger, stamp_in
 from little_sister.state import DEFAULT_STATE_INTERVAL
 
 DEFAULT_TIMEZONE = "Europe/Berlin"
@@ -180,13 +181,22 @@ class Config:
         return ZoneInfo(self.timezone)
 
 
-def _valid_timezone(name: str) -> str:
+def _valid_timezone(name: str,
+                    read: Callable[[ZoneInfo], None] | None = None) -> str:
+    """The zone ``name``, or the default where it names none — handed to ``read``
+    the moment it is known, which is before the warning that a name was not
+    understood: the warning is then stamped in the zone that is used (ADR-0120
+    decision 9)."""
     try:
-        ZoneInfo(name)
+        zone = ZoneInfo(name)
     except (ZoneInfoNotFoundError, ValueError):
+        if read is not None:
+            read(ZoneInfo(DEFAULT_TIMEZONE))
         logger.warning("config: unknown timezone %r; using %s", name,
                        DEFAULT_TIMEZONE)
         return DEFAULT_TIMEZONE
+    if read is not None:
+        read(zone)
     return name
 
 
@@ -448,7 +458,8 @@ def _read_settings(source: Path) -> dict[str, Any]:
 
 
 def load_config(path: str | Path | None = None, *,
-                config_dir: str | Path | None = None) -> Config:
+                config_dir: str | Path | None = None,
+                zone_read: Callable[[ZoneInfo], None] | None = None) -> Config:
     """Load the settings; on any problem, fall back to defaults.
 
     ``path`` names a single file and bypasses layering (as
@@ -457,17 +468,23 @@ def load_config(path: str | Path | None = None, *,
     shallow-merged **per key**, later root winning. Logs (INFO) the resolved
     absolute path of every layer and the values they yield, so a deployment can see
     exactly which file and which cap took effect.
+
+    ``zone_read`` is told the time zone the moment it has been read, before any
+    other setting is looked at: the process's own configuration names the logger
+    there, so every line about a setting is stamped in the configured zone (ADR-0120
+    decision 9). A load that names nobody — a test's, a tool's — tells nobody.
     """
     sources = [Path(path)] if path is not None else settings_files(config_dir)
     data: dict[str, Any] = {}
     for source in sources:
         data.update(_read_settings(source))
+    timezone = _valid_timezone(
+        values.text(data, "timezone", default=DEFAULT_TIMEZONE), zone_read)
     if not sources:
         logger.info("config: no settings file in any configuration root; "
                     "using defaults (reason_cap=%d)", DEFAULT_REASON_CAP)
     cfg = Config(
-        timezone=_valid_timezone(
-            values.text(data, "timezone", default=DEFAULT_TIMEZONE)),
+        timezone=timezone,
         time_format=values.text(data, "time_format",
                                 default=DEFAULT_TIME_FORMAT),
         maintenance_default_expiry=values.text(
@@ -521,5 +538,6 @@ def load_config(path: str | Path | None = None, *,
     return cfg
 
 
-# The single shared configuration for this process.
-config = load_config()
+# The single shared configuration for this process, which hands its time zone to
+# the logger the moment it has read it.
+config = load_config(zone_read=stamp_in)

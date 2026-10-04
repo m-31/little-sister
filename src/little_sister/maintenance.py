@@ -16,7 +16,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from little_sister import self_report, values
+from little_sister import instants, self_report, values
 from little_sister.reasons import plain
 from little_sister.state import MAINTENANCE_FILE, StateLayer
 
@@ -30,7 +30,7 @@ if TYPE_CHECKING:
 RETIRED_PATH = "var/maintenance.json"
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class MaintenanceEntry:
     """One maintenance pin: why, when, until, and by whom.
 
@@ -42,61 +42,87 @@ class MaintenanceEntry:
     new creation.
 
     ``set_at`` does double duty as the **concurrency token**: a write names the
-    ``set_at`` it believes it is replacing, and the tree refuses the write when
-    that no longer matches (:meth:`StatusTree.set_maintenance`).
+    ``set_at`` it believes it is replacing, as :attr:`token` spells it, and the
+    tree refuses the write when that no longer matches
+    (:meth:`StatusTree.set_maintenance`).
 
-    Timestamps are ISO-8601 strings (naive server-local, like the tree's; ADR-0006).
+    The three times are instants, held in UTC (ADR-0120): an entry cannot be built
+    with a time without a zone, and its file carries none (:meth:`from_dict`).
     """
     reason: str
-    set_at: str
-    expires_at: str
-    set_by: str = ""
-    created_at: str = ""
-    created_by: str = ""
+    set_at: datetime
+    expires_at: datetime
+    set_by: str
+    created_at: datetime
+    created_by: str
 
-    def __post_init__(self) -> None:
-        """An absent creation **is** the set — which is both the upgrade rule for a
-        file written before these two fields existed and the plain reading of a pin
-        nobody has edited yet. Normalizing here rather than at the read makes it one
-        rule in one place, and no entry anywhere carries an empty creation."""
-        if not self.created_at:
-            object.__setattr__(self, "created_at", self.set_at)
-            if not self.created_by:
-                object.__setattr__(self, "created_by", self.set_by)
+    def __init__(self, reason: str, set_at: datetime, expires_at: datetime,
+                 set_by: str = "", created_at: datetime | None = None,
+                 created_by: str = "") -> None:
+        """An absent creation **is** the set, and then its author the set's unless
+        one is named: the plain reading of a pin nobody has edited yet. Said here
+        rather than at the read, so it is one rule in one place and no entry
+        anywhere is without its creation.
+
+        :raises ValueError: one of the times carries no zone.
+        """
+        set_at = instants.utc(set_at, "a pin's set_at")
+        if created_at is None:
+            created_at = set_at
+            created_by = created_by or set_by
+        for name, value in (
+                ("reason", reason), ("set_at", set_at),
+                ("expires_at", instants.utc(expires_at, "a pin's expires_at")),
+                ("set_by", set_by),
+                ("created_at", instants.utc(created_at, "a pin's created_at")),
+                ("created_by", created_by)):
+            object.__setattr__(self, name, value)
+
+    @property
+    def token(self) -> str:
+        """The concurrency token a form carries and sends back: ``set_at`` as it is
+        spelled, which is the same text before a restart and after it."""
+        return instants.stamp(self.set_at)
 
     def to_dict(self) -> dict[str, str]:
-        return {"reason": self.reason, "set_at": self.set_at,
-                "expires_at": self.expires_at, "set_by": self.set_by,
-                "created_at": self.created_at, "created_by": self.created_by}
+        """The entry as its file carries it: each time in UTC, as
+        :func:`~little_sister.instants.stamp` spells one."""
+        return {"reason": self.reason, "set_at": instants.stamp(self.set_at),
+                "expires_at": instants.stamp(self.expires_at),
+                "set_by": self.set_by,
+                "created_at": instants.stamp(self.created_at),
+                "created_by": self.created_by}
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> MaintenanceEntry:
-        """Read one entry. A file written before the two creation fields existed has
-        neither; they arrive empty and :meth:`__post_init__` defaults them to the set
-        values, so the file loads unchanged and no pin is lost on upgrade."""
+        """Read one entry, its times strictly
+        (:func:`~little_sister.instants.instant`): :class:`ValueError` for one that
+        is not an instant with an offset — a time without a zone, which is every
+        time the versions before ADR-0120 wrote — and the store reports the file.
+        An entry that names no creation was created when it was set."""
+        created = data.get("created_at")
         return cls(
             reason=values.text(data, "reason"),
-            set_at=values.text(data, "set_at"),
-            expires_at=values.text(data, "expires_at"),
+            set_at=instants.instant(data.get("set_at"), "a pin's set_at"),
+            expires_at=instants.instant(data.get("expires_at"),
+                                        "a pin's expires_at"),
             set_by=values.text(data, "set_by"),
-            created_at=values.text(data, "created_at"),
+            created_at=(None if created is None
+                        else instants.instant(created, "a pin's created_at")),
             created_by=values.text(data, "created_by"))
 
     def same_pin_as(self, other: MaintenanceEntry) -> bool:
         """Whether ``other`` says the same thing this entry does — same reason, same
-        expiry. A re-submit that changes neither is a no-op the tree writes but does
-        not announce (ADR-0014); anything else is a real edit."""
+        expiry. A set that changes neither is no write at all: the tree keeps the
+        stored entry, its token and its authors (ADR-0104 decision 5), and has
+        nothing to announce (ADR-0014). Anything else is a real edit."""
         return (self.reason == other.reason
                 and self.expires_at == other.expires_at)
 
     def is_expired(self, now: datetime) -> bool:
-        """True once ``now`` reaches ``expires_at``. An unparseable bound is treated
-        as not-expired — better to keep a pin than drop it on bad data; the startup
-        reaper and an admin remain backstops."""
-        try:
-            return datetime.fromisoformat(self.expires_at) <= now
-        except ValueError:
-            return False
+        """True once ``now`` reaches ``expires_at`` — two instants, so the answer
+        is the same on every machine and through every change of a clock."""
+        return self.expires_at <= now
 
 
 @dataclass(frozen=True)
@@ -104,12 +130,13 @@ class MaintenanceWrite:
     """The outcome of a guarded write to the maintenance side-table.
 
     ``applied`` says whether the table changed. ``refused`` says the **guard**
-    rejected the write — a different thing from a clear that found nothing to clear,
-    which changes nothing and is nobody's conflict. ``current`` is what the table
-    holds afterwards: the new entry on a set, ``None`` on a clear, and on a refusal
-    the entry that was actually there (``None`` when the pin the admin meant to
-    replace is already gone). One process holds one lock (ADR-0001/0002), so the
-    comparison is exact rather than best-effort.
+    rejected the write — a different thing from a clear that found nothing to clear
+    or a set that says what the stored pin says, which change nothing and are
+    nobody's conflict. ``current`` is what the table holds afterwards: the new entry
+    on a set, the entry that stood on a set that changed nothing, ``None`` on a
+    clear, and on a refusal the entry that was actually there (``None`` when the pin
+    the admin meant to replace is already gone). One process holds one lock
+    (ADR-0001/0002), so the comparison is exact rather than best-effort.
     """
     applied: bool
     current: MaintenanceEntry | None = None
@@ -121,9 +148,11 @@ class MaintenanceStore:
 
     The file holds two tables — ``nodes`` (``{path: entry}``) and ``entries``
     (``{path: {slug: entry}}``, ADR-0036). An entry is ``{reason, set_at,
-    expires_at, set_by, created_at, created_by}``. The bare node table this file
-    used to be is a **clean break**, not a migration: it is not read, and the
-    layer reports it as a load failure. Reading and writing — atomic, and never a
+    expires_at, set_by, created_at, created_by}``, its three times in UTC
+    (ADR-0120). The bare node table this file used to be is a **clean break**, not
+    a migration: it is not read, and the layer reports it as a load failure — as it
+    does a file whose times carry no zone, which is what the versions before
+    ADR-0120 wrote. Reading and writing — atomic, and never a
     refusal to start — are the state layer's (ADR-0071); a failed write leaves the
     in-memory table authoritative for the session and stands as a line on the
     heartbeat until a write succeeds. There is no flush-on-shutdown, because
@@ -162,28 +191,30 @@ class MaintenanceStore:
                       f"{self._state.path(MAINTENANCE_FILE)} (ADR-0071); move it "
                       f"there before the next restart if its pins are still "
                       f"wanted"))
-        nodes, entries = self._sections()
-        return _node_pins(nodes), _entry_pins(entries)
+        return self._read()
 
     def load(self) -> dict[str, MaintenanceEntry]:
         """The node table, or an empty one if the file is missing or unusable.
         Per-entry pins come from :meth:`load_entries`."""
-        return _node_pins(self._sections()[0])
+        return self._read()[0]
 
     def load_entries(self) -> dict[tuple[str, str], MaintenanceEntry]:
         """The per-entry pins (ADR-0036), keyed ``(path, slug)``. Empty for a file
         written before they existed."""
-        return _entry_pins(self._sections()[1])
+        return self._read()[1]
 
-    def _sections(self) -> tuple[dict[str, Any], dict[str, Any]]:
+    def _read(self) -> tuple[dict[str, MaintenanceEntry],
+                             dict[tuple[str, str], MaintenanceEntry]]:
         """The file's two tables — node pins and per-entry pins — as the startup
-        read finds them: a file that is not there is two empty tables, and a
-        shape :func:`_split` refuses is a load failure the layer reports."""
+        read finds them: a file that is not there is two empty tables, and so is
+        one :meth:`tables` refuses — a shape it does not know, a time that is no
+        instant — which is a load failure the layer reports. Nothing of such a
+        file is in force: one pin it cannot take refuses every pin beside it."""
         data = self._state.read(MAINTENANCE_FILE)
         if data is None:
             return {}, {}
         try:
-            return _split(data)
+            return self.tables(data)
         except ValueError as error:
             self._state.report_load_failure(MAINTENANCE_FILE, str(error))
             return {}, {}

@@ -1,0 +1,38 @@
+{#- What a path **no node stands at** is answered with (ADR-0116): one block,
+    whichever view of it was asked for, on the page that answers its address and in
+    the part an open Status page's refresh swaps in when its node leaves. It says
+    what the event log and the pins know of the path, and where the nearest node
+    above it stands; nothing is kept for it that those two do not already keep.
+    Expects `no_node` (`_NoNode`), `is_admin`, and what a pin's editor prints. -#}
+{% from '_pin_sections.html' import suspended_pins, suspended_sentence with context %}
+<section class="ls-no-node" aria-label="No node at this path">
+    <p class="ls-no-node__lead">No node stands at <code>{{ no_node.path }}</code>.</p>
+    {%- if no_node.removed %}
+    <p>Removed {{ no_node.removed }}: {{ no_node.reason }}. <a href="{{ no_node.events }}">Events</a> lists what was recorded of it.</p>
+    {%- elif no_node.events %}
+    <p>It is not reported at present. <a href="{{ no_node.events }}">Events</a> lists what was recorded of it.</p>
+    {%- else %}
+    <p>Nothing is recorded of it: no check reports a node here, and the event log holds nothing at this path.</p>
+    {%- endif %}
+    {#- Every pin held against the path or beneath it, each under the path it is
+        held against: the path's own needs no heading, the page being about it. -#}
+    {%- for path, group in no_node.pins | groupby('path') %}
+    <div class="ls-no-node__pins pin-node pin-node--suspended">
+        {%- if path != no_node.pin_path %}
+        <h2 class="pin-node__path">{{ path }}</h2>
+        {%- endif %}
+        <p class="pin-node__suspended">{{ suspended_sentence(group) }}</p>
+        <div class="pin-node__pins">
+        {{ suspended_pins(path, group, loop.index, url_for('status', branch=no_node.path), is_admin) }}
+        </div>
+    </div>
+    {%- endfor %}
+    {%- if no_node.above %}
+    <p>The nearest node above it that stands is <a href="{{ url_for('status', branch=no_node.above) }}">{{ no_node.above }}</a>: <a href="{{ url_for('history', path=no_node.above) }}">History</a>{% if no_node.above_series %}, <a href="{{ url_for('series', path=no_node.above) }}">Series</a>{% endif %}.{% if no_node.removed %} Readings kept of a subject that was removed are listed on its History page.{% endif %}</p>
+    {%- elif no_node.first_level %}
+    <p>It would stand at the first level of <a href="{{ url_for('status') }}">nodes</a>.</p>
+    {%- else %}
+    <p>No node stands above it either: <a href="{{ url_for('status') }}">nodes</a> lists the first level.</p>
+    {%- endif %}
+</section>
+<!-- /no-node -->

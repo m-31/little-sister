@@ -1,10 +1,11 @@
 # ADR-0007 — Checks may report a branch (recursive `CheckResult`)
 
 - **Status:** Accepted
-- **Date:** 2026-06-27
+- **Date:** 2026-10-04 (accepted 2026-06-27)
 - **Related:** [ADR-0002](0002-rlock-snapshot-synchronization.md) (the tree owns
   state), [ADR-0004](0004-status-aggregation-semantics.md) (roll-up),
-  [ADR-0005](0005-dashboard-freshness-and-self-monitoring.md) (freshness).
+  [ADR-0005](0005-dashboard-freshness-and-self-monitoring.md) (freshness),
+  [ADR-0109](0109-a-node-says-its-children-are-complete.md) (pruning).
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -50,11 +51,12 @@ small **tree**.
   fields and every existing call site is untouched.
 - The same shape is what a future satellite check will produce by parsing remote
   JSON into a result tree (`project.md` §2.9) — no second mechanism needed.
-- **Children are not pruned.** If a later run reports fewer children (e.g. the
+- **Children are pruned only where their parent's result says that they are
+  complete** ([ADR-0109](0109-a-node-says-its-children-are-complete.md)). Where the
+  result says nothing, they stay: if a later run reports fewer children (e.g. the
   host is unreachable, so the `host-metrics` check returns just an `ERROR` root), the
   previously written aspect nodes remain until they go stale (ADR-0005); the root
-  `ERROR` dominates the roll-up meanwhile. A tree-level prune/delete is deferred
-  until a check needs it.
+  `ERROR` dominates the roll-up meanwhile.
 
 ## Alternatives considered
 - **Return a `Status` subtree** — reuse the entity. Rejected: it drags

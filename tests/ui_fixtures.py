@@ -82,14 +82,14 @@ class Fixture:
 
 # The sheet is a static artifact, so the *observation* times the cards now carry
 # (ADR-0027) must be fixed like ``_RENDERED_AT`` — a build-time ``now`` would make
-# every re-run diff. Carries an explicit offset so the rendered time of day is the
-# configured timezone's whatever the renderer's own clock is set to, which keeps the
-# sheet (and the tests reading it) identical on any machine.
-_PINNED_STAMP = "2026-07-20T11:59:31+02:00"
+# every re-run diff. An instant, so the rendered time of day is the configured
+# timezone's — 11:59:31 in `Europe/Berlin` — whatever the renderer's own clock is
+# set to, which keeps the sheet (and the tests reading it) identical on any machine.
+_PINNED_STAMP = datetime(2026, 7, 20, 9, 59, 31, tzinfo=UTC)
 #: The armed next slot, pinned for the same reason (ADR-0044). ``_pin_stamps`` does
 #: not reach it — the run facts are one object below the snapshot, and a fixture that
 #: wants them says so — so it is written straight into the tree.
-_PINNED_NEXT_RUN = "2026-07-20T12:04:00+02:00"
+_PINNED_NEXT_RUN = datetime(2026, 7, 20, 10, 4, tzinfo=UTC)
 
 
 def _pin_stamps(snap: StatusSnapshot) -> StatusSnapshot:
@@ -106,7 +106,16 @@ def _pin_stamps(snap: StatusSnapshot) -> StatusSnapshot:
 def _snapshot(tree: StatusTree, branch: str = "",
               now: datetime | None = None) -> StatusSnapshot:
     """Snapshot ``branch`` (root by default); the node always exists here. Every
-    fixture funnels through here, so pinning the stamps once covers the whole sheet."""
+    fixture funnels through here, so pinning the stamps once covers the whole sheet —
+    and so does the one guard a fixture needs since a pin makes no node (ADR-0109
+    decision 4): a path it pins is one it wrote. Otherwise its page shows no pinned
+    node, and nothing on it says that one is missing."""
+    nodes, lines = tree.pins()
+    unwritten = sorted(path for path in {*nodes, *(path for path, _slug in lines)}
+                       if tree.snapshot(path) is None)
+    if unwritten:
+        raise AssertionError(
+            f"fixture pins what it never wrote: {', '.join(unwritten)}")
     snap = tree.snapshot(branch, now=now)
     if snap is None:  # pragma: no cover - fixtures always address a real node
         raise AssertionError(f"fixture built no node at {branch!r}")
@@ -244,7 +253,7 @@ def _idle_mix() -> StatusSnapshot:
     node and a maintenance pin — the idle/stale/maintenance treatments together
     (freshness, ADR-0005; #26)."""
     tree = StatusTree()
-    built = datetime.now()
+    built = datetime.now(UTC)
     # Long frequency ⇒ still fresh 20 min on; these carry live status.
     tree.upsert("/live-ok", StatusCode.OK, frequency_seconds=3600)
     tree.upsert("/live-warn", StatusCode.WARN, "elevated latency",
@@ -255,7 +264,8 @@ def _idle_mix() -> StatusSnapshot:
     tree.upsert("/gone-stale", StatusCode.OK, frequency_seconds=60)
     # Metadata-only node: never reported, so it stays UNDEFINED (idle).
     tree.set_about("/never-reported", "a check that has not run yet")
-    # An admin maintenance pin.
+    # An admin maintenance pin, on a node its check reads.
+    tree.upsert("/under-maintenance", StatusCode.OK, frequency_seconds=3600)
     tree.set_maintenance("/under-maintenance", "planned kernel upgrade",
                          expires_at=built + timedelta(days=1), set_by="pan")
     return _snapshot(tree, now=built + timedelta(minutes=20))
@@ -316,11 +326,12 @@ def _maintenance_deep() -> StatusSnapshot:
     the strip **pill**'s popover lists it by path with time left, and the ``nexus`` card
     gains a "contains maintenance" pip. Beside two calm hosts."""
     tree = StatusTree()
-    built = datetime.now()
+    built = datetime.now(UTC)
     tree.upsert("/web", StatusCode.OK)
     tree.upsert("/db", StatusCode.OK)
     tree.upsert("/nexus/disk/smart/bay-1", StatusCode.OK)
     tree.upsert("/nexus/disk/smart/bay-2", StatusCode.OK)
+    tree.upsert("/nexus/disk/smart/bay-7", StatusCode.WARN, "reallocated sectors: 12")
     tree.set_maintenance("/nexus/disk/smart/bay-7", "disk swap (RMA 4471)",
                          expires_at=built + timedelta(days=2, hours=6), set_by="pan")
     return _snapshot(tree, now=built + timedelta(minutes=1))
@@ -336,7 +347,7 @@ def _maintenance_many() -> StatusSnapshot:
     a few calm hosts, so the pill's place in the strip band — just left of the
     heartbeat — is visible."""
     tree = StatusTree()
-    built = datetime.now()
+    built = datetime.now(UTC)
     tree.upsert("/little-sister", StatusCode.OK, frequency_seconds=3600)
     for index in range(1, 5):
         tree.upsert(f"/host{index:02d}", StatusCode.OK, frequency_seconds=3600)
@@ -357,6 +368,7 @@ def _maintenance_many() -> StatusSnapshot:
         ("/sensor-bay/probe-7", "recalibration", timedelta(minutes=20)),
     )
     for path, reason, remaining in pins:
+        tree.upsert(path, StatusCode.OK, frequency_seconds=3600)
         tree.set_maintenance(path, reason,
                              expires_at=built + remaining, set_by="pan")
     return _snapshot(tree, now=built + timedelta(minutes=1))
@@ -376,7 +388,7 @@ def _maintenance_editor() -> StatusSnapshot:
         for index in range(1, 13)
     }
     tree.upsert("/security/audit", StatusCode.ERROR, findings)
-    expires = datetime.now() + timedelta(days=2)
+    expires = datetime.now(UTC) + timedelta(days=2)
     tree.set_entry_maintenance(
         "/security/audit", "finding-2",
         "**Ada owns this**\n\n- ticket filed\n- patch under review",
@@ -442,7 +454,7 @@ def coded_workflow_tree() -> StatusTree:
     tree.set_entry_maintenance(
         "/ci/actions", "deploy-gate",
         "approvals paused for the release freeze",
-        expires_at=datetime.now() + timedelta(days=2), set_by="ada")
+        expires_at=datetime.now(UTC) + timedelta(days=2), set_by="ada")
     return tree
 
 
@@ -643,6 +655,74 @@ def _host_engine() -> Engine:
     return Engine([check], StatusTree(), series=store)
 
 
+_JOB = "queue-live/transform"
+_WORKFLOW = "100200300:4005006:main"
+
+
+def _runs_node(path: str, subject: str, said: str, record: dict[str, object]
+               ) -> Callable[[], StatusSnapshot]:
+    """A leaf whose node stands for a subject with a history of runs (ADR-0106): the
+    job name or the workflow its check declares, as its newest run left it. The
+    Series card under it is its runs (``_runs_engine``)."""
+    def build() -> StatusSnapshot:
+        tree = StatusTree()
+        tree.upsert(path, StatusCode.OK, [Entry("newest", said)],
+                    frequency_seconds=300, subject=subject, record=record)
+        return _snapshot(tree, branch=path.strip("/"))
+    return build
+
+
+def _runs_engine(path: str, subject: str, *, timed: bool) -> Callable[[], Engine]:
+    """Thirty days of that subject's runs as its series keeps them, each a record
+    with an identity (ADR-0111) — the marks a plot of runs has to tell apart: the
+    oldest kept no verdict, as a run no line carried keeps none; one failed after
+    six minutes and its second attempt ran the same hour; the run time creeps past
+    the hour its configuration allows, so the newest nightly runs warned; and since
+    four days it runs every two hours, a crowd in which a passing run's head gives
+    way. ``timed`` says whether a run carries its run time, which the check's
+    measure draws as a stem; without it a run is a tick."""
+    def build() -> Engine:
+        check = _HostReading(
+            path=path, subject=subject, frequency_seconds=300, series_keep=200,
+            measures=({"seconds": {"unit": "s", "label": "Run time"}}
+                      if timed else {}))
+        store = MemoryStore()
+        start = _SERIES_END - timedelta(days=30)
+
+        def ran(at: datetime, seconds: int, code: StatusCode | None) -> None:
+            outcome = {StatusCode.ERROR: "failed", StatusCode.WARN: "slow"}.get(
+                code, "succeeded") if code else "succeeded"
+            record: dict[str, object] = {"outcome": outcome, "at": at.isoformat()}
+            if timed:
+                record["seconds"] = seconds
+            store.add(SeriesKey("fixture-host", path, subject),
+                      SeriesRecord(record, at, identity=at.isoformat(), code=code,
+                                   texts=(() if code is None
+                                          else (f"{outcome} in {seconds}s",))),
+                      keep=check.series_keep)
+
+        for night in range(26):
+            at = start + timedelta(days=night, hours=3)
+            seconds = 2500 + 42 * night
+            if night == 17:
+                ran(at, 360, StatusCode.ERROR)
+                ran(at + timedelta(minutes=40), seconds, StatusCode.OK)
+                continue
+            ran(at, seconds, None if night < 9
+                else StatusCode.WARN if seconds > 3500 else StatusCode.OK)
+        for step in range(48):
+            at = start + timedelta(days=26, hours=2 * step)
+            seconds = round(2800 + 240 * math.sin(step * 1.7))
+            code = StatusCode.OK
+            if step in (9, 30):
+                seconds, code = 420, StatusCode.ERROR
+            elif step in (17, 41):
+                seconds, code = 3900, StatusCode.WARN
+            ran(at, seconds, code)
+        return Engine([check], StatusTree(), series=store)
+    return build
+
+
 def _empty() -> StatusSnapshot:
     """The empty tree — a root with no children, which renders the
     'No checks reporting yet' hint (the whole overview while the engine is
@@ -664,7 +744,7 @@ def _roots_mixed(count: int) -> StatusSnapshot:
     with WARN/ERROR/stale/idle/maintenance scattered on fixed indices, plus a
     few over-long names so the columns cope with ragged label widths."""
     tree = StatusTree()
-    built = datetime.now()
+    built = datetime.now(UTC)
     for index in range(1, count + 1):
         name = (f"svc-{index:02d}-with-a-name-that-runs-long"
                 if index % 17 == 0 else f"host{index:02d}")
@@ -692,7 +772,7 @@ def _wall_incident() -> StatusSnapshot:
     asks is not "does one big card render" but "what do three simultaneous
     skyscrapers do to the rows between them"."""
     tree = StatusTree()
-    built = datetime.now()
+    built = datetime.now(UTC)
     for index in range(1, 17):
         tree.upsert(f"/host{index:02d}", StatusCode.OK, frequency_seconds=3600)
     reasons = [
@@ -1037,6 +1117,22 @@ FIXTURES: tuple[Fixture, ...] = (
             "the same on a polled branch page: two measures, two curves, the "
             "`%` axis labeled once",
             _host_node, branch="hosts/nas", engine=_host_engine),
+    Fixture("runs_stems_leaf",
+            "a subject's runs under a measure (ADR-0111): a stem to each run's "
+            "run time — the oldest bare and muted, having kept no verdict; a "
+            "hollow ring and a lane mark for a failure; the warning's triangle; "
+            "and a crowd in which a passing run's head gives way",
+            _runs_node("/batch/transform", _JOB, "succeeded in 2936s",
+                       {"outcome": "succeeded", "seconds": 2936}),
+            branch="batch/transform", detail=True,
+            engine=_runs_engine("/batch/transform", _JOB, timed=True)),
+    Fixture("runs_ticks_leaf",
+            "the same runs without a measure: each a tick whose height says how it "
+            "stood, a failure told by its ring and a warning by its triangle",
+            _runs_node("/ci/deploy", _WORKFLOW, "succeeded",
+                       {"outcome": "succeeded"}),
+            branch="ci/deploy", detail=True,
+            engine=_runs_engine("/ci/deploy", _WORKFLOW, timed=False)),
     Fixture("empty_engine_down",
             "the empty tree (engine disabled) — the 'No checks' hint", _empty),
     Fixture("engine_error_banner",

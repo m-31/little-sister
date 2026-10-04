@@ -1,7 +1,7 @@
 # ADR-0080 — The envelope is the snapshot, published: `schema_version` 2
 
 - **Status:** Accepted
-- **Date:** 2026-09-20 (accepted 2026-09-06)
+- **Date:** 2026-10-04 (accepted 2026-09-06)
 - **Supersedes:** [ADR-0008](0008-json-output-api.md) wholly (accepted 2026-06-27,
   rewritten 2026-08-23). Everything that record decided and this one keeps is
   restated below with its original reasoning, so nothing has to be read out of a
@@ -21,7 +21,9 @@
   now follow), [ADR-0079](0079-freshness-is-a-stated-tolerance.md) (the tolerance
   beside the verdict), [ADR-0005](0005-dashboard-freshness-and-self-monitoring.md)
   (`stale`), [ADR-0039](0039-status-rollup-semantics.md) (the roll-up),
-  [ADR-0003](0003-config-and-secrets-via-env-file.md) (the token)
+  [ADR-0003](0003-config-and-secrets-via-env-file.md) (the token),
+  [ADR-0120](0120-every-stored-time-is-an-instant.md) (the instants the date-times are
+  spelled from)
 - **Register:** [`../decisions.md`](../decisions.md)
 - **Contract:** [`../api/openapi.yaml`](../api/openapi.yaml) — the normative schema.
 
@@ -230,8 +232,9 @@ unversioned resources** — `GET /status` and `GET /status/<node_path>` stay the
 canonical URLs and `Accept` chooses the representation; the URL identifies the
 resource, not the format. **A top-level object** carrying `schema_version` and
 `generated_at`. **`snake_case` properties**, **`UPPER_SNAKE_CASE` code enums**, **RFC
-3339 UTC date-times** with `T`/`Z`, converted at serialization while storage stays
-naive-local ([ADR-0006](0006-config-file-and-timezones.md)). **Problem JSON** for
+3339 UTC date-times** with `T`/`Z`, spelled at serialization from what the tree stores:
+instants, and not the machine's clock without a zone
+([ADR-0120](0120-every-stored-time-is-an-instant.md)). **Problem JSON** for
 errors (RFC 9457) with no stack traces, `401` / `404` / `406`. **A bearer token per
 client**, provisioned in `.env` ([ADR-0003](0003-config-and-secrets-via-env-file.md))
 and compared with a constant-time equality. **One self-contained OpenAPI 3.1 document**
@@ -271,7 +274,7 @@ still available and adding it breaks nothing.
   instance's own rules made of it, which one code could not express. Federation itself
   stays unbuilt.
 - **The debt sentences retire.** Six records end with a clause about a field that
-  rides this round; each now carries an update saying where it went. A reader who
+  rides this round; each now says where it went. A reader who
   arrives at one of them from a code comment is not sent to a promise with no date.
 - **`docs/api/README.md` and the client's byte-identical copy of the spec move with
   it**, the one-way sync ADR-0008 established.

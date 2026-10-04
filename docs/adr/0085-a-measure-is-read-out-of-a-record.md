@@ -1,7 +1,7 @@
 # ADR-0085 — A measure is read out of a record, not declared into it
 
 - **Status:** Accepted
-- **Date:** 2026-09-27 (accepted 2026-09-19)
+- **Date:** 2026-10-04 (accepted 2026-09-19)
 - **Related:** [ADR-0082](0082-a-line-carries-what-it-is-about-and-what-it-read.md)
   (the record this reads from, and the `subject` this finally uses),
   [ADR-0042](0042-entries-carry-their-own-code.md) (why the line carries no code),
@@ -12,7 +12,9 @@
   where it is not), [ADR-0075](0075-a-check-declares-what-it-costs.md) (the cost this
   declares), [ADR-0058](0058-transport-policy-vocabulary.md) (this check's readings),
   [ADR-0086](0086-a-check-measures-and-grades.md) (the `Measurement` that holds the
-  record, and the object a check declares)
+  record, and the object a check declares),
+  [ADR-0096](0096-a-measure-names-its-node-and-its-things.md) (the `error` a curve
+  marks, and the things one reading counts)
 - **Register:** [`../decisions.md`](../decisions.md)
 - **Contract:** [`../api/openapi.yaml`](../api/openapi.yaml) — a node's `subject` and
   `record`, from 2.5.0.
@@ -66,7 +68,9 @@ reading, out of which the check builds `ssh`, `disk`, `memory`, `cpu` and `load`
 is no line for the record to ride on, and those five nodes are renderings of one
 measurement, not five measurements. Putting the record on a line would either invent a
 line to carry it or split one reading into five at write time — the same premature
-extraction decision 1 refuses, one level up.
+extraction decision 1 refuses, one level up. The reading stays one where it counts
+several things of one kind: they are keyed by their nodes' names inside it
+([ADR-0096](0096-a-measure-names-its-node-and-its-things.md) decision 2).
 
 Where the object has **no node** — a repository, a load-test run, a security finding —
 it is a line, and `Entry.data` carries its record there. That is the special case, and
@@ -116,9 +120,11 @@ from outside the series, from the check's cadence, which nothing stores beside i
 What the nulls must **not** hold is how long we waited before giving up. That is the
 timeout's number, not the endpoint's, and under `response_ms` it would seed a series
 with values that are not the thing it measures. The reason for the failure rides beside
-them, and only where there was one: carrying it as a null on every successful reading
-would lengthen every record for nothing, since a projection treats a missing key as an
-empty one.
+them, as the reading's `error`, and only where there was one: carrying it as a null on
+every successful reading would lengthen every record for nothing, since a projection
+treats a missing key as an empty one. The `error`, not the nulls, is what a curve
+marks: a reading that answered without a number breaks the line with no mark
+([ADR-0096](0096-a-measure-names-its-node-and-its-things.md) decision 4).
 
 ### 4. One line, no code of its own, one slug
 

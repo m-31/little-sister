@@ -1,7 +1,7 @@
 # ADR-0083 — A node may wait before it escalates
 
 - **Status:** Accepted
-- **Date:** 2026-09-19
+- **Date:** 2026-10-04 (accepted 2026-09-19)
 - **Related:** [ADR-0032](0032-status-contribution-boundary.md) (the contribution
   boundary this is the second rule at, and rules 5–7 which bind it),
   [ADR-0039](0039-status-rollup-semantics.md) (the roll-up, unchanged),
@@ -12,7 +12,15 @@
   backstop this must not close), [ADR-0080](0080-the-envelope-is-the-snapshot-published.md)
   (decision 2, which described this field before there was a rule that needed it),
   [ADR-0027](0027-observation-timestamp-semantics.md) (the reading, which is what
-  the counter counts)
+  the counter counts),
+  [ADR-0107](0107-an-event-is-a-change-of-what-a-node-shows.md) (decision 4, what an
+  event says its check reported, which decision 7 counts the changes of),
+  [ADR-0108](0108-the-wait-before-an-escalation-counts-what-a-node-shows.md) (what
+  the counter counts, and what a pin publishes),
+  [ADR-0110](0110-what-every-node-last-showed-is-kept-beside-the-log.md) (decision 1,
+  what a node's first reading in a process is counted from),
+  [ADR-0119](0119-a-wait-that-ends-by-its-count-writes-a-row.md) (the row that ends a
+  wait by its count, and the wait a restart resumes)
 - **Register:** [`../decisions.md`](../decisions.md)
 - **Contract:** [`../api/openapi.yaml`](../api/openapi.yaml) — `Contribution`, from
   2.2.0.
@@ -35,7 +43,7 @@ claim that everything above it is broken.
 
 ## Decision
 
-### 1. The counter counts readings, and it counts what the check reported
+### 1. The counter counts readings, and it counts what the node shows
 
 A node publishes a worse code to its parent only after `escalate_after` **consecutive
 readings** of it. A reading is a check's write, not a poll: the snapshot is recomputed
@@ -45,11 +53,10 @@ pins, as a side-table keyed by path, and is advanced in the one place a reading
 arrives — including a reading that changed nothing, because *three consecutive
 readings of `ERROR`* is three readings and only the first of them is a transition.
 
-What it counts is the code the check **reported**, not the node's derived own status.
-Those two differ only where a pin is involved — with coded entries the derived value
-is already what the tree is handed — and a pinned node contributes nothing anyway. So
-counting the reported code costs nothing in fidelity and saves deriving the same value
-twice, at two points, that must then agree.
+What it counts is what the node **shows**, its own status, and not the code its check
+reported ([ADR-0108](0108-the-wait-before-an-escalation-counts-what-a-node-shows.md)):
+the two differ wherever a line is pinned, and such a node contributes. A change of what
+a node shows that a pin made is published at once, so only a reading starts a wait.
 
 ### 2. What a held node publishes is what it published before
 
@@ -120,6 +127,12 @@ only its parent's count waited. So the filter turns on which rules hide the **re
 not on whether a rule acted; today that is maintenance alone, and a dependency shield
 will sit on this side too, since it keeps the node's own state and marks it.
 
+The reading that completes a node's count writes a row of its own, unmarked
+([ADR-0119](0119-a-wait-that-ends-by-its-count-writes-a-row.md)), so the log says when
+a failure reached the level above. And the kept file says which nodes are waiting, so a
+wait under way at a stop goes on in the next process, counted from the reading its held
+row records.
+
 ### 6. The number is the deployment's, and `1` is today
 
 `escalate_after` is a `settings.yaml` key with a per-check override, default **1** —
@@ -138,12 +151,15 @@ Consecutive counting never escalates a **flapping** subject — `red, green, red
 green` never reaches two reds in a row — and its own marker is no help there either,
 because every recovery clears it: the card would flicker rather than report. So the
 hole is not merely written down, it is answered on the surface. A node's page says how
-many times its own status **changed in the last hour**, counting only moves between
+many times its reading **changed in the last hour**, counting only moves between
 `OK`, `WARN` and `ERROR`.
 
 It is **derived, not stored**. Every transition is already in the event log; a second
-record of them would be a second thing to keep true. One pass over the log per
-snapshot serves the whole tree, because the log is bounded and the recursion is not.
+record of them would be a second thing to keep true. An event says what the check
+reported ([ADR-0107](0107-an-event-is-a-change-of-what-a-node-shows.md)), and the
+number counts the changes of that: a row that a pin caused is none, and a run that
+wrote two rows is one. One pass over the log per snapshot serves the whole tree,
+because the log is bounded and the recursion is not.
 
 Three details decide what the number means. A node's **first** reading is not a change
 of mind, so `UNDEFINED` to anything is not counted — otherwise every node on the
@@ -162,10 +178,13 @@ whole tree is the events page's job and it already does it.
 
 ## Consequences
 
-- **The counter is memory and a restart re-arms it.** A node mid-escalation when the
-  process restarts begins its count again. Accepted rather than solved: the value's
-  whole purpose is to be forgotten within a few minutes, and a state file for it would
-  outlive the thing it describes.
+- **The counter is memory, and a restart does not re-arm it.** The value's whole
+  purpose is to be forgotten within a few minutes, and a state file for it would
+  outlive the thing it describes. A node's first reading in a process is counted from
+  what the node last showed
+  ([ADR-0110](0110-what-every-node-last-showed-is-kept-beside-the-log.md)), so a
+  failure a restart finds waits and one that stood before it stays published; a wait
+  under way at a stop goes on (decision 5).
 - **Flap is not caught, it is only shown.** `red, green, red, green` never reaches two
   consecutive reds, so a flapping subject escalates only through staleness or not at
   all — while a flapping service is broken. Consecutive is the rule that is easy to

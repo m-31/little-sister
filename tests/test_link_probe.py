@@ -21,13 +21,15 @@ import textwrap
 import threading
 import time
 import urllib.error
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest import TestCase, mock
+from zoneinfo import ZoneInfo
 
-from little_sister import link_probe
+from little_sister import instants, link_probe
 from little_sister.icons import Icon, IconFile
 from little_sister.links import Group, Link, LinksConfig, ProbeSettings
+from little_sister.spans import local_time
 from little_sister.transport import Fault, RemoteError
 from tests.running import subprocess_env
 
@@ -269,7 +271,7 @@ class PassTests(TestCase):
         for url, verdict in list(link_probe.results().items()):
             link_probe._results[url] = link_probe.Verdict(
                 url=url, alive=verdict.alive, detail=verdict.detail,
-                checked_at=datetime.now() - by)
+                checked_at=datetime.now(UTC) - by)
 
     def test_an_answer_older_than_the_interval_is_refreshed(self):
         self.run_pass(answering(200))
@@ -384,7 +386,7 @@ class CheckNowTests(TestCase):
     def test_a_press_past_the_gap_probes_again(self):
         with mock.patch.object(link_probe, "_request", answering(200)):
             link_probe.refresh_now(self.config)
-        link_probe._last_forced = datetime.now() - timedelta(
+        link_probe._last_forced = datetime.now(UTC) - timedelta(
             seconds=link_probe.MIN_FORCED_GAP + 1)
         second = answering(200)
         with mock.patch.object(link_probe, "_request", second):
@@ -467,7 +469,7 @@ class PageViewTests(TestCase):
         view = self.view(config)
         self.assertTrue(view.active)
         self.assertIsNotNone(view.checked_at)
-        self.assertLess((datetime.now() - view.checked_at).total_seconds(), 5)
+        self.assertLess((datetime.now(UTC) - view.checked_at).total_seconds(), 5)
 
     def test_a_dead_entry_carries_its_verdict(self):
         config = config_with(Link(title="A", url="https://a.example.org/",
@@ -748,8 +750,8 @@ class DeadlineTests(TestCase):
         Only used where the thing being waited for is a *store*, which has no event
         of its own — every other wait in this file is on one the test owns.
         """
-        deadline = datetime.now() + timedelta(seconds=timeout)
-        while datetime.now() < deadline:
+        deadline = datetime.now(UTC) + timedelta(seconds=timeout)
+        while datetime.now(UTC) < deadline:
             if predicate():
                 return True
             threading.Event().wait(0.01)
@@ -809,11 +811,11 @@ class DeadlineTests(TestCase):
     def test_a_pass_in_flight_does_not_hold_the_interpreter_s_exit(self):
         script = textwrap.dedent("""
             import threading, time
-            from datetime import datetime
+            from datetime import UTC, datetime
             from little_sister import link_probe
             link_probe._request = lambda url, method: threading.Event().wait()
             current = link_probe._Pass(generation=1, done=threading.Event(),
-                                       started_at=datetime.now(), deadline=60.0)
+                                       started_at=datetime.now(UTC), deadline=60.0)
             threading.Thread(target=link_probe._sweep, daemon=True,
                              args=(current, ("https://wedged.example.org/",),
                                    frozenset())).start()
@@ -928,7 +930,7 @@ class GenerationTests(TestCase):
 
     def a_pass(self, generation, deadline=30.0, age=0.0):
         return link_probe._Pass(generation=generation, done=threading.Event(),
-                                started_at=datetime.now() - timedelta(seconds=age),
+                                started_at=datetime.now(UTC) - timedelta(seconds=age),
                                 deadline=deadline)
 
     def test_a_superseded_pass_stores_nothing(self):
@@ -936,7 +938,7 @@ class GenerationTests(TestCase):
         link_probe._running = current
         self.addCleanup(setattr, link_probe, "_running", None)
         verdict = link_probe.Verdict("https://a.example.org/", True, "HTTP 200",
-                                     datetime.now())
+                                     datetime.now(UTC))
         self.assertFalse(link_probe._store(stale, verdict))
         self.assertEqual(link_probe.results(), {})
         self.assertTrue(link_probe._store(current, verdict))
@@ -992,8 +994,14 @@ class GenerationTests(TestCase):
                 first = link_probe.start_pass(config)
             self.assertTrue(entered.wait(5))
             threading.Event().wait(0.4)                  # let it fall past grace
-            with self.assertLogs("little_sister", level="WARNING"):
+            running = link_probe._running
+            assert running is not None
+            with self.assertLogs("little_sister", level="WARNING") as logged:
                 second = link_probe.start_pass(config)
+            # the line says when the wedged pass started as a page writes a time
+            self.assertTrue(any(
+                f"a reachability pass started {local_time(running.started_at)} has "
+                f"not honored" in line for line in logged.output), logged.output)
             self.assertIsNot(second, first)
             self.assertTrue(second.wait(5))
             self.assertEqual(set(link_probe.results()), {"https://a.example.org/"})
@@ -1017,6 +1025,54 @@ class GenerationTests(TestCase):
                 with self.assertLogs("little_sister", level="WARNING"):
                     self.assertTrue(link_probe.refresh_now(config, deadline=5))
         self.assertEqual(set(link_probe.results()), {"https://a.example.org/"})
+
+
+class InstantTests(TestCase):
+    """The probe's times are instants (ADR-0120): how long ago an answer was given,
+    and how long a pass has run, are read off the one clock and are the same through
+    a change of the machine's — and a time without a zone is no answer's."""
+
+    ASKED = datetime(2026, 11, 1, 5, 59, 50, tzinfo=UTC)     # 01:59:50 in New York
+    URL = "https://a.example.org/"
+
+    def _at(self, moment: datetime):
+        return mock.patch.object(instants, "now", return_value=moment)
+
+    def test_a_verdict_holds_its_instant_in_utc(self):
+        there = self.ASKED.astimezone(ZoneInfo("America/New_York"))
+        verdict = link_probe.Verdict(self.URL, True, "HTTP 200", there)
+        self.assertEqual(verdict.checked_at, self.ASKED)
+        self.assertIs(verdict.checked_at.tzinfo, UTC)
+
+    def test_a_verdict_refuses_a_time_without_a_zone(self):
+        with self.assertRaises(ValueError) as refused:
+            link_probe.Verdict(self.URL, True, "HTTP 200",
+                               self.ASKED.replace(tzinfo=None))
+        self.assertIn("a verdict's checked_at is a time without a zone",
+                      str(refused.exception))
+
+    def test_an_answer_is_stamped_by_the_one_clock(self):
+        with self._at(self.ASKED), \
+                mock.patch.object(link_probe, "_request", answering(200)):
+            verdict = link_probe._probe(self.URL, frozenset({200}))
+        self.assertEqual(verdict.checked_at, self.ASKED)
+
+    def test_an_answers_age_does_not_jump_in_the_hour_a_clock_repeats(self):
+        # asked at 01:59:50; twenty seconds later that clock reads 01:00:10
+        link_probe._results[self.URL] = link_probe.Verdict(
+            self.URL, True, "HTTP 200", self.ASKED)
+        with self._at(self.ASKED + timedelta(seconds=20)):
+            self.assertFalse(link_probe._is_due((self.URL,), 21))
+            self.assertTrue(link_probe._is_due((self.URL,), 20))
+
+    def test_a_pass_is_overdue_by_the_one_clock(self):
+        running = link_probe._Pass(generation=1, done=threading.Event(),
+                                   started_at=self.ASKED, deadline=30.0)
+        grace = link_probe.PASS_ABANDON_GRACE
+        with self._at(self.ASKED + timedelta(seconds=30 + grace)):
+            self.assertFalse(running.overdue())
+        with self._at(self.ASKED + timedelta(seconds=30 + grace + 1)):
+            self.assertTrue(running.overdue())
 
 
 def _eventually_set(started: dict, url: str, seconds: float = 5.0) -> bool:

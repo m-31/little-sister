@@ -3,10 +3,15 @@
 The tests are written from the module's claims, not from its branches: each one
 names a sentence the docstrings make and uses the values that sentence is about.
 """
+import time
 import unittest
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta, timezone
 from unittest import mock
 
+from little_sister.checks import Measurement
+from little_sister.checks.base import CheckResult
+from little_sister.engine import Engine
 from little_sister.spans import (
     coarse_span,
     format_duration,
@@ -14,6 +19,10 @@ from little_sister.spans import (
     format_tolerance,
     local_time,
 )
+from little_sister.status import StatusCode
+from little_sister.tree import StatusTree
+from tests.test_engine import _FakeCheck
+from tests.test_stored_instants import _zone
 
 
 class FormatSpanTests(unittest.TestCase):
@@ -178,6 +187,53 @@ class LocalTimeTests(unittest.TestCase):
         moment = datetime(2026, 9, 4, 20, 32, 39, tzinfo=UTC)
         with self._settings("Europe/Berlin", "%Y-%m-%d %H:%M:%S"):
             self.assertEqual(local_time(moment, "%H:%M"), "22:32")
+
+    #: A time without a zone, on purpose: what a clock in Berlin showed, with
+    #: nothing to say whose clock it was — the time `local_time` refuses.
+    BARE = datetime(2026, 9, 4, 22, 32, 39)  # noqa: DTZ001
+
+    def test_a_time_without_a_zone_is_refused_in_words_that_name_the_call(self):
+        with self._settings("Europe/Berlin", "%Y-%m-%d %H:%M:%S"):
+            with self.assertRaises(ValueError) as refused:
+                local_time(self.BARE)
+        self.assertEqual(
+            str(refused.exception),
+            "the moment handed to local_time is a time without a zone, and no "
+            "instant: '2026-09-04T22:32:39'")
+
+    @unittest.skipUnless(hasattr(time, "tzset"), "no tzset on this platform")
+    def test_it_is_read_as_no_machines_clock(self):
+        # what it was read as before: the clock of the machine the process runs
+        # on — an answer for every machine, and a different one on each
+        for machine in ("UTC", "America/New_York", "Europe/Berlin"):
+            with self.subTest(machine=machine), _zone(machine), \
+                    self._settings("Europe/Berlin", "%H:%M:%S"):
+                with self.assertRaises(ValueError):
+                    local_time(self.BARE)
+                with self.assertRaises(ValueError):
+                    local_time(self.BARE, "%H:%M")
+
+    def test_a_check_type_that_hands_it_one_is_an_error_on_its_node(self):
+        # a type writes a time into a line through this function: where it hands
+        # it a time without a zone its run is an ERROR, and the node says what
+        # was refused
+        bare = self.BARE
+
+        class _WritesABareTime(_FakeCheck):
+            def grade(self, measurements: Sequence[Measurement],
+                      now: datetime) -> CheckResult:
+                return CheckResult(StatusCode.OK,
+                                   [f"the lease was renewed at {local_time(bare)}"])
+
+        tree = StatusTree()
+        with self._settings("Europe/Berlin", "%Y-%m-%d %H:%M:%S"), \
+                self.assertLogs(level="ERROR"):
+            Engine([_WritesABareTime(path="/lease")], tree).run_once()
+        node = tree.snapshot("/lease")
+        assert node is not None
+        self.assertEqual(node.own_code, StatusCode.ERROR)
+        self.assertIn("check error", node.reason[0])
+        self.assertIn("is a time without a zone, and no instant", node.reason[0])
 
 
 class FormatToleranceTests(unittest.TestCase):

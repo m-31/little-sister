@@ -4,37 +4,33 @@
     {% set page_title = 'Copy' %}
     {% include '_header.html' %}
 
-    {#- One page, three documents (ADR-0036 decision 12's addressing, one route):
-        the whole tree at `/copy`, one node at `/copy/<branch>`, one reason line at
-        `/copy/<branch>?reason=<slug>`. The heading says which, because the three
-        are told apart by a URL a reader may have arrived at from a chip. -#}
+    {#- One page, four documents (ADR-0036 decision 12's addressing, one route):
+        the whole tree at `/copy`, one node at `/copy/<branch>` — a leaf's, or a
+        branch's with what is beneath it — and one reason line at
+        `/copy/<branch>?reason=<slug>`. **Copy is a view of its node** (ADR-0115
+        decision 7), so the page stands in the node's band as the node's other
+        views do: the trail says where, its crumbs opening the Copy page of each
+        ancestor, and the tabs lead back to the node. The tree's page stands in the
+        root's band, and a line's in its node's. The sentence beneath says which
+        document this is, because they are told apart by a URL a reader may have
+        arrived at from a chip. A path no node stands at never reaches this page:
+        it is answered as its other addresses are (ADR-0116). -#}
     <div class="container-fluid mt-3 px-4" style="max-width: 820px">
-        {% if copy_subject | default('') %}
-        <h1 class="h4 mb-2">Copy <span class="font-monospace">{{ copy_subject | default('') }}</span></h1>
-        {% else %}
-        <h1 class="h4 mb-2">Copy status</h1>
-        <p class="text-muted">
-            A compact incident snapshot: every status that needs attention, with
-            just enough of the tree to locate it.
-        </p>
+        {% include '_page_band.html' %}
+        {%- set says = {
+            'tree': 'A compact incident snapshot: every status that needs attention, with just enough of the tree to locate it.',
+            'branch': 'A branch: what it shows, what needs attention beneath it, and what its own run found.',
+            'node': 'One node: what its check reported, since when, and what its run found and ran with.',
+            'line': 'One line of this node, and where it came from.',
+        }.get(copy_kind | default('')) %}
+        {% if says %}
+        <p class="text-muted">{{ says }}</p>
         {% endif %}
 
         {% if copy_markdown %}
-        {#- The buttons, the preview, the source and the payload — the same
-            partial the leaf detail page includes, so the pair is named and
-            ordered identically wherever a document is offered. `copy_preview`
-            is what puts this page's rendered document between them; the detail
-            page shows the node itself instead. -#}
+        {#- The buttons, the preview, the source and the payload
+            (`_copy_controls.html`): the one place a document is offered. -#}
         {% include '_copy_controls.html' %}
-        {% elif copy_missing | default(false) %}
-        <div class="card">
-            <div class="card-body">
-                <h2 class="h5">No such node</h2>
-                <p class="mb-0 text-muted">
-                    Nothing is mounted at that path, so there is nothing to hand over.
-                </p>
-            </div>
-        </div>
         {% elif copy_missing_reason | default(false) %}
         {#- A slug the current run does not report is **suspended, not deleted**
             (ADR-0036 decision 6) — the same thing the node page says of an
@@ -49,15 +45,6 @@
                     This check is not reporting the line you asked for, so there is
                     nothing to hand over. A pin on it is still in force and still
                     expires — the node's own page says so.
-                </p>
-            </div>
-        </div>
-        {% else %}
-        <div class="card">
-            <div class="card-body">
-                <h2 class="h5">Nothing needs attention</h2>
-                <p class="mb-0 text-muted">
-                    Every reported leaf is OK, so there is no incident snapshot to copy.
                 </p>
             </div>
         </div>

@@ -34,7 +34,12 @@
            line reads it, and beside it the projection its `series.projection` line
            reads — what this configuration would need at today's estate. A series
            fills slowly, so the second figure is the one that says, on the first
-           tick, what the first will say hours later. #}
+           tick, what the first will say hours later.
+
+           The process is the fourth (ADR-0095): its resident size and the peak
+           beside it — the peak alone, labelled as the peak, where the platform
+           keeps no size now — against the `memory` line's limit and what the
+           machine gives the process, as the last tick read them. #}
         <div class="col-auto">
             <div class="card"><div class="card-body">
                 <div class="text-muted small">Declared load</div>
@@ -46,27 +51,60 @@
                 <div class="text-muted small mt-2">Series held</div>
                 <div>{{ info.series_held | weight }}
                     <span class="text-muted">of {{ info.series_limit | weight }}{% if info.series_projection %} · {{ info.series_projection | weight }} at this estate{% endif %}</span></div>
+                <div class="text-muted small mt-2">{% if info.resident is none and info.resident_peak is not none %}Peak resident size{% else %}Resident size{% endif %}</div>
+                <div>{% if info.resident is not none %}{{ info.resident | size }}{% elif info.resident_peak is not none %}{{ info.resident_peak | size }}{% else %}—{% endif %}
+                    <span class="text-muted">
+                    {%- if info.resident_peak is not none %}
+                        {%- set said = [] %}
+                        {%- if info.memory_limit %}{% set said = said + ["of " ~ (info.memory_limit | size)] %}{% endif %}
+                        {%- if info.resident is not none %}{% set said = said + ["peak " ~ (info.resident_peak | size)] %}{% endif %}
+                        {%- if info.machine_memory %}{% set said = said + ["the machine gives the process " ~ (info.machine_memory | size)] %}{% endif %}
+                        {{- said | join(" · ") }}
+                    {%- endif %}</span></div>
             </div></div>
         </div>
     </div>
 
-    {# The three schedule columns share one shape: a time of day (the
-       configured timezone; the Started card anchors the date) plus a
-       muted interval. Every interval on this page goes through `elapsed`
-       (`little_sister.spans.format_span`) rather than being formatted where it
-       is shown — which is how a quarter-hour wait came to read `in 812s` beside
-       a two-minute run reading `115 s`. #}
-    <table class="table table-sm align-middle">
+    {#- The schedule (ADR-0100 decision 4): a row per check, and a column for each
+        thing it holds. The check carries its type, and what it is reached through
+        where it is — the dependency graph, whole on one page rather than read one
+        node at a time — on a muted line beneath its path: the type is read with it,
+        and *through* is an em dash for nearly every check, so neither earns a
+        column of its own on a table that wrapped every time it ran out of width.
+
+        The three time columns share one shape: a time of day (the configured
+        timezone; the Started card anchors the date) plus a muted interval, kept on
+        one line. Every interval on this page goes through `elapsed`
+        (`little_sister.spans.format_span`) rather than being formatted where it is
+        shown — which is how a quarter-hour wait came to read `in 812s` beside a
+        two-minute run reading `115 s`.
+
+        *Declared* is the type's own estimate of one run and *Seen* what the last
+        run carried, side by side as ADR-0075 decision 8 asks: the declared run time
+        compares with *Last run*'s, the declared record with *Seen*. A heading that
+        held both said half of what was under it, so the legend says the comparison
+        once rather than on every row.
+
+        Seven columns are wider than a phone, so the table scrolls sideways in a box
+        and the page does not. The poll brings a new box every time; `poll.js` puts
+        it where the one before it stood, so a reader at *Seen* stays there. -#}
+    <p class="text-muted small mb-2 ls-schedule__legend"><em>Declared</em> is what a
+        check's type estimates for one run: its run time compares with <em>Last
+        run</em>, its record with <em>Seen</em>, the heaviest record that run
+        carried.</p>
+    <div class="table-responsive position-relative mb-3">
+    <table class="table table-sm align-middle mb-0 ls-schedule">
         <thead>
-            <tr><th>Check</th><th>Type</th><th>Frequency</th><th>Running</th><th>Next run</th><th>Last run</th><th>Declared</th><th>Through</th></tr>
+            <tr><th>Check</th><th>Every</th><th>Running</th><th>Next run</th><th>Last run</th><th>Declared</th><th>Seen</th></tr>
         </thead>
         <tbody>
             {% for c in info.checks %}
                 <tr>
-                    <td><a href="{{ url_for('status', branch=c.path | url_branch) }}">{{ c.path }}</a></td>
-                    <td class="text-muted">{{ c.type_name }}</td>
+                    <td><a href="{{ url_for('status', branch=c.path | url_branch) }}">{{ c.path }}</a>
+                        <div class="text-muted small">{{ c.type_name }}
+                            {%- if c.depends_on %} · through <a href="{{ url_for('status', branch=c.depends_on | url_branch) }}">{{ c.depends_on }}</a>{% endif %}</div></td>
                     <td>{{ c.frequency_seconds | duration }}</td>
-                    <td>
+                    <td class="ls-schedule__time">
                         {% if c.running_since %}
                             {{ c.running_since | localtime("%H:%M:%S") }}
                             <span class="text-muted">· {{ c.running_seconds | elapsed }}</span>
@@ -74,11 +112,11 @@
                             <span class="text-muted">queued</span>
                         {% endif %}
                     </td>
-                    <td>
+                    <td class="ls-schedule__time">
                         {{ c.next_run_at | localtime("%H:%M:%S") }}
                         <span class="text-muted">· in {{ c.next_in_seconds | elapsed }}{% if c.retrying %} · retry {{ c.retry_attempt }}/{{ c.retry_attempts }}{% endif %}</span>
                     </td>
-                    <td>
+                    <td class="ls-schedule__time">
                         {% if c.last_run_at %}
                             {{ c.last_run_at | localtime("%H:%M:%S") }}
                             <span class="text-muted">· {{ c.elapsed_seconds | elapsed }}</span>
@@ -86,53 +124,43 @@
                             —
                         {% endif %}
                     </td>
-                    {# The type's own estimate, beside the run it is an estimate
-                       of. A type that will not estimate says nothing, and the
-                       cell is empty rather than zero — nothing declared is not
-                       the same claim as nothing spent.
-
-                       The record is the third declaration and the one whose
-                       measurement has no column of its own, so the largest record
-                       the last run carried is shown here in parentheses, beside
-                       what was declared. It stands even where nothing was
-                       declared: the drift a declaration hides is only visible if
-                       both are shown, and a record nobody declared is still worth
-                       seeing grow. A declared record below the engine's own
-                       failure record is shown at that floor, with the type's
-                       number beside it, because the page must not claim more
-                       precision than the check has nor hide what it said. #}
+                    {#- The type's own estimate, beside the run it is an estimate
+                        of. A type that will not estimate says nothing, and the
+                        cell is a dash rather than zero — nothing declared is not
+                        the same claim as nothing spent. A declared record below
+                        the engine's own failure record is shown at that floor,
+                        with the type's number beside it, because the page must not
+                        claim more precision than the check has nor hide what it
+                        said. -#}
                     <td class="text-muted">
-                        {% if c.expected_cost is not none %}{{ c.expected_cost | elapsed }}{% endif %}
+                        {%- if c.expected_cost is not none %}{{ c.expected_cost | elapsed }}{% endif %}
                         {%- if c.expected_cost is not none and c.expected_entries is not none %} · {% endif %}
-                        {%- if c.expected_entries is not none %}{{ "{:,}".format(c.expected_entries) }} entries{% endif %}
+                        {%- if c.expected_entries is not none %}{{ "{:,}".format(c.expected_entries) }} {{ "entry" if c.expected_entries == 1 else "entries" }}{% endif %}
                         {%- if c.expected_record is not none %}
                             {%- if c.expected_cost is not none or c.expected_entries is not none %} · {% endif %}
                             {{- "{:,}".format(c.expected_record) }} B record
                             {%- if c.stated_record is not none %} (floor; declares {{ "{:,}".format(c.stated_record) }} B){% endif %}
                         {%- endif %}
-                        {%- if c.record_bytes is not none %}
-                            {%- if c.expected_cost is not none or c.expected_entries is not none or c.expected_record is not none %} {% endif %}
-                            {{- "(" }}{{ "{:,}".format(c.record_bytes) }} B seen
-                            {%- if c.record_refused %}, refused{% endif %}{{ ")" }}
-                        {%- endif %}
                         {%- if c.expected_cost is none and c.expected_entries is none
-                              and c.expected_record is none and c.record_bytes is none %}—{% endif %}
+                              and c.expected_record is none %}—{% endif -%}
                     </td>
-                    {# What this check is reached **through** (backlog #38 A). The
-                       graph belongs on one page rather than one node at a time:
-                       a single failing dependency withholds every check naming
-                       it, and *how many* is the question to ask before declaring
-                       one — not after a quiet morning. An em dash where a check
-                       stands on its own, which is nearly all of them. #}
+                    {#- The largest record the last run carried, the ones the seam
+                        refused included, since a refused record costs its line or
+                        its reading rather than the run (ADR-0093 decision 6) — and
+                        *refused* where that heaviest one was refused for its
+                        weight, which is the declaration failing. It stands where
+                        nothing was declared: a record nobody declared is still
+                        worth seeing grow. -#}
                     <td class="text-muted">
-                        {%- if c.depends_on %}
-                            <a href="{{ url_for('status', branch=c.depends_on | url_branch) }}">{{ c.depends_on }}</a>
-                        {%- else %}—{% endif %}
+                        {%- if c.record_bytes is not none %}{{ "{:,}".format(c.record_bytes) }} B
+                            {%- if c.record_refused %}, refused{% endif %}
+                        {%- else %}—{% endif -%}
                     </td>
                 </tr>
             {% else %}
-                <tr><td colspan="8" class="text-muted">No checks.</td></tr>
+                <tr><td colspan="7" class="text-muted">No checks.</td></tr>
             {% endfor %}
         </tbody>
     </table>
+    </div>
 {% endif %}

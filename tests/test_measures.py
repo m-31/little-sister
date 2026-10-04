@@ -8,6 +8,9 @@ block of another shape is refused at startup, naming the file; a unit is free te
 and the family's own units are written the way the page writes a span; the measure
 is read out of the record by the name its record list spells; and `reading_cap` is
 the check's own answer to how many readings its node shows.
+
+ADR-0096 adds three more: a measure names the node its curve stands on; a `*` picks
+the key a record counts a thing by; and the binary sizes are units the family writes.
 """
 from __future__ import annotations
 
@@ -278,8 +281,7 @@ class TemplateTests(TestCase):
 
 class WrittenTests(TestCase):
     """A unit is free text, printed beside a value; `ms` and `s` are written
-    through `format_span`, so 1,850 ms reads 1.9 s (decision 3). `B` reads as a
-    plain label until a curve needs it formatted."""
+    through `format_span`, so 1,850 ms reads 1.9 s (decision 3)."""
 
     def test_milliseconds_read_as_a_span(self) -> None:
         measure = Measure("response_ms", "ms", "Response time")
@@ -301,7 +303,6 @@ class WrittenTests(TestCase):
         self.assertEqual(Measure("rate", "req/s", "rate").write(3), "3 req/s")
         self.assertEqual(Measure("rate", "req/s", "rate").write(1234), "1,234 req/s")
         self.assertEqual(Measure("rate", "req/s", "rate").write(2.5), "2.5 req/s")
-        self.assertEqual(Measure("size", "B", "size").write(2048), "2,048 B")
 
     def test_no_unit_is_the_number_alone(self) -> None:
         self.assertEqual(Measure("retries", "", "retries").write(42), "42")
@@ -350,3 +351,157 @@ class ReadTests(TestCase):
                 value = Measure(row.name, "", row.name).read(self.RECORD)
                 shown = value if isinstance(value, str) else json.dumps(value)
                 self.assertEqual(shown, row.stored)
+
+
+class SizeTests(TestCase):
+    """`B`, `KiB`, `MiB`, `GiB` and `TiB` say what a field's number is in; the page
+    scales it to bytes and writes it through `format_weight`, which gains TiB. Like a
+    span, every value and every tick names its unit, so a size axis carries no label.
+    The decimal spellings stay free text (ADR-0096 decision 3)."""
+
+    def test_a_size_is_written_in_the_unit_that_reads_it(self) -> None:
+        self.assertEqual(Measure("mem_used_kb", "KiB", "m").write(19_169_728),
+                         "18.3 GiB")
+        self.assertEqual(Measure("swap_used_mb", "MiB", "s").write(1418.75),
+                         "1.4 GiB")
+        self.assertEqual(Measure("rss_kb", "KiB", "r").write(24_848), "24.3 MiB")
+        self.assertEqual(Measure("body", "B", "b").write(512), "512 B")
+        self.assertEqual(Measure("body", "B", "b").write(2048), "2.0 KiB")
+        self.assertEqual(Measure("used", "GiB", "u").write(1.5), "1.5 GiB")
+
+    def test_a_volume_of_terabytes_reads_in_tib(self) -> None:
+        self.assertEqual(Measure("avail_kb", "KiB", "a").write(5_835_678_284),
+                         "5.4 TiB")
+        self.assertEqual(Measure("used", "TiB", "u").write(2), "2.0 TiB")
+
+    def test_every_value_and_every_tick_names_its_unit(self) -> None:
+        for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+            with self.subTest(unit=unit):
+                self.assertEqual(Measure("x", unit, "x").axis_unit, "")
+        # a tick lands on a whole unit, and says so without a tenth of nothing
+        rss = Measure("rss_kb", "KiB", "r")
+        self.assertEqual(rss.write(524_288, bare=True), "512 MiB")
+        self.assertEqual(rss.write(1_048_576, bare=True), "1 GiB")
+        self.assertEqual(rss.write(0, bare=True), "0 B")
+
+    def test_the_decimal_spellings_stay_free_text(self) -> None:
+        for unit in ("kB", "MB", "GB"):
+            with self.subTest(unit=unit):
+                self.assertEqual(Measure("x", unit, "x").write(1500), f"1,500 {unit}")
+                self.assertEqual(Measure("x", unit, "x").axis_unit, unit)
+
+
+class NodeTests(TestCase):
+    """A measure names the node its curve stands on: `node`, beside `unit` and
+    `label`, a path relative to the check's own node. One that names none stands on
+    the check's own node. A `node` that is not text, that is absolute, or that has an
+    empty, `.` or `..` segment is refused at startup, naming the file (ADR-0096
+    decision 1)."""
+
+    SHAPES: ClassVar[dict[str, str]] = {
+        "a node that is not text": "{unit: '%', node: 5}",
+        "an absolute node": "{unit: '%', node: /memory}",
+        "an empty node": "{unit: '%', node: ''}",
+        "an empty segment": "{unit: '%', node: 'disk//root'}",
+        "a trailing slash": "{unit: '%', node: 'disk/'}",
+        "a dot": "{unit: '%', node: './memory'}",
+        "two dots": "{unit: '%', node: 'disk/../memory'}",
+    }
+
+    def test_a_measure_names_its_node(self) -> None:
+        check = _probe(measures={"mem_pct": {"unit": "%", "node": "memory",
+                                             "label": "Memory in use"}})
+        self.assertEqual(check.measures["mem_pct"],
+                         Measure("mem_pct", "%", "Memory in use", "memory"))
+
+    def test_a_node_beneath_is_a_relative_path(self) -> None:
+        check = _probe(measures={"root_pct": {"unit": "%", "node": "disk/root"}})
+        self.assertEqual(check.measures["root_pct"].node, "disk/root")
+
+    def test_one_that_names_none_stands_on_the_check_s_own_node(self) -> None:
+        self.assertEqual(_probe(measures={"response_ms": "ms"})
+                         .measures["response_ms"].node, "")
+        self.assertEqual(_probe(measures={"response_ms": {"unit": "ms"}})
+                         .measures["response_ms"].node, "")
+
+    def test_every_other_node_is_refused_naming_the_file(self) -> None:
+        for shape, entry in self.SHAPES.items():
+            with self.subTest(shape=shape):
+                with self.assertRaises(CheckError) as caught:
+                    _loaded("type: http\npath: /web\nurl: https://example.org\n"
+                            f"measures:\n  mem_pct: {entry}\n")
+                message = str(caught.exception)
+                self.assertTrue(message.startswith("web.yaml: "), message)
+                self.assertIn("measures.mem_pct", message)
+
+
+class PickTests(TestCase):
+    """A thing a record counts is keyed by its node's name, and a declaration's `*`
+    picks it: one whole segment of the field, and the same `*` in its node and its
+    label. One declaration draws a curve for every key the kept readings hold, each
+    on its own node; `*` picks a key and computes nothing. A field with two `*`, a
+    `*` inside a segment, and a `*` in a node or a label whose field has none are
+    refused at startup (ADR-0096 decision 2)."""
+
+    VOLUMES = Measure("volumes.*.pct", "%", "Space used on *", "disk/*")
+    READINGS = ({"volumes": {"root": {"path": "/", "pct": 52},
+                             "data": {"path": "/srv/data", "pct": 91}}},
+                {"volumes": {"root": {"path": "/", "pct": 53},
+                             "backup": {"path": "/mnt/backup", "pct": 12}}})
+    SHAPES: ClassVar[dict[str, str]] = {
+        "two stars": "volumes.*.*: '%'",
+        "a star inside a segment": "vol*.pct: '%'",
+        "a star in a node whose field has none": "disk_pct: {unit: '%', node: disk/*}",
+        "a star in a label whose field has none": "disk_pct: {unit: '%', label: on *}",
+        "a star inside a node's segment":
+            "drives.*.temp_c: {unit: C, node: 'temperature/drive*'}",
+        "two stars in a node": "volumes.*.pct: {unit: '%', node: '*/*'}",
+    }
+
+    def test_a_declaration_writes_a_star_for_the_key(self) -> None:
+        check = _probe(measures={"volumes.*.pct": {
+            "unit": "%", "node": "disk/*", "label": "Space used on *"}})
+        self.assertEqual(check.measures["volumes.*.pct"], self.VOLUMES)
+
+    def test_one_declaration_is_a_curve_for_every_key_the_readings_hold(
+            self) -> None:
+        self.assertEqual(self.VOLUMES.expand(self.READINGS), [
+            Measure("volumes.root.pct", "%", "Space used on root", "disk/root"),
+            Measure("volumes.data.pct", "%", "Space used on data", "disk/data"),
+            Measure("volumes.backup.pct", "%", "Space used on backup",
+                    "disk/backup")])
+
+    def test_a_star_picks_a_key_and_computes_nothing(self) -> None:
+        root, data, backup = self.VOLUMES.expand(self.READINGS)
+        self.assertEqual([root.read(reading) for reading in self.READINGS], [52, 53])
+        self.assertEqual([data.read(reading) for reading in self.READINGS], [91, None])
+        self.assertEqual([backup.read(reading) for reading in self.READINGS],
+                         [None, 12])
+
+    def test_a_key_is_taken_as_it_stands(self) -> None:
+        # a watched process's name is the deployment's, dots and all
+        rss = Measure("processes.*.rss_kb", "KiB", "Resident memory of *",
+                      "processes/*")
+        reading = {"processes": {"my.app": {"rss_kb": 2048}}}
+        picked, = rss.expand((reading,))
+        self.assertEqual((picked.node, picked.label),
+                         ("processes/my.app", "Resident memory of my.app"))
+        self.assertEqual(picked.read(reading), 2048)
+
+    def test_a_measure_without_a_star_is_itself(self) -> None:
+        memory = Measure("mem_pct", "%", "Memory in use", "memory")
+        self.assertEqual(memory.expand(self.READINGS), [memory])
+
+    def test_readings_that_count_nothing_hold_no_key(self) -> None:
+        self.assertEqual(self.VOLUMES.expand(
+            ({"disk_pct": 5}, {"volumes": None}, {"volumes": {}}, {"error": "x"})), [])
+
+    def test_every_other_star_is_refused_naming_the_file(self) -> None:
+        for shape, entry in self.SHAPES.items():
+            with self.subTest(shape=shape):
+                with self.assertRaises(CheckError) as caught:
+                    _loaded("type: http\npath: /web\nurl: https://example.org\n"
+                            f"measures:\n  {entry}\n")
+                message = str(caught.exception)
+                self.assertTrue(message.startswith("web.yaml: "), message)
+                self.assertIn("measures", message)

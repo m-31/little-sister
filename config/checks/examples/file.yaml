@@ -14,7 +14,7 @@ description: Heartbeat — the file stays fresh
 frequency: 5m                # how often to run
 timeout: 30s                 # per-run timeout
 # series_keep: 60            # readings kept per subject as its history (default 0: keep none)
-# reading_cap: 10            # of those, the newest its page lists (default: settings.yaml's)
+# reading_cap: 10            # of those, the newest its Series view lists (default: settings.yaml's)
 
 # --- freshness -------------------------------------------------------------
 file: logs/app.done          # file to watch; absolute, ~/…, or relative to $HOME (required)

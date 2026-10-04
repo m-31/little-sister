@@ -1,7 +1,7 @@
 # ADR-0041 — Maintenance is a contribution rule, not a value
 
 - **Status:** Accepted
-- **Date:** 2026-09-20 (accepted 2026-08-02)
+- **Date:** 2026-10-04 (accepted 2026-08-02)
 - **Supersedes:** [ADR-0004](0004-status-aggregation-semantics.md)'s `MAINTENANCE` half
   (its §3 and its *Implemented (`tree.py`)* note); the other two pieces are
   [ADR-0039](0039-status-rollup-semantics.md) and
@@ -12,7 +12,10 @@
   first and left the transform in place), [ADR-0014](0014-maintenance-persistence.md)
   (the side-table this reads and the write path that fills it),
   [ADR-0005](0005-dashboard-freshness-and-self-monitoring.md) (the liveness backstop
-  this may not switch off)
+  this may not switch off), [ADR-0101](0101-the-events-page-is-filtered-by-its-url.md)
+  (the `/events` filter, whose *held back* switch reads the marker),
+  [ADR-0107](0107-an-event-is-a-change-of-what-a-node-shows.md) (decisions 6 to 8 taken
+  one level down, to a line's pin)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -73,7 +76,10 @@ raised.
    *an unmarked event is one that alarmed; a marked one is one that didn't.* It is a
    **name, not a boolean**: the aggregation clamp, the dependency shield and the
    damping counter each withhold transitions too, and four booleans would be four
-   spellings of one property.
+   spellings of one property. Under a pin, a transition is marked where the node did
+   not show it, also where only some of its lines are pinned
+   ([ADR-0107](0107-an-event-is-a-change-of-what-a-node-shows.md) decision 2), and one
+   run may write the node's own change beside it.
 7. **History counts only what the node showed.** A marked transition does not start a
    period, so a maintenance window stays one period rather than being chopped into
    `ERROR` stretches no surface ever displayed. The marked events remain in the log,
@@ -81,7 +87,10 @@ raised.
    no answer at all before.
 8. **Setting and clearing a pin stay transitions** of what the node shows (`old` = what
    it was contributing, `new` = `MAINTENANCE`, and the reverse on release), and are
-   never marked: they are what everybody saw.
+   never marked: they are what everybody saw. A line's pin is a transition of what the
+   node shows, as a node's is, where it changes that (ADR-0107 decision 1), and a pin's
+   `old` and `new` are what the node showed, which with a line pinned is not what its
+   check reported.
 
 Default behavior is unchanged where it was correct: a pinned node still contributes
 nothing to its parent, an existing `var/maintenance.json` loads untouched, and every
@@ -97,8 +106,11 @@ value of `own_code` and `code` the API published before is the value it publishe
   flapping check under a week-long pin can wrap the bounded event deque. An *unpinned*
   flapper does exactly the same thing today; pins merely used to mask it. It belongs to
   **retention and event filtering**, which this makes more urgent — and with the marker
-  present, defaulting `/events` to hide suppressed transitions is nearly free once that
-  is opened.
+  present, defaulting `/events` to hide suppressed transitions is nearly free. `/events`
+  is filtered ([ADR-0101](0101-the-events-page-is-filtered-by-its-url.md) decision 3):
+  its *held back* switch leaves out the transitions a rule held back, this marker's
+  among them. They stay shown by default — hiding them would not keep them from filling
+  the bounded log — so the default that hides them is left to retention.
 - The marker is the first member of a vocabulary the remaining policies will join.
 
 ## Alternatives considered

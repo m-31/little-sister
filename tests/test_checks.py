@@ -512,6 +512,35 @@ class FileFreshnessTests(TestCase):
                          check.expected_record())
         self.assertLessEqual(check.expected_record(), RECORD_LIMIT)
 
+    def _stale_reason(self, max_age: str, age: timedelta) -> tuple[str, str]:
+        """The reason a stale reading is graded with, ``age`` after the file last
+        changed, and the configuration summary beside it."""
+        with tempfile.TemporaryDirectory() as directory:
+            heartbeat = Path(directory) / "hb.txt"
+            heartbeat.write_text("x")
+            changed = 1_700_000_000
+            os.utime(heartbeat, (changed, changed))
+            check = FileFreshnessCheck.from_config(
+                {"type": "file", "path": "/hb", "file": str(heartbeat),
+                 "max_age": max_age}, Path(directory))
+            now = datetime.fromtimestamp(changed, tz=UTC) + age
+            result = check.grade(measured(check), now)
+            return result.reason_texts[0], check.config_summary()
+
+    def test_an_age_past_a_day_is_written_in_days(self):
+        # More than eighty days read as thousands of hours and their minutes:
+        # "1987h14m". A measured span is written as the library writes one — days
+        # and the hour beside them — and the maximum as it was configured.
+        reason, _ = self._stale_reason(
+            "20m", timedelta(days=82, hours=19, minutes=14))
+        self.assertEqual(reason, "stale: last changed 82d 19h ago (max 20m)")
+
+    def test_the_maximum_reads_as_it_was_configured(self):
+        # A week configured read back as "168h00m" in the reason and on the page.
+        reason, summary = self._stale_reason("1w", timedelta(days=8, hours=3))
+        self.assertEqual(reason, "stale: last changed 8d 3h ago (max 1w)")
+        self.assertIn("**max age:** 1w", summary)
+
     def test_custom_stale_code(self):
         with tempfile.TemporaryDirectory() as directory:
             heartbeat = Path(directory) / "hb.txt"

@@ -1,4 +1,10 @@
     <meta charset="utf-8">
+    {#- The device's own width, at its own scale. Without it a phone lays the page
+        out 980 pixels wide and scales that to its screen, and none of the narrow
+        layouts is ever reached. Nothing is said about zooming, which stays the
+        reader's. Here, so that every page that takes this head says it; the two
+        that do not, `login.html` and `choose_door.html`, say it themselves. #}
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     {# The tab reads the brand too: the page first, so it survives a narrow tab,
        and the name from the one place it is written. poll.js prefixes "(stale) "
        to whatever this says, which is why the page belongs at the front. #}
@@ -14,7 +20,7 @@
     <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16x16.png">
     <link rel="manifest" href="/static/site.webmanifest">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="/static/css/overview.css" rel="stylesheet">
+    <link href="{{ url_for('static', filename='css/overview.css') }}" rel="stylesheet">
     {#- What a dependent package ships for its slot fillers (ADR-0037). The
         **library** emits these tags, never the extension: an extension writing a
         tag into a page it does not own would be deciding load order and caching for

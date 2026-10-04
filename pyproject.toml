@@ -1,6 +1,6 @@
 [project]
 name = "little-sister"
-version = "0.3.18"
+version = "0.3.19"
 description = "Self-hosted status monitoring — checks are plain Python, from a homelab to a team"
 authors = [
     { name = "Michael Meyling" }
@@ -74,17 +74,28 @@ target-version = "py311"
 # ruff-selection:begin
 # One selection for the whole family, so every project lints identically and a
 # fix argued in one of them is a fix in all of them. Beyond ruff's default (E, F):
-# import sorting (I), pyupgrade (UP), bugbear (B), comprehensions (C4) and Ruff's
-# own rules (RUF). Selecting explicitly also pins the gate against ruff's own
-# defaults shifting between releases.
+# import sorting (I), pyupgrade (UP), bugbear (B), comprehensions (C4), the
+# time-zone rules (DTZ) and Ruff's own rules (RUF). DTZ refuses a clock read and a
+# time built without a zone, and a time that is meant as a wall time says so with
+# a `noqa` and its reason (little-sister ADR-0120). Selecting explicitly also pins
+# the gate against ruff's own defaults shifting between releases.
 #
 # The ambiguous-unicode rules are off, and stay off. This family's user-facing
 # text — reasons, subnode titles, chip labels — uses typographic "—", "…", "×" and
 # "·" on purpose, and a rule that flags them would be answered with a `noqa` on
 # every line that has an opinion about punctuation.
 # ruff-selection:end
-select = ["E", "F", "W", "I", "UP", "B", "C4", "RUF"]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "DTZ", "RUF"]
 ignore = ["RUF001", "RUF002", "RUF003"]
+
+[tool.ruff.lint.per-file-ignores]
+# The release tooling and its tests read the machine's clock without a zone: the
+# stamps and dates they write are their own, on the one machine they run on, and no
+# instance reads them. So the `DTZ` rules of the selection above (ADR-0120 decision
+# 10) are not applied there. A release carries neither directory, and the entry
+# matches nothing in one. The table is this project's own: the family's selection
+# is `select` and `ignore`, not this.
+"{src/little_sister/release,tests/release}/**" = ["DTZ"]
 
 [tool.mypy]
 # `wsgi.py` by name beside the package: a bare `files = ["src"]` type-checks

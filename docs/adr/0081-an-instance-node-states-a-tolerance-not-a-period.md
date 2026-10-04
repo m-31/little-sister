@@ -107,7 +107,7 @@ not have one.
   `next_at` stay null, as they always were.
 - Nothing about the dashboard grid, the status strip or the roll-up changes; this
   record moves no node and no code.
-- Two records grow an update rather than being quietly corrected:
+- Two records are amended rather than being quietly corrected:
   [ADR-0076](0076-the-instance-node-is-a-branch.md) decision 1, which said the root is
   written with the heartbeat's description and **frequency**, and
   [ADR-0079](0079-freshness-is-a-stated-tolerance.md) decision 1, whose second branch

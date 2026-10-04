@@ -1,21 +1,20 @@
-{#- The clipboard controls: the two buttons, the live region that reports what
-    happened, the no-JavaScript escape hatch and the rich-HTML payload.
+{#- The Copy page's controls: the two buttons, the live region that reports what
+    happened, the document as it will be pasted, the no-JavaScript escape hatch
+    and the rich-HTML payload.
 
-    **One partial, so one pair of buttons.** `/copy` hands over the tree and a
-    leaf's detail page hands over one node, but a reader has to learn the pair
-    once: the same two labels, in the same order, doing the same two things
-    wherever they appear. Two copies of this markup is how "Copy rich text" on
-    one page and something else on the other happens.
+    **One pair of buttons, on one page.** Every document — the tree's, a node's,
+    a line's — is offered here, on its Copy page, so a reader learns the pair
+    once: the same two labels, in the same order, doing the same two things. No
+    other page carries them (ADR-0115 decision 7).
 
     The labels say what the clipboard actually receives. **Copy Rich HTML** writes
     a `text/html` member (with the Markdown as its `text/plain` fallback) — never
     RTF, which is what "rich text" claims — and **Copy Markdown** writes the
     Markdown alone.
 
-    Context: `copy_markdown` (the canonical document) and `copy_html_text` (the
-    same document rendered by the hardened renderer, as a string). `copy_preview`
-    additionally renders the document above the source, which is `/copy`'s whole
-    page and would be noise on a detail page that already shows the node.
+    Context: `copy_markdown` (the canonical document), `copy_html` (the same
+    document rendered by the hardened renderer, which the preview shows) and
+    `copy_html_text` (that rendering as a string, which the payload carries).
 
     `copy.js` binds to the ids below and is event-delegated on this container, so
     it needs no per-page wiring beyond the script tag. -#}
@@ -31,7 +30,6 @@
               aria-live="polite" aria-atomic="true"></span>
     </div>
 
-    {% if copy_preview | default(false) %}
     <section class="card mb-3" aria-labelledby="ls-copy-preview-heading">
         <div class="card-body">
             <h2 class="h6 text-muted text-uppercase" id="ls-copy-preview-heading">
@@ -40,7 +38,6 @@
             <div class="md-body ls-copy__preview">{{ copy_html }}</div>
         </div>
     </section>
-    {% endif %}
 
     {# A no-JavaScript and permission-denied escape hatch. It is real page
         content rather than a hidden clipboard staging node, so a user can

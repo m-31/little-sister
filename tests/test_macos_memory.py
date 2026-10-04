@@ -61,7 +61,7 @@ class MacosMemoryCheckTests(TestCase):
                          ["normal — 62% of memory free system-wide"])
         self.assertEqual(kids["swap"].code, StatusCode.OK)
         self.assertEqual(kids["swap"].reason,
-                         ["1419 MB used of 3072 MB allocated"])
+                         ["1.4 GiB used of 3.0 GiB allocated"])
         self.assertEqual(kids["compressor"].code, StatusCode.OK)
         self.assertEqual(kids["compressor"].reason,
                          ["15% compressed — 1.2 GiB of 8.0 GiB RAM"])
@@ -73,9 +73,9 @@ class MacosMemoryCheckTests(TestCase):
         self.assertEqual(set(procs), {"findmy", "system-events", "findmy-pull"})
         self.assertEqual(procs["findmy"].code, StatusCode.OK)     # 412 MB
         self.assertEqual(procs["findmy"].reason,
-                         ["412 MB RSS over 1 process, oldest up 2h 13m"])
+                         ["412.0 MiB RSS over 1 process, oldest up 2h 13m"])
         self.assertEqual(procs["system-events"].reason,
-                         ["100 MB RSS over 1 process, oldest up 1d 1h"])
+                         ["100.0 MiB RSS over 1 process, oldest up 1d 1h"])
         # not running is OK by design — liveness belongs to other checks
         self.assertEqual(procs["findmy-pull"].code, StatusCode.OK)
         self.assertEqual(procs["findmy-pull"].reason, ["not running"])
@@ -123,7 +123,7 @@ class MacosMemoryCheckTests(TestCase):
         self.assertEqual(procs["findmy-pull"].code, StatusCode.WARN)
         # no elapsed key (older script): the reason simply omits the uptime
         self.assertEqual(procs["findmy-pull"].reason,
-                         ["600 MB RSS over 2 processes"])
+                         ["600.0 MiB RSS over 2 processes"])
 
     def test_missing_proc_keys_are_unavailable(self):
         with tempfile.TemporaryDirectory() as directory:

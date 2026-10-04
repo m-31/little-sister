@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    {% from '_maintenance_fields.html' import maintenance_fields with context %}
+    {% from '_rule_block.html' import pin_block, pin_new, rule_mark with context %}
     {% from '_status_cue.html' import status_cue %}
     {% from '_record_list.html' import record_list %}
     {# the node, not the section: three leaf tabs open at once should be
@@ -23,24 +23,77 @@
                 {% if node.description %}
                     <p class="text-muted mb-2">{{ node.description | markdown_inline }}</p>
                 {% endif %}
-                {% if node.about %}
-                    <div class="md-body mb-2"><span class="text-muted">About:</span> {{ node.about | markdown }}</div>
-                {% endif %}
+                {#- What the node is lives in the band, folded, as on every view of
+                    it; this card says how it is. -#}
                 <div class="alert {{ node.code | status_alert }} mb-0">
-                    {#- The `node.actions` slot (ADR-0034, second slot): the same
-                        action as the card head's, on the page where the node is the
-                        subject. It sits with the status rather than with the reason
-                        lines, because that is precisely the distinction it exists
-                        for — this control is about the node, the per-line ones are
-                        about one finding (ADR-0036). -#}
-                    <span class="node-actions">{{ slot('node.actions', node=node, surface='check') }}</span>
-                    {#- "maintenance · error" rather than a bare "maintenance":
-                        naming what is being silenced is the transform being made
-                        visible (ADR-0032 rule 5), and before the keystone the
-                        reading it names was not merely hidden but overwritten. -#}
-                    Status: <strong>{{ node.code.name.lower() }}</strong>{% if node.own_code.name == 'MAINTENANCE' and node.reported_code.name not in ('MAINTENANCE', 'UNDEFINED') %} <span class="status-reported">· {{ node.reported_code.name.lower() }}</span>{% endif %}
-                    {%- if node.maintenance_entry %}
-                        <div class="pin-banner">Silenced by <strong>{{ node.maintenance_entry.set_by or 'an admin' }}</strong> until {{ node.maintenance_entry.expires_at | localtime }}{% if node.maintenance_entry.reason and node.maintenance_entry.reason != 'maintenance' %}<span class="pin-banner__reason"> — {{ node.maintenance_entry.reason | markdown_inline }}</span>{% endif %}</div>
+                    {#- What an admin's pin on this node would cover, as its
+                        editor's first sentence says it (ADR-0104 decision 3).
+                        A node whose lines can be pinned one by one counts them,
+                        because that is the choice the admin is making; prose is
+                        one condition in several sentences. -#}
+                    {%- set pin = node.maintenance_entry %}
+                    {%- set node_covers %}
+                        {%- if node.members and node.reasons | length > 1 -%}
+                            Silences all {{ node.reasons | length }} lines and any that appear; the check keeps running and counts again when the pin clears.
+                        {%- elif node.members and node.reasons -%}
+                            Silences its one line and any that appear; the check keeps running and counts again when the pin clears.
+                        {%- else -%}
+                            It will not alarm before the pin expires; the check keeps running and counts again when the pin clears.
+                        {%- endif -%}
+                    {%- endset %}
+                    {#- And a line's: what is left alarming beside it. A line that
+                        is silenced already is not one that keeps alarming, and
+                        under the node's pin nothing alarms at all — there a
+                        line's pin is for the day the node's ends. -#}
+                    {%- set others = node.reasons | rejectattr('quiet') | list | length - 1 %}
+                    {%- set line_covers %}
+                        {%- if pin -%}
+                            It stays silenced when the node's pin ends.
+                        {%- elif others > 1 -%}
+                            The other {{ others }} keep alarming.
+                        {%- elif others == 1 -%}
+                            The other one keeps alarming.
+                        {%- else -%}
+                            No other line is left to alarm.
+                        {%- endif -%}
+                    {%- endset %}
+                    {#- The status line: how the node is, and what is about the
+                        node rather than about one finding. The `node.actions`
+                        slot (ADR-0034, second slot) is the same action as the
+                        card head's, on the page where the node is the subject;
+                        it sits with the status rather than with the reason
+                        lines, because that is precisely the distinction it
+                        exists for (ADR-0036). An admin's *Set maintenance* is
+                        the one control that sets the node's pin, and it opens
+                        its editor here, where the pin's block will stand
+                        (ADR-0104 decision 3); a pinned node has *Edit* and
+                        *Clear* in that block instead. -#}
+                    <div class="status-line">
+                        {#- "maintenance · error" rather than a bare "maintenance":
+                            naming what is being silenced is the transform being
+                            made visible (ADR-0032 rule 5), and before the keystone
+                            the reading it names was not merely hidden but
+                            overwritten. -#}
+                        <span class="status-line__what">Status: <strong>{{ node.code.name.lower() }}</strong>{% if node.own_code.name == 'MAINTENANCE' and node.reported_code.name not in ('MAINTENANCE', 'UNDEFINED') %} <span class="status-reported">· {{ node.reported_code.name.lower() }}</span>{% endif %}</span>
+                        <span class="node-actions">{{ slot('node.actions', node=node, surface='check') }}</span>
+                        {%- if is_admin and not pin %}
+                        <details class="maintenance-editor-disclosure rule-setter">
+                            <summary class="rule-button rule-setter__toggle">{{ rule_mark('maintenance') }}Set maintenance</summary>
+                            {{ pin_new('node', node_covers, branch, '', 'node-maintenance') }}
+                        </details>
+                        {%- endif %}
+                    </div>
+                    {#- The node's pin (ADR-0104 decisions 1, 2 and 8): one block
+                        at the top of the card, heading a frame that runs round
+                        every line the pin covers. The head is a **list** — the
+                        rules acting on this node, of which maintenance is the
+                        first kind — so a second rule is a second row here and
+                        not a second place to look. -#}
+                    {%- if pin %}
+                    <div class="rule-frame">
+                        <ul class="rule-list">
+                            {{ pin_block(pin, 'node', branch, '', 'node-maintenance', is_admin, tag='li') }}
+                        </ul>
                     {%- endif %}
                     {#- The dashboard's reason line, uncapped: every reason, and the
                         same ``reason.actions`` slot (ADR-0034) beside each one, so a
@@ -50,20 +103,25 @@
 
                         This is also the surface for **per-entry maintenance**
                         (ADR-0036): where a check declared its reasons as members,
-                        an admin gets a pin control on each line, so the one finding
-                        somebody is working on can go quiet while its nineteen
-                        siblings keep alarming. A quiet line stays visible in the
-                        maintenance tint and says who silenced it and until when.
-                        Prose gets no per-line control — its unit of suppression is
-                        the node pin, and a per-line button there would offer to
-                        silence half of one condition.
+                        one finding somebody is working on can go quiet while its
+                        nineteen siblings keep alarming. An admin gets a pause
+                        mark at each such line's end, on a seat in the rail the
+                        line's other actions share; it opens the pin's editor
+                        beneath the line, where its block will stand (ADR-0104
+                        decisions 3 and 4). A quiet line stays visible in the
+                        maintenance tint and carries that block — who silenced
+                        it and until when, its note, *Edit* and *Clear*. Prose
+                        gets no mark — its unit of suppression is the node pin,
+                        and a per-line control there would offer to silence half
+                        of one condition.
 
                         `?reason=<slug>` names one line (ADR-0036 decision 12): the
-                        maintenance index links here with it, because on a node with
-                        150 findings arriving at the right *page* is not the same as
-                        arriving at the *line*. The named line — and only it — gets
-                        the `pinned-reason` id, so one anchor exists instead of one
-                        per reason, and only when it was asked for. -#}
+                        maintenance index links here with it, and a line's set,
+                        edit and clear from this page come back with it, because on
+                        a node with 150 findings arriving at the right *page* is not
+                        the same as arriving at the *line*. The named line — and
+                        only it — gets the `pinned-reason` id, so one anchor exists
+                        instead of one per reason, and only when it was asked for. -#}
                     {%- if focus_orphan %}
                         {#- The pin is real and its line is absent: a slug the current
                             run did not report is **suspended, not deleted** (decision
@@ -78,49 +136,18 @@
                     {%- endif %}
                     {% for line in node.reasons %}
                         {%- set focused = focus and line.slug == focus %}
+                        {%- set settable = is_admin and node.members and not line.quiet %}
                         {#- A coded line carries its own claim (ADR-0042): state class,
                             its state's own tint, and a labeled cue as its accessible
                             name; quiet keeps the maintenance tint over any code, and
                             is-running is display only — the words still say it. -#}
                         <div {% if focused %}id="pinned-reason" {% endif %}class="small check-reason{% if line.code %} is-coded s-{{ line.code | status_slug }}{% endif %}{% if line.running %} is-running{% endif %}{% if line.quiet %} is-quiet{% endif %}{% if focused %} is-focused{% endif %}">
-                            <div class="check-reason__rail">
+                            {#- The box the pause mark is placed in: the line's own
+                                paddings differ with its state, and the mark has to
+                                sit where the rail does. -#}
+                            <div class="check-reason__box">
+                            <div class="check-reason__rail{% if settable %} check-reason__rail--seat{% endif %}">
                                 <span class="reason-actions">{{ slot('reason.actions', node=node, reason=line.text, line=line, index=loop.index0, surface='check') }}</span>
-                                {%- if is_admin and node.members %}
-                                    <details class="reason-pin">
-                                        <summary class="reason-action reason-pin__toggle">{% if line.quiet %}Edit maintenance{% else %}Set maintenance{% endif %}</summary>
-                                        <div class="reason-pin__panel">
-                                            <form method="post" action="{{ url_for('maintenance') }}"
-                                                  class="maintenance-editor-form">
-                                                <input type="hidden" name="path" value="{{ branch }}">
-                                                <input type="hidden" name="slug" value="{{ line.slug }}">
-                                                <input type="hidden" name="action" value="set">
-                                                <input type="hidden" name="set_at" value="{{ line.maintenance.set_at if line.quiet else '' }}">
-                                                {{ maintenance_fields(
-                                                    line.maintenance.reason if line.quiet else '', '',
-                                                    'reason-maintenance-' ~ loop.index,
-                                                    maintenance_default,
-                                                    maintenance_timezone,
-                                                    true) }}
-                                                <div class="maintenance-editor-form__actions">
-                                                    <button class="btn btn-sm btn-primary" type="submit">{% if line.quiet %}Save changes{% else %}Set maintenance{% endif %}</button>
-                                                    <button class="btn btn-sm btn-link maintenance-editor-cancel"
-                                                            type="reset">Cancel</button>
-                                                </div>
-                                            </form>
-                                            {%- if line.quiet %}
-                                                <form method="post" action="{{ url_for('maintenance') }}"
-                                                      class="reason-pin__clear">
-                                                    <input type="hidden" name="path" value="{{ branch }}">
-                                                    <input type="hidden" name="slug" value="{{ line.slug }}">
-                                                    <input type="hidden" name="action" value="clear">
-                                                    <input type="hidden" name="set_at" value="{{ line.maintenance.set_at }}">
-                                                    <button class="btn btn-sm btn-outline-secondary"
-                                                            type="submit">Clear maintenance</button>
-                                                </form>
-                                            {%- endif %}
-                                        </div>
-                                    </details>
-                                {%- endif %}
                             </div>
                             <div class="md-body check-reason__body">{% if line.code %}{{ status_cue(line.code, labeled=true) }}{% endif %}{{ line.text | markdown }}</div>
                             {#- The record (backlog #32): what the check read about
@@ -139,24 +166,34 @@
                             {%- elif line.refused %}
                                 <p class="reason-refused small text-muted">Record refused: {{ line.refused }}</p>
                             {%- endif %}
-                            {%- if line.quiet %}
-                                <div class="reason-quiet-note">
-                                    <div>In maintenance{% if line.maintenance.set_by %}, set by <strong>{{ line.maintenance.set_by }}</strong>{% endif %} — expires {{ line.maintenance.expires_at | localtime }}.</div>
-                                    {% if line.maintenance.reason and line.maintenance.reason != 'maintenance' %}
-                                        <div class="maintenance-explanation md-body">{{ line.maintenance.reason | markdown }}</div>
-                                    {% endif %}
-                                </div>
+                            {%- if settable %}
+                                {#- After the line's text in the document, so the
+                                    editor opens beneath it in the flow; the mark
+                                    itself is drawn on its seat in the rail. A
+                                    mark and not the two words: on a node with
+                                    150 lines the words were a column of their
+                                    own. -#}
+                                <details class="reason-pin">
+                                    <summary class="reason-action reason-pin__toggle" title="Set maintenance for this line">{{ rule_mark('maintenance') }}<span class="visually-hidden">Set maintenance for this line</span></summary>
+                                    {{ pin_new('line', line_covers, branch, line.slug, 'reason-maintenance-' ~ loop.index) }}
+                                </details>
+                            {%- elif line.quiet %}
+                                {{ pin_block(line.maintenance, 'line', branch, line.slug, 'reason-maintenance-' ~ loop.index, is_admin, also=pin is not none) }}
                             {%- endif %}
+                            </div>
                         </div>
                     {% endfor %}
                     {% if node.quiet_reasons %}
                         {#- "nothing here is reporting" explains a node that went blue
                             because its last member was pinned. Under a **node** pin it
-                            would take credit for the wrong thing — the banner above
+                            would take credit for the wrong thing — the block above
                             already says why — so the count then reports only what
                             stays quiet once that pin is cleared. -#}
                         <div class="reason-quiet-count">{{ node.quiet_reasons }} of {{ node.reasons | length }} {% if node.maintenance %}also pinned individually{% else %}in maintenance{% if node.own_code.name == 'MAINTENANCE' %} — nothing here is reporting{% endif %}{% endif %}.</div>
                     {% endif %}
+                    {%- if pin %}
+                    </div>
+                    {%- endif %}
                     {%- if node.damping %}
                         {#- The counter, in words rather than as a number nobody can
                             place: what this node shows, how far the count has got,
@@ -169,45 +206,28 @@
                             readings before this escalates{% if node.contribution and node.contribution.code %}, so the level above still counts
                             <strong>{{ node.contribution.code.name.lower() }}</strong>{% endif %}.</small></div>
                     {%- endif %}
+                    {#- Observed, the Time card's word (ADR-0099 decision 3): a node the
+                        instance re-asserts on its own tick goes stale too, and
+                        nothing checks it. -#}
                     {% if node.stale %}
-                        <div><small>Stale — last checked {{ node.age_seconds | elapsed }} ago.</small></div>
+                        <div><small>Stale — last observed {{ node.age_seconds | elapsed }} ago.</small></div>
                     {% endif %}
                 </div>
             </div>
         </div>
 
-        {#- Take this node away. `/copy` hands over the whole tree; these two
-            buttons hand over **this leaf**, with everything the tree document
-            has no room for and only this page knows — the path, the observation
-            and the period it bounds, the next update, the run's wall time, the
-            frequency, the report, the configuration and every reason line in
-            full, each instant naming its offset because the paste is read
-            somewhere else.
-
-            Directly under the status and the reasons, which is what the document
-            is mostly made of. **Leaf pages only** — a container's page is a
-            dashboard of its children, and the hand-off for a subtree already
-            exists at `/copy`, so `_node_facts.html`, which both pages share,
-            is deliberately not where this went. -#}
-        {% include '_copy_controls.html' %}
-
         {#- Time, report and configuration — the shared node-facts block
             (_node_facts.html), which the branch page now renders too, so a
             container and a leaf say the same things in the same shapes
-            (ADR-0044 decision 8). -#}
+            (ADR-0044 decision 8). Directly under the status and the reasons:
+            the node's document is its Copy view's, a tab in the band above, and
+            this page carries none (ADR-0115 decision 7). -#}
         {% include '_node_facts.html' %}
-
-        {% if is_admin %}
-        {% include '_maintenance_card.html' %}
-        {% endif %}
     </div>
 {% include '_page_end.html' %}
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     <script src="{{ url_for('static', filename='js/rail.js') }}"></script>
     <script src="{{ url_for('static', filename='js/maintenance-edit.js') }}"></script>
-    {# The clipboard writer, shared with /copy: same script, same two buttons,
-       same fallbacks down to manual selection when the browser denies access. #}
-    <script src="{{ url_for('static', filename='js/copy.js') }}"></script>
 </body>
 </html>

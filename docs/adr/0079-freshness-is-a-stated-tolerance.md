@@ -110,8 +110,7 @@ should is a fact about the *engine*, not about the subject.
   decision: the subject's node says whether we know its state, the engine's node says
   whether we are keeping up.
 - ADR-0005 decision 1 is amended rather than superseded: its rule is intact and its
-  scope is now *where there is a frequency*. The update blockquote on that record
-  points here.
+  scope is now *where there is a frequency*. That record points here.
 - One number in the envelope means a client renders freshness identically for both
   kinds, and a paced check needs no client change beyond tolerating two absent fields.
 
