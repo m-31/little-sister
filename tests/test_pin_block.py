@@ -550,6 +550,143 @@ class SetControlTests(_LeafCase):
         self.assertEqual(self._setters(page), [])
 
 
+class PinAboveTests(_LeafCase):
+    """ADR-0104 decision 2: a pin set on a node above this one silences it
+    with everything else beneath that node (ADR-0041), and the node's own page
+    states it where it acts — the pin's block, without buttons, naming and linking
+    the node it stands on — one row of the frame's list for each, outermost first."""
+
+    def _pin_at(self, path: str, note: str | None = NOTE, by: str = "lex",
+                left: timedelta = timedelta(days=1, hours=23, minutes=30),
+                ) -> MaintenanceEntry:
+        write = self.tree.set_maintenance(
+            path, note, expires_at=datetime.now(UTC) + left, set_by=by)
+        assert write.current is not None
+        return write.current
+
+    @staticmethod
+    def _rows(page: Element) -> list[Element]:
+        """The rows of the list at the head of the node's frame."""
+        return [child for child in page.one("rule-frame").one("rule-list").children
+                if isinstance(child, Element)]
+
+    def _until(self, entry: MaintenanceEntry) -> str:
+        return str(app_module._localtime(entry.expires_at))
+
+    def test_a_pin_above_is_stated_as_its_block_where_it_acts(self):
+        self._workflows()
+        entry = self._pin_at("/ci")
+        page = self._page()
+        row, = self._rows(page)
+        self.assertEqual((row.tag, row.has("rule-block--node"),
+                          row.attrs.get("data-rule")), ("li", True, "maintenance"))
+        what = row.one("rule-block__what")
+        self.assertEqual(
+            what.text(),
+            f"This node is silenced from /ci by lex until {self._until(entry)} "
+            "· 1d 23h left")
+        # linked to where it stands, which is where it is edited
+        link, = what.all(tag="a")
+        self.assertEqual((link.attrs.get("href"), link.text()), ("/status/ci", "/ci"))
+        # the note whole, as decision 1 states a pin everywhere it shows
+        self.assertEqual(len(row.one("rule-block__note").all(tag="p")), 3)
+        # and nothing to press: not even an admin edits it from here
+        self.assertEqual(row.all(tag="form") + row.all(tag="details")
+                         + row.all(tag="button"), [])
+        # it frames every line, since it silences every one
+        for line in page.all("check-reason"):
+            self.assertTrue(line.within(page.one("rule-frame")))
+
+    def test_each_pin_above_is_a_row_outermost_first(self):
+        self.tree.upsert("/ci/fleet/runner7", StatusCode.ERROR, "disk is full")
+        outer = self._pin_at("/ci", "rack move", by="anna")
+        inner = self._pin_at("/ci/fleet", "fleet swap")
+        rows = self._rows(self._page("/ci/fleet/runner7"))
+        self.assertEqual(
+            [row.one("rule-block__what").text() for row in rows],
+            [f"This node is silenced from /ci by anna until {self._until(outer)} "
+             "· 1d 23h left",
+             f"This node is silenced from /ci/fleet by lex until "
+             f"{self._until(inner)} · 1d 23h left"])
+
+    def test_the_nodes_own_pin_under_one_is_also_silenced_on_its_own(self):
+        # it stays quiet when the pin above ends, as a line's does under its node's
+        self._workflows()
+        self._pin_at("/ci", by="anna")
+        own = self._pin_node()
+        above, mine = self._rows(self._page())
+        self.assertIn("silenced from /ci", above.one("rule-block__what").text())
+        self.assertEqual(
+            mine.one("rule-block__what").text(),
+            f"This node is also silenced on its own by lex until "
+            f"{self._until(own)} · 1d 23h left")
+        # the node's own is edited here, as ever
+        self.assertTrue(mine.all("rule-block__edit"))
+        self.assertTrue(mine.all("rule-block__clear"))
+
+    def test_a_lines_pin_under_one_is_also_silenced_on_its_own(self):
+        self._workflows()
+        self._pin_at("/ci", by="anna")
+        entry = self._pin_line()
+        page = self._page()
+        self.assertEqual(
+            self._stated(page, "line")[0].one("rule-block__what").text(),
+            f"This line is also silenced on its own by anna until "
+            f"{self._until(entry)} · 5h 29m left")
+        # and a line's editor says what its pin is for under it
+        self.assertEqual(
+            self._line(page, "web-build").one("rule-block__scope").text(),
+            "Maintenance for this line only. It stays silenced when the pin above "
+            "the node ends.")
+
+    def test_the_nodes_editor_says_its_pin_outlasts_the_one_above(self):
+        self._workflows()
+        self._pin_at("/ci")
+        self.assertEqual(
+            self._page().one("status-line").one("rule-block__scope").text(),
+            "Maintenance for this node. It stays silenced when the pin above it "
+            "ends; the check keeps running and counts again when every pin on it "
+            "has cleared.")
+
+    def test_a_viewer_reads_it_too(self):
+        self._workflows()
+        self._pin_at("/ci")
+        self._viewer()
+        raw = self._body()
+        page = parse(raw)
+        row, = self._rows(page)
+        self.assertIn("silenced from /ci by lex", row.one("rule-block__what").text())
+        self.assertTrue(row.all("rule-block__note"))
+        self.assertNotIn('name="set_at"', raw)
+
+    def test_a_pin_on_a_line_above_silences_that_line_alone(self):
+        # a node's own pin covers what is beneath it; a line's covers its line
+        # (ADR-0124), so it is no row here
+        self.tree.upsert("/ci", StatusCode.WARN, {"quota": "runner quota at 90 %"})
+        self._workflows()
+        self.tree.set_entry_maintenance(
+            "/ci", "quota", "raised on Monday",
+            expires_at=datetime.now(UTC) + timedelta(hours=5), set_by="anna")
+        page = self._page()
+        self.assertEqual(page.all("rule-frame"), [])
+        self.assertNotIn("silenced from", self._body())
+
+    def test_a_pin_beside_the_node_is_no_row_of_it(self):
+        self._workflows()
+        self.tree.upsert("/ci/runners", StatusCode.OK)
+        self._pin_at("/ci/runners")
+        self.assertEqual(self._page().all("rule-frame"), [])
+
+    def test_a_pin_on_everything_links_to_the_overview(self):
+        # the overview's own pin is not set from a form, and one that stands is
+        # stated like any other
+        self._workflows()
+        self._pin_at("/")
+        row, = self._rows(self._page())
+        link, = row.one("rule-block__what").all(tag="a")
+        self.assertEqual((link.attrs.get("href"), link.text()), ("/status", "/"))
+
+
 class EditorTests(_LeafCase):
     """Decision 4: Edit opens the block where it stands."""
 

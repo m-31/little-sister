@@ -325,9 +325,11 @@ connect-src:
   - https://tickets.example.org
 ```
 
-`/system/installed` prints the effective policy with the contributor of every source, so what
-this file did is visible from the running instance. The shipped copy is an example
-with every entry commented out.
+The hosts `/links` loads its icons from — a remote mark, the favicon of a link with no
+mark — need no line here: the page allows them itself, taken from `links.yaml` as it
+renders. `/system/installed` prints the effective policy with the contributor of every
+source, and what `/links` adds, so what this file did is visible from the running
+instance. The shipped copy is an example with every entry commented out.
 
 ### Installation
 
@@ -433,7 +435,9 @@ started the other), and refuses to touch a foreign process on the port — loggi
 accepts both users-aspect forms (and follows the configured root path-list) before it
 starts. **`./stop.sh`** stops it, whichever scheme it was started under; **`./test_api.sh`**
 smoke-tests the running JSON API
-(token from `LITTLE_SISTER_API_TOKENS`); **`./memory.sh`** says what the running
+(token from `LITTLE_SISTER_API_TOKENS`), and asks the path it is given in place of
+`/status` — `./test_api.sh '/series/hosts/alpha?from=now-1h'`;
+**`./memory.sh`** says what the running
 instance holds in memory — the resident size of the gunicorn master and of each worker,
 and their sum — and adds it as a row to `var/memory.csv`, so a run measured at its start
 and a day later can be compared; `--background` does that every ten minutes, detached,

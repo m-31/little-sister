@@ -184,7 +184,12 @@ class _CopyCase(unittest.TestCase):
 
     def setUp(self) -> None:
         app_module.status_tree = _estate()
-        context = self.browser.new_context()
+        # A browser lets a page its reader has just clicked write to the clipboard,
+        # and the loopback class is about that interface. Headless Chromium 153,
+        # the one Playwright 1.63 installs, refuses it unless it is granted, where
+        # 141 did not: without the grant every press below is the copy command's
+        # alone. So the context grants it, as the reader's click does.
+        context = self.browser.new_context(permissions=["clipboard-write"])
         self.addCleanup(context.close)
         self.page = context.new_page()
         self.page.route("https://cdn.jsdelivr.net/**", self._vendored)

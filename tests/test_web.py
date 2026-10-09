@@ -10,6 +10,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from unittest import TestCase, mock
+from urllib.parse import urlsplit
 
 from little_sister.checks import Measurement
 
@@ -2771,11 +2772,15 @@ class LinksPageTests(TestCase):
         patched. `view` is what the render is handed; the default is the state
         before anything has been asked.
         """
+        return self.respond(config, view).get_data(as_text=True)
+
+    def respond(self, config, view=None):
+        """The response itself, headers and all — see :meth:`page`."""
         with (mock.patch.object(app_module, "current_links", return_value=config),
               mock.patch.object(app_module.link_probe, "refresh_if_due"),
               mock.patch.object(app_module.link_probe, "page_view",
                                 return_value=view or link_probe.ProbeView())):
-            return self.client.get("/links").get_data(as_text=True)
+            return self.client.get("/links")
 
     def test_requires_login(self):
         response = app_module.app.test_client().get("/links")
@@ -2857,6 +2862,48 @@ class LinksPageTests(TestCase):
                            url="https://aws.example.org/"),)),))
         body = self.page(config)
         self.assertIn("https://aws.example.org/favicon.ico", body)
+
+    def test_every_image_from_elsewhere_is_one_the_page_allows_and_no_more(self):
+        # What the page loads and what its own policy allows are one answer
+        # (`LinksConfig.mark_for`), so they cannot drift: every image fetched from
+        # another host is on a host img-src names, and img-src names nothing beyond
+        # those and the library's floor (ADR-0030, ADR-0048).
+        remote = links.Icon(name="phoenix",
+                            on_light=links.IconFile(url="https://m.example.org/l.svg"),
+                            on_dark=links.IconFile(url="https://n.example.org/d.svg"),
+                            paired=True)
+        half = links.Icon(name="half",
+                          on_light=links.IconFile(url="https://h.example.org/l.png"),
+                          paired=True)
+        config = links.LinksConfig(
+            icons={"phoenix": remote, "half": half,
+                   "aws": links.Icon(name="aws", suppressed=True)},
+            groups=(links.Group(title="T", links=(
+                links.Link(title="Chef", url="https://chef.example.org/tool"),
+                links.Link(title="Unknown", url="https://u.example.org:8443/",
+                           icon="cyberchef"),
+                links.Link(title="AWS", url="http://aws.example.org/", icon="aws"),
+                links.Link(title="Phoenix", url="https://p.example.org/",
+                           icon="phoenix"),
+                links.Link(title="Half", url="https://half.example.org/",
+                           icon="half"),
+                links.Link(title="Grafana", url="https://g.example.org/",
+                           icon="grafana"))),))
+        response = self.respond(config)
+        loaded = {f"{urlsplit(image.attrs['src']).scheme}://"
+                  f"{urlsplit(image.attrs['src']).netloc}"
+                  for image in parse(response.get_data(as_text=True)).walk()
+                  if image.tag == "img"
+                  and urlsplit(image.attrs.get("src", "")).netloc}
+        img_src = next(directive.split()[1:] for directive in
+                       response.headers[app_module.CSP_HEADER].split("; ")
+                       if directive.startswith("img-src "))
+        in_page_order = ["https://chef.example.org", "https://u.example.org:8443",
+                         "http://aws.example.org", "https://m.example.org",
+                         "https://n.example.org", "https://h.example.org",
+                         "https://half.example.org"]
+        self.assertEqual(loaded, set(in_page_order))
+        self.assertEqual(img_src, ["'self'", "data:", *in_page_order])
 
     def test_the_neutral_glyph_is_wired_without_an_inline_handler(self):
         # The last step of the search path, and it must not become the reason a
@@ -3193,12 +3240,6 @@ class LinksPageTests(TestCase):
             response = self.client.post("/links/check",
                                         data={"next": "//evil.example.org/"})
         self.assertTrue(response.headers["Location"].endswith("/status"))
-
-    def test_site_origin_keeps_only_the_origin(self):
-        self.assertEqual(
-            app_module._site_origin("https://a.example.org/deep/path?q=1"),
-            "https://a.example.org")
-        self.assertEqual(app_module._site_origin("not a url"), "")
 
 
 class UserAvatarRouteTests(TestCase):
@@ -4189,7 +4230,9 @@ class ContainerHeadTests(TestCase):
     and *undefined*, the word hide-idle reads as never reported, while the dashboard
     drew the same node green. It heads with what its card shows now, and the Time
     card under it bounds no period of a status the node never had. A node that
-    declares a code of its own heads with that code, as it always did.
+    declares a code of its own heads with what it rolls up to as well (ADR-0123
+    decision 1), pale where that comes from beneath it: `tests/test_one_status.py`
+    reads every surface that says it.
     """
 
     SCOPE = "1 account, 1 account/region pair in scope"
@@ -4250,24 +4293,36 @@ class ContainerHeadTests(TestCase):
         self._estate(StatusCode.UNDEFINED)
         self.assertEqual(self._head(), ("s-undefined", "undefined", "undefined"))
 
-    def test_a_node_that_declares_a_code_heads_with_its_own(self):
-        # Unchanged: a verdict of its own is what the head says, and the red child
-        # right below it says the rest — the `github` check's coverage node.
+    def test_a_node_that_declares_a_code_heads_with_what_it_rolls_up_to_too(self):
+        # The `github` check's coverage node: well of its own, above an aspect in
+        # error. It headed its page green, with the verdict of its own, while its
+        # card one page up was red — one node, two statuses.
         self.tree.set_check_mount("/quality/github")
         self.tree.upsert("/quality/github", StatusCode.OK, "3 repositories")
         self.tree.upsert("/quality/github/actions", StatusCode.ERROR, "red")
-        self.assertEqual(self._head("quality/github"), ("s-ok", "ok", "ok"))
+        self.assertEqual(self._head("quality/github"),
+                         ("s-error dim", "error", "error"))
+
+    def test_a_verdict_of_its_own_heads_vivid(self):
+        # The color is the node's own where the node counts it for itself.
+        self.tree.set_check_mount("/quality/github")
+        self.tree.upsert("/quality/github", StatusCode.WARN, "a read was cut short")
+        self.tree.upsert("/quality/github/actions", StatusCode.OK)
+        self.assertEqual(self._head("quality/github"), ("s-warn", "warn", "warn"))
 
     def test_the_time_card_bounds_no_period_of_a_status_it_never_had(self):
         # A root that declared OK and declares nothing now — an `aws` check's,
         # across its conversion — has that transition in its log, and the card
-        # bounded it as "Status undefined from … until …" under a green head.
+        # bounded it as "Status undefined from … until …" under a green head. It
+        # says where what it shows comes from (ADR-0123 decision 3), and no period.
         self._estate()
         self.tree.upsert("/cloud/aws", StatusCode.OK, self.SCOPE)
         self.tree.upsert("/cloud/aws", StatusCode.UNDEFINED, self.SCOPE)
         body = self._page()
         self.assertIn("Observed ", body)
-        self.assertNotIn("Status <strong>", body)
+        self.assertIn("Status <strong>ok</strong>, from the nodes beneath it", body)
+        self.assertNotRegex(body, r"Status <strong>[a-z]+</strong>\s+since ")
+        self.assertNotIn("Its own status", body)
 
     def test_its_copy_bounds_no_period_either(self):
         # The Copy document states what the page states, from the same start: it
@@ -4425,8 +4480,9 @@ class TimeCardTests(TestCase):
         self.tree.upsert("/hosts/a/disk", StatusCode.WARN, "85 %")
         oldest = self._steady("/hosts/a")
         card = self._time_card("hosts/a")
-        self.assertRegex(card, rf"Status <strong>warn</strong>\s+since before "
-                               rf"{re.escape(oldest)}")
+        # a node above others: the period is its own status's, and named so
+        self.assertRegex(card, rf"Its own status <strong>warn</strong>\s+since "
+                               rf"before {re.escape(oldest)}")
 
     def test_its_copy_document_says_since_before_too(self):
         self.tree.upsert("/svc/api", StatusCode.OK, "fine")
@@ -4708,6 +4764,37 @@ class ContentSecurityPolicyTests(TestCase):
         self.assertIn("https://tickets.example.org", body)
         self.assertIn("(ls_tickets)", body)
         self.assertIn(f"({csp.LIBRARY})", body)
+
+    def test_links_allows_the_hosts_its_icons_load_from_and_no_other_page_does(self):
+        config = links.LinksConfig(
+            sources=(Path("config/links/links.yaml"),),
+            groups=(links.Group(title="T", links=(
+                links.Link(title="Chef", url="https://chef.example.org/tool"),
+                links.Link(title="Grafana", url="https://grafana.example.org/",
+                           icon="grafana"))),))
+        self._login()
+        with mock.patch.object(app_module, "current_links", return_value=config), \
+                mock.patch.object(app_module.link_probe, "refresh_if_due"):
+            on_links = self.client.get("/links").headers[app_module.CSP_HEADER]
+            on_status = self.client.get("/status").headers[app_module.CSP_HEADER]
+        self.assertIn("img-src 'self' data: https://chef.example.org;", on_links)
+        self.assertNotIn("grafana.example.org", on_links)
+        self.assertIn("img-src 'self' data:;", on_status)
+        self.assertNotIn("chef.example.org", on_status)
+
+    def test_system_names_what_links_adds_and_the_file_that_named_it(self):
+        config = links.LinksConfig(
+            sources=(Path("config/links/links.yaml"),),
+            groups=(links.Group(title="T", links=(
+                links.Link(title="Chef", url="https://chef.example.org/tool"),)),))
+        self._login()
+        with mock.patch.object(app_module, "current_links", return_value=config):
+            body = self.client.get("/system/installed").get_data(as_text=True)
+        row = body[body.index('id="csp-links"'):]
+        row = row[:row.index("</tr>")]
+        self.assertIn("<code>/links</code>", row)
+        self.assertIn("<code>https://chef.example.org</code>", row)
+        self.assertIn("(config/links/links.yaml)", row)
 
     def test_system_needs_an_admin_like_the_rest_of_the_page(self):
         # the readout names a deployment's internal hosts; it inherits /system's gate

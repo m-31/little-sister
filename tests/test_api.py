@@ -1,5 +1,6 @@
 import json
 import os
+import tempfile
 import unittest
 from datetime import UTC, datetime
 from pathlib import Path
@@ -13,6 +14,7 @@ from little_sister import app as app_module
 from little_sister.reasons import Entry
 from little_sister.status import StatusCode
 from little_sister.tree import StatusTree
+from tests.test_contract_fixture import build_series_scene, series_from
 
 TOKEN = "secret-token"
 JSON = {"Accept": "application/json", "Authorization": f"Bearer {TOKEN}"}
@@ -551,6 +553,93 @@ class TheSpecIsTheContract(TestCase):
             declared = set(self.schemas[name]["properties"])
             self.assertEqual(declared - served - self.CONDITIONAL.get(name, set()),
                              set(), f"{name}: declared and never served")
+
+    # --- the series read (ADR-0122): the same two directions, over the scene the
+    # golden answer is made from, which holds every shape that read has ------------
+
+    def _series_answer(self, request: str = "") -> dict:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        tree = StatusTree()
+        engine = build_series_scene(tree, Path(directory.name))
+        return series_from(tree, engine, *([request] if request else []))
+
+    def test_the_served_series_and_the_spec_agree_in_both_directions(self):
+        self._check(self._series_answer(), self.schemas["SeriesResponse"],
+                    "series_response")
+
+    def test_a_series_answer_without_a_window_agrees_with_the_spec_too(self):
+        """Both ends null, and a node's answer rather than the root's."""
+        body = self._series_answer("/series/hosts/alpha")
+        self.assertEqual(body["window"], {"from": None, "to": None})
+        self.assertTrue(body["series"])
+        self._check(body, self.schemas["SeriesResponse"], "series_response")
+
+    def test_the_spec_would_notice_a_series_field_nobody_documented(self):
+        for where in ("the answer", "a series", "its key", "a measure", "a reading",
+                      "the window"):
+            with self.subTest(where=where):
+                body = self._series_answer()
+                host, = [one for one in body["series"]
+                         if one["key"]["type"] == "host-metrics"]
+                {"the answer": body, "a series": host, "its key": host["key"],
+                 "a measure": host["measures"][0], "a reading": host["readings"][0],
+                 "the window": body["window"]}[where]["undocumented"] = "surprise"
+                with self.assertRaises(AssertionError):
+                    self._check(body, self.schemas["SeriesResponse"],
+                                "series_response")
+
+    def test_the_spec_would_notice_a_required_series_field_that_went_missing(self):
+        for where, name in (("the answer", "path"), ("the answer", "window"),
+                            ("a series", "node"), ("its key", "mount"),
+                            ("a measure", "axis_to"), ("a reading", "code"),
+                            ("a reading", "observed_at"), ("the window", "to")):
+            with self.subTest(where=where, name=name):
+                body = self._series_answer()
+                host, = [one for one in body["series"]
+                         if one["key"]["type"] == "host-metrics"]
+                del {"the answer": body, "a series": host, "its key": host["key"],
+                     "a measure": host["measures"][0],
+                     "a reading": host["readings"][0],
+                     "the window": body["window"]}[where][name]
+                with self.assertRaises(AssertionError):
+                    self._check(body, self.schemas["SeriesResponse"],
+                                "series_response")
+
+    def test_the_spec_declares_nothing_the_series_read_never_carries(self):
+        """Every property of the read is always served: none is conditional, so
+        whatever the spec declares for it has to turn up in the scene's answer."""
+        self._check(self._series_answer(), self.schemas["SeriesResponse"],
+                    "series_response", "SeriesResponse")
+        self.assertEqual(
+            set(self.served),
+            {"SeriesResponse", "Instance", "Window", "Series", "SeriesKey",
+             "Measure", "Reading"})
+        for name, served in sorted(self.served.items()):
+            self.assertEqual(set(self.schemas[name]["properties"]) - served, set(),
+                             f"{name}: declared and never served")
+
+    def test_the_spec_names_both_series_paths_their_window_and_their_refusals(self):
+        """The root and a node, each over `from` and `to`; a window the server
+        cannot read is the first `400` of this API, and only a node can be missing
+        (ADR-0122 decisions 2 and 7)."""
+        import yaml
+        spec = Path(__file__).resolve().parents[1] / "docs/api/openapi.yaml"
+        paths = yaml.safe_load(spec.read_text(encoding="utf-8"))["paths"]
+
+        def refs(path: str) -> set[str]:
+            return {parameter["$ref"].rsplit("/", 1)[-1]
+                    for parameter in paths[path]["get"]["parameters"]}
+
+        self.assertEqual(refs("/series"), {"From", "To", "FlowId"})
+        self.assertEqual(refs("/series/{node_path}"),
+                         {"NodePath", "From", "To", "FlowId"})
+        self.assertEqual(set(paths["/series"]["get"]["responses"]),
+                         {"200", "400", "401"})
+        self.assertEqual(set(paths["/series/{node_path}"]["get"]["responses"]),
+                         {"200", "400", "401", "404"})
+        for path in ("/status", "/status/{node_path}"):
+            self.assertNotIn("400", paths[path]["get"]["responses"], path)
 
     def test_the_version_in_the_spec_is_the_version_on_the_wire(self):
         """`schema_version` and the spec's major are one decision (ADR-0080 decision

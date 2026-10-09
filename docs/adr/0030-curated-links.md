@@ -1,7 +1,7 @@
 # ADR-0030 — Curated links come from a deployment-supplied file
 
 - **Status:** Accepted
-- **Date:** 2026-10-04 (accepted 2026-08-01)
+- **Date:** 2026-10-10 (accepted 2026-08-01)
 - **Related:** [ADR-0031](0031-deployment-config-directory.md) (the `config/` directory
   and its layering, which this file is an aspect of),
   [ADR-0015](0015-check-discovery-union.md) (the path-list underneath it),
@@ -15,7 +15,9 @@
   [ADR-0028](0028-design-tokens-and-themes.md) (themes the icons must survive),
   [ADR-0029](0029-per-user-presentation-preferences.md) (`DARK_THEMES` → `bs_theme`,
   the seam the icon variants ride), [ADR-0088](0088-a-stop-ends-at-its-save.md) (the
-  stop that abandons a pass in flight).
+  stop that abandons a pass in flight),
+  [ADR-0048](0048-an-assembled-content-security-policy.md) (decision 4: the page's own
+  policy allows the hosts its icons load from).
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -370,9 +372,19 @@ groups:
   that very product, is what makes the page fine either way. And it adds a **terms of
   service** question, because plenty of asset hosts forbid hotlinking as a bandwidth matter
   and enforce it with a `403`. It also trades a licensing problem for a reliability one:
-  referrer-based hotlink protection, URLs that rot on a vendor redesign, every host needing
-  a line in a future `img-src` policy, and no icons at all for a deployment without
-  outbound access. Hence the preferred order in the decision.
+  referrer-based hotlink protection, URLs that rot on a vendor redesign, and no icons at
+  all for a deployment without outbound access. Hence the preferred order in the
+  decision.
+- **A remote icon is fetched by the viewer's browser, never by the instance.** The hosts
+  a remote mark or a fallback favicon loads from are allowed by the page's own
+  Content-Security-Policy, taken from this file as the page renders
+  ([ADR-0048](0048-an-assembled-content-security-policy.md) decision 4), so none needs a
+  line in `config/csp.yaml`. That the browser fetches them is deliberate: the page
+  exists to send the viewer to those sites, so a browser that can open a link can fetch
+  its icon, and one that cannot has no use for the link either — while the instance may
+  stand where those hosts are out of its reach. A favicon that redirects to a host the
+  file does not name, a login wall's, is still reported, and an enforced policy draws
+  the neutral glyph for it.
 - The `onerror` fallback to the neutral glyph must be an **external listener**, not an
   inline attribute, so the page does not become the reason a Content-Security-Policy
   cannot be turned on.

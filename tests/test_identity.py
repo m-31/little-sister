@@ -27,8 +27,7 @@ from little_sister import identity, local_login
 GATED_ENDPOINTS = frozenset({
     "about", "copy", "events", "extension_asset", "history", "link_icon", "links",
     "links_check", "maintenance", "maintenance_overview", "preferences",
-    "self_report_action", "series", "series_index", "system", "system_installed",
-    "user_avatar",
+    "self_report_action", "system", "system_installed", "user_avatar",
 })
 
 #: The one method each endpoint is exercised with, where GET is not it.
@@ -116,6 +115,21 @@ class GateTests(TestCase):
         self.assertEqual(page.headers["Location"], "/login")
         api = self.client.get("/status", headers={"Accept": "application/json"})
         self.assertEqual(api.status_code, 401)
+
+    def test_every_route_that_chooses_its_own_credential_refuses_both_ways(self):
+        """Not gated is not open: a route the gate leaves to itself answers a
+        stranger's browser with the login page and a stranger's JSON request with
+        a `401` — the status read, and the two routes of the series read
+        (ADR-0122 decision 8)."""
+        for endpoint in sorted(identity.SELF_AUTHENTICATING_ENDPOINTS):
+            with self.subTest(endpoint=endpoint):
+                url = self._url(endpoint)
+                page = self.client.get(url)
+                self.assertEqual(page.status_code, 302, url)
+                self.assertEqual(page.headers["Location"], "/login", url)
+                api = self.client.get(url, headers={"Accept": "application/json"})
+                self.assertEqual(api.status_code, 401, url)
+                self.assertEqual(api.mimetype, "application/problem+json", url)
 
     def test_a_signed_in_visitor_reaches_a_gated_page(self):
         self._login()

@@ -36,12 +36,12 @@ PID_FILE="$PWD/var/gunicorn.pid"
 # exported one cannot decide it either.
 ANY_INSTANCE=0
 
-# The grace (little-sister ADR-0088): how long gunicorn gives a request still running at
-# the TERM before its master KILLs the worker. gunicorn's own default, written down once
-# here because three things are bounded by it: `start.sh` hands it to gunicorn as
-# `--graceful-timeout`, `stop_instance` below waits it out, and a container that runs
-# the instance names its stop timeout beside it. An installation raises it in
-# `instance.sh` or in the environment, the way it raises WORKER_TIMEOUT.
+# The grace: how long gunicorn gives a request still running at the TERM before its
+# master KILLs the worker. gunicorn's own default, written down once here because three
+# things are bounded by it: `start.sh` hands it to gunicorn as `--graceful-timeout`,
+# `stop_instance` below waits it out, and a container that runs the instance names its
+# stop timeout beside it. An installation raises it in `instance.sh` or in the
+# environment, the way it raises WORKER_TIMEOUT.
 GRACEFUL_TIMEOUT="${GRACEFUL_TIMEOUT:-30}"
 # What the master needs after its own KILL to reap its worker and exit: `stop_instance`
 # waits the grace and this, and then KILLs whatever is left.
@@ -379,10 +379,9 @@ fatal_in_log() {
 # up so the banner stays readable (./stop.sh ends it).
 #
 # The line is written by the server's start -- gunicorn's `post_worker_init`, right
-# after the worker's import and before it serves anything (little-sister ADR-0091) --
-# so checking after a successful probe cannot race it. A deliberate
-# LITTLE_SISTER_ENGINE=0 logs "engine disabled via …" instead, so it does not match
-# here.
+# after the worker's import and before it serves anything -- so checking after a
+# successful probe cannot race it. A deliberate LITTLE_SISTER_ENGINE=0 logs "engine
+# disabled via …" instead, so it does not match here.
 ENGINE_ERROR_MARK="engine not started:"
 engine_error_in_log() {
   # `|| true` because no match is the healthy case, and `set -o pipefail` in the
@@ -480,7 +479,7 @@ instance_pids() {
   ps -A -o pid= -o ppid= 2>/dev/null | awk -v master="$1" '$2 == master { print $1 }'
 }
 
-# Stop an instance, and wait for **every process of it** (little-sister ADR-0088).
+# Stop an instance, and wait for **every process of it**.
 #
 # The processes are read *before* the TERM, while the worker still listens: a worker
 # leaves its loop at the TERM and closes its sockets, and from then on nothing on the

@@ -13,8 +13,10 @@ test whose Bootstrap prerequisite is directly unavailable skips.
 from __future__ import annotations
 
 import shutil
+import struct
 import tempfile
 import unittest
+import zlib
 from pathlib import Path
 
 try:  # pragma: no cover - environment probe
@@ -69,6 +71,77 @@ def _make_cdn_deterministically_unavailable(page) -> list[str]:
 
     page.route("**cdn.jsdelivr.net/**", abort)
     return aborted
+
+
+def _samples(png: bytes) -> tuple[int, int, int, bytes]:
+    """A capture's width, height, channels and 8-bit samples, row after row.
+
+    Chromium writes a screenshot as 8-bit RGB or RGBA, never interlaced; anything
+    else is refused rather than misread. Its filters are the specification's
+    five, so a few lines decode it and no image library joins the browser group.
+    """
+    if png[:8] != b"\x89PNG\r\n\x1a\n":
+        raise ValueError("not a PNG")
+    header, data, at = b"", [], 8
+    while at < len(png):
+        (length,) = struct.unpack(">I", png[at:at + 4])
+        kind, body = png[at + 4:at + 8], png[at + 8:at + 8 + length]
+        if kind == b"IHDR":
+            header = body
+        elif kind == b"IDAT":
+            data.append(body)
+        at += 12 + length
+    width, height, depth, color, _, _, interlace = struct.unpack(">IIBBBBB", header)
+    if depth != 8 or color not in (2, 6) or interlace:
+        raise ValueError(f"a PNG of depth {depth}, color type {color}, "
+                         f"interlace {interlace}")
+    step = 3 if color == 2 else 4
+    stride = width * step
+    raw = zlib.decompress(b"".join(data))
+    rows: list[bytes] = []
+    above = bytearray(stride)
+    for y in range(height):
+        start = y * (stride + 1)
+        kind, row = raw[start], bytearray(raw[start + 1:start + 1 + stride])
+        for i in range(stride):
+            left = row[i - step] if i >= step else 0
+            up, corner = above[i], above[i - step] if i >= step else 0
+            if kind == 1:
+                row[i] = (row[i] + left) & 0xFF
+            elif kind == 2:
+                row[i] = (row[i] + up) & 0xFF
+            elif kind == 3:
+                row[i] = (row[i] + (left + up) // 2) & 0xFF
+            elif kind == 4:
+                guess = left + up - corner
+                far_left, far_up = abs(guess - left), abs(guess - up)
+                far_corner = abs(guess - corner)
+                if far_left <= far_up and far_left <= far_corner:
+                    row[i] = (row[i] + left) & 0xFF
+                elif far_up <= far_corner:
+                    row[i] = (row[i] + up) & 0xFF
+                else:
+                    row[i] = (row[i] + corner) & 0xFF
+        rows.append(bytes(row))
+        above = row
+    return width, height, step, b"".join(rows)
+
+
+#: How far apart two captures of one unchanged region come out: the rasterizer's
+#: own, measured at one level in one channel where a title had been hidden from
+#: under an opaque veil — at some widths and not at others, and not on every run.
+#: A title's glyph is some 145 levels off the fill it is drawn on.
+_RASTER_NOISE = 2
+
+
+def _largest_difference(first: bytes, second: bytes) -> int:
+    """The largest difference, in any channel of any pixel, between two captures
+    of the same region."""
+    one, other = _samples(first), _samples(second)
+    if one[:3] != other[:3]:
+        raise AssertionError(f"captures of different shapes: {one[:3]}, {other[:3]}")
+    return max((abs(a - b) for a, b in zip(one[3], other[3], strict=True)),
+               default=0)
 
 
 class ChromiumBoundaryTests(unittest.TestCase):
@@ -580,6 +653,31 @@ class ChromiumBoundaryTests(unittest.TestCase):
         finally:
             page.close()
 
+    def test_an_unstyled_bar_keeps_its_height_on_a_short_window(self):
+        # Without Bootstrap's stylesheet the settings panel stands in the bar's own
+        # flow, and its cap was read from the height rail.js measures off the bar,
+        # which the cap then changed: on a window too short for the panel the bar
+        # grew and shrank twice a second, and the page under a pointer with it
+        # (`.ls-menu__panel.show` in overview.css). A phone, where the rail gives
+        # way and the sections join the bar, and a short desk window.
+        for width, height in ((360, 700), (1200, 600)):
+            page = self.browser.new_page()
+            try:
+                page.set_viewport_size({"width": width, "height": height})
+                aborted = _make_cdn_deterministically_unavailable(page)
+                self._open_fixture(page, "two_equal_large_roots", rail_script=True)
+                self.assertIn(_BOOTSTRAP_CSS, aborted)
+                heights = set()
+                for _ in range(10):
+                    heights.add(page.evaluate(
+                        "document.querySelector('.ls-bar')"
+                        ".getBoundingClientRect().height"))
+                    page.wait_for_timeout(100)
+                with self.subTest(width=width, height=height):
+                    self.assertEqual(len(heights), 1, sorted(heights))
+            finally:
+                page.close()
+
     def test_narrow_expanded_topbar_keeps_its_last_section_reachable(self):
         page = self.browser.new_page()
         try:
@@ -913,6 +1011,12 @@ class ActionChipPaintTests(unittest.TestCase):
     band is white, so it reads exactly like a difference in what the veil
     covers; the pixels themselves were never in doubt.
 
+    And the two are compared as pixels, not as files. Hiding the title under an
+    opaque veil can still move a pixel of the chip's own edge by one level, at
+    some widths and on some runs, and two files that differ by that are not two
+    images of which one shows a title. `_RASTER_NOISE` is that allowance, and a
+    title's glyph is far beyond it.
+
     This builds its own page rather than reading one off the fixture sheet: the
     sheet registers no filler, so it has no chip to collide with anything, which
     is exactly how the collision shipped. The page is the real Jinja pipeline
@@ -985,7 +1089,13 @@ class ActionChipPaintTests(unittest.TestCase):
     HIDDEN = "0"
 
     def _open(self):
-        """One card at dashboard width, on a page that has stopped moving.
+        """One card on a phone's window, on a page that has stopped moving.
+
+        The card has to be narrow enough for its chips to land on its title, and
+        a window of 360 pixels makes it so. Below 576 the rail gives way
+        (ADR-0105 decision 8) and a card is the window's width less its margins:
+        at 360 about as narrow as it was beside the rail in the 420-pixel window
+        this test was written at, where its title now ends before the chips.
 
         Two screenshots taken a moment apart are only comparable if nothing
         relaid out between them, and this page has two ways to move after its
@@ -994,13 +1104,16 @@ class ActionChipPaintTests(unittest.TestCase):
         Either one slides the card out from under a pointer that never moved,
         the chips fade, and the comparison silently becomes one about `:hover`.
         That is not hypothetical — it failed about one run in five before both
-        were pinned down here.
+        were pinned down here. A third way was the page itself: unstyled, its bar
+        grew and shrank twice a second on a window this short, until the settings
+        panel's cap became the open menu's
+        (`test_an_unstyled_bar_keeps_its_height_on_a_short_window`).
 
         The clip has to be on screen as well: the header band puts the grid
         below the fold at any sane window height.
         """
         page = self.browser.new_page()
-        page.set_viewport_size({"width": 420, "height": 700})
+        page.set_viewport_size({"width": 360, "height": 700})
         aborted = _make_cdn_deterministically_unavailable(page)
         page.goto((self.out / "page.html").as_uri(), wait_until="commit")
         page.wait_for_selector(".status-card .node-action")
@@ -1141,7 +1254,8 @@ class ActionChipPaintTests(unittest.TestCase):
             # than as a difference in what the veil covers.
             self.assertEqual(self._chip_opacity(page), self.SHOWN)
             without_title = self._stable_screenshot(page, clip)
-            self.assertEqual(with_title, without_title)
+            self.assertLessEqual(
+                _largest_difference(with_title, without_title), _RASTER_NOISE)
         finally:
             page.close()
 
@@ -1158,7 +1272,8 @@ class ActionChipPaintTests(unittest.TestCase):
             self._hide_title(page)
             self.assertEqual(self._chip_opacity(page), self.HIDDEN)
             without_title = self._stable_screenshot(page, clip)
-            self.assertNotEqual(with_title, without_title)
+            self.assertGreater(
+                _largest_difference(with_title, without_title), _RASTER_NOISE)
         finally:
             page.close()
 

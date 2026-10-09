@@ -1,7 +1,7 @@
 # ADR-0048 — The Content-Security-Policy is assembled, never a constant
 
 - **Status:** Accepted
-- **Date:** 2026-10-04 (accepted 2026-08-08, decided in the design round on what a
+- **Date:** 2026-10-10 (accepted 2026-08-08, decided in the design round on what a
   Content-Security-Policy would actually cost)
 - **Related:** [ADR-0037](0037-extension-static-assets.md) (same-origin extension
   assets — why `'self'` already covers a dependent package's *scripts*, and the
@@ -17,7 +17,8 @@
   [ADR-0031](0031-deployment-config-directory.md) (`config/` is operator input — where
   a deployment's own sources are written),
   [ADR-0100](0100-system-is-two-views.md) (the *Installed* view of `/system`, which
-  shows the effective policy)
+  shows the effective policy), [ADR-0030](0030-curated-links.md) (the `/links` page,
+  which adds the hosts its icons load from)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -53,11 +54,16 @@ ships, not after.
 
 ## Decision
 
-1. **The policy is assembled, and assembled late.** There is no policy constant. A
-   `csp` module holds the library's defaults and the contributions made to it, and
-   composes the header value **at application creation** — after every registration has
-   run and after the configuration is loaded. Nothing is computed at module import,
-   because import is when contributions are still arriving.
+1. **The policy is assembled, and assembled late.** There is no policy constant. A `csp`
+   module holds the library's defaults and the contributions made to it, and composes
+   the header value **at application creation** — after every registration has run and
+   after the configuration is loaded. Nothing is computed at module import, because
+   import is when contributions are still arriving. The defaults allow what the
+   library's own pages draw, so that a report says something: `img-src` takes `data:`
+   beside `'self'`, because Bootstrap draws a switch's knob and the bar's burger as
+   `data:` images, and a `data:` image calls no host, so it gives away nothing the
+   directive keeps — refused, our own controls would be reported on every page view and
+   bury the reports the policy is there to collect.
 
 2. **A dependent package contributes through a module-level registry**, called from the
    same import-before-app slot it already uses to register check types, fillers, assets,
@@ -91,6 +97,13 @@ ships, not after.
    resolved at assembly time and reduced to `scheme://host[:port]` — any path, query or
    fragment is dropped. A host written in two places drifts the first time a deployment
    repoints it, and the drift shows up as a blocked request nobody connects to the edit.
+
+   For the same reason a page adds what its own configuration names, to its own
+   response's policy and no other page's: `/links` adds to `img-src` the hosts its icons
+   load from — the site of an entry whose mark falls back to its favicon, the host of a
+   remote mark — taken from `links.yaml` as the page renders, and answerable to that
+   file on `/system/installed` ([ADR-0030](0030-curated-links.md)). Such a host is
+   written once, in the file that names it, and needs no line in `config/csp.yaml`.
 
 5. **The deployment has the last word.** A `csp` block in the deployment's own
    configuration may add sources, and is the only place a keyword from decision 3 may be

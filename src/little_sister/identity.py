@@ -87,12 +87,14 @@ OPEN_ENDPOINTS = frozenset({
 
 #: Endpoints that **choose their own credential** and are therefore not gated here.
 #:
-#: Exactly one: ``/status`` serves the dashboard to a session *and* the JSON API to a
-#: bearer token, deciding which by content negotiation (ADR-0008). A gate in front of
-#: it would redirect an API client to a login page. It is not open — it refuses both
-#: ways — and it is named
-#: separately from :data:`OPEN_ENDPOINTS` so that nobody reads it as open.
-SELF_AUTHENTICATING_ENDPOINTS = frozenset({"status"})
+#: The routes the JSON API reads: ``/status`` serves the dashboard to a session *and*
+#: the status read to a bearer token, deciding which by content negotiation
+#: (ADR-0008), and ``/series`` and ``/series/<path>`` serve the Series index and a
+#: node's Series view to a session and the series read to a token (ADR-0122
+#: decision 8). A gate in front of one would redirect an API client to a login page.
+#: None is open — each refuses both ways — and they are named
+#: separately from :data:`OPEN_ENDPOINTS` so that nobody reads them as open.
+SELF_AUTHENTICATING_ENDPOINTS = frozenset({"status", "series", "series_index"})
 
 
 #: The library's own login routes, and the whole of the URL space a door occupies.

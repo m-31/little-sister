@@ -1,10 +1,12 @@
 # Little Sister — Status API
 
-A small, **read-only JSON** view of the aggregated status tree. The same routes serve
-the HTML dashboard; the representation is chosen by the `Accept` header. This page is
-the practical guide; the normative reference is the [`openapi.yaml`](openapi.yaml)
-beside it (design rationale lives in little-sister's ADR-0080 — every record this
-page and the spec name is little-sister's, also in the copy a client keeps).
+A small, **read-only JSON** view of the aggregated status tree, and of what the
+instance keeps of its subjects over time. The same routes serve the HTML dashboard;
+the representation is chosen by the `Accept` header. This page is the practical guide;
+the normative reference is the [`openapi.yaml`](openapi.yaml) beside it (design
+rationale lives in little-sister's ADR-0080, and for the series read in ADR-0106 and
+ADR-0122 — every record this page and the spec name is little-sister's, also in the
+copy a client keeps).
 
 ## At a glance
 
@@ -12,12 +14,17 @@ page and the spec name is little-sister's, also in the copy a client keeps).
 - **Auth** — a bearer token (below). Required for JSON; the browser/session path is
   separate and not part of this contract.
 - **Format** — request `Accept: application/json`. Responses are a versioned envelope
-  (`schema_version`, `generated_at`, `instance`, `status`).
+  (`schema_version`, `generated_at`, `instance`, `status`); the series read's carries
+  `path`, `window` and `series` where the status read's carries `status`.
 - **Endpoints**
   - `GET /status` — the whole tree.
   - `GET /status/{node_path}` — the subtree at an absolute, slash-separated path, e.g.
     `system/db` (the leading `/` is implied by the route; a segment may be an FQDN).
-- **No pagination** — a request returns the whole (sub)tree in one response.
+  - `GET /series` — every series the instance keeps.
+  - `GET /series/{node_path}` — the series that stand at or beneath a node;
+    `?from=…&to=…` names the window on both.
+- **No pagination** — a request returns the whole (sub)tree, or every series asked
+  for, in one response.
 
 ## Authentication
 
@@ -78,6 +85,88 @@ client-side. `order` is the declared rank, `show_when_quiet` a tri-state, and
 `children` are in rank-then-name order. Full field docs are in
 [`openapi.yaml`](openapi.yaml).
 
+## Reading a series
+
+A check may keep what it read of a subject over time — its **series** — and a node's
+Series view draws them. The same URL, asked for JSON, answers them as data: what an
+instance keeps, as it keeps it, for a script or a session that reads a running
+instance.
+
+```bash
+# every series at or beneath a node, over the last six hours
+curl -s -H "Accept: application/json" -H "Authorization: Bearer $TOKEN" \
+  "$BASE/series/hosts/alpha?from=now-6h"
+
+# everything the instance keeps, over one stretch
+curl -s -H "Accept: application/json" -H "Authorization: Bearer $TOKEN" \
+  "$BASE/series?from=2026-09-26T15:00:00Z&to=2026-09-26T16:00:00Z"
+```
+
+**The window is `from` and `to`**, read as the Series view's own URL reads them:
+`now`; `now-` and a duration in seconds, minutes, hours, days or weeks (`now-90s`,
+`now-15m`, `now-6h`, `now-1d`, `now-1w`); or an ISO 8601 instant — sent with a `Z` or
+an offset, because one without is read in the server's configured timezone. `to` is
+`now` where it is left out, and a request without `from` reaches back to the oldest
+reading kept, so one that names neither answers **everything kept**, which for a whole
+instance can be megabytes. The answer's `window` says the two instants the server read
+them as, each null where the request left it open, and `generated_at` is the `now` it
+measured from.
+
+**Which series come back.** Every one that stands at or beneath the node asked, and
+`path` says which node that was. A series stands on the node that stands for its
+subject — a job name, a function, a workflow with a node of its own — and on its
+check's own node where none does; `node` is that node's path. One thing reaches down
+from above: a series shown *above* the node asked comes back where one of its measures
+names a node at or beneath it, so a host's series answers at the host's `memory` node,
+with the one measure that stands there. **A node that exists always answers `200`** —
+with an empty `series` where none stands at or beneath it, which is also what an
+instance that runs no engine answers everywhere, and its `instance.engine` says so.
+A series with no reading inside the window keeps its place, with no readings. The
+order is the tree's: a node above the one asked first, then the node and what is
+beneath it — a node before its children, siblings by rank and then by name — and by
+type, mount and subject where several stand on one node.
+
+**A series has a key and a node, and they are different things.** `key` is what its
+readings are kept under: the `type` and the `mount` of the check that took them, and
+the `subject` they are of. `node` is where the tree shows it. A rename at the source
+moves the node and leaves the key, so follow a subject by its key.
+
+**A reading** carries two clocks: `at`, the time on the series' own clock — the
+record's own top-level `at` where it has one, so a run sits where it finished, and
+otherwise when the reading was first observed — and `observed_at`, when the server
+last took it. A window is asked of `at`, both ends included, and readings come oldest
+first. `code` and `texts` are how the reading stood where it landed — its line's, or
+its node's — and `code` is **null** where no line carried it: a null is never an `OK`.
+`identity` names the event a reading is of, where the source keeps a history of such
+events, and `state` the state a subject stood in, where a reading is one spell of it —
+the same event or an unchanged state read again stays one reading; both are empty
+for a reading that is always a new one. `record` is what was read, whole and in the
+check's own keys, with the same typed `at`, `started` and `ended` as everywhere else,
+and an `error` that is not null where the reading failed.
+
+**A measure** is a field of the record that is drawn as a curve: its `field`, its
+`unit`, its `label`, the `node` its curve stands on and `axis_to`, where its value
+axis reaches, or null. Only the measures that stand at or beneath the node asked are
+listed. A deployment may declare one measure for every thing a record counts — every
+volume, every process — and those arrive already told apart: one for each such thing
+the kept readings hold, whatever the window. **Read a field in one way**: flatten the
+record, joining the keys from the top down to each value with `.`, and look `field`
+up. Never split `field` at its dots — a key may hold one:
+
+```python
+def flatten(record, above=""):
+    found = {}
+    for key, value in record.items():
+        name = f"{above}.{key}" if above else str(key)
+        if isinstance(value, dict):
+            found.update(flatten(value, name))
+        else:
+            found[name] = value
+    return found
+
+value = flatten(reading["record"]).get(measure["field"])
+```
+
 ## Errors
 
 Failures are **Problem JSON** (RFC 9457), media type `application/problem+json`:
@@ -86,8 +175,11 @@ Failures are **Problem JSON** (RFC 9457), media type `application/problem+json`:
 { "type": "about:blank", "title": "Unauthorized", "status": 401 }
 ```
 
+- `400` — a window the server cannot read, or whose `from` does not come before its
+  `to`; `detail` names the parameter and what it takes. The series read only.
 - `401` — missing or invalid bearer token.
-- `404` — no node at the given path.
+- `404` — no node at the given path. A node without series is not one: the series read
+  answers it an empty list.
 
 ## Versioning
 
@@ -132,6 +224,10 @@ every other line. Additive. The line stands as its check graded it, so its text 
 mean what they always did: only the record is missing, and `refused` is what says so
 rather than leaving a client to believe the check carried none.
 
+**2.7.0 adds the series read** — `GET /series` and `GET /series/{node_path}`, their
+schemas, and the first `400` this API answers. Additive: nothing of the status read
+moves, and a client that reads no series is unaffected.
+
 Decode defensively all the same: tolerate unknown fields and any child order, and
 treat an absent `run` as *nothing answers for this node* rather than as an error.
 
@@ -169,6 +265,22 @@ artifact = contract.golden_artifact()          # plus schema_version and volatil
 
 A client that cannot import the wheel carries the identical bytes as a shared file of
 the family.
+
+**The series read has a golden answer of its own**, `series-2.json`, beside the
+envelope in that package: one request and what it is answered — a series on its
+check's node and one on its subject's, a measure told apart by key and one with no
+`axis_to`, a series without measures, a reading that failed, a run with its own time,
+a run without a verdict, a state, and a series with no reading in the window. It is
+generated and held to the server the same way, from a scene whose every instant is
+fixed, so every time a reading carries is a real value to decode and only
+`generated_at` and the instance's `version` are volatile:
+
+```python
+answer = contract.golden_series()              # as GET /series answers the request
+artifact = contract.golden_series_artifact()   # plus request, schema_version, volatile
+```
+
+It ships in the wheel alone: no client of ours that cannot import it reads a series.
 
 Some field **names** are volatile — they differ between two correct runs — and the
 artifact names them itself under `volatile`, so a consumer keeps no list of its own:

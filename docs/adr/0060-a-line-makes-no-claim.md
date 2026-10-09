@@ -1,7 +1,7 @@
 # ADR-0060 — A line makes no claim; the node says it could not look
 
 - **Status:** Accepted
-- **Date:** 2026-10-04 (accepted 2026-08-15)
+- **Date:** 2026-10-10 (accepted 2026-08-15)
 - **Related:** [ADR-0042](0042-entries-carry-their-own-code.md) (the decision that
   put `UNDEFINED` in the entry vocabulary, and so created the collision),
   [ADR-0039](0039-status-rollup-semantics.md) (the roll-up that ignores it, and the
@@ -18,7 +18,9 @@
   [ADR-0036](0036-addressable-reasons.md) (the entry model, and the stamp decision 5
   declines to add), [ADR-0109](0109-a-node-says-its-children-are-complete.md) (a
   node's statement that its children are complete, which a node that could not read
-  a child does not make)
+  a child does not make),
+  [ADR-0125](0125-the-failure-retry-reads-what-a-run-rolls-up-to.md) (decision 4 read
+  of what a run rolls up to, not of its root's code)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -141,7 +143,7 @@ forward — is a different question with a real cost, and is not decided here.
 non-`OK` completion and re-arms the budget when an `OK` completes. Both halves were
 reasoned, and two facts that were not available then change one of them each.
 
-**(a) The budget re-arms on any change of the stored code, not only on `OK`.**
+**(a) The budget re-arms on any change of what the run rolls up to, not only on `OK`.**
 ADR-0033 accepted that a long outage costs `retry_attempts` fast runs and then normal
 cadence. What it did not foresee is a check that is non-`OK` *as its ordinary state*:
 ADR-0042 made a node's code derive from its lines, and `github-rate-limit` is a flat
@@ -149,16 +151,16 @@ node whose budget sits below a threshold for weeks at a time. Such a check spend
 retries in its first few cycles and never gets them back, so the fast second look is
 gone at the moment a genuinely new failure needs it — and nothing says so, because
 `/system` prints `retry n/m` only while the slot is a pulled-in one, which a spent
-budget never sets again. A **change** of the stored code ends one episode and begins
-another; an `OK` still does, and everything ADR-0033 says about bounding a burst
-holds within an episode.
+budget never sets again. A **change** of what the run rolls up to — its root's code and
+every child it returned, by ADR-0039's rules (ADR-0125) — ends one episode and begins
+another; an `OK` still does, and everything ADR-0033 says about bounding a burst holds
+within an episode.
 
-**(b) A completed run that reports `UNDEFINED` does not arm the retry.** A claim
-withheld is not a failure to confirm. The live case is structural rather than
-transient — `github-rate-limit` reports `UNDEFINED` for a resource the installation
-gives no limit for, and asking again in ten seconds cannot change that. An
-`UNDEFINED` from a run that never completed is untouched, because there is no
-completion to arm anything.
+**(b) A completed run that rolls up to `UNDEFINED` does not arm the retry.** A claim
+withheld is not a failure to confirm. The live case is structural rather than transient
+— `github-rate-limit` reports `UNDEFINED` for a resource the installation gives no limit
+for, and asking again in ten seconds cannot change that. An `UNDEFINED` from a run that
+never completed is untouched, because there is no completion to arm anything.
 
 This is the only narrowing of ADR-0033's trigger set, and it is deliberately one code
 wide. That record chose "any non-`OK`" so the escalation counter that will sit on top

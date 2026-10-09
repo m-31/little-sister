@@ -10,13 +10,14 @@ from functools import cache, partial
 from pathlib import Path
 from secrets import token_hex
 from typing import Any, Literal
-from urllib.parse import parse_qs, quote, urlencode, urlsplit
+from urllib.parse import parse_qs, parse_qsl, quote, urlencode, urlsplit
 
 from flask import (
     Flask,
     Response,
     abort,
     flash,
+    g,
     has_request_context,
     jsonify,
     make_response,
@@ -37,6 +38,7 @@ from little_sister import (
     instants,
     link_probe,
     local_login,
+    noise,
     readiness,
     self_report,
     slots,
@@ -44,7 +46,14 @@ from little_sister import (
     watch_lines,
 )
 from little_sister.actions import register_builtin_fillers
-from little_sister.api import authenticate, parse_api_tokens, problem, status_envelope
+from little_sister.api import (
+    StandingSeries,
+    authenticate,
+    parse_api_tokens,
+    problem,
+    series_envelope,
+    status_envelope,
+)
 from little_sister.assets import Assets
 from little_sister.checks import CheckError, parse_duration, plain
 from little_sister.checks.base import DURATION_UNITS, TypeOrigin, registered_types
@@ -90,7 +99,7 @@ from little_sister.instance import this_instance
 from little_sister.keeper import registered_keeper
 from little_sister.lease import Lease, LeaseRefused
 from little_sister.limits import format_size, format_weight
-from little_sister.links import LINKS_ASPECT, current_links
+from little_sister.links import LINKS_ASPECT, current_links, links_policy_sources
 from little_sister.logger import logger, open_log_file
 from little_sister.maintenance import MaintenanceEntry, MaintenanceStore
 from little_sister.measures import Measure
@@ -115,7 +124,13 @@ from little_sister.spans import (
     local_time,
 )
 from little_sister.state import EVENTS_FILE, SERIES_FILE, StateLayer
-from little_sister.status import HEARTBEAT_PATH, StatusCode, join_path, on_same_line
+from little_sister.status import (
+    HEARTBEAT_PATH,
+    StatusCode,
+    join_path,
+    on_same_line,
+    split_path,
+)
 from little_sister.titles import Labeled, label_parts, shown_title
 from little_sister.tree import (
     CAUSE_LINE_PIN_ENDED,
@@ -438,9 +453,14 @@ def _content_security_policy(response: Response) -> Response:
     a *document* may be built, so putting it on the JSON API's responses or on a
     static file would be noise a browser ignores anyway. The ~10s poll fragments are
     HTML and do carry it, which costs a header and is honest — they are page content.
+
+    A view may hand over the assembled policy with what its own page adds
+    (``g.csp_page_policy``, :meth:`csp.Policy.adding`) — ``/links`` and the hosts its
+    icons load from — and that policy is this response's alone.
     """
     if response.mimetype == "text/html":
-        response.headers[CSP_HEADER] = csp_policy.header()
+        policy = g.get("csp_page_policy", csp_policy)
+        response.headers[CSP_HEADER] = policy.header()
     return response
 
 
@@ -535,6 +555,37 @@ def _own_address() -> str:
     kept = [(name, value) for name, value in request.args.items(multi=True)
             if name != "fragment"]
     return quote(request.path) + ("?" + urlencode(kept) if kept else "")
+
+
+@app.template_filter("at_line")
+def _at_line(address: str, slug: str) -> str:
+    """Where a write to one of a page's lines comes back to: the page as it was asked
+    for — a branch's depth and filters kept — at that line, by the address that names
+    one (``?reason=<slug>#pinned-reason``, ADR-0036 decision 12), in place of whatever
+    line the page was asked at before."""
+    parts = urlsplit(address)
+    kept = [(name, value)
+            for name, value in parse_qsl(parts.query, keep_blank_values=True)
+            if name != "reason"]
+    return f"{parts.path}?{urlencode([*kept, ('reason', slug)])}#pinned-reason"
+
+
+def _focus_of(branch: str, node: StatusSnapshot | None
+              ) -> tuple[str, MaintenanceEntry | None]:
+    """The line a node's page was asked at (``?reason=<slug>``, ADR-0036 decision
+    12), and the pin on that slug where the current run did not report the line.
+
+    Such a pin is **suspended, not deleted** (decision 6): the pin is real and the
+    line is absent, and the node's own page is the one surface that can say so — a
+    fragment could only have failed to scroll, at the moment an operator most needs
+    it said. A leaf's page and a branch's ask it alike, since both list their lines.
+    """
+    if not branch or node is None:
+        return "", None
+    focus = request.args.get("reason", "")
+    if not focus or any(line.slug == focus for line in node.reasons):
+        return focus, None
+    return focus, status_tree.entry_maintenance(branch, focus)
 
 
 @app.route("/preferences", methods=["POST"])
@@ -1505,6 +1556,19 @@ def _window_bar(url: Callable[[Mapping[str, str]], str], window: _Window,
                       presets=tuple(presets), moves=moves)
 
 
+def _tree_order(top: StatusSnapshot | None) -> list[str]:
+    """The path of every node at or beneath ``top``, in the tree's own order: a
+    node before its children, and siblings as the snapshot has them — by rank and
+    then by name (ADR-0055)."""
+    order: list[str] = []
+    stack = [top] if top is not None else []
+    while stack:
+        snapshot = stack.pop()
+        order.append(join_path(snapshot.path))
+        stack.extend(reversed(snapshot.children))
+    return order
+
+
 def _series_view(branch: str, window: _Window | None = None
                  ) -> dict[str, object] | None:
     """What the Series view of the node at ``branch`` shows (ADR-0097 decision 1),
@@ -1533,14 +1597,7 @@ def _series_view(branch: str, window: _Window | None = None
     # tables of readings are over the same readings.
     times = _times()
     drawn = _drawn(drawers, where=where, span=span, times=times, within=span)
-    tree_order: list[str] = []
-    top = status_tree.snapshot(branch)
-    if top is not None:
-        stack = [top]
-        while stack:
-            snapshot = stack.pop()
-            tree_order.append(join_path(snapshot.path))
-            stack.extend(reversed(snapshot.children))
+    tree_order = _tree_order(status_tree.snapshot(branch))
     order = [path for path in tree_order if path in drawn]
     order += sorted(path for path in drawn if path not in tree_order)
     groups = tuple(
@@ -1577,6 +1634,61 @@ def _series_view(branch: str, window: _Window | None = None
         "zoom": lambda start, end, anchor="": _series_url(
             branch, _written_window(start, end), anchor),
         "times": times}
+
+
+def _series_standing(top: StatusSnapshot, window: _Window
+                     ) -> tuple[StandingSeries, ...]:
+    """Every series the series read answers at the node ``top`` (ADR-0106 decision
+    6, ADR-0122 decision 3), over ``window``.
+
+    A series is here where the node it is shown on (:func:`_shown`) is ``top`` or
+    beneath it, and, shown above it, where one of its measures names a node at or
+    beneath it. Which series stand is read from where the lines stand and from what
+    is declared (:func:`_standing`), never from a reading's numbers, and from
+    everything kept: one with no reading inside the window keeps its place and
+    answers none. Each carries the measures that stand at or beneath ``top`` — one
+    for every key its kept readings hold, with the path of the node its curve stands
+    on (decision 4) — and its readings whose time on the series' clock the window
+    holds, both ends included, an end the URL left open bounding nothing.
+
+    In order (decision 6): a node above ``top`` first, the shallowest before the
+    deeper; then the tree's own order at and beneath it; and by type, mount and
+    subject where several stand on one node. None where no engine runs.
+    """
+    if engine is None:
+        return ()
+    where = join_path(top.path)
+    kept = engine.series_near(where)
+    stood = _stood_on(kept)
+    measures: dict[int, list[tuple[Measure, str]]] = {}
+    for path, measure, series in _standing(kept, where=where, stood=stood):
+        measures.setdefault(id(series), []).append((measure, path))
+    beneath = {path: place for place, path in enumerate(_tree_order(top))}
+
+    def place(series: SubjectSeries) -> tuple[int, int, str, str, str, str]:
+        node = stood[id(series)]
+        if node in beneath:
+            rank = (1, beneath[node])
+        elif _beneath_or_at(where, node):
+            rank = (0, node.count("/"))
+        else:
+            # at or beneath by its path, and no node of the tree: a mount its
+            # check has not written since the start
+            rank = (2, 0)
+        return (*rank, node, series.check.type_name, join_path(series.check.path),
+                series.subject)
+
+    found = sorted((series for series in kept
+                    if _beneath_or_at(stood[id(series)], where)
+                    or id(series) in measures), key=place)
+    return tuple(StandingSeries(
+        node=stood[id(series)], type_name=series.check.type_name,
+        mount=join_path(series.check.path), subject=series.subject,
+        measures=tuple(measures.get(id(series), ())),
+        readings=tuple(placed for placed in series.readings
+                       if (window.start is None or window.start <= placed.at)
+                       and (window.end is None or placed.at <= window.end)))
+        for series in found)
 
 
 def _series_index() -> tuple[_IndexTop, ...]:
@@ -2113,6 +2225,29 @@ def _maintenance_view(
     return node_pins, entry_pins, ancestors
 
 
+def _pins_above(branch: str) -> list[tuple[str, MaintenanceEntry]]:
+    """The pins set on the nodes above ``branch``, outermost first, each with the
+    path it stands on.
+
+    A node's pin silences everything beneath it (ADR-0041), so the page of a node
+    beneath one is silenced by it as much as by a pin of its own — and is the one
+    page that would otherwise not say so. It states each as the pin's block, where
+    it acts, without buttons, since a pin is edited where it stands (ADR-0104
+    decision 2). A pin on one of a node's **lines** silences that line
+    alone (ADR-0124), so only a node's own pin is one of these. Read from the
+    tree's table rather than from a snapshot of every node above: the path's
+    ancestors are all the nodes there are to ask, and the root is one of them.
+    """
+    segments = split_path(branch)
+    above: list[tuple[str, MaintenanceEntry]] = []
+    for depth in range(len(segments)):
+        path = join_path(*segments[:depth])
+        entry = status_tree.maintenance_entry(path)
+        if entry is not None:
+            above.append((path, entry))
+    return above
+
+
 def _maintenance_pins(node_pins: list[_MaintenancePin],
                       entry_pins: list[_MaintenancePin],
                       suspended: Sequence[_MaintenancePin] = ()
@@ -2281,6 +2416,19 @@ identity.announce_doors()
 # every aspect registered after it would have been called unknown for the life of the
 # process (ADR-0070).
 announce_aspects()
+
+# The same moment a third time, asked about the log (ADR-0121 decision 4). Every
+# package has declared the noise caps of the dependencies it brings, and the code of
+# the slot has set the levels it sets — so each cap can be judged against all of it,
+# and is set only where that takes lines away and nobody chose a level: not the
+# deployment's code, and not `LOG_LEVEL` by name, whose named entries are said here a
+# second time so that they stand over that code. Nothing is set where a cap is
+# declared, which is what keeps the order of a deployment's imports from deciding
+# what its log holds. Setting a level writes nothing an instance keeps, so an import
+# may do it (ADR-0091); the lines this logs, one for each cap that was set, are where
+# a log that leaves lines out says which. A cap that was not set leaves none out and
+# has no line: `/system/installed` says why it was not.
+noise.settle()
 
 # API tokens for the JSON backend (ADR-0008): "name=token,name2=token2" — set
 # directly, or as a value that is itself a secret reference (ADR-0023), which the
@@ -2816,6 +2964,41 @@ def _api_problem(status_code: int, title: str,
     return resp
 
 
+def _wants_json() -> bool:
+    """Whether this request asks for a resource's JSON: one URL, and `Accept`
+    chooses the representation (ADR-0080 decision 8). A browser, and a request that
+    says nothing, get the page."""
+    return request.accept_mimetypes.best_match(
+        ("text/html", "application/json")) == "application/json"
+
+
+def _series_json(branch: str) -> Response:
+    """The series read (ADR-0106 decision 6, ADR-0122): every series that stands at
+    or beneath the node at ``branch`` — the root's, ``""``, every series the instance
+    keeps — over the window the URL names, behind the bearer token, in one response.
+
+    A node that stands answers a list, empty where no series stands at or beneath
+    it. Three things are refused, in the page's order: a request without a valid
+    token, a path no node stands at, and a window the server cannot read — the last
+    with the page's own sentence, its markup taken off (ADR-0122 decision 7).
+    """
+    if authenticate(request.headers.get("Authorization"), api_tokens) is None:
+        return _api_problem(401, "Unauthorized",
+                            "A valid bearer token is required.")
+    node = status_tree.snapshot(branch)
+    if node is None:
+        return _api_problem(404, "Not Found",
+                            f"No status node at path {branch!r}.")
+    try:
+        window = _window(request.args)
+    except _WindowRefused as refused:
+        return _api_problem(400, "Bad Request", refused.said.striptags())
+    return _api_json(series_envelope(
+        join_path(branch), _series_standing(node, window), start=window.start,
+        end=window.end, version=__version__, engine=_engine_state(),
+        now=window.now))
+
+
 @app.before_request
 def _require_identity() -> ResponseReturnValue | None:
     """Refuse a request with no identity, unless its endpoint says otherwise.
@@ -2913,8 +3096,7 @@ def _containers(node: StatusSnapshot | None) -> frozenset[str]:
 @app.route('/status/<path:branch>')
 def status(branch: str = "") -> ResponseReturnValue:
     # JSON backend mode (ADR-0080): content-negotiated, token-gated, read-only.
-    if request.accept_mimetypes.best_match(
-            ("text/html", "application/json")) == "application/json":
+    if _wants_json():
         if authenticate(request.headers.get("Authorization"), api_tokens) is None:
             return _api_problem(401, "Unauthorized",
                                 "A valid bearer token is required.")
@@ -2950,15 +3132,7 @@ def status(branch: str = "") -> ResponseReturnValue:
         # index links here with it, and a line's write from this page comes back
         # with it, because on a node with 150 findings "the right page" is not the
         # same as "the line", and the page marks the one it names.
-        focus = request.args.get('reason', '')
-        # A pin whose slug the current run does not report is **suspended, not
-        # deleted** (ADR-0036 decision 6): the pin is real and the line is absent.
-        # This is the only surface that can say so — a fragment could only have
-        # failed to scroll — and it is the moment an operator most needs it said.
-        focus_orphan = (
-            status_tree.entry_maintenance(branch, focus)
-            if focus and all(line.slug != focus for line in node.reasons)
-            else None)
+        focus, focus_orphan = _focus_of(branch, node)
         return render_template('check.html', username=user.name,
                                firstname=user.firstname, node=node,
                                # The curves that stand on this node (ADR-0097
@@ -2970,8 +3144,12 @@ def status(branch: str = "") -> ResponseReturnValue:
                                # other end of a shield, and the only place the cost
                                # of one is visible before it is paid.
                                dependents=status_tree.dependents(branch),
-                               branch=branch, since=since, focus=focus,
+                               branch=branch, since=since,
+                               # A leaf shows what it counts for itself, so
+                               # nothing beneath it makes it so: this is None.
+                               made_by=_made_by(node), focus=focus,
                                focus_orphan=focus_orphan,
+                               pins_above=_pins_above(branch),
                                is_admin=user.admin,
                                maintenance_default=config.maintenance_default_expiry,
                                maintenance_timezone=config.timezone)
@@ -2982,6 +3160,17 @@ def status(branch: str = "") -> ResponseReturnValue:
     # None on the overview root, which is nobody's node. Taken from the node before
     # any filter below removes its children, which the rule is about.
     since = _since_of(branch, node) if branch and node else None
+    # And the node beneath it that makes what it shows, which the card's first line
+    # names with that node's own period (ADR-0123 decision 3) — from the same
+    # unfiltered node, since a filter that hides a child cannot change what made it.
+    made_by = _made_by(node) if branch and node else None
+    # A branch's page lists the node's own lines as a leaf's does, so it is asked at
+    # one of them the same way — the index's link and a line's write come back with
+    # `?reason=<slug>` — and says the same of a pin whose line is absent.
+    focus, focus_orphan = _focus_of(branch, node)
+    # The pins above the node, which silence it as much as one of its own: its
+    # head states them, and the refresh's fragment renders the head again.
+    pins_above = _pins_above(branch) if branch and node else []
     # The same curves as the leaf page's, from the unfiltered node: the curves that
     # stand on it (ADR-0097 decision 2), which the poll renders again.
     node_curves = _node_curves(node) if branch else None
@@ -3032,7 +3221,8 @@ def status(branch: str = "") -> ResponseReturnValue:
     if request.args.get('fragment'):
         body = render_template('_status_grid.html', node=node, branch=branch,
                                no_node=no_node,
-                               since=since, node_curves=node_curves,
+                               since=since, made_by=made_by,
+                               node_curves=node_curves,
                                # The poll fragment renders the same node block as
                                # the page, so it needs the same facts — without
                                # this the dependent count would vanish ten seconds
@@ -3048,6 +3238,8 @@ def status(branch: str = "") -> ResponseReturnValue:
                                maintenance_default=config.maintenance_default_expiry,
                                maintenance_timezone=config.timezone,
                                here=here, containers=containers,
+                               focus=focus, focus_orphan=focus_orphan,
+                               pins_above=pins_above,
                                heartbeat=heartbeat, reason_cap=config.reason_cap,
                                branch_cap=config.branch_cap,
                                maintenance_cap=config.maintenance_cap,
@@ -3066,13 +3258,16 @@ def status(branch: str = "") -> ResponseReturnValue:
                                series_count=_series_count(branch),
                                dependents=(status_tree.dependents(branch)
                                            if branch else ()),
-                               branch=branch, since=since, max_depth=depth,
+                               branch=branch, since=since, made_by=made_by,
+                               max_depth=depth,
                                depth_limit=MAX_DEPTH, hide_ok=hide_ok,
                                hide_idle=hide_idle, dense=dense,
                                is_admin=user.admin,
                                maintenance_default=config.maintenance_default_expiry,
                                maintenance_timezone=config.timezone,
                                here=here, containers=containers,
+                               focus=focus, focus_orphan=focus_orphan,
+                               pins_above=pins_above,
                                heartbeat=heartbeat, node_meta=node_meta,
                                rendered_at=rendered_at,
                                reason_cap=config.reason_cap,
@@ -3123,11 +3318,17 @@ def history(path: str) -> ResponseReturnValue:
     # beginning, or the bound it began before, where the log no longer holds the
     # row (ADR-0110 decision 5).
     declares_nothing = node is not None and _declares_nothing(node)
+    # The rows are the periods of the node's **own** status, as every period is
+    # (ADR-0107 decision 1). Where the node has nodes beneath it that is one part
+    # of what its page heads with, and the page says so under its table (ADR-0123
+    # decision 3) — unless it declares nothing, which the line above already says.
+    own_periods = bool(node.children) and not declares_nothing
     return render_template('history.html', username=user.name,
                            firstname=user.firstname, node=node,
                            branch=path, periods=periods,
                            declares_nothing_since=quiet_since,
                            declares_nothing=declares_nothing,
+                           own_periods=own_periods,
                            # Every reading kept by each check mounted on the
                            # node, beneath the periods: the page is not polled.
                            readings=_history_readings(node), view="history",
@@ -3138,8 +3339,15 @@ def history(path: str) -> ResponseReturnValue:
 @app.route('/series')
 def series_index() -> ResponseReturnValue:
     """The Series index (ADR-0097 decision 4): every node a series is kept on, and
-    where a reader goes from it."""
-    user = identity.signed_in()
+    where a reader goes from it — and, where `Accept` asks for JSON, every series
+    the instance keeps (ADR-0122 decision 2)."""
+    if _wants_json():
+        return _series_json("")
+    # Not behind the gate, as `/status` is not (ADR-0122 decision 8): the JSON half
+    # above answers a bearer token, so the session is asked for here.
+    user = identity.current_user()
+    if user is None:
+        return identity.challenge()
     return render_template('series_index.html', username=user.name,
                            firstname=user.firstname, node=status_tree.snapshot(""),
                            branch="", index=_series_index(), view="series",
@@ -3150,8 +3358,13 @@ def series_index() -> ResponseReturnValue:
 def series(path: str) -> ResponseReturnValue:
     """A node's Series view (ADR-0097 decision 1): every curve that stands at or
     beneath it, on one time axis, and the newest readings they were drawn from. Not
-    polled: it is read, as History is."""
-    user = identity.signed_in()
+    polled: it is read, as History is. Where `Accept` asks for JSON it is the series
+    read: the same series, as data (ADR-0106 decision 6, ADR-0122)."""
+    if _wants_json():
+        return _series_json(path)
+    user = identity.current_user()
+    if user is None:
+        return identity.challenge()
     node = status_tree.snapshot(path)
     if node is None:
         return _no_node_page(user, path)
@@ -3960,6 +4173,13 @@ def _registering_packages() -> list[PackageRow]:
     # carried at all, and by which installation.
     if (keeping := registered_keeper()) is not None and keeping.package:
         registers.setdefault(keeping.package, set()).add(f"keeper {keeping.name}")
+    # The noise caps (ADR-0121 decision 7): what a package declared for the
+    # dependencies it brings, beside its other registrations — set or not, which
+    # is the Logging section's to say. A cap declared from `__main__` names no
+    # installation and joins no row; that section lists it all the same.
+    for row in noise.rows():
+        if row.package:
+            registers.setdefault(row.package, set()).add(f"cap {row.logger}")
     return [PackageRow(origin=package_origin(package),
                        registers=tuple(sorted(registers[package])))
             for package in sorted(registers) if package != "little_sister"]
@@ -4012,6 +4232,13 @@ def system_installed() -> ResponseReturnValue:
     seams and one more: a source is contributed by a *package*, so a request
     blocked inside somebody else's code is undebuggable from this instance unless
     the page says who asked for each origin (ADR-0048 §7).
+
+    And what the log leaves out (ADR-0121 decision 7): whether the library's
+    default is in charge of it, the root's level, every logger that carries a
+    level of its own with where the level comes from — a cap a package declared,
+    an entry of ``LOG_LEVEL``, or neither — and every declared cap that was not
+    set, with the reason. Read off the loggers as they stand at the request,
+    since what code sets after the import it sets; nothing here polls it.
     """
     user = identity.signed_in()
     if not user.admin:
@@ -4030,7 +4257,9 @@ def system_installed() -> ResponseReturnValue:
                            choosing_at_login=identity.choosing_at_login(),
                            system_admin=system_admin.registered(),
                            csp_header=CSP_HEADER,
-                           csp_directives=csp_policy.directives)
+                           csp_directives=csp_policy.directives,
+                           csp_links_sources=links_policy_sources(current_links()),
+                           log=noise.report())
 
 
 @app.route('/copy')
@@ -4161,10 +4390,19 @@ class _Since:
     until the node changes (ADR-0099 decisions 1, 6 and 9, ADR-0102 decision 3).
     ``began`` says what kind of beginning it was, in the words every surface writes
     after the instant, and is empty where a reading began the period and where the
-    instant is a bound (:func:`_began`)."""
+    instant is a bound (:func:`_began`).
+
+    ``status`` is the status the period names, which is the node's **own**, as
+    every period is (ADR-0107 decision 1). ``own`` says that a surface names it so,
+    *its own status* (ADR-0123 decision 3): the node counts nodes beneath it into
+    what it shows, its own status is one part of that, and the period stated as the
+    node's would say *ok since Monday* of a branch whose child was red on Tuesday.
+    A surface prints the two as they stand here and chooses neither."""
     at: datetime
     before: bool = False
     began: str = ""
+    status: StatusCode = StatusCode.UNDEFINED
+    own: bool = False
 
 
 def _began(period: StatusPeriod) -> str:
@@ -4207,7 +4445,8 @@ def _since_of(branch: str, node: StatusSnapshot) -> _Since | None:
     if not periods:
         return None
     current = periods[-1]
-    return _Since(current.since, before=current.before, began=_began(current))
+    return _Since(current.since, before=current.before, began=_began(current),
+                  status=node.own_code, own=node.counts_beneath)
 
 
 def _period_of(node: StatusSnapshot) -> _Since | None:
@@ -4215,6 +4454,78 @@ def _period_of(node: StatusSnapshot) -> _Since | None:
     own page states (:func:`_since_of`), which is what a Copy document writes
     beside it (ADR-0115 decision 2)."""
     return _since_of(node.path.lstrip("/"), node)
+
+
+@dataclass(frozen=True)
+class _MadeBy:
+    """The node beneath a branch that makes what the branch shows, as the branch's
+    Time card names it (ADR-0123 decision 3): ``path``, its own, which its name
+    links to, and ``name``, the part of it beneath the branch. ``since`` is the
+    period its own page states, where that period is of what the branch shows; or
+    ``observed``, when it was last observed, where it counts that only because its
+    reading went stale and its period is of something else. ``more`` is how many
+    other nodes beneath the branch count the branch's code for themselves."""
+    path: str
+    name: str
+    since: _Since | None = None
+    observed: datetime | None = None
+    more: int = 0
+
+
+def _made_by(node: StatusSnapshot) -> _MadeBy | None:
+    """The node beneath ``node`` that makes what it shows (ADR-0123 decision 3), or
+    ``None``: where that is the node's own, where it is a status no one node makes
+    — *ok*, *maintenance* — and where no node beneath counts it for itself, as one
+    a damping counter holds back does not.
+
+    The node that makes it so counts the code for itself
+    (:attr:`StatusSnapshot.own_counted`), and its parent counts it too, as does
+    every node up to ``node`` (:attr:`StatusSnapshot.counted`): a branch on the way
+    down that only passes the code on is walked through, never named. Of several,
+    the one that has counted the code the longest — the first in the tree's order
+    of those that began at one instant — from where its period began, as its own
+    page states the period (:func:`_since_of`), or, where it counts the code only
+    because its own reading went stale, from when it went stale: its last
+    observation and its tolerance after it, since its period is of something else.
+    Taken from the node before a filter takes its children away, as the period
+    is."""
+    shown = node.code
+    if not node.derived or shown not in (StatusCode.WARN, StatusCode.ERROR):
+        return None
+    makers: list[tuple[datetime | None, _MadeBy]] = []
+
+    def walk(parent: StatusSnapshot) -> None:
+        for child in parent.children:
+            if child.counted is not shown:
+                continue
+            if child.own_counted is shown:
+                makers.append(_maker(node, child))
+            walk(child)
+
+    walk(node)
+    if not makers:
+        return None
+    longest = min(((at, index) for index, (at, _) in enumerate(makers)
+                   if at is not None), default=None)
+    _, first = makers[longest[1] if longest is not None else 0]
+    return replace(first, more=len(makers) - 1)
+
+
+def _maker(node: StatusSnapshot,
+           child: StatusSnapshot) -> tuple[datetime | None, _MadeBy]:
+    """A node beneath ``node`` that counts what ``node`` shows for itself, as
+    :func:`_made_by` names it, and since when it has counted that — ``None`` where
+    the tree keeps nothing to say it by."""
+    name = child.path[len(node.path):].lstrip("/")
+    if child.own_stale and child.own_code is not node.code:
+        observed = child.timestamp
+        tolerance = child.stale_after_seconds
+        went = (observed + timedelta(seconds=tolerance)
+                if observed is not None and tolerance is not None else None)
+        return went, _MadeBy(child.path, name, observed=observed)
+    since = _since_of(child.path.lstrip("/"), child)
+    return (since.at if since is not None else None,
+            _MadeBy(child.path, name, since=since))
 
 
 @app.route('/links')
@@ -4240,6 +4551,10 @@ def links() -> ResponseReturnValue:
     user = identity.signed_in()
     links_config = current_links()
     link_probe.refresh_if_due(links_config)
+    # The page allows the hosts its icons load from — the viewer's browser fetches
+    # a remote mark and a favicon itself, and the file names them (ADR-0030).
+    g.csp_page_policy = csp_policy.adding(
+        "img-src", links_policy_sources(links_config))
     return render_template('links.html', username=user.name,
                            firstname=user.firstname,
                            links_config=links_config,
@@ -4282,19 +4597,6 @@ def _links_file_hint() -> str:
         return str(config_roots()[0] / f"{LINKS_ASPECT}/{LINKS_ASPECT}.yaml")
     except ConfigError:
         return f"config/{LINKS_ASPECT}/{LINKS_ASPECT}.yaml"
-
-
-@app.template_filter('site_origin')
-def _site_origin(url: str) -> str:
-    """A URL's `scheme://host` — the origin its favicon would be served from.
-
-    The step of the icon search path before the neutral glyph (ADR-0030 §3), and
-    the reason it is a filter: only the template knows which entry it is drawing.
-    Empty when there is no host to ask, which the loader's scheme check already
-    makes unreachable for a link that survived loading.
-    """
-    parts = urlsplit(url)
-    return f"{parts.scheme}://{parts.netloc}" if parts.netloc else ""
 
 
 @app.route('/ext/<package>/<member>')

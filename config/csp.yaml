@@ -18,6 +18,10 @@
 #     a keyword is taken at all, because relaxing a policy is the deployment's call
 #     and nobody else's.
 #
+# Not one of them: the hosts `/links` loads its icons from — a remote mark, the
+# favicon of a link with no mark. The page allows those itself, taken from
+# `links.yaml` as it renders, so they are written once, in the file that names them.
+#
 # The shape is one key per directive, each a list of sources. Sources are **added** to
 # the assembled policy, never replaced — and this file layers across the whole
 # LITTLE_SISTER_CONFIG_DIR path-list the same way, a site root adding to a base root's

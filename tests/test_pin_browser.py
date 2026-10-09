@@ -26,6 +26,7 @@ from urllib.parse import parse_qs, urlsplit
 from wsgiref.simple_server import WSGIRequestHandler, WSGIServer, make_server
 
 from little_sister import app as app_module
+from little_sister.checks import Entry
 from little_sister.status import StatusCode
 from little_sister.tree import StatusTree
 
@@ -72,6 +73,11 @@ _PAUSED = ("document.getElementById('status-updated').textContent"
 _SWAPPED = "document.querySelector('#status-grid [data-drawn]') === null"
 _HOST_NOTE = "Kernel update and reboot. Back by 23:30."
 
+#: An aspect of `aws`'s shape: lines of its own above a node for each pipeline.
+_ASPECT = "/cloud/codepipeline"
+_UNREAD = "read/eu-west-1"
+_CANNOT = "eu-west-1: pipelines cannot be read: AccessDenied"
+
 
 def _estate() -> StatusTree:
     tree = StatusTree()
@@ -98,6 +104,24 @@ def _wall() -> StatusTree:
     tree.upsert("/uplink", StatusCode.WARN, "packet loss of 2 %")
     tree.set_maintenance("/gaffsie", _HOST_NOTE, set_by="lex",
                          expires_at=datetime.now(UTC) + timedelta(days=2))
+    return tree
+
+
+def _aspect() -> StatusTree:
+    """A branch with two lines of its own — its scope, `OK`, and a region that cannot
+    be read, `WARN` — above a node for each pipeline, one of them failing; titled, so
+    its head is one the inspection card answers to."""
+    tree = StatusTree()
+    tree.upsert(_ASPECT, StatusCode.WARN, [
+        Entry("scope", "3 pipelines in scope (eu-central-1)", StatusCode.OK),
+        Entry(_UNREAD, _CANNOT, StatusCode.WARN,
+              data={"region": "eu-west-1", "error": "AccessDenied"})],
+        members=True)
+    for name, code in (("build-site", StatusCode.OK),
+                       ("deploy-site", StatusCode.ERROR),
+                       ("load-fixtures", StatusCode.OK)):
+        tree.upsert(f"{_ASPECT}/{name}", code, f"last execution {code.name.lower()}")
+    tree.set_title(_ASPECT, "CodePipeline pipelines")
     return tree
 
 
@@ -936,3 +960,98 @@ class WallEditorBrowserTests(_BrowserCase):
             [self._opacity(head.locator(".rule-block__edit > summary")),
              self._opacity(head.locator(".rule-block__clear > button"))],
             [1.0, 1.0])
+
+
+class BranchLineBrowserTests(_BrowserCase):
+    """A branch's own lines take a pin on its own page (ADR-0036 decision 12): the
+    pause mark on a line of its head, the way a write comes back to the line, the
+    refresh that waits for the editor, and the inspection card that leaves the mark
+    alone — in Chromium."""
+
+    estate = staticmethod(_aspect)
+
+    def _line(self, page: Any, text: str) -> Any:
+        return page.locator(".viewed-head .check-reason").filter(
+            has=page.locator(".check-reason__body", has_text=text))
+
+    def test_a_lines_pin_set_in_the_head_comes_back_to_the_line(self):
+        page = self.page
+        page.goto(f"{self.base}/status{_ASPECT}?depth=2")
+        line = self._line(page, _CANNOT)
+        line.locator(".reason-pin > summary").click()
+        page.wait_for_function(_FOCUS_IN_NOTE)
+        page.keyboard.type("the role is being granted")
+        with page.expect_navigation():
+            line.locator(".reason-pin button[type=submit]").click()
+        parts = urlsplit(page.url)
+        # the page as it was asked for, at the line
+        self.assertEqual(
+            (parts.path, parse_qs(parts.query), parts.fragment),
+            (f"/status{_ASPECT}", {"depth": ["2"], "reason": [_UNREAD]},
+             "pinned-reason"))
+        page.wait_for_selector("#pinned-reason")
+        seen = page.evaluate(
+            """
+            () => {
+              const line = document.querySelector('#pinned-reason');
+              const bar = document.querySelector('.ls-bar');
+              return {
+                head: line.closest('.viewed-head') !== null,
+                name: line.querySelector('.check-reason__body').textContent.trim(),
+                ringed: line.classList.contains('is-focused'),
+                quiet: line.classList.contains('is-quiet'),
+                note: line.querySelector('.rule-block__note').textContent.trim(),
+                top: line.getBoundingClientRect().top,
+                bottom: line.getBoundingClientRect().bottom,
+                bar: bar.getBoundingClientRect().bottom,
+                window: window.innerHeight,
+              };
+            }
+            """)
+        self.assertEqual(
+            (seen["head"], seen["name"], seen["ringed"], seen["quiet"], seen["note"]),
+            (True, _CANNOT, True, True, "the role is being granted"), seen)
+        self.assertGreaterEqual(seen["top"], seen["bar"], seen)
+        self.assertLessEqual(seen["bottom"], seen["window"], seen)
+        # the node's own part says its other line, and the pipeline beneath it red
+        self.assertIn("error", page.locator(".viewed-head__state").inner_text())
+
+    def test_a_lines_editor_in_the_head_makes_the_refresh_wait(self):
+        page = self.page
+        asked: list[str] = []
+        page.on("request", lambda request: (
+            asked.append(request.url) if _FRAGMENT.search(request.url) else None))
+        page.clock.install(time=_NOON)
+        page.goto(f"{self.base}/status{_ASPECT}")
+        page.wait_for_function(
+            "document.documentElement.classList"
+            ".contains('maintenance-edit-enhanced')")
+        page.clock.pause_at(_NOON + timedelta(seconds=5))
+        self._line(page, _CANNOT).locator(".reason-pin > summary").click()
+        page.wait_for_function(_FOCUS_IN_NOTE)
+        page.wait_for_function(_PAUSED, timeout=3000)
+        page.keyboard.type("half a sentence")
+        page.evaluate("document.querySelector('#status-grid .status-card')"
+                      ".dataset.drawn = 'before'")
+        page.clock.run_for(35_000)
+        page.wait_for_timeout(300)          # room for a request that must not come
+        self.assertEqual(asked, [])
+        self.assertEqual(page.locator("#status-grid [data-drawn]").count(), 1)
+        self.assertEqual(page.evaluate("document.activeElement.value"),
+                         "half a sentence")
+
+    def test_a_tap_on_a_lines_mark_opens_its_editor_and_not_the_nodes_card(self):
+        # the head's row is what the inspection card answers to, and on a touch
+        # screen a first tap inside it would open that card instead
+        page = self._signed_in(has_touch=True, **self.drawn_in)
+        page.goto(f"{self.base}/status{_ASPECT}")
+        page.wait_for_selector(".viewed-head .status-node__self.inspect-trigger")
+        line = self._line(page, "3 pipelines in scope")
+        line.locator(".reason-pin > summary").tap()
+        page.wait_for_function(_FOCUS_IN_NOTE, timeout=3000)
+        self.assertTrue(line.locator("form.maintenance-editor-form").is_visible())
+        self.assertTrue(page.locator("#inspect-card").is_hidden())
+        # its first sentence says what is left alarming, the nodes beneath counted
+        self.assertEqual(
+            " ".join(line.locator(".rule-block__scope").inner_text().split()),
+            "Maintenance for this line only. The other one keeps alarming.")

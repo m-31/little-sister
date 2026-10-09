@@ -23,9 +23,12 @@
         {%- if slot_fillers or extra_aspects %}
         {%- set sections = sections + [('extensions', 'Extensions', '')] %}
         {%- endif %}
+        {%- set capped = log.levels | selectattr('source', 'equalto', 'cap') | list %}
         {%- set sections = sections + [('identity', 'Identity',
                                         doors | length ~ (' door' if doors | length == 1 else ' doors')),
-                                       ('csp', 'Content-Security-Policy', '')] %}
+                                       ('csp', 'Content-Security-Policy', ''),
+                                       ('logging', 'Logging',
+                                        (capped | length ~ ' capped') if capped else '')] %}
         <nav class="ls-sections" aria-label="Sections">
             {%- for anchor, label, count in sections %}
             <a class="ls-sections__link" href="#{{ anchor }}">{{ label }}{% if count != '' %} <span class="ls-sections__count">{{ count }}</span>{% endif %}</a>
@@ -379,7 +382,9 @@
            print it is that a source may come from a *package* — a request blocked
            inside somebody else's code is undebuggable from here unless the page says
            who asked for each origin. The header name is part of the answer: a
-           Report-Only policy reports and blocks nothing. #}
+           Report-Only policy reports and blocks nothing. The last row is what one
+           page adds for itself: `/links` allows the hosts its icons load from, named
+           by the file that names them (ADR-0030). #}
         <div class="card mb-3" id="csp">
             <div class="card-body">
                 <h3 class="h6 text-muted text-uppercase">Content-Security-Policy</h3>
@@ -402,9 +407,172 @@
                             </td>
                         </tr>
                         {% endfor %}
+                        {% if csp_links_sources %}
+                        <tr id="csp-links">
+                            <td><code>img-src</code>
+                                <span class="text-muted small">on <code>/links</code></span></td>
+                            <td>
+                                {%- for source in csp_links_sources %}
+                                <code>{{ source.value }}</code>
+                                <span class="text-muted small">({{ source.by }})</span>
+                                {%- if not loop.last %}<br>{% endif %}
+                                {%- endfor %}
+                            </td>
+                        </tr>
+                        {% endif %}
                     </tbody>
                 </table>
                 </div>
+            </div>
+        </div>
+
+        {# What the log leaves out (ADR-0121 decision 7). Always shown, like the
+           policy above: there is always a log, and a log that leaves lines out has
+           to say which somewhere other than in itself — a deployment that takes
+           the library's own lines out with `LOG_LEVEL` has this page for it.
+
+           A cap is declared by the package that brings the noise and set by the
+           library, so neither the deployment's code nor its log shows that it
+           happened; and whether a cap *holds* is decided against what the
+           deployment said, in its code or in the variable. The page lays the three
+           side by side: each logger that carries a level of its own, with where
+           the level comes from. Read off the loggers as they stand at the
+           request, not as startup left them — what code sets after the import, it
+           sets, and a page that still called that level a cap would be wrong in
+           exactly the case somebody opens it for. #}
+        <div class="card mb-3" id="logging">
+            <div class="card-body">
+                <h3 class="h6 text-muted text-uppercase">Logging</h3>
+                {#- Who is in charge comes first, because it decides what the rest
+                    means: against an application that configured logging itself
+                    the library sets no level at all, the variable does nothing,
+                    and every level below is that application's own. -#}
+                <p class="text-muted small mb-2">
+                    {% if log.in_charge %}
+                    The library's default is in charge of this log. The root logger
+                    is at <code>{{ log.root }}</code>:
+                    {%- if log.root_source == 'variable' %} the level <code>LOG_LEVEL</code> names.
+                    {%- elif log.root_source == 'default' %} the default, since <code>LOG_LEVEL</code> names no level.
+                    {%- else %} set by code, after the default was installed.
+                    {%- endif %}
+                    {% else %}
+                    The application configured logging itself, so no level is the
+                    library's to set: the root logger, at <code>{{ log.root }}</code>,
+                    is the application's, <code>LOG_LEVEL</code> does nothing, and no
+                    declared cap is set.
+                    {% endif %}
+                </p>
+                {% if log.levels %}
+                <div class="table-responsive position-relative">
+                <table class="table table-sm align-middle mb-0">
+                    <thead>
+                        <tr><th>Logger</th><th>Level</th><th>From</th></tr>
+                    </thead>
+                    <tbody>
+                        {% for level in log.levels %}
+                        <tr>
+                            <td><code>{{ level.logger }}</code></td>
+                            <td><code>{{ level.level_name }}</code></td>
+                            {#- Three sources and no fourth. A cap names every
+                                package that declared one for the logger, each
+                                with what its cap hides — two packages may bring
+                                one dependency, the higher level stands, and the
+                                page names both. An entry is printed as it would
+                                be written. And *neither* is said as what it is:
+                                the library cannot tell a level the deployment's
+                                code set from one the dependency set on itself,
+                                and a guess here would send somebody to the wrong
+                                file. -#}
+                            <td class="text-muted">
+                                {%- if level.source == 'cap' %}
+                                {%- for row in level.rows %}
+                                cap, declared by {{ row.owner }}
+                                {%- if row.level_name != level.level_name %} at <code>{{ row.level_name }}</code>{% endif %}
+                                <span class="small">— hides {{ row.hides }}</span>
+                                {%- if not loop.last %}<br>{% endif %}
+                                {%- endfor %}
+                                {%- elif level.source == 'variable' %}
+                                <code>LOG_LEVEL</code> entry <code>{{ level.logger }}={{ level.level_name }}</code>
+                                {%- else %}
+                                the application's code, or the dependency itself
+                                {%- endif %}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                </div>
+                {% else %}
+                <p class="text-muted small mb-0">No logger carries a level of its own.</p>
+                {% endif %}
+                {% if capped %}
+                {#- How a cap is lifted, with a logger of this instance in the
+                    example: a capped logger is asked for by name, and a line the
+                    reader can copy beats a rule they have to instantiate. The
+                    line is the variable as it was read with one entry more, so
+                    that pasting it changes one thing: every entry the variable
+                    has stays, and the bare level in front is its own, or the
+                    default's where it names none — not the root's as it stands,
+                    which code may have moved. The entry names the level the
+                    logger is at without its cap, which brings back what the cap
+                    hid and nothing below it. -#}
+                <p class="text-muted small mb-0 mt-2">
+                    A capped logger's lines come back by name, at the next start:
+                    <code>LOG_LEVEL={{ log.variable }},{{ capped[0].shown_by }}</code>,
+                    in <code>.env</code> or in the environment.
+                </p>
+                {% endif %}
+                {% if log.not_set %}
+                {#- Every declared cap that was *not* set, with the first of the
+                    four reasons that held. A cap that is not set is the ordinary
+                    case — under a root at INFO a cap at INFO would take no line
+                    away — so this is a table of its own rather than a warning. -#}
+                <p class="text-muted small mb-1 mt-3">Declared caps that were not set:</p>
+                <div class="table-responsive position-relative">
+                <table class="table table-sm align-middle mb-0">
+                    <thead>
+                        <tr><th>Logger</th><th>Cap</th><th>Declared by</th><th>Not set because</th></tr>
+                    </thead>
+                    <tbody>
+                        {% for verdict in log.not_set %}
+                        <tr>
+                            <td><code>{{ verdict.logger }}</code></td>
+                            <td><code>{{ verdict.level_name }}</code></td>
+                            <td class="text-muted">
+                                {%- for row in verdict.rows %}
+                                {{ row.owner }}
+                                {%- if row.level_name != verdict.level_name %} at <code>{{ row.level_name }}</code>{% endif %}
+                                <span class="small">— hides {{ row.hides }}</span>
+                                {%- if not loop.last %}<br>{% endif %}
+                                {%- endfor %}</td>
+                            <td class="text-muted">{{ verdict.reason }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                </div>
+                {% endif %}
+                {% if log.taken_off %}
+                {#- A named entry speaks for every name beneath it, so a level
+                    that stood there was taken off, whoever set it. Said, because
+                    it is the one thing the variable does to a logger it does not
+                    name. -#}
+                <p class="text-muted small mb-0 mt-2">
+                    Taken off by <code>LOG_LEVEL</code>:
+                    {% for taken in log.taken_off -%}
+                    <code>{{ taken.level_name }}</code> on <code>{{ taken.logger }}</code>, which the entry for <code>{{ taken.entry }}</code> speaks for
+                    {%- if not loop.last %}; {% endif %}
+                    {%- endfor %}.
+                </p>
+                {% endif %}
+                {% if log.unreadable %}
+                <p class="text-muted small mb-0 mt-2">
+                    Entries of <code>LOG_LEVEL</code> that could not be read, and were skipped:
+                    {% for skipped in log.unreadable -%}
+                    <code>{{ skipped.entry }}</code> ({{ skipped.why }})
+                    {%- if not loop.last %}; {% endif %}
+                    {%- endfor %}.
+                </p>
+                {% endif %}
             </div>
         </div>
     </div>

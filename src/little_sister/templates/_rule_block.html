@@ -70,15 +70,22 @@ Pinned by <strong>{{ entry.created_by or 'unknown' }}</strong> {{ instant(entry.
     The stored placeholder `maintenance` is the absence of a note, not a note
     somebody wrote, so it is neither shown nor offered as the source to edit; a
     blank note on an edit keeps the stored text (ADR-0014 decision 15), so
-    leaving it blank writes the placeholder back. -#}
+    leaving it blank writes the placeholder back.
+
+    `source` is the node a pin **above** this one stands on, which silences it with
+    everything else beneath that node (ADR-0041): the block is stated where it acts
+    as well as where it was set — *This node is silenced from /nexus/qnap* — linked
+    to that node's page, and `pins_above_stated` states it without buttons, since a
+    pin is edited where it stands (ADR-0104 decision 2). -#}
 {% macro pin_block(entry, scope, path, slug, prefix, editable, also=false, tag='div',
-                   subject='', record=false, next='', of='', bare=false) -%}
+                   subject='', record=false, next='', of='', bare=false,
+                   source='') -%}
 {%- set note = entry.reason if entry.reason != 'maintenance' else '' -%}
 {%- set kept = entry.expires_at | expiry_input -%}
 {%- set named %} this {{ scope }}'s maintenance{% if of %}, {{ of }}{% endif %}{% endset -%}
 <{{ tag }} class="rule-block rule-block--{{ scope }}" data-rule="maintenance">
     <div class="rule-block__head">
-        <span class="rule-block__what" id="{{ prefix }}-what">{{ rule_mark('maintenance') }}{% if bare %}Silenced{% else %}{% if subject %}{{ subject }}{% else %}<strong>This {{ scope }}</strong>{% endif %} is {% if also %}also silenced on its own{% else %}silenced{% endif %}{% endif %} by <strong>{{ entry.set_by or 'an admin' }}</strong> until {{ instant(entry.expires_at) }} <span class="text-nowrap">· {{ entry.expires_at | time_left }}</span></span>
+        <span class="rule-block__what" id="{{ prefix }}-what">{{ rule_mark('maintenance') }}{% if bare %}Silenced{% else %}{% if subject %}{{ subject }}{% else %}<strong>This {{ scope }}</strong>{% endif %} is {% if also %}also silenced on its own{% else %}silenced{% endif %}{% endif %}{% if source %} from <a href="{{ url_for('status', branch=source | url_branch) if source | url_branch else url_for('status') }}"><strong>{{ source }}</strong></a>{% endif %} by <strong>{{ entry.set_by or 'an admin' }}</strong> until {{ instant(entry.expires_at) }} <span class="text-nowrap">· {{ entry.expires_at | time_left }}</span></span>
         {%- if editable %}
         <details class="maintenance-editor-disclosure rule-block__edit">
             <summary class="rule-button" aria-describedby="{{ prefix }}-what">Edit<span class="visually-hidden">{{ named }}</span></summary>
@@ -124,6 +131,18 @@ Pinned by <strong>{{ entry.created_by or 'unknown' }}</strong> {{ instant(entry.
     <p class="rule-block__record">{{ pin_record(entry) }}</p>
     {%- endif %}
 </{{ tag }}>
+{%- endmacro %}
+
+{#- The pins set on nodes above this one, each a block where it acts: outermost
+    first, as the path reads, and without buttons (ADR-0104 decision 2).
+    `above` is the view's list of (path, pin); `tag` is `li` where the blocks are
+    rows of a node's rule list, and `bare` is a card's sentence, whose head names the
+    node already. -#}
+{% macro pins_above_stated(above, prefix, tag='div', bare=false) -%}
+{%- for source, entry in above %}
+{{ pin_block(entry, 'node', source | url_branch, '', prefix ~ loop.index, false,
+             tag=tag, bare=bare, source=source) }}
+{%- endfor %}
 {%- endmacro %}
 
 {#- The editor of a pin still to be set, standing where its block will (decision

@@ -13,7 +13,10 @@ openapi: 3.1.0
 # report ADR-0013 / ADR-0044; Markdown text fields ADR-0018; maintenance ADR-0014;
 # roll-up & staleness ADR-0039 / ADR-0005 / ADR-0079; the run facts ADR-0044 and the
 # unit that answers for a node ADR-0078; sibling rank ADR-0055; show_when_quiet
-# ADR-0063; instance facts ADR-0066; bearer token ADR-0003. Consumer-facing
+# ADR-0063; instance facts ADR-0066; bearer token ADR-0003. The series read is
+# ADR-0106 decision 6 and ADR-0122: a series' key, its two clocks and what a reading
+# stood with ADR-0087; a measure ADR-0092 / ADR-0096 / ADR-0117; the node a series
+# is shown on ADR-0106; the window ADR-0098. Consumer-facing
 # `description:` text is kept self-contained; rationale lives in those ADRs and
 # docs/api/README.md.
 
@@ -39,6 +42,14 @@ info:
     An optional `X-Flow-Id` request header is echoed in the response, to correlate a
     request across logs.
 
+    **The series read.** A check may keep what it read of a subject over time: its
+    *series*. `GET /series` and `GET /series/{node_path}` answer every series that
+    stands at or beneath a node — the node each is shown on, the key it is kept
+    under, the measures drawn there and its readings, whole — over the window the
+    request's `from` and `to` name. It is the Series view's own URL, answered as
+    data: what an instance keeps, as it keeps it, for a script or a session that
+    reads a running instance.
+
     **Versioning.** A field added to the served snapshot is added here in the same
     change, and such an addition is compatible: `schema_version` stays and
     `info.version` moves a minor. `schema_version` and the major move only when a
@@ -54,9 +65,12 @@ info:
     `show_when_quiet` and the envelope's `instance` block are new. A client that meets
     a `schema_version` it does not know should say so and stop.
 
+    2.7.0 adds the series read: two paths and their schemas, and the first `400` this
+    API answers, for a window it cannot read. Nothing of the status read moves.
+
     See `docs/api/README.md` (linked below) for auth, `curl` examples and how tokens
     are provisioned.
-  version: 2.6.0
+  version: 2.7.0
   contact:
     name: little-sister
     url: https://github.com/m-31/little-sister
@@ -77,6 +91,8 @@ servers:
 tags:
   - name: status
     description: The aggregated status tree and its branches.
+  - name: series
+    description: What the instance keeps of its subjects over time.
 
 security:
   - bearerAuth: []
@@ -133,6 +149,72 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /series:
+    get:
+      tags: [series]
+      operationId: getSeries
+      summary: Every series the instance keeps
+      description: >-
+        Returns every series the instance keeps, each with the node it stands on,
+        over the window `from` and `to` name — one response, no pagination, and
+        everything kept where the request names no window. Send
+        `Accept: application/json` for the JSON representation documented here; a
+        browser receives the Series index, which is not part of this contract.
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/FlowId"
+      responses:
+        "200":
+          description: The series, wrapped in a versioned envelope.
+          headers:
+            X-Flow-Id:
+              $ref: "#/components/headers/FlowId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SeriesResponse"
+        "400":
+          $ref: "#/components/responses/BadWindow"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /series/{node_path}:
+    get:
+      tags: [series]
+      operationId: getSeriesBranch
+      summary: The series that stand at or beneath a node
+      description: >-
+        Returns every series that stands at or beneath the node at `node_path`, over
+        the window `from` and `to` name — one response, no pagination. A series
+        stands on the node that stands for its subject, and on its check's own node
+        where none does; one shown above the node asked is returned where one of its
+        measures names a node at or beneath it. **A node that exists always answers
+        `200`**, with an empty `series` where none stands at or beneath it: `404`
+        means that no node exists at the path, and nothing else. The root itself is
+        addressed by `GET /series`.
+      parameters:
+        - $ref: "#/components/parameters/NodePath"
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/FlowId"
+      responses:
+        "200":
+          description: The series at or beneath the node, wrapped in a versioned envelope.
+          headers:
+            X-Flow-Id:
+              $ref: "#/components/headers/FlowId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SeriesResponse"
+        "400":
+          $ref: "#/components/responses/BadWindow"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
 components:
 
   securitySchemes:
@@ -158,6 +240,30 @@ components:
         type: string
         pattern: "^.+$"
         examples: ["system/db"]
+    From:
+      name: from
+      in: query
+      required: false
+      description: >-
+        Where the window starts: `now`; `now-` and a duration in seconds, minutes,
+        hours, days or weeks (`now-90s`, `now-15m`, `now-6h`, `now-1d`, `now-1w`); or
+        an ISO 8601 instant. An instant without an offset is read in the server's
+        configured timezone, so send one with a `Z` or an offset. Left out, the
+        window has no start and reaches back to the oldest reading kept.
+      schema:
+        type: string
+        examples: ["now-6h", "2026-09-26T15:00:00Z"]
+    To:
+      name: to
+      in: query
+      required: false
+      description: >-
+        Where the window ends, written as `from` is. Left out, it is `now` where
+        `from` is given, and the window has no end where neither is. `from` has to
+        come before `to`.
+      schema:
+        type: string
+        examples: ["now", "2026-09-26T16:00:00Z"]
     FlowId:
       name: X-Flow-Id
       in: header
@@ -184,6 +290,15 @@ components:
             $ref: "#/components/schemas/Problem"
     NotFound:
       description: No node exists at the given path.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    BadWindow:
+      description: >-
+        The window cannot be read: `from` or `to` is written in none of the forms
+        it takes, or `from` does not come before `to`. `detail` names the parameter
+        and what it takes.
       content:
         application/problem+json:
           schema:
@@ -623,6 +738,267 @@ components:
         - generated_at
         - instance
         - status
+
+    SeriesResponse:
+      type: object
+      description: >-
+        Versioned envelope around the series that stand at or beneath a node.
+      properties:
+        schema_version:
+          type: integer
+          description: >-
+            Major version of this JSON / federation schema. A client that meets a
+            version it does not know should say so and stop.
+          examples: [2]
+        generated_at:
+          type: string
+          format: date-time
+          description: >-
+            The serving instance's clock when the request was read (RFC 3339, UTC) —
+            the `now` a window back from now is measured from.
+          examples: ["2026-09-26T15:45:00Z"]
+        instance:
+          $ref: "#/components/schemas/Instance"
+        path:
+          type: string
+          description: The node asked, by its absolute path; `/` for the root.
+          examples: ["/hosts/alpha"]
+        window:
+          $ref: "#/components/schemas/Window"
+        series:
+          type: array
+          description: >-
+            Every series that stands at or beneath the node asked, **empty where
+            none does**. Ordered by the node each stands on: a node above the one
+            asked first, then the tree's own order at and beneath it — a node before
+            its children, siblings by declared rank and then by name — and by type,
+            mount and subject where several stand on one node. A series with no
+            reading inside the window keeps its place, with no readings.
+          items:
+            $ref: "#/components/schemas/Series"
+      required:
+        - schema_version
+        - generated_at
+        - instance
+        - path
+        - window
+        - series
+
+    Window:
+      type: object
+      description: >-
+        The window the readings were taken from, as the server read the request's
+        `from` and `to`. A window back from now is read by the server's clock, so
+        these are the instants it meant. An end is null where the request left it
+        open: it then bounds nothing, and the readings reach to the oldest or the
+        newest kept.
+      properties:
+        from:
+          type: [string, "null"]
+          format: date-time
+          description: Where the window starts (RFC 3339, UTC), or null.
+          examples: ["2026-09-26T09:45:00Z"]
+        to:
+          type: [string, "null"]
+          format: date-time
+          description: Where the window ends (RFC 3339, UTC), or null.
+          examples: ["2026-09-26T15:45:00Z"]
+      required:
+        - from
+        - to
+
+    Series:
+      type: object
+      description: |-
+        What one check keeps of one subject over time: its readings, ordered by
+        time and bounded by the retention the deployment gave the check.
+
+        A series belongs to its check and its subject (`key`), and is shown on a
+        node (`node`). The two are different things: the key is what the readings
+        are kept under and does not move, the node is where the deployment's tree
+        shows them and may.
+      properties:
+        node:
+          type: string
+          description: >-
+            The absolute path of the node the series stands on: the node that stands
+            for its subject, or its check's own node where none does. It is the node
+            asked or one beneath it — or one **above** it, for a series returned
+            because one of its measures names a node at or beneath the one asked.
+          examples: ["/hosts/alpha"]
+        key:
+          $ref: "#/components/schemas/SeriesKey"
+        measures:
+          type: array
+          description: >-
+            The fields of the record that are drawn as curves, and where: the
+            measures of this series' check that stand **at or beneath the node
+            asked**, in the order they were declared. Empty where the check declares
+            none, or none there. A measure is listed whether or not a reading gives
+            it a number.
+          items:
+            $ref: "#/components/schemas/Measure"
+        readings:
+          type: array
+          description: >-
+            The series' readings inside the window, **oldest first** — both ends of
+            the window included, by each reading's `at`. Empty where the window
+            holds none.
+          items:
+            $ref: "#/components/schemas/Reading"
+      required:
+        - node
+        - key
+        - measures
+        - readings
+
+    SeriesKey:
+      type: object
+      description: >-
+        What a series is kept under: the check that took the readings — its type
+        and where it is mounted — and the subject they are of. It stays the same
+        when a rename at the source moves the subject to another node.
+      properties:
+        type:
+          type: string
+          description: The check's type.
+          examples: ["http"]
+        mount:
+          type: string
+          description: >-
+            The absolute path the check is mounted at. Two checks of different types
+            may share one, and each keeps a series of its own.
+          examples: ["/hosts/alpha/web"]
+        subject:
+          type: string
+          description: >-
+            The object the readings are of, as the identifier the check reached it
+            by — a host, a URL, a provider's id. Never a node's path.
+          examples: ["https://www.example.org"]
+      required:
+        - type
+        - mount
+        - subject
+
+    Measure:
+      type: object
+      description: |-
+        One field of a series' records that is drawn as a curve.
+
+        **To read it out of a record**, flatten the record — join the keys from the
+        top down to each value with `.` — and look `field` up. Never split `field`
+        at its dots: a key may hold one.
+
+        A deployment may declare one measure for every thing a record counts — every
+        volume, every process. Those arrive here already told apart: one measure for
+        each such thing the kept readings hold, whatever the window, with the
+        thing's key in `field`, `label` and `node`.
+      properties:
+        field:
+          type: string
+          description: >-
+            The field's dotted name in the flattened record.
+          examples: ["volumes.root.pct"]
+        unit:
+          type: string
+          description: >-
+            The unit the field's numbers are in — free text, printed beside a value
+            (`%`, `ms`, `KiB`), and empty where the measure has none.
+          examples: ["%"]
+        label:
+          type: string
+          description: What the curve is titled; the field's name where none was given.
+          examples: ["Disk space used on root"]
+        node:
+          type: string
+          description: >-
+            The absolute path of the node the curve stands on — the node asked or
+            one beneath it. It need not exist in the status tree.
+          examples: ["/hosts/alpha/disk/root"]
+        axis_to:
+          type: [number, "null"]
+          description: >-
+            Where the curve's value axis reaches whatever its readings are — 100 for
+            a percent of a whole — or null where it ends past its own highest
+            reading. It is no limit: a reading may lie above it.
+          examples: [100]
+      required:
+        - field
+        - unit
+        - label
+        - node
+        - axis_to
+
+    Reading:
+      type: object
+      description: >-
+        One kept reading of a subject: what was read, when, and how it stood.
+      properties:
+        at:
+          type: string
+          format: date-time
+          description: >-
+            The reading's time on the series' own clock (RFC 3339, UTC), which is
+            what the series is ordered by and what a window is asked of: the
+            record's own top-level `at` where it has one — a run sits where it
+            finished — and otherwise when the reading was first observed.
+          examples: ["2026-09-26T15:01:00Z"]
+        observed_at:
+          type: string
+          format: date-time
+          description: >-
+            When the server last took this reading (RFC 3339, UTC). Later than `at`
+            for a run read after it finished, and for a state or a run that was read
+            again and stayed one reading.
+          examples: ["2026-09-26T15:01:00Z"]
+        code:
+          description: >-
+            The status the reading stood with where it landed — its line's, or its
+            node's — or **null where it kept none**, which is a reading no line
+            carried. A null is never an `OK`.
+          oneOf:
+            - $ref: "#/components/schemas/StatusCode"
+            - type: "null"
+        texts:
+          type: array
+          description: >-
+            The sentences the reading stood with, as raw Markdown: its line's one,
+            the lines of the node it was placed on, or none.
+          items:
+            type: string
+          examples: [["HTTP 200 in 327 ms"]]
+        identity:
+          type: string
+          description: >-
+            The event the reading is of — a run's id, a job's — where its source
+            keeps a history of such events: the same event read again is the same
+            reading. Empty for a reading that names none.
+          examples: ["run-4215"]
+        state:
+          type: string
+          description: >-
+            The state the subject stood in, for a reading that is one spell of it:
+            an unchanged state read again is the same reading, and `at` is when the
+            spell began. Empty for a reading that names none; a reading never names
+            both an identity and a state.
+          examples: ["disabled"]
+        record:
+          type: object
+          additionalProperties: true
+          description: >-
+            What was read, whole — free-form JSON in the check's own vocabulary, of
+            which only `at`, `started` and `ended` are typed, as RFC 3339 UTC
+            date-times or null at any depth. An `error` that is not null says the
+            reading failed.
+          examples: [{"status": 200, "response_ms": 327}]
+      required:
+        - at
+        - observed_at
+        - code
+        - texts
+        - identity
+        - state
+        - record
 
     Problem:
       type: object

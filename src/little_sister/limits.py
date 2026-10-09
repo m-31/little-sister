@@ -20,15 +20,18 @@ from __future__ import annotations
 
 import os
 import sys
+from collections import deque
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
+from little_sister import instants
 from little_sister.codes import StatusCode
 from little_sister.logger import logger
 from little_sister.reasons import Entry, slug
 from little_sister.self_report import Held
-from little_sister.spans import format_duration, format_span
+from little_sister.spans import format_duration, format_span, local_time
 
 #: Worker threads the pool is built with, unless a deployment says otherwise
 #: (``max_workers`` in ``settings.yaml``). The pool is never larger than the
@@ -92,6 +95,14 @@ MEMORY_LINE_MINUTES = 10
 #: line carries the drift either way.
 RISE_LOGGED = 1024 ** 2
 
+#: How many times its own length a collection after a run that rose is followed by
+#: none (ADR-0095 decision 8): one that took *p* is followed by none for a hundred
+#: times *p*, so the collector stops the process for a hundredth of the time at most,
+#: however many runs rise. Its pause grows with what is alive — 15 to 20 ms where the
+#: `aws` type builds its sessions on one loader, 230 to 255 ms over 533 MiB all alive —
+#: and so does the wait after it.
+COLLECTION_SPACING = 100
+
 #: How long a check may wait for a pool worker before the pool counts as
 #: saturated. Ten poll intervals: a queue that drains within them is the ordinary
 #: jitter of a busy pool, one that does not is a pool too small for its schedule.
@@ -114,10 +125,69 @@ LAG_MEMORY_SECONDS = 600.0
 #: second.
 EVICTION_MEMORY_SECONDS = 600.0
 
-#: Where a cgroup says how much memory this process may use, when one does — v2
-#: first, then v1. Read once, at :meth:`Limits.from_machine`.
-_CGROUP_LIMITS = (Path("/sys/fs/cgroup/memory.max"),
-                  Path("/sys/fs/cgroup/memory/memory.limit_in_bytes"))
+#: How long a reading of the resident size at or past the amber share stays on the
+#: report. The lag line's window, for the lag line's reason: a process that sits on
+#: its limit is past it on one tick and below it on the next, and a line graded on
+#: the tick's own figure turns ERROR and back every time — two events a crossing and
+#: no information. So the line is written from the worst reading inside this window,
+#: and steps down only when the whole window stood below (ADR-0095).
+MEMORY_HOLD_SECONDS = 600.0
+
+#: How long the share of time in which the machine stalled on memory is read over
+#: (ADR-0095 decision 7): the ten minutes between two of the log's memory lines, so
+#: that the share a line says is that of the ten minutes it closes.
+STALL_SECONDS = MEMORY_LINE_MINUTES * 60.0
+
+#: Where Linux says what the machine has left: `MemAvailable`, the kernel's estimate
+#: of what a process can be given before anything is swapped out or ended.
+_MEMINFO = Path("/proc/meminfo")
+
+#: Where Linux counts the time in which some task stalled on memory, in microseconds
+#: since boot — the machine's figure, which a process in a container reads as well.
+_PRESSURE = Path("/proc/pressure/memory")
+
+
+#: Where the kernel names the cgroups this process runs in, a line a hierarchy.
+_SELF_CGROUP = Path("/proc/self/cgroup")
+
+
+@dataclass(frozen=True)
+class _Controller:
+    """How one version of cgroups keeps the memory controller: where it is mounted,
+    how ``/proc/self/cgroup`` names the process's cgroup in it, and the files of
+    every cgroup's directory — how much its processes may use, how much they do, the
+    statistics that hold the file cache the kernel gives up before the limit ends
+    anything, and the count of the processes the kernel has ended."""
+
+    mount: Path
+    #: A file at the root of the mount that says this version is mounted there.
+    #: v2's root has no limit of its own, so it is not the limit file.
+    marker: str
+    #: The controller ``/proc/self/cgroup`` names on the process's line for this
+    #: version: none for v2's one hierarchy, ``memory`` among them for v1's.
+    named: str
+    limit: str
+    usage: str
+    stat: str
+    #: The two lists of file pages in :attr:`stat`, counted back from the usage.
+    files: tuple[str, str]
+    #: The file whose ``oom_kill`` counts the processes the kernel ended.
+    events: str
+
+
+#: The memory controller, v2 first, then v1 — whichever the machine mounts, a host
+#: that mounts v1's beside v2's other controllers included. v1's two lists are its
+#: hierarchical ones, as its usage is.
+_CONTROLLERS = (
+    _Controller(mount=Path("/sys/fs/cgroup"), marker="cgroup.controllers", named="",
+                limit="memory.max", usage="memory.current", stat="memory.stat",
+                files=("inactive_file", "active_file"), events="memory.events"),
+    _Controller(mount=Path("/sys/fs/cgroup/memory"), marker="memory.limit_in_bytes",
+                named="memory", limit="memory.limit_in_bytes",
+                usage="memory.usage_in_bytes", stat="memory.stat",
+                files=("total_inactive_file", "total_active_file"),
+                events="memory.oom_control"),
+)
 
 
 @dataclass(frozen=True)
@@ -143,6 +213,8 @@ class Limits:
     #: (ADR-0087), and what a projection is measured against.
     series_limit: int = SERIES_LIMIT
     eviction_memory_seconds: float = EVICTION_MEMORY_SECONDS
+    #: How long a reading at or past the amber share holds the `memory` line.
+    memory_hold_seconds: float = MEMORY_HOLD_SECONDS
 
     @classmethod
     def from_machine(cls, *, entry_limit: int = ENTRY_LIMIT,
@@ -174,6 +246,24 @@ class Resident:
         peak where it is all there is. A line that graded a high-water mark could
         never clear once it had stood."""
         return self.peak if self.now is None else self.now
+
+
+@dataclass(frozen=True)
+class Left:
+    """What the machine has left, as one tick read it (ADR-0095 decision 7).
+
+    ``available`` is the smaller of what Linux says is available (`MemAvailable`)
+    and, where the process runs under a cgroup's memory limit, what that limit
+    leaves — the limit less the usage, with the file cache the kernel gives up first
+    counted back — and ``None`` where neither can be read. ``stalled`` is the
+    kernel's counter of the seconds in which some task stalled on memory, ``None``
+    where it keeps none: a share of a window is two readings of it. ``killed`` is
+    how often the kernel has ended a process of that cgroup, ``None`` where the
+    process runs under no limit or the cgroup does not say."""
+
+    available: int | None = None
+    stalled: float | None = None
+    killed: int | None = None
 
 
 @dataclass(frozen=True)
@@ -228,9 +318,10 @@ class MayRunLate:
 
 def machine_memory() -> int | None:
     """What this machine gives the process, in bytes: its physical memory, or the
-    cgroup's memory limit where one is set and smaller — a container's limit is
-    the number that kills the process, and the host's memory is not. ``None``
-    where neither can be read."""
+    smallest memory limit set on the cgroups the process runs under, where that is
+    smaller — a container's limit, or a service's and the slice's above it on a bare
+    host, is the number that kills the process, and the host's memory is not
+    (:func:`_cgroups`). ``None`` where neither can be read."""
     known = [value for value in (_physical_memory(), _cgroup_memory_limit())
              if value]
     return min(known) if known else None
@@ -246,15 +337,162 @@ def _physical_memory() -> int | None:
 
 
 def _cgroup_memory_limit() -> int | None:
-    for path in _CGROUP_LIMITS:
-        try:
-            text = path.read_text(encoding="ascii").strip()
-        except (OSError, ValueError):
+    """The smallest memory limit set on the cgroups this process runs under, or
+    ``None`` where none is. v1 says a very large number where there is none, which
+    the caller's ``min`` drops."""
+    found = _cgroups()
+    if found is None:
+        return None
+    limits = [limit for _directory, limit in _limits(*found)]
+    return min(limits) if limits else None
+
+
+def _cgroups() -> tuple[_Controller, tuple[Path, ...]] | None:
+    """The memory controller the machine mounts, and the directories of the cgroups
+    this process runs under in it: its own first, as ``/proc/self/cgroup`` names it
+    beneath the mount, then each above it up to the root of the mount — on a bare
+    host a service's cgroup and the slice above it, whose limits bind it as well.
+    Where that names no directory there, the root is the process's own: a container
+    sees its own cgroup at the root of the mount, and under v1 still names the
+    host's path for it. ``None`` where the machine mounts no memory controller, as
+    macOS."""
+    for controller in _CONTROLLERS:
+        if not (controller.mount / controller.marker).exists():
             continue
-        # v2 says ``max`` for no limit; anything that is not a number reads the
-        # same way. v1 says a very large number, which the caller's ``min`` drops.
-        return int(text) if text.isdigit() else None
+        own = controller.mount
+        path = _own_path(controller)
+        parts = [] if path is None else [part for part in path.split("/")
+                                         if part not in ("", ".")]
+        if parts and ".." not in parts:
+            named = controller.mount.joinpath(*parts)
+            if named.is_dir():
+                own = named
+        chain = [own]
+        while own != controller.mount and controller.mount in own.parents:
+            own = own.parent
+            chain.append(own)
+        return controller, tuple(chain)
     return None
+
+
+def _own_path(controller: _Controller) -> str | None:
+    """The path ``/proc/self/cgroup`` names for this process under ``controller`` —
+    ``0::/system.slice/little-sister.service`` under v2,
+    ``9:memory:/docker/<id>`` under v1 — or ``None`` where it names none."""
+    try:
+        text = _SELF_CGROUP.read_text(encoding="utf-8")
+    except (OSError, ValueError):
+        return None
+    for line in text.splitlines():
+        _hierarchy, _, rest = line.partition(":")
+        listed, _, path = rest.partition(":")
+        names = [name for name in listed.split(",") if name]
+        if (controller.named in names) if controller.named else not names:
+            return path
+    return None
+
+
+def _limits(controller: _Controller,
+            chain: Sequence[Path]) -> list[tuple[Path, int]]:
+    """Every memory limit set on ``chain``, with the directory of the cgroup it is
+    set on — a number in the limit file, where v2's ``max`` says there is none."""
+    found: list[tuple[Path, int]] = []
+    for directory in chain:
+        limit = _number(directory / controller.limit)
+        if limit is not None:
+            found.append((directory, limit))
+    return found
+
+
+def machine_left() -> Left | None:
+    """What the machine has left, read now (ADR-0095 decision 7): `MemAvailable` and,
+    where the process runs under a memory limit — one set on its cgroup or on any
+    above it that is smaller than the physical memory — the least that any such
+    limit leaves, the smaller of the two; the kernel's counter of the time in which
+    some task stalled on memory; and, under a limit, how often the kernel has ended
+    a process of the process's own cgroup. ``None`` where the platform says none of
+    it, as macOS, which has neither file."""
+    leaves = killed = None
+    found = _cgroups()
+    if found is not None:
+        controller, chain = found
+        physical = _physical_memory()
+        binding = [(directory, limit)
+                   for directory, limit in _limits(controller, chain)
+                   if physical is None or limit < physical]
+        if binding:
+            known = [value for value in (
+                _what_the_limit_leaves(controller, directory, limit)
+                for directory, limit in binding) if value is not None]
+            leaves = min(known) if known else None
+            killed = _fields(chain[0] / controller.events).get("oom_kill")
+    kilobytes = _fields(_MEMINFO).get("MemAvailable:")
+    available = None if kilobytes is None else kilobytes * 1024
+    known = [value for value in (available, leaves) if value is not None]
+    left = Left(available=min(known) if known else None,
+                stalled=_stalled_seconds(), killed=killed)
+    return None if left == Left() else left
+
+
+def _what_the_limit_leaves(controller: _Controller, directory: Path,
+                           limit: int) -> int | None:
+    """What a cgroup's memory limit leaves: the limit less the usage — the cgroup's,
+    the processes beneath it included — with the two lists of file pages counted
+    back, the cache the kernel gives up before the limit ends anything (ADR-0095
+    decision 7); never more than the limit nor less than nothing. ``None`` where the
+    usage or either list cannot be read: the usage alone counts the cache as taken,
+    and says less is left than is."""
+    usage = _number(directory / controller.usage)
+    stat = _fields(directory / controller.stat)
+    if usage is None or any(key not in stat for key in controller.files):
+        return None
+    cache = sum(stat[key] for key in controller.files)
+    return max(0, min(limit, limit - usage + cache))
+
+
+def _stalled_seconds() -> float | None:
+    """The seconds since boot in which some task stalled on memory: the ``total``
+    of the ``some`` line of ``/proc/pressure/memory``, kept there in microseconds.
+    ``None`` where the kernel keeps no such counter."""
+    try:
+        text = _PRESSURE.read_text(encoding="ascii")
+    except (OSError, ValueError):
+        return None
+    for line in text.splitlines():
+        kind, _, rest = line.partition(" ")
+        if kind != "some":
+            continue
+        for field in rest.split():
+            name, _, value = field.partition("=")
+            if name == "total" and value.isdigit():
+                return int(value) / 1_000_000
+    return None
+
+
+def _number(path: Path) -> int | None:
+    """The one number a file holds, or ``None``."""
+    try:
+        text = path.read_text(encoding="ascii").strip()
+    except (OSError, ValueError):
+        return None
+    return int(text) if text.isdigit() else None
+
+
+def _fields(path: Path) -> dict[str, int]:
+    """The numbers of a kernel file of ``key value`` lines, by key —
+    ``/proc/meminfo``, whose keys end in a colon and whose values are in kibibytes,
+    and a cgroup's ``memory.stat``, ``memory.events`` and v1's
+    ``memory.oom_control`` — and empty where the file cannot be read."""
+    try:
+        text = path.read_text(encoding="ascii")
+    except (OSError, ValueError):
+        return {}
+    fields: dict[str, int] = {}
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[1].isdigit():
+            fields[parts[0]] = int(parts[1])
+    return fields
 
 
 def resident_size() -> Resident | None:
@@ -563,21 +801,32 @@ class EngineReport:
     records show — the tree's entry count, the checks waiting for a worker, the
     runs that outgrew their period — and this object measures the one thing the
     engine does not record, the resident size, and keeps what needs remembering
-    between ticks: when the last tick was, so a late one can be seen, and the
-    late ticks of the last :data:`LAG_MEMORY_SECONDS`. :meth:`lines` then reads
-    that record into entries; it touches nothing else.
+    between ticks: when the last tick was, so a late one can be seen, the late
+    ticks of the last :data:`LAG_MEMORY_SECONDS`, and those readings of the resident
+    size in the last :data:`MEMORY_HOLD_SECONDS` that stood at or past the amber
+    share. It reads what the machine has left as well, and keeps the readings of the
+    kernel's stall counter over the last :data:`STALL_SECONDS` (ADR-0095 decision
+    7). :meth:`lines` then reads that record into entries; it touches nothing
+    else.
     """
 
     def __init__(self, checks: Iterable[object], *, workers: int,
                  poll_interval: float, limits: Limits,
                  capacity: Capacity | None = None,
-                 resident: Callable[[], Resident | None] = resident_size) -> None:
+                 resident: Callable[[], Resident | None] = resident_size,
+                 left: Callable[[], Left | None] = machine_left,
+                 wall: Callable[[], datetime] = instants.now) -> None:
         self._may_run_late = may_run_late(checks)
         self._capacity = capacity
         self._workers = max(1, workers)
         self._poll_interval = poll_interval
         self._limits = limits
         self._resident = resident
+        self._read_left = left
+        # The wall clock, an instant (ADR-0120) — the engine's own, where an engine
+        # built this report. Read for one thing: when a reading was taken that the
+        # `memory` line may come to name.
+        self._wall = wall
         self._last_tick: float | None = None
         #: The late ticks still inside the window — a held record (ADR-0072), so a
         #: late tick is logged and recorded in one call and the line is written
@@ -587,8 +836,25 @@ class EngineReport:
         #: an eviction has shortened a curve for good, so the line says
         #: *recently* rather than *this second*.
         self._evictions = Held(limits.eviction_memory_seconds)
+        #: The readings of the resident size at or past the amber share still
+        #: inside their window (ADR-0095) — a held record like the two above, so
+        #: the `memory` line is written from the worst of them and not from the
+        #: tick's own, which on a process that sits on its limit is another code
+        #: every tick.
+        self._sizes = Held(limits.memory_hold_seconds)
+        #: Whether a tick has read a size now: this platform keeps one, so a reading
+        #: that comes without it is a read that failed and not a peak to grade.
+        self._size_now_read = False
         self._entries = 0
         self._memory: Resident | None = None
+        #: What the machine had left at the last tick, and the readings of the
+        #: kernel's stall counter back to the latest that is ten minutes old or
+        #: older — by the engine's clock — with the share they come to (ADR-0095
+        #: decision 7). The scheduler thread writes them; a reader takes the last
+        #: whole value.
+        self._left: Left | None = None
+        self._stalls: deque[tuple[float, float]] = deque()
+        self._stall: tuple[float, float] | None = None
         self._series: SeriesHeld | None = None
         self._waiting: tuple[Waiting, ...] = ()
         self._late: tuple[LateRun, ...] = ()
@@ -620,17 +886,34 @@ class EngineReport:
         and where nothing could say."""
         return self._memory
 
+    @property
+    def left(self) -> Left | None:
+        """What the machine had left at the last tick (ADR-0095 decision 7) —
+        ``None`` before the first, and where the platform says none of it."""
+        return self._left
+
+    @property
+    def stalled(self) -> tuple[float, float] | None:
+        """The share of the last :data:`STALL_SECONDS` in which the machine stalled
+        on memory, and the seconds it is the share of — fewer while the process has
+        not yet read that many — from the first and the last reading of the counter
+        kept; ``None`` before there are two."""
+        return self._stall
+
     def memory_figures(self, resident: Resident | None) -> str | None:
         """The log's memory line after its prefix (ADR-0095 decision 3): the
-        process's figures as ``resident`` gives them, then what the series hold and
-        the tree's entry count as the last tick recorded them — the card's figures in
-        one line. ``None`` where nothing can say what the process holds."""
+        process's figures as ``resident`` gives them, then what the machine has left
+        (decision 7), what the series hold and the tree's entry count as the last
+        tick recorded them — the card's figures in one line. ``None`` where nothing
+        can say what the process holds."""
         if resident is None:
             return None
         held = self._series.held if self._series is not None else 0
         entries = self._entries
         noun = "entry" if entries == 1 else "entries"
-        return (f"{resident_text(resident, self._limits)}; the series hold "
+        machine = machine_text(self._left, self._stall)
+        beside = "" if machine is None else f"; {machine}"
+        return (f"{resident_text(resident, self._limits)}{beside}; the series hold "
                 f"{format_weight(held)}, the tree {entries:,} {noun}")
 
     def observe(self, now: float, *, entries: int, waiting: Sequence[Waiting],
@@ -651,9 +934,85 @@ class EngineReport:
         self._evictions.prune(now)
         self._entries = entries
         self._memory = self._resident()
+        self._see_size(now)
+        self._left = self._read_left()
+        self._see_stall(now)
         self._series = series
         self._waiting = tuple(waiting)
         self._late = tuple(late)
+
+    def _see_size(self, now: float) -> None:
+        """Record this tick's resident size for the `memory` line, where it stands
+        at or past the amber share of the limit — graded as it is recorded, so that
+        the worst reading inside the window carries the line's code as well as its
+        sentence.
+
+        Where the platform keeps a size now, a tick that could not read it records
+        nothing: all such a reading has is the high-water mark, which is not what
+        the process holds, and where that mark is past the limit the one tick,
+        held, would be an ERROR for the whole window."""
+        memory, limit = self._memory, self._limits.memory_limit
+        if memory is not None and memory.now is not None:
+            self._size_now_read = True
+        elif self._size_now_read:
+            memory = None
+        if memory is not None and limit:
+            size = memory.graded
+            if size >= limit * self._limits.amber_share:
+                # No log entry of its own, which every other occurrence on a held
+                # record has: this one comes every tick for as long as the process
+                # is that large. The log carries the figures every ten minutes, and
+                # a rise on the line of the run it came with (ADR-0095 decisions 3
+                # and 4).
+                self._sizes.see(
+                    "memory", self._size_text(memory, limit),
+                    code=StatusCode.ERROR if size >= limit else StatusCode.WARN,
+                    measure=float(size), now=now, log=False)
+        self._sizes.prune(now)
+
+    def _see_stall(self, now: float) -> None:
+        """Keep this tick's reading of the stall counter, and those before it back
+        to the latest that is :data:`STALL_SECONDS` old or older, so that the share
+        of the last ten minutes is two readings: that one and this one. A tick that
+        could not read the counter keeps the share as it stood."""
+        stalled = None if self._left is None else self._left.stalled
+        if stalled is not None:
+            self._stalls.append((now, stalled))
+            while (len(self._stalls) > 1
+                   and self._stalls[1][0] <= now - STALL_SECONDS):
+                self._stalls.popleft()
+        if len(self._stalls) < 2:
+            return
+        (first, before), (last, after) = self._stalls[0], self._stalls[-1]
+        if last > first:
+            share = (after - before) / (last - first)
+            self._stall = (min(1.0, max(0.0, share)), last - first)
+
+    def _size_text(self, memory: Resident, limit: int) -> str:
+        """What one reading says — the sentence the `memory` line carries for the
+        worst reading inside the window, before what stands beside it. A size now
+        is said with the time it was read at, on the clock every line's time is
+        written on (:func:`~little_sister.spans.local_time`); a peak is said
+        without one, since a high-water mark was reached at a moment the process
+        cannot name."""
+        if memory.now is None:
+            what = f"peak resident size {format_size(memory.peak)}"
+        else:
+            what = (f"resident size {format_size(memory.now)} at "
+                    f"{local_time(self._wall(), '%H:%M')}")
+        return f"{what}, {_against(memory.graded, limit)}"
+
+    def _beside_the_size(self) -> str:
+        """What stands beside the worst reading, in one parenthesis: the size now,
+        where the last tick read one, and what the machine gives the process —
+        ``(now 481 MiB of the 917 MiB the machine gives the process)``."""
+        beside: list[str] = []
+        if self._memory is not None and self._memory.now is not None:
+            beside.append(f"now {format_size(self._memory.now)}")
+        if self._limits.machine_memory:
+            beside.append(f"of the {format_size(self._limits.machine_memory)} the "
+                          f"machine gives the process")
+        return f" ({' '.join(beside)})" if beside else ""
 
     def _eviction_text(self, series: SeriesHeld) -> str:
         """What one sweep that evicted says — the line's sentence while it is the
@@ -696,23 +1055,14 @@ class EngineReport:
                                           f"{_percent(entries, entry_limit)} of its "
                                           f"limit of {entry_limit:,}",
                                code=StatusCode.WARN))
-        memory, memory_limit = self._memory, limits.memory_limit
-        if memory is not None and memory_limit:
-            what = "peak resident size" if memory.now is None else "resident size"
-            size = memory.graded
-            given = (f" (of the {format_size(limits.machine_memory)} the machine "
-                     f"gives the process)" if limits.machine_memory else "")
-            if size >= memory_limit:
-                lines.append(Entry("memory", f"{what} {format_size(size)}, past "
-                                             f"the limit of "
-                                             f"{format_size(memory_limit)}{given}",
-                                   code=StatusCode.ERROR))
-            elif size >= memory_limit * limits.amber_share:
-                lines.append(Entry("memory", f"{what} {format_size(size)}, "
-                                             f"{_percent(size, memory_limit)} "
-                                             f"of the limit of "
-                                             f"{format_size(memory_limit)}{given}",
-                                   code=StatusCode.WARN))
+        # From the held record and not from this tick's reading (ADR-0095): the
+        # worst reading inside the window, with its code, and beside it what the
+        # size is now.
+        heaviest = self._sizes.worst("memory", now=self._last_tick)
+        if heaviest is not None:
+            lines.append(Entry("memory",
+                               f"{heaviest.text}{self._beside_the_size()}",
+                               code=heaviest.code))
         lines.extend(self._series_lines())
         if self._waiting:
             longest = max(item.seconds for item in self._waiting)
@@ -805,11 +1155,47 @@ class EngineReport:
         if self._memory is not None:
             facts.append(
                 f"- {resident_text(self._memory, self._limits, machine=True)}")
+        # And what the machine has left beside it (ADR-0095 decision 7), a fact in
+        # the same words as on `/system` and in the log, from the first tick on.
+        machine = machine_text(self._left, self._stall, joint="; it ")
+        if machine is not None:
+            facts.append(f"- {machine}")
         return "\n".join(facts)
 
 
 def _percent(part: float, whole: float) -> str:
     return f"{round(100 * part / whole)} %"
+
+
+def _against(size: int, limit: int) -> str:
+    """A size against its limit, compared in bytes: ``past the limit of 504 MiB``
+    from the limit on, ``91 % of the limit of 504 MiB`` below it. Where that would
+    read as though the size were the limit — the two figures, as
+    :func:`format_size` writes them, name one quantity while the sizes differ, or a
+    size below the limit comes to ``100 %`` of it — the sentence says how far apart
+    they are instead: ``97.0 KiB past the limit of 504 MiB``, ``1.0 MiB below the
+    limit of 504 MiB``. So a size past its limit never reads as equal to it, nor
+    one below it."""
+    written = format_size(limit)
+    apart = size - limit
+    alike = _quantity(format_size(size)) == _quantity(written)
+    if apart >= 0:
+        if apart and alike:
+            return f"{format_weight(apart)} past the limit of {written}"
+        return f"past the limit of {written}"
+    share = _percent(size, limit)
+    if alike or share == "100 %":
+        return f"{format_weight(-apart)} below the limit of {written}"
+    return f"{share} of the limit of {written}"
+
+
+def _quantity(figure: str) -> float:
+    """The bytes a size written by :func:`format_size` names — read back from the
+    figure itself, so that it is what a reader holds beside another: ``504 MiB``
+    twice is one quantity, and so are ``1,024 MiB`` and ``1.0 GiB``."""
+    number, unit = figure.split()
+    return float(number.replace(",", "")) * (1024 ** 3 if unit == "GiB"
+                                             else 1024 ** 2)
 
 
 def format_weight(size: int) -> str:
@@ -860,6 +1246,59 @@ def resident_text(resident: Resident, limits: Limits, *,
         if machine and limits.machine_memory:
             said += (f" (of the {format_size(limits.machine_memory)} the machine "
                      f"gives the process)")
+    return said
+
+
+def machine_text(left: Left | None, stall: tuple[float, float] | None, *,
+                 joint: str = ", ") -> str | None:
+    """What the machine has left, as every surface says it (ADR-0095 decision 7):
+    ``the machine has 41 MiB left, stalled on memory for 1.7 % of the last 10m, and
+    the kernel has ended no process of this cgroup`` — each part where there is one
+    to say, and ``joint`` before the second, which the report, a list of its own,
+    writes as ``; it ``. ``None`` where there is nothing to say."""
+    if left is None:
+        return None
+    said = ("" if left.available is None
+            else f"the machine has {format_size(left.available)} left")
+    if stall is not None:
+        stalled = stall_text(stall)
+        said = f"{said}{joint}{stalled}" if said else f"the machine {stalled}"
+    if left.killed is not None:
+        killed = killed_text(left.killed)
+        said = f"{said}, and {killed}" if said else killed
+    return said or None
+
+
+def stall_text(stall: tuple[float, float]) -> str:
+    """How long the machine stalled on memory, ``(share, seconds)``: ``stalled on
+    memory for 1.7 % of the last 10m``. Once the process has read ten minutes the
+    share is theirs, named as the window though the oldest reading kept may be a
+    part of a tick older; before that it is the share of what it has read, named as
+    long as it is — ``of the last 4m``."""
+    share, seconds = stall
+    named = STALL_SECONDS if seconds >= STALL_SECONDS else seconds
+    return f"stalled on memory for {100 * share:.1f} % of the last {format_span(named)}"
+
+
+def killed_text(killed: int) -> str:
+    """How often the kernel has ended a process of the cgroup this one runs in —
+    ``the kernel has ended no process of this cgroup``, ``1 process``, ``2
+    processes`` — said at none as well: the count stays with the cgroup, so in a
+    process that began anew, none says that the one before it was not ended so
+    (ADR-0095 decision 7)."""
+    count = ("no process" if killed == 0 else "1 process" if killed == 1
+             else f"{killed:,} processes")
+    return f"the kernel has ended {count} of this cgroup"
+
+
+def collection_text(seconds: float, fall: int) -> str:
+    """What a collection after a run says on that run's line (ADR-0095 decision 8),
+    after its rise: ``collected after it in 18 ms, resident −31.0 MiB`` — the size's
+    fall across the collection, said from :data:`RISE_LOGGED` as a rise is, and a
+    rise never. On macOS, which keeps no size now, the time alone."""
+    said = f"collected after it in {format_span(seconds)}"
+    if fall >= RISE_LOGGED:
+        said += f", resident −{format_weight(fall)}"
     return said
 
 

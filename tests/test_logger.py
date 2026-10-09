@@ -259,7 +259,7 @@ def test_an_unknown_log_level_falls_back_to_info_and_says_so(
         as_the_default: Callable[[], None], log_file: Path,
         monkeypatch: pytest.MonkeyPatch) -> None:
     """A typo in an environment is not a reason to refuse to log. It is a reason to
-    say which value was not understood, in the log the start opens with what the
+    say which entry was not understood, in the log the start opens with what the
     import said — read back from the file, because a warning nobody receives is the
     failure here."""
     monkeypatch.setenv("LOG_LEVEL", "chatty")
@@ -268,8 +268,220 @@ def test_an_unknown_log_level_falls_back_to_info_and_says_so(
     little_sister.logger.open_log_file()
 
     assert logging.getLogger().level == logging.INFO
-    assert ("logger: LOG_LEVEL 'chatty' is not a level name; using INFO\n"
-            in log_file.read_text())
+    assert (" - WARNING - logger: LOG_LEVEL entry 'chatty' is skipped: 'chatty' is "
+            "not a level name; the root is at INFO\n" in log_file.read_text())
+
+
+# --- LOG_LEVEL names loggers beside the level (ADR-0121 decision 5) --------------
+#
+# The rules of the list — what an entry speaks for, what cannot be read, what is
+# taken off — are run in `tests/test_noise.py`, against real loggers. What is held
+# here is that the *default* says them, where it is installed, and nothing else
+# does.
+
+@pytest.fixture
+def levels_restored() -> Iterator[None]:
+    """Every logger's own level is put back: a named entry sets one on a logger
+    this suite shares with every later test."""
+    def standing() -> list[logging.Logger]:
+        return [logger for logger in logging.Logger.manager.loggerDict.values()
+                if isinstance(logger, logging.Logger)]
+
+    saved = {logger: logger.level for logger in standing()}
+    try:
+        yield
+    finally:
+        for logger in standing():
+            logger.setLevel(saved.get(logger, logging.NOTSET))
+
+
+def test_a_named_entry_is_set_with_the_default(
+        as_the_default: Callable[[], None], levels_restored: None,
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """``LOG_LEVEL=WARNING,example_sdk.credentials=DEBUG``: the entry without an
+    ``=`` is the root's level, which is all the variable was, and the named one
+    holds from the import of this module — before any application was imported,
+    which is what puts the lines of a door that registers into the log."""
+    monkeypatch.setenv("LOG_LEVEL", "WARNING,example_sdk.credentials=DEBUG")
+
+    as_the_default()
+
+    assert logging.getLogger().level == logging.WARNING
+    assert logging.getLogger("example_sdk.credentials").level == logging.DEBUG
+    assert logging.getLogger("example_sdk").level == logging.NOTSET
+    assert little_sister.logger.in_charge is True
+
+
+def test_a_level_beneath_a_named_entry_is_taken_off_with_the_default(
+        as_the_default: Callable[[], None], levels_restored: None,
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """Whoever set it: a dependency that set its own before this module was
+    imported is heard from the first line, and the module keeps what it took."""
+    logging.getLogger("example_sdk.credentials").setLevel(logging.WARNING)
+    monkeypatch.setenv("LOG_LEVEL", "INFO,example_sdk=DEBUG")
+
+    as_the_default()
+
+    credentials = logging.getLogger("example_sdk.credentials")
+    assert credentials.level == logging.NOTSET
+    assert credentials.getEffectiveLevel() == logging.DEBUG
+    assert [(taken.logger, taken.level_name, taken.entry)
+            for taken in little_sister.logger.entries.taken_off] == [
+        ("example_sdk.credentials", "WARNING", "example_sdk")]
+
+
+def test_every_entry_that_cannot_be_read_is_said_in_the_log_a_line_for_each(
+        as_the_default: Callable[[], None], levels_restored: None, log_file: Path,
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """And the rest of the variable stands. A bare entry was about the root, so
+    its line says where the root is; a named one is about its logger alone. The
+    lines are written before the variable's levels are set, so an entry that
+    takes warnings out of the log does not take out the line about another."""
+    monkeypatch.setenv(
+        "LOG_LEVEL", "chatty,example_sdk=LOUD,root=DEBUG,ERROR,example_orm=WARNING,"
+                     "little_sister=CRITICAL")
+    logging.getLogger().setLevel(logging.WARNING)      # as `logging` starts a process
+
+    as_the_default()
+    little_sister.logger.open_log_file()
+
+    assert logging.getLogger().level == logging.ERROR
+    assert logging.getLogger("example_orm").level == logging.WARNING
+    assert logging.getLogger("example_sdk").level == logging.NOTSET
+    said = [line.split(" - WARNING - logger: ", 1)[1]
+            for line in log_file.read_text().splitlines()
+            if " - WARNING - logger: LOG_LEVEL entry " in line]
+    assert said == [
+        "LOG_LEVEL entry 'chatty' is skipped: 'chatty' is not a level name; the "
+        "root is at ERROR",
+        "LOG_LEVEL entry 'example_sdk=LOUD' is skipped: 'LOUD' is not a level name",
+        "LOG_LEVEL entry 'root=DEBUG' is skipped: the root has no name in the "
+        "variable: its level is the entry without a name"]
+
+
+def test_the_list_does_not_reach_an_application_that_configured_logging(
+        application_logging: _Recorder, levels_restored: None,
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """All of it belongs to the default: no named entry is set, no level is taken
+    off, and an entry that cannot be read is nobody's to report."""
+    logging.getLogger("example_sdk.credentials").setLevel(logging.WARNING)
+    monkeypatch.setenv("LOG_LEVEL", "DEBUG,example_sdk=DEBUG,example_orm=ERROR,chatty")
+
+    importlib.reload(little_sister.logger)
+
+    assert little_sister.logger.in_charge is False
+    assert logging.getLogger().level == logging.WARNING
+    assert logging.getLogger("example_sdk").level == logging.NOTSET
+    assert logging.getLogger("example_sdk.credentials").level == logging.WARNING
+    assert logging.getLogger("example_orm").level == logging.NOTSET
+    assert little_sister.logger.entries.taken_off == []
+    assert application_logging.records == []
+
+
+def test_the_default_sets_no_level_on_a_logger_the_variable_does_not_name(
+        as_the_default: Callable[[], None], levels_restored: None,
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """The caps left this module (ADR-0121 decision 1): a cap is a row a package
+    declares, the library's own for ``markdown_it`` among them, set where the
+    application is imported — and ``httpx``, which nothing here depends on, is no
+    longer capped at all. Installing the default sets the root and no other
+    logger."""
+    for name in ("httpx", "markdown_it"):
+        logging.getLogger(name).setLevel(logging.NOTSET)
+    monkeypatch.setenv("LOG_LEVEL", "DEBUG")
+
+    as_the_default()
+
+    assert logging.getLogger().level == logging.DEBUG
+    assert logging.getLogger("httpx").level == logging.NOTSET
+    assert logging.getLogger("markdown_it").level == logging.NOTSET
+
+
+@pytest.mark.parametrize(("value", "written"), [
+    ("", "INFO"),
+    ("DEBUG", "DEBUG"),
+    ("example_sdk=DEBUG", "INFO,example_sdk=DEBUG"),
+    ("warning, example_sdk = debug ,example_orm=ERROR",
+     "WARNING,example_sdk=DEBUG,example_orm=ERROR"),
+    ("chatty,example_sdk=LOUD,root=DEBUG,example_orm=WARN", "INFO,example_orm=WARNING"),
+    ("INFO,example_sdk=DEBUG,ERROR,example_sdk=INFO", "ERROR,example_sdk=INFO"),
+])
+def test_what_was_read_is_written_as_the_variable_takes_it(value: str,
+                                                           written: str) -> None:
+    """The bare level first — the default's where the variable names none — then
+    every named entry, and nothing of an entry that could not be read. Reading the
+    answer again says the same, which is what lets ``/system/installed`` print it
+    in front of an entry it suggests: pasting that line changes one thing."""
+    said = little_sister.logger.Entries.read(value)
+
+    assert said.written() == written
+
+    again = little_sister.logger.Entries.read(written)
+    assert again.named == said.named and again.unreadable == []
+    assert again.bare == (logging.INFO if said.bare is None else said.bare)
+    assert again.written() == written
+
+
+# --- `.env` feeds both of the default's variables (ADR-0121 decision 6) ----------
+
+_SAYS_ITS_LEVELS = """
+import importlib, logging, sys
+importlib.import_module(sys.argv[1])
+import little_sister.logger
+little_sister.logger.open_log_file()
+logging.getLogger("example_sdk.credentials").debug("asked for by name")
+print(logging.getLevelName(logging.getLogger().level),
+      logging.getLevelName(logging.getLogger("example_sdk.credentials").level))
+"""
+
+
+def _a_process_in(directory: Path, first: str, **environment: str) -> str:
+    """What a process of its own prints, started in ``directory`` — whose ``.env``
+    is the one it reads — and importing ``first`` before anything else of the
+    library. Neither variable is in its environment unless ``environment`` puts
+    it there."""
+    handed = subprocess_env()
+    handed.pop("LOG_LEVEL", None)
+    handed.pop("LOG_FILE", None)
+    done = subprocess.run([sys.executable, "-c", _SAYS_ITS_LEVELS, first],
+                          env={**handed, **environment}, cwd=directory,
+                          capture_output=True, text=True, timeout=60)
+    assert done.returncode == 0, done.stderr
+    return done.stdout.strip()
+
+
+@pytest.mark.parametrize("first", ["little_sister.checks", "little_sister.app",
+                                   "little_sister.logger", "little_sister.noise"])
+def test_both_variables_are_read_from_env_whatever_a_process_imports_first(
+        tmp_path: Path, first: str) -> None:
+    """A check package's import reaches the logger module before the module that
+    reads ``.env``, and so does the application's: written only in the file,
+    neither variable was read in the order a deployment starts in."""
+    log = tmp_path / "named-in-env.log"
+    (tmp_path / ".env").write_text(
+        f"LOG_LEVEL=WARNING,example_sdk.credentials=DEBUG\nLOG_FILE={log}\n")
+
+    assert _a_process_in(tmp_path, first) == "WARNING DEBUG"
+
+    written = [line.split(" - ", 1)[1] for line in log.read_text().splitlines()]
+    assert "example_sdk.credentials - DEBUG - asked for by name" in written
+    # ... and the root is where the file put it: the application's import logs at
+    # INFO, and none of that is in the file.
+    assert not [line for line in written if " - INFO - " in line]
+
+
+def test_a_value_in_the_process_environment_stands_over_the_files(
+        tmp_path: Path) -> None:
+    """As for every variable."""
+    ours, theirs = tmp_path / "from-the-environment.log", tmp_path / "from-env.log"
+    (tmp_path / ".env").write_text(
+        f"LOG_LEVEL=WARNING,example_sdk.credentials=DEBUG\nLOG_FILE={theirs}\n")
+
+    said = _a_process_in(tmp_path, "little_sister.checks",
+                         LOG_LEVEL="ERROR", LOG_FILE=str(ours))
+
+    assert said == "ERROR NOTSET"
+    assert ours.exists() and not theirs.exists()
 
 
 # --- the stamp (ADR-0120 decision 9) --------------------------------------------
@@ -492,8 +704,11 @@ def _a_start(tmp_path: Path, *, machine: str, zone: str) -> list[str]:
     settings.write_text(f"timezone: {zone}\n")
     environment = {**subprocess_env(), "TZ": machine, "LOG_FILE": str(log),
                    "LITTLE_SISTER_CONFIG": str(settings),
-                   "LITTLE_SISTER_ENGINE": "0", "SECRET_KEY": "test-key"}
-    environment.pop("LOG_LEVEL", None)
+                   "LITTLE_SISTER_ENGINE": "0", "SECRET_KEY": "test-key",
+                   # said, not left out: the child runs in the directory the suite
+                   # runs in and reads that `.env` itself, where a developer's own
+                   # `LOG_LEVEL` line would stand for a variable that is absent
+                   "LOG_LEVEL": "INFO"}
     done = subprocess.run(
         [sys.executable, "-c", "from little_sister import app; app.start()"],
         env=environment, capture_output=True, text=True, timeout=60)

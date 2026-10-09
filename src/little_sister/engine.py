@@ -21,6 +21,7 @@ process they started, says once what it abandoned, and makes the one final save.
 from __future__ import annotations
 
 import copy
+import gc
 import json
 import threading
 import time
@@ -51,16 +52,23 @@ from little_sister.checks.output import FAILURE_BYTES, failure_text
 from little_sister.codes import RANKED, worst_of
 from little_sister.config import config
 from little_sister.limits import (
+    COLLECTION_SPACING,
     MEMORY_LINE_MINUTES,
+    RISE_LOGGED,
     EngineReport,
     LateRun,
+    Left,
     Limits,
     Resident,
     SeriesHeld,
     Waiting,
     capacity,
+    collection_text,
+    killed_text,
+    machine_left,
     resident_size,
     rise_text,
+    stall_text,
 )
 from little_sister.logger import logger
 from little_sister.pool import DaemonPool
@@ -530,6 +538,31 @@ def _detail(result: CheckResult) -> str:
     return " — " + joined
 
 
+def _asks_for_a_collection(before: Resident | None,
+                           after: Resident | None) -> bool:
+    """Whether a run rose enough to be followed by a collection (ADR-0095 decision
+    8): by :data:`~little_sister.limits.RISE_LOGGED` or more — the size's rise where
+    both reads have a size now, the peak's where neither has, as on macOS, where a
+    collection follows a run that raised the high-water mark. A peak that rose on
+    Linux while the size did not is a spike the run gave back before it ended, and a
+    read that failed says nothing: neither asks for one."""
+    if before is None or after is None:
+        return False
+    if before.now is not None and after.now is not None:
+        return after.now - before.now >= RISE_LOGGED
+    if before.now is None and after.now is None:
+        return after.peak - before.peak >= RISE_LOGGED
+    return False
+
+
+def _fell(before: Resident | None, after: Resident | None) -> int:
+    """How far the size fell between two reads — ``0`` where either has no size
+    now, and negative where it rose."""
+    if before is None or after is None or before.now is None or after.now is None:
+        return 0
+    return before.now - after.now
+
+
 def _rose(before: Resident | None, after: Resident | None) -> tuple[int, int]:
     """How far the size and the peak rose between two reads (ADR-0095): the size
     only where both reads have one, nothing where either read failed. A fall is a
@@ -563,18 +596,18 @@ class _Scheduled:
     running: bool = False
     # One-time schedule offset (see _stagger), spent at the first re-arm.
     stagger: float = 0.0
-    # The budgeted failure retry (ADR-0033, amended by ADR-0060), resolved per
-    # check at engine construction: the fast interval (0 = off) and the
-    # per-episode budget. `retry_used` counts the fast attempts of the current
-    # episode and `last_code` is what ends one — **any** change of the stored
-    # code, not only an OK, because a check whose ordinary state is non-OK would
-    # otherwise spend its budget once and never get it back. It starts at
+    # The budgeted failure retry (ADR-0033, amended by ADR-0060 and ADR-0125),
+    # resolved per check at engine construction: the fast interval (0 = off) and
+    # the per-episode budget. `retry_used` counts the fast attempts of the current
+    # episode and `last_code` is what ends one — **any** change of what the run
+    # rolls up to, not only an OK, because a check whose ordinary state is non-OK
+    # would otherwise spend its budget once and never get it back. It starts at
     # `UNDEFINED` because that is the code a node carries before its first run —
     # nothing observable turns on the choice, since a first reading either matches
     # it or is news, but any other value would be a lie to whoever reads it in a
-    # debugger. `retrying` marks that the currently armed
-    # slot is a retry slot, for the system page. In-memory only — a restart
-    # forgets an episode, like the rest of the schedule.
+    # debugger. `retrying` marks that the currently armed slot is a retry slot,
+    # for the system page. In-memory only — a restart forgets an episode, like the
+    # rest of the schedule.
     retry_interval_seconds: int = 0
     retry_attempts: int = 0
     retry_used: int = 0
@@ -705,6 +738,14 @@ class EngineInfo:
     resident_peak: int | None = None
     memory_limit: int | None = None
     machine_memory: int | None = None
+    #: What the machine had left at the last tick (ADR-0095 decision 7), ``None``
+    #: where it could not say; and beside it, in the words every surface says them,
+    #: how long the machine stalled on memory and, under a memory limit, how often
+    #: the kernel has ended a process of this cgroup — each ``""`` where there is
+    #: nothing to say. All three are nothing where the platform says none of it.
+    machine_left: int | None = None
+    machine_stalled: str = ""
+    machine_killed: str = ""
 
 
 @dataclass(frozen=True)
@@ -753,7 +794,9 @@ class Engine:
                  limits: Limits | None = None,
                  series: MemoryStore | None = None,
                  resident: Callable[[], Resident | None] = resident_size,
-                 wall: Callable[[], datetime] = instants.now) -> None:
+                 left: Callable[[], Left | None] = machine_left,
+                 wall: Callable[[], datetime] = instants.now,
+                 collect: Callable[[], object] | None = gc.collect) -> None:
         # The limits this engine measures itself against: what the deployment
         # stated in `settings.yaml`, or the constants in `limits.py` where it
         # said nothing — unless a caller composed its own and passed them.
@@ -858,11 +901,20 @@ class Engine:
         # end and around the tick (ADR-0095); and the wall clock, an instant: when
         # the engine started and a run did, when a reading was observed, when a
         # check's next run is due and, read on the clock the log is stamped in, the
-        # ten-minute marks the memory line keeps. A clock that answers a time
-        # without a zone is refused where it is read (ADR-0120).
+        # ten-minute marks the memory line keeps in the log — and, handed to the
+        # report, the time of a reading that the `memory` line on the engine's node
+        # comes to name. A clock that answers a time without a zone is refused
+        # where it is read (ADR-0120).
         self._resident = resident
         self._wall: Callable[[], datetime] = lambda: instants.utc(
             wall(), "the engine's wall clock")
+        # The cycle collector a run that rose is followed by (ADR-0095 decision 8),
+        # ``None`` for a caller that collects nothing — a test measuring something
+        # else — and the engine's clock from which the next may start: none until a
+        # hundred times what the last took has passed since it ended, and none at
+        # all while one runs. Under the engine lock.
+        self._collect = collect
+        self._collect_from = float("-inf")
         # The runs in flight at any point of the tick in progress, by name — ``None``
         # between ticks (ADR-0095 decision 5). Under the engine lock.
         self._tick_beside: set[str] | None = None
@@ -885,7 +937,8 @@ class Engine:
         # run, not a broken one.
         self._report = EngineReport(
             checks, workers=self._max_workers, poll_interval=poll_interval,
-            limits=self._limits, capacity=self._capacity, resident=resident)
+            limits=self._limits, capacity=self._capacity, resident=resident,
+            left=left, wall=self._wall)
         for late in self._report.may_run_late:
             logger.warning(
                 "check %s: timeout %s is longer than its frequency %s, so a run "
@@ -1057,6 +1110,7 @@ class Engine:
         # it walks no store. The process's own figures likewise (ADR-0095).
         series = self._report.series
         memory = self._report.memory
+        left, stall = self._report.left, self._report.stalled
         return EngineInfo(
             started_at=self._started_at, uptime_seconds=uptime,
             max_workers=self._max_workers, check_count=len(self._scheduled),
@@ -1072,7 +1126,11 @@ class Engine:
             resident=memory.now if memory is not None else None,
             resident_peak=memory.peak if memory is not None else None,
             memory_limit=self._limits.memory_limit,
-            machine_memory=self._limits.machine_memory)
+            machine_memory=self._limits.machine_memory,
+            machine_left=left.available if left is not None else None,
+            machine_stalled=stall_text(stall) if stall is not None else "",
+            machine_killed=(killed_text(left.killed)
+                            if left is not None and left.killed is not None else ""))
 
     def start(self) -> None:
         """Start the scheduler and worker pool (idempotent).
@@ -1212,6 +1270,37 @@ class Engine:
         if rose:
             logger.info("engine: %s", rose)
         self._log_memory()
+
+    def _collect_after(self, before: Resident | None,
+                       after: Resident | None) -> str:
+        """The collection after a run that rose (ADR-0095 decision 8), and what it
+        says on that run's line: the cycle collector, called where the run rose by
+        :data:`~little_sister.limits.RISE_LOGGED` or more
+        (:func:`_asks_for_a_collection`), and never for more than a hundredth of the
+        time — one that took *p* is followed by none for
+        :data:`~little_sister.limits.COLLECTION_SPACING` times *p*, and none starts
+        while one runs, whichever run asked first. It walks the whole process, so it
+        is the library's to call and no type's. ``""`` where none was called."""
+        if self._collect is None or not _asks_for_a_collection(before, after):
+            return ""
+        with self._lock:
+            started = self._clock()
+            if started < self._collect_from:
+                return ""
+            self._collect_from = float("inf")
+        try:
+            self._collect()
+        except Exception:
+            # A bare log call and no self-report line: `gc.collect` does not raise,
+            # so a collector that does is a caller's own, and the run it followed
+            # is recorded and logged all the same — without the clause.
+            logger.exception("engine: the collection after a run raised")
+            return ""
+        finally:
+            took = max(0.0, self._clock() - started)
+            with self._lock:
+                self._collect_from = started + took * (1 + COLLECTION_SPACING)
+        return collection_text(took, _fell(after, self._resident()))
 
     def _log_memory(self) -> None:
         """The process's figures in the log (ADR-0095 decision 3): at the first
@@ -1527,6 +1616,10 @@ class Engine:
         # the reasons, whose truncation cannot reach it (ADR-0095 decision 4).
         rose = rise_text(*_rose(held_before, held_after), beside,
                          during="while it ran")
+        # And after a run that rose, the collection, said on the same line, after
+        # the rise (ADR-0095 decision 8).
+        collected = self._collect_after(held_before, held_after)
+        figures = "".join(f"; {said}" for said in (rose, collected) if said)
         # The node's own code, and what the run rolls up to beside it wherever the
         # two differ (ADR-0099 decision 5): a root that declares nothing above
         # children that grade said `UNDEFINED` on every run, full disk or not.
@@ -1535,7 +1628,7 @@ class Engine:
                     result.stored_code.name,
                     "" if rolled is result.stored_code
                     else f", rolls up to {rolled.name}",
-                    elapsed_ms, f"; {rose}" if rose else "", _detail(result))
+                    elapsed_ms, figures, _detail(result))
         _say_refused(check, refused, result)
         with self._lock:
             # Every completion, whatever it stored: this is what `outcomes` reads
@@ -1550,11 +1643,20 @@ class Engine:
             # measurement exists to make visible.
             item.record_bytes, item.record_refused = _largest_record(
                 result, measurements, refusals)
-        # A faster second look on failure (ADR-0033): a non-OK completion pulls
-        # the armed slot earlier — never later — to the retry interval, at most
-        # `retry_attempts` times per episode. A secret-pinned check (`ran` False)
-        # is excluded: it is pinned until restart (ADR-0023), so a fast retry
-        # would burn the pool confirming a result that cannot change.
+        # A faster second look on failure (ADR-0033): a completion whose run rolls
+        # up to a non-OK code pulls the armed slot earlier — never later — to the
+        # retry interval, at most `retry_attempts` times per episode. A
+        # secret-pinned check (`ran` False) is excluded: it is pinned until
+        # restart (ADR-0023), so a fast retry would burn the pool confirming a
+        # result that cannot change.
+        #
+        # **What the run rolls up to is what is read** (ADR-0125): `rolled`, the
+        # code the log line above says, and not the root's own. A check that hands
+        # back a branch says its failures on the nodes beneath its root —
+        # `host-metrics` and `aws` declare nothing on theirs — and a failing disk
+        # read by the root's code never pulled the next run in. It is the
+        # result's roll-up, not the node's, for the reasons `_rolled_up` gives:
+        # what this run read, which a pin cannot reach.
         #
         # **An episode ends on any change of the reading** (ADR-0060 decision 4),
         # not only on an OK as ADR-0033 first had it. That record assumed a non-OK
@@ -1570,13 +1672,10 @@ class Engine:
         # seconds cannot change the answer.
         if ran and item.retry_interval_seconds > 0 and item.retry_attempts > 0:
             with self._lock:
-                # not `code`: that name is the Markdown fence helper in this
-                # module, and shadowing it here breaks the traceback branch above.
-                stored = result.stored_code
-                if stored is not item.last_code:
+                if rolled is not item.last_code:
                     item.retry_used = 0
-                    item.last_code = stored
-                if stored is StatusCode.OK or stored is StatusCode.UNDEFINED:
+                    item.last_code = rolled
+                if rolled is StatusCode.OK or rolled is StatusCode.UNDEFINED:
                     pass
                 elif item.retry_used < item.retry_attempts:
                     pulled = self._clock() + item.retry_interval_seconds

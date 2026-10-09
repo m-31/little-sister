@@ -17,6 +17,8 @@ from little_sister.config_dir import forget_aspects, register_aspect
 
 CDN = "https://cdn.jsdelivr.net"
 TRACKER = "https://tickets.example.org"
+#: The library's own img-src: no host, and data:, which calls none.
+FLOOR_IMG = ("'self'", "data:")
 
 
 @contextmanager
@@ -58,13 +60,15 @@ class DefaultsTests(TestCase):
         self.assertIn("object-src 'none'", header)
         self.assertIn(f"report-uri {csp.REPORT_PATH}", header)
 
-    def test_style_src_keeps_unsafe_inline_and_img_src_does_not(self):
+    def test_style_src_keeps_unsafe_inline_and_img_src_names_no_host(self):
         # the two deliberate asymmetries: a computed style= cannot be hashed even in
-        # principle, while img-src is the directive with something to measure
+        # principle, while img-src is the directive with something to measure — so it
+        # names no host, and takes data:, which calls none: Bootstrap draws a switch's
+        # knob and the bar's burger as data: images
         with _roots() as roots:
             policy = csp.assemble(config_dir=roots)
         self.assertIn("'unsafe-inline'", policy.sources_of("style-src"))
-        self.assertEqual(policy.sources_of("img-src"), ("'self'",))
+        self.assertEqual(policy.sources_of("img-src"), ("'self'", "data:"))
 
     def test_every_default_source_is_attributed_to_the_library(self):
         with _roots() as roots:
@@ -178,7 +182,7 @@ class ContributionTests(TestCase):
         csp.allow("img-src", "https://a.example", by="two")
         with _roots() as roots:
             self.assertEqual(csp.assemble(config_dir=roots).sources_of("img-src"),
-                             ("'self'", "https://a.example"))
+                             (*FLOOR_IMG, "https://a.example"))
 
     def test_an_ipv6_literal_keeps_its_brackets(self):
         csp.allow("connect-src", "https://[2001:db8::1]:8443", by="pkg")
@@ -343,8 +347,8 @@ class ConfiguredTests(TestCase):
         with _roots(f"img-src:\n  - {TRACKER}\n") as roots:
             policy = csp.assemble(config_dir=roots)
         sources = dict(policy.directives)["img-src"]
-        self.assertEqual(tuple(s.value for s in sources), ("'self'", TRACKER))
-        self.assertTrue(sources[1].by.endswith("csp.yaml"))
+        self.assertEqual(tuple(s.value for s in sources), (*FLOOR_IMG, TRACKER))
+        self.assertTrue(sources[-1].by.endswith("csp.yaml"))
 
     def test_a_keyword_is_taken_here(self):
         with _roots("script-src:\n  - \"'unsafe-inline'\"\n") as roots:
@@ -359,7 +363,7 @@ class ConfiguredTests(TestCase):
         with _roots(document) as roots, \
                 self.assertLogs("little_sister", level="WARNING") as logs:
             policy = csp.assemble(config_dir=roots)
-        self.assertEqual(policy.sources_of("img-src"), ("'self'",))
+        self.assertEqual(policy.sources_of("img-src"), FLOOR_IMG)
         self.assertIn("not a single source", "\n".join(logs.output))
         self.assertNotIn("\n", policy.header())
 
@@ -375,13 +379,13 @@ class ConfiguredTests(TestCase):
         with _roots("img-src:\n  - \"'none'\"\n") as roots, \
                 self.assertLogs("little_sister", level="WARNING") as logs:
             policy = csp.assemble(config_dir=roots)
-        self.assertEqual(policy.sources_of("img-src"), ("'self'",))
+        self.assertEqual(policy.sources_of("img-src"), FLOOR_IMG)
         self.assertIn("only means anything", "\n".join(logs.output))
 
     def test_a_bare_scheme_and_a_wildcard_are_taken_here(self):
-        with _roots("img-src:\n  - \"data:\"\n  - \"*\"\n") as roots:
+        with _roots("img-src:\n  - \"blob:\"\n  - \"*\"\n") as roots:
             self.assertEqual(csp.assemble(config_dir=roots).sources_of("img-src"),
-                             ("'self'", "data:", "*"))
+                             (*FLOOR_IMG, "blob:", "*"))
 
     def test_one_bare_source_needs_no_list(self):
         with _roots(f"connect-src: {TRACKER}\n") as roots:
@@ -392,7 +396,8 @@ class ConfiguredTests(TestCase):
         with _roots("img-src:\n  - https://a.example.org\n",
                     "img-src:\n  - https://b.example.org\n") as roots:
             self.assertEqual(csp.assemble(config_dir=roots).sources_of("img-src"),
-                             ("'self'", "https://a.example.org", "https://b.example.org"))
+                             (*FLOOR_IMG, "https://a.example.org",
+                              "https://b.example.org"))
 
     def test_a_directive_the_library_does_not_emit_is_refused(self):
         with _roots("frame-src:\n  - https://a.example.org\n") as roots, \
@@ -409,20 +414,20 @@ class ConfiguredTests(TestCase):
         with _roots(document) as roots, \
                 self.assertLogs("little_sister", level="WARNING") as logs:
             policy = csp.assemble(config_dir=roots)
-        self.assertEqual(policy.sources_of("img-src"), ("'self'",))
+        self.assertEqual(policy.sources_of("img-src"), FLOOR_IMG)
         self.assertIn("neither an origin nor a keyword", "\n".join(logs.output))
 
     def test_unparsable_yaml_is_a_warning_and_not_a_dead_instance(self):
         with _roots("img-src: [unclosed\n") as roots, \
                 self.assertLogs("little_sister", level="WARNING") as logs:
             policy = csp.assemble(config_dir=roots)
-        self.assertEqual(policy.sources_of("img-src"), ("'self'",))
+        self.assertEqual(policy.sources_of("img-src"), FLOOR_IMG)
         self.assertIn("could not be read", "\n".join(logs.output))
 
     def test_a_directive_holding_neither_a_source_nor_a_list_adds_nothing(self):
         with _roots("img-src:\n  host: https://a.example.org\n") as roots:
             self.assertEqual(csp.assemble(config_dir=roots).sources_of("img-src"),
-                             ("'self'",))
+                             FLOOR_IMG)
 
     def test_a_reference_into_a_field_that_is_not_a_mapping_adds_nothing(self):
         # `tickets.base_url.host` where base_url is a string: the walk stops rather
@@ -431,13 +436,13 @@ class ConfiguredTests(TestCase):
             csp.allow("img-src", csp.origin_of("tickets.base_url.host"), by="pkg")
             with self.assertLogs("little_sister", level="WARNING"):
                 policy = csp.assemble(config_dir=root)
-        self.assertEqual(policy.sources_of("img-src"), ("'self'",))
+        self.assertEqual(policy.sources_of("img-src"), FLOOR_IMG)
 
     def test_a_file_that_is_not_a_mapping_is_ignored_with_a_warning(self):
         with _roots("- https://a.example.org\n") as roots, \
                 self.assertLogs("little_sister", level="WARNING") as logs:
             policy = csp.assemble(config_dir=roots)
-        self.assertEqual(policy.sources_of("img-src"), ("'self'",))
+        self.assertEqual(policy.sources_of("img-src"), FLOOR_IMG)
         self.assertIn("not a mapping", "\n".join(logs.output))
 
     def test_an_empty_or_absent_file_is_normal_and_silent(self):
@@ -446,7 +451,7 @@ class ConfiguredTests(TestCase):
                 with _roots(text) as roots:
                     with self.assertNoLogs("little_sister", level="WARNING"):
                         policy = csp.assemble(config_dir=roots)
-                self.assertEqual(policy.sources_of("img-src"), ("'self'",))
+                self.assertEqual(policy.sources_of("img-src"), FLOOR_IMG)
 
     def test_configuring_object_src_drops_the_lone_none_and_says_so(self):
         # 'none' beside another source is not a narrower policy, it is an invalid one —
@@ -465,14 +470,104 @@ class ConfiguredTests(TestCase):
         with _roots("img-src:\n  - /local/images\n") as roots, \
                 self.assertLogs("little_sister", level="WARNING"):
             self.assertEqual(csp.assemble(config_dir=roots).sources_of("img-src"),
-                             ("'self'",))
+                             FLOOR_IMG)
 
     def test_the_repos_own_example_file_is_inert(self):
         # config/csp.yaml ships as documentation; it must add nothing as it stands
         root = Path(__file__).resolve().parent.parent / "config"
         policy = csp.assemble(config_dir=str(root))
-        self.assertEqual(policy.sources_of("img-src"), ("'self'",))
+        self.assertEqual(policy.sources_of("img-src"), FLOOR_IMG)
         self.assertEqual(policy.sources_of("script-src"), ("'self'", CDN))
+
+
+class PageSourcesTests(TestCase):
+    """What a page names for itself — the hosts ``/links`` loads its icons from,
+    taken from the URLs ``links.yaml`` holds (ADR-0030, ADR-0048)."""
+
+    def values(self, *urls):
+        return [source.value for source in csp.page_sources(urls, by="links.yaml")]
+
+    def test_a_url_becomes_the_origin_it_is_fetched_from(self):
+        self.assertEqual(self.values("https://Chef.Example.org/tool/x.ico?v=1#top"),
+                         ["https://chef.example.org"])
+
+    def test_a_port_stays_and_credentials_never_reach_the_header(self):
+        self.assertEqual(self.values("https://user:secret@a.example.org:8443/p"),
+                         ["https://a.example.org:8443"])
+
+    def test_an_address_is_an_origin_as_a_name_is(self):
+        # a home network's links are addresses as often as names, and Chromium
+        # matches an address source as it matches a host
+        self.assertEqual(self.values("http://192.168.1.10:5000/favicon.ico",
+                                     "http://[fd00::1]/favicon.ico"),
+                         ["http://192.168.1.10:5000", "http://[fd00::1]"])
+
+    def test_each_origin_once_in_the_order_the_page_has_them(self):
+        self.assertEqual(self.values("https://b.example.org/favicon.ico",
+                                     "https://a.example.org/x.svg",
+                                     "https://b.example.org/other.png"),
+                         ["https://b.example.org", "https://a.example.org"])
+
+    def test_what_names_no_origin_is_skipped_and_cannot_widen_the_header(self):
+        self.assertEqual(self.values("javascript:alert(1)", "file:///etc/passwd",
+                                     "not a url", "https://a.example.org; script-src *",
+                                     "https://a b.example.org/"), [])
+
+    def test_every_source_answers_to_the_file_that_named_it(self):
+        sources = csp.page_sources(["https://a.example.org/x"], by="config/links.yaml")
+        self.assertEqual(sources, (csp.Source("https://a.example.org",
+                                              "config/links.yaml"),))
+
+
+class PolicyAddingTests(TestCase):
+    """A page's own sources, on that page's copy of the policy (ADR-0048)."""
+
+    def setUp(self):
+        with _roots() as roots:
+            self.policy = csp.assemble(config_dir=roots)
+        self.page = [csp.Source("https://chef.example.org", "links.yaml")]
+
+    def test_the_page_adds_to_its_copy_and_the_assembled_policy_stays_as_it_was(self):
+        widened = self.policy.adding("img-src", self.page)
+        self.assertEqual(widened.sources_of("img-src"),
+                         ("'self'", "data:", "https://chef.example.org"))
+        self.assertEqual(self.policy.sources_of("img-src"), ("'self'", "data:"))
+        self.assertIn("img-src 'self' data: https://chef.example.org",
+                      widened.header())
+
+    def test_the_other_directives_are_untouched(self):
+        widened = self.policy.adding("img-src", self.page)
+        for directive, _ in self.policy.directives:
+            if directive != "img-src":
+                with self.subTest(directive=directive):
+                    self.assertEqual(widened.sources_of(directive),
+                                     self.policy.sources_of(directive))
+
+    def test_a_source_the_directive_holds_is_not_repeated(self):
+        widened = self.policy.adding("img-src", [*self.page, *self.page,
+                                                 csp.Source("'self'", "links.yaml")])
+        self.assertEqual(widened.sources_of("img-src"),
+                         ("'self'", "data:", "https://chef.example.org"))
+
+    def test_an_added_source_keeps_who_named_it(self):
+        widened = self.policy.adding("img-src", self.page)
+        added = dict(widened.directives)["img-src"][-1]
+        self.assertEqual(added.by, "links.yaml")
+
+    def test_a_directive_the_policy_lacks_is_added_with_the_sources(self):
+        # an assembled policy carries every directive a page may add to; one built
+        # by hand need not, and gains the directive rather than losing the sources
+        bare = csp.Policy(directives=(
+            ("default-src", (csp.Source("'self'", csp.LIBRARY),)),))
+        self.assertEqual(bare.adding("img-src", self.page).header(),
+                         "default-src 'self'; img-src https://chef.example.org")
+
+    def test_nothing_to_add_is_the_assembled_policy_itself(self):
+        self.assertIs(self.policy.adding("img-src", ()), self.policy)
+
+    def test_a_directive_the_library_keeps_to_itself_takes_nothing(self):
+        with self.assertRaises(ValueError):
+            self.policy.adding("object-src", self.page)
 
 
 class TemplateSurfaceTests(TestCase):

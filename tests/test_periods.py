@@ -259,10 +259,11 @@ class _Pages(TestCase):
         return str(app_module.app.jinja_env.filters["localtime"](_at(minutes)))
 
     def _period(self, url: str) -> str:
-        """The Time card's sentence about the status that holds."""
+        """The Time card's sentence about the status that holds: a node's own,
+        named so on a node above others (ADR-0123 decision 3)."""
         for paragraph in self._page(url).all(tag="p"):
             text = paragraph.text()
-            if text.startswith("Status "):
+            if text.startswith(("Status ", "Its own status ")):
                 return text
         self.fail(f"no period on {url}")
 
@@ -295,7 +296,7 @@ class TimeCardTests(_Pages):
         app_module.status_tree.upsert("/hosts/a/cpu", OK, "fine")
         self.assertEqual(
             self._period("/status/hosts/a"),
-            f"Status ok since {self._shown(9)}, when its maintenance ended")
+            f"Its own status ok since {self._shown(9)}, when its maintenance ended")
 
     def test_a_period_a_reading_began_says_nothing_more(self):
         self._serve(_event("/db", UNDEFINED, OK, 0, "in step"),

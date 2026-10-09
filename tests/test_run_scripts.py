@@ -13,12 +13,18 @@ off and the hooks module that starts and stops the engine, and a `stop.sh` that 
 for every process of the instance rather than for its master alone. What gunicorn does
 with those flags is asked of a real gunicorn serving a stand-in application.
 
+The **read** (ADR-0122 decision 11) is the fourth: `test_api.sh` asks the path it is
+given and `/status` without one, with a token it takes out of `.env` itself and
+prints nowhere, and prints what a refusal says before it fails. The script is run
+whole for that, out of a directory of the test's own.
+
 The functions are exercised by sourcing `lib.sh` in a real `bash`, because that is
 what the scripts do and because a re-implementation in Python would be a test of the
 re-implementation.
 """
 
 import contextlib
+import http.server
 import os
 import re
 import shutil
@@ -27,6 +33,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 from unittest import TestCase, skipUnless
@@ -1333,3 +1340,253 @@ class MemoryScriptTests(TestCase):
                 completed = self._measure("--every", value)
                 self.assertEqual(completed.returncode, 2, completed.stderr)
                 self.assertIn("whole seconds", completed.stderr)
+
+
+#: A `curl` that asks nothing and writes down what it was given, an argument a line, in
+#: the file `$ASKED` names: which URL the script would have asked, and with which
+#: headers, with nothing listening. It answers as an instance that refuses nothing:
+#: a body, and behind it whatever the script asked to have written out, the status a
+#: 200.
+_CURL_THAT_WRITES_DOWN = """#!/usr/bin/env bash
+for argument in "$@"; do printf '%s\\n' "$argument" >> "$ASKED"; done
+printf '{"asked": true}'
+while [ "$#" -gt 1 ]; do
+  if [ "$1" = "--write-out" ]; then
+    printf "$(printf '%s' "$2" | sed 's/%{http_code}/200/')"
+  fi
+  shift
+done
+"""
+
+
+@contextlib.contextmanager
+def _answering(status: int = 200, said: str = '{"answered": true}'):
+    """A server of the test's own, which writes down what it is asked.
+
+    It answers every request with *status* and *said* as its body. Yields
+    ``(port, asked)``. *asked* gains a ``(target, headers)`` for every request: the
+    target as it arrived, before anything decoded it, and the headers by their names
+    in lower case.
+    """
+    asked: list[tuple[str, dict[str, str]]] = []
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            headers = {name.lower(): value for name, value in self.headers.items()}
+            asked.append((self.path, headers))
+            body = said.encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format, *args):
+            """Say nothing: what the suite prints is not this server's log."""
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    # Asked often whether it is to stop: `shutdown` waits out one such interval, and
+    # the default of half a second is most of what a test here would take.
+    thread = threading.Thread(target=server.serve_forever,
+                              kwargs={"poll_interval": 0.02}, daemon=True)
+    thread.start()
+    try:
+        yield server.server_address[1], asked
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+class ApiScriptTests(TestCase):
+    """`./test_api.sh` end to end: the path it asks, and the token it sends
+    (ADR-0122 decision 11).
+
+    It runs out of a temporary directory holding the script, `lib.sh`, an
+    `instance.sh` and an `.env` written here, which is the whole of what it reads -- so
+    no test reads the credential of the checkout it runs in. Which URL it asks is read
+    off a `curl` that writes its arguments down; what reaches an instance, and what the
+    script prints of an answer and of a refusal, are asked of the real `curl` and a
+    server of the test's own.
+    """
+
+    TOKEN = "the-first-readers-token"
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        root = Path(self.directory.name)
+        for script in ("test_api.sh", "lib.sh"):
+            shutil.copy(_REPO / script, root / script)
+        (root / "test_api.sh").chmod(0o755)
+        (root / "bin").mkdir()
+        (root / "bin" / "curl").write_text(_CURL_THAT_WRITES_DOWN, encoding="utf-8")
+        (root / "bin" / "curl").chmod(0o755)
+        self.root = root
+        self.asked = root / "asked"
+        self._install(*_free_ports(2))
+        self._tokens(f"reader={self.TOKEN}")
+
+    def _install(self, plain: int, tls: int) -> None:
+        self.plain, self.tls = plain, tls
+        (self.root / "instance.sh").write_text(
+            'NAME="little-sister"\n'
+            f"PORT={plain}\n"
+            f"TLS_PORT={tls}\n"
+            'APP="little_sister.app:app"\n',
+            encoding="utf-8")
+
+    def _tokens(self, pairs: str) -> None:
+        """Write the `.env` this run reads, its token line as `setup.sh` writes it:
+        the pairs in double quotes, among the other secrets."""
+        (self.root / ".env").write_text(
+            'SECRET_KEY="not-a-token"\n'
+            f'LITTLE_SISTER_API_TOKENS="{pairs}"\n',
+            encoding="utf-8")
+
+    def _ask(self, *arguments: str, real_curl: bool = False
+             ) -> subprocess.CompletedProcess[str]:
+        env = os.environ.copy()
+        for name in (*_TLS_ENVIRONMENT, "LITTLE_SISTER_HOST",
+                     "LITTLE_SISTER_API_TOKENS"):
+            env.pop(name, None)
+        if not real_curl:
+            env["PATH"] = f"{self.root / 'bin'}{os.pathsep}{env['PATH']}"
+            env["ASKED"] = str(self.asked)
+        return subprocess.run(["./test_api.sh", *arguments], cwd=self.root, env=env,
+                              capture_output=True, text=True, timeout=60)
+
+    def _given(self, *arguments: str) -> list[str]:
+        """What `curl` was given, by a run that was not refused."""
+        self.asked.unlink(missing_ok=True)
+        completed = self._ask(*arguments)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        return self.asked.read_text(encoding="utf-8").splitlines()
+
+    def _refused(self, *arguments: str) -> str:
+        """What a refused run said, having asked nothing."""
+        completed = self._ask(*arguments)
+        self.assertEqual(completed.returncode, 2, completed.stderr)
+        self.assertFalse(self.asked.exists(), "it was refused and asked all the same")
+        return completed.stderr
+
+    def test_without_a_path_it_asks_status_as_it_did(self):
+        self.assertEqual(self._given()[-1], f"http://127.0.0.1:{self.plain}/status")
+
+    def test_it_asks_the_path_it_is_given_with_its_query(self):
+        self.assertEqual(
+            self._given("/series/hosts/alpha?from=now-1h&to=now")[-1],
+            f"http://127.0.0.1:{self.plain}/series/hosts/alpha?from=now-1h&to=now")
+
+    def test_the_path_and_the_flag_come_in_either_order(self):
+        for arguments in (("--tls", "/series"), ("/series", "--tls")):
+            with self.subTest(arguments=arguments):
+                given = self._given(*arguments)
+                self.assertEqual(given[-1], f"https://127.0.0.1:{self.tls}/series")
+                self.assertIn("--insecure", given)
+
+    def test_a_second_path_is_refused_and_both_are_named(self):
+        said = self._refused("/status", "/series/hosts/alpha")
+        self.assertIn("one path", said)
+        self.assertIn("'/status'", said)
+        self.assertIn("'/series/hosts/alpha'", said)
+
+    def test_what_is_neither_a_flag_nor_a_path_is_refused_by_what_a_path_is(self):
+        # The slip is a path without its first slash, and "unknown option" would send
+        # its reader looking for a flag.
+        said = self._refused("series/hosts/alpha")
+        self.assertIn("starts with '/'", said)
+        self.assertIn("'series/hosts/alpha'", said)
+
+    def test_an_unknown_option_is_refused_as_it_was(self):
+        said = self._refused("--tsl", "/series")
+        self.assertIn("--tsl", said)
+        self.assertIn("--tls", said)
+
+    def test_help_names_the_path_and_asks_nothing(self):
+        for flag in ("-h", "--help"):
+            with self.subTest(flag=flag):
+                completed = self._ask("/series", flag)
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                self.assertIn("[/path]", completed.stderr)
+                self.assertIn("--tls", completed.stderr)
+                self.assertFalse(self.asked.exists(), "help asked the instance")
+
+    def test_it_takes_the_token_out_of_env_itself(self):
+        given = self._given("/series")
+        self.assertIn(f"Authorization: Bearer {self.TOKEN}", given)
+        self.assertIn("Accept: application/json", given)
+
+    def test_of_several_tokens_it_sends_the_first(self):
+        self._tokens(f"reader={self.TOKEN},second=another-token")
+        self.assertIn(f"Authorization: Bearer {self.TOKEN}", self._given())
+
+    @skipUnless(shutil.which("curl"), "test_api.sh asks with curl")
+    def test_a_path_reaches_the_instance_as_it_was_written(self):
+        # curl reads brackets and braces in a URL as a pattern of its own: left to it,
+        # `{var}` is asked as `var` and `[1]` is refused as a range.
+        path = "/series/hosts/alpha/disk[1]/{var}?from=now-1h"
+        with _answering() as (port, asked):
+            self._install(port, _free_ports(1)[0])
+            completed = self._ask(path, real_curl=True)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual([target for target, _ in asked], [path])
+        self.assertEqual(completed.stdout.strip(), '{"answered": true}')
+        self.assertEqual(asked[0][1].get("authorization"), f"Bearer {self.TOKEN}")
+        self.assertEqual(asked[0][1].get("accept"), "application/json")
+
+    @skipUnless(shutil.which("curl"), "test_api.sh asks with curl")
+    def test_it_prints_the_token_nowhere(self):
+        # Answered or refused: a credential the script read for its reader is not one
+        # the reader then reads off the terminal.
+        for status in (200, 401):
+            with self.subTest(status=status), _answering(status) as (port, asked):
+                self._install(port, _free_ports(1)[0])
+                completed = self._ask("/series", real_curl=True)
+                self.assertEqual(len(asked), 1, completed.stderr)
+                self.assertEqual(completed.returncode == 0, status == 200)
+                self.assertNotIn(self.TOKEN, completed.stdout + completed.stderr)
+
+    @skipUnless(shutil.which("curl"), "test_api.sh asks with curl")
+    def test_a_refusal_is_printed_as_the_instance_said_it_and_still_fails(self):
+        # What an API writes for its reader is the body of its refusal: a window nobody
+        # can read says which forms one is read in. `curl -f` threw that away.
+        path = "/series/hosts/alpha?from=yesterday"
+        problem = ('{"detail":"The window\'s from cannot be read as yesterday.",'
+                   '"status":400,"title":"Bad Request","type":"about:blank"}\n')
+        for status in (400, 401, 404, 500):
+            with self.subTest(status=status), \
+                    _answering(status, problem) as (port, asked):
+                self._install(port, _free_ports(1)[0])
+                completed = self._ask(path, real_curl=True)
+                self.assertEqual(len(asked), 1, completed.stderr)
+                self.assertEqual(completed.stdout, problem + "\n")
+                self.assertEqual(completed.stderr,
+                                 f"ERROR: {path} answered {status}\n")
+                self.assertEqual(completed.returncode, 22)
+
+    @skipUnless(shutil.which("curl"), "test_api.sh asks with curl")
+    def test_an_answer_is_printed_as_it_was(self):
+        # The body and a line's end, whatever the body ends with. And a status under
+        # 400 is no refusal: a redirect is printed and the run succeeds, as it did.
+        for status, said in ((200, '{"answered": true}'),
+                             (200, '{"answered": true}\n'),
+                             (302, "the page is elsewhere\n")):
+            with self.subTest(status=status, said=said), \
+                    _answering(status, said) as (port, asked):
+                self._install(port, _free_ports(1)[0])
+                completed = self._ask("/series", real_curl=True)
+                self.assertEqual(len(asked), 1, completed.stderr)
+                self.assertEqual(completed.stdout, said + "\n")
+                self.assertEqual(completed.stderr, "")
+                self.assertEqual(completed.returncode, 0)
+
+    @skipUnless(shutil.which("curl"), "test_api.sh asks with curl")
+    def test_an_instance_that_does_not_answer_is_curls_own_failure(self):
+        # Nothing listens on the port, so there is no answer to print and no status to
+        # name: the run says what curl says and ends with curl's status, as it did.
+        completed = self._ask("/series", real_curl=True)
+        self.assertEqual(completed.returncode, 7, completed.stderr)
+        self.assertEqual(completed.stdout, "")
+        self.assertIn("curl: (7) ", completed.stderr)
+        self.assertNotIn("answered", completed.stderr)

@@ -1,7 +1,7 @@
 # ADR-0049 — The check-authoring surface is contract, and the gate holds it
 
 - **Status:** Accepted
-- **Date:** 2026-09-05 (accepted 2026-08-08, decided while preparing the first check
+- **Date:** 2026-10-10 (accepted 2026-08-08, decided while preparing the first check
   types to move into repositories of their own)
 - **Related:** [ADR-0022](0022-generated-release-branch.md) (the tag a dependent
   pins — the thing a surface makes meaningful),
@@ -11,7 +11,10 @@
   promised), [ADR-0036](0036-addressable-reasons.md) /
   [ADR-0042](0042-entries-carry-their-own-code.md) (the entry vocabulary now
   promised), [ADR-0043](0043-coverage-backstop.md) (a rule the gate measures rather
-  than a rule we remember)
+  than a rule we remember),
+  [ADR-0121](0121-a-noise-cap-is-declared-and-log-level-has-the-last-word.md) (the
+  noise caps as rows a package declares, `LOG_LEVEL` as a list and the one call promised
+  beside the behavior: decision 4 as it stands)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -102,24 +105,39 @@ contract; it is a promise about the one name nobody's code writes against.
    logging *before* importing `little_sister.app` keeps its handlers and its level,
    and little-sister's own records arrive there too. Writing that down forced a fix:
    the root `setLevel()` ran *outside* the has-no-handlers guard, so a dependent
-   that had chosen INFO silently got DEBUG. It sits inside the guard, with the
-   third-party noise caps that belong to our default and to nobody else's setup.
+   that had chosen INFO silently got DEBUG. It sits inside the guard, and the noise
+   caps beside it belong to our default and to nobody else's setup.
    `tests/test_logger.py` holds it.
 
    What the guard guards has a **level of its own** to choose. **The default is
    `INFO`, and `LOG_LEVEL` names it** — inside the guard, like the level it replaces,
-   so a stray variable in a deployment's environment cannot overrule the level that
-   deployment chose in code. `DEBUG` collects no record little-sister writes, because
-   nothing in it logs below `INFO`, and every record written by everything it is
-   installed beside; that is also what the `httpx` and `markdown_it` caps beside it
-   are: dependencies noticed one at a time, each after somebody read a log. A
+   so a stray variable in a deployment's environment cannot overrule an application
+   that configured logging itself. The variable is a list
+   ([ADR-0121](0121-a-noise-cap-is-declared-and-log-level-has-the-last-word.md)
+   decision 5): an entry with no `=` is the level of the default's root, and an entry
+   `name=LEVEL` is the level of that logger — under the default it stands over a
+   declared cap and over a level the deployment's code set. `DEBUG` collects no record
+   little-sister writes, because nothing in it logs below `INFO`, and every record
+   written by everything it is installed beside, short of what a cap holds back: a
    deployment carrying an AWS check type made the shape plain by being two thirds SDK
-   request detail. An unrecognized name falls back to `INFO` and says so in the log it
-   just opened, because a typo in an environment is not a reason to refuse to log.
-   Nothing about the promise moves: logging is still a behavior rather than a name,
-   `little_sister.logger` is still not importable by a plugin, and a chatty dependency
-   is still quieted by capping **its own** logger — which adds no handler to root, and
-   so leaves this default running rather than replacing it.
+   request detail. An entry that cannot be read is skipped and said in the log it just
+   opened, and without a bare level that can be read the root is at `INFO`, because a
+   typo in an environment is not a reason to refuse to log.
+
+   The caps beside that level are **rows, each declared by the package that brings
+   the dependency** (decisions 1 to 4 of that record), where they had been
+   dependencies the library noticed one at a time, each after somebody read a log.
+   The library declares the one for a dependency of its own, `markdown_it`; `httpx`,
+   which nothing here depends on, is no longer capped. The library sets the rows
+   where the application is imported, and only where a row takes lines away and
+   nobody chose a level.
+
+   Logging is still a behavior rather than a name, and `little_sister.logger` is
+   still not importable by a plugin. **One call is promised beside the behavior**,
+   `little_sister.noise.cap`, by which a package declares a row (decision 8 of that
+   record). A chatty dependency is still quieted by capping **its own** logger —
+   which adds no handler to root, and so leaves this default running rather than
+   replacing it.
 
 5. **Adding a name is compatible; removing or renaming one is a version bump and a
    new ADR** — [ADR-0034](0034-template-slots-for-dependent-packages.md)'s rule for

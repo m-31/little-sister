@@ -22,7 +22,11 @@
     it was not merely hidden but destroyed. Shown wherever a node's own status has
     been derived away from a countable reading, by a node pin or by every member
     being pinned; a check that reported ``MAINTENANCE`` itself has nothing to add.
-    ``word`` includes the status word for surfaces that do not already print it.
+    And only where the node **shows** *maintenance*: one whose lines are all
+    silenced shows what the nodes beneath it roll up to, and has no *maintenance*
+    for the reading to stand under (ADR-0124) — its silenced lines and their count
+    say it there. ``word`` includes the status word for surfaces that do not
+    already print it.
 
     **A damping counter is the same kind of fact and takes the same slot**: the node
     shows what it read and its parent is still counting the quieter value, so the
@@ -31,7 +35,7 @@
     sentence that tells the two apart. Same ink as the maintenance suffix — the
     transform is one idea and it should not look like two. -#}
 {% macro reported_suffix(node, word=False) -%}
-{%- if node.own_code.name == 'MAINTENANCE' and node.reported_code.name not in ('MAINTENANCE', 'UNDEFINED') %} <span class="status-reported">{% if word %}maintenance {% endif %}· {{ node.reported_code.name.lower() }}</span>{% endif -%}
+{%- if node.code.name == 'MAINTENANCE' and node.own_code.name == 'MAINTENANCE' and node.reported_code.name not in ('MAINTENANCE', 'UNDEFINED') %} <span class="status-reported">{% if word %}maintenance {% endif %}· {{ node.reported_code.name.lower() }}</span>{% endif -%}
 {%- if node.damping %} <span class="status-reported">· {{ node.damping.seen }} of {{ node.damping.needed }} to escalate</span>{% endif -%}
 {%- endmacro %}
 {#- Why the node is blue: the pin's block (ADR-0104 decisions 1 and 2), as the node's
@@ -68,48 +72,77 @@
     said the pin a second time, in different words and to an admin only; it went
     when the head took this over.
 
-    Silent when the node has nothing of its own to add **and the reader cannot pin**:
-    a container with no reading, no reasons and no pin is exactly the page that should
-    open with its children. An admin gets the head on every branch's page, because
-    the control needs its place. The caller decides (`head_drawn`, where the page is
-    drawn), since what the head shows is also what the cards beneath it suppress. It
-    reports **own** status, not the roll-up — the children are directly below and say
-    that themselves. Rendered as a `status-node` so it takes the same fill and ink as
-    any box, and kept **inside `#status-grid`** so it refreshes on the ~10s poll —
-    which waits while an editor in it is open (decision 7).
+    **So does a pin above it** (ADR-0104 decision 2): a pin on a node above this
+    one silences it with everything else beneath that node, and the head states each
+    such pin as its block, outermost first, without buttons — it is edited where it
+    stands — and the node's own pin, under one, is *also silenced on its own*.
 
-    **A node that declares nothing is the exception.** Its `UNDEFINED` is a
-    container's, which the roll-up skips (ADR-0039), and not a status: one that carries
-    a sentence — an `aws` check's root states its scope above its accounts — headed its
-    page gray and *undefined*, the word hide-idle reads as never reported, under a
-    dashboard that drew the same node green. So it heads with what it rolls up to,
-    pale as its card is where its children show, because the culprit is right below;
-    that is also the code a kept reading records for it (ADR-0087 decision 8). A
-    roll-up of nothing is `UNDEFINED`, the node's own again, and says so. -#}
+    Silent when the node has nothing of its own to add, no pin above it **and the
+    reader cannot pin**: a container with no reading, no reasons and no pin is
+    exactly the page that should open with its children. An admin gets the head on every branch's page, because
+    the control needs its place. The caller decides (`head_drawn`, where the page is
+    drawn), since what the head shows is also what the cards beneath it suppress.
+    Rendered as a `status-node` so it takes the same fill and ink as any box, and kept
+    **inside `#status-grid`** so it refreshes on the ~10s poll — which waits while an
+    editor in it is open (decision 7).
+
+    **It says what the node rolls up to** (ADR-0123 decision 1): the status its card
+    says on the page above and its one card says at depth 0, so a node is one status
+    wherever it is read. Saying the node's **own** status here, on the ground that
+    the children right below say theirs, headed a page green over a child in error
+    while the page above drew the same node red.
+
+    **Whose the status is, the fill says**, as a card's does (decision 2): pale where
+    it comes from beneath the node — `derived`, the snapshot's one answer to that —
+    because the node that makes it so is right below, and vivid where the node counts
+    it for itself: a failure of its own, or its own reading gone stale. A node that
+    declares nothing is the plain case of the first. Its `UNDEFINED` is a container's,
+    which the roll-up skips (ADR-0039), so whatever it shows comes from beneath it,
+    and that is also the code a kept reading records for it (ADR-0087 decision 8); a
+    roll-up of nothing is `UNDEFINED`, the node's own again, and vivid. What the node
+    says of itself is its lines, and the period of its own status, on the Time card
+    beneath the children.
+
+    **Its lines are listed as a leaf's page lists them** (`own_lines`, ADR-0036
+    decision 12): in full rather than clamped to `reason_cap` — this
+    is the node's own page, where a reader comes when its card is not enough — each
+    with its record, and for an admin with the pin control at its end, so a line of
+    a node above others is silenced where it is read, without the node's pin that
+    silences everything beneath it. -#}
 {% macro viewed_head(node, reason_cap, pinning, branch) -%}
-{%- set rolled = node.own_code.name == 'UNDEFINED' and node.code.name != 'UNDEFINED' %}
-{%- set head_code = node.code if rolled else node.own_code %}
-<div class="status-node viewed-head s-{{ head_code | status_slug }}{% if rolled %} dim{% endif %}">
+<div class="status-node viewed-head s-{{ node.code | status_slug }}{% if node.derived %} dim{% endif %}">
     <div class="status-node__self" data-path="{{ node.path }}">
-        {{ status_cue(head_code) }}<span class="status-node__name">{{ node.name }}</span>
+        {{ status_cue(node.code) }}<span class="status-node__name">{{ node.name }}</span>
         {%- if node.stale %} <span class="status-stale">stale{% if not node.children %} · {{ node.age_seconds | elapsed }} ago{% endif %}</span>{% endif %}
         {#- The head is the topmost visible node of this view, so the observation
             time shows here and the cards below suppress an identical one
             (ADR-0044): seven aspect cards repeating one check's run time invite a
             reader to think the seven were checked separately. -#}
-        <span class="viewed-head__state">{{ card_time(node) }}{{ head_code.name.lower() }}{{ reported_suffix(node) }}</span>
+        <span class="viewed-head__state">{{ card_time(node) }}{{ node.code.name.lower() }}{{ reported_suffix(node) }}</span>
+        {%- set above = pins_above | length %}
+        {{ pins_above_stated(pins_above, 'head-above-maintenance-') }}
         {%- if node.maintenance_entry %}
-        {{ pin_block(node.maintenance_entry, 'node', branch, '', 'head-maintenance', pinning.may, next=pinning.back) }}
+        {{ pin_block(node.maintenance_entry, 'node', branch, '', 'head-maintenance', pinning.may, next=pinning.back, also=above > 0) }}
         {%- elif pinning.may %}
         {#- What the pin would cover, as its editor's first sentence says it: the
-            node whose page this is, and with it every node beneath. -#}
-        {%- set covers %}It silences everything beneath it: nothing under here will alarm before the pin expires. Its checks keep running, their colors stay visible here, and they count again when the pin clears.{% endset %}
+            node whose page this is, and with it every node beneath — which a pin
+            above it silences already, until that one ends. -#}
+        {%- set covers %}
+            {%- if above -%}
+                It keeps everything beneath it silenced when the {{ 'pin' if above == 1 else 'pins' }} above it {{ 'ends' if above == 1 else 'end' }}: nothing under here will alarm before this pin expires. Its checks keep running, their colors stay visible here, and they count again when every pin on them has cleared.
+            {%- else -%}
+                It silences everything beneath it: nothing under here will alarm before the pin expires. Its checks keep running, their colors stay visible here, and they count again when the pin clears.
+            {%- endif -%}
+        {%- endset %}
         <details class="maintenance-editor-disclosure rule-setter">
             <summary class="rule-button rule-setter__toggle">{{ rule_mark('maintenance') }}Set maintenance</summary>
             {{ pin_new('node', covers, branch, '', 'head-maintenance', next=pinning.back) }}
         </details>
         {%- endif %}
-        {{ reason_block(node, reason_cap) }}
+        {{ own_lines(node, branch, pinning.may, focus, focus_orphan,
+                     beneath=node.path in containers, back=pinning.back,
+                     surface='grid', prefix='head-line-maintenance-',
+                     muted=false, covered=above) }}
     </div>
 </div>
 {%- endmacro %}
@@ -144,7 +177,11 @@
 {#- A pin's block and its editor are the rule's own (ADR-0104), imported with the
     context for the deployment's default window and its timezone that an editor's
     fields print — so the refresh's fragment is handed both, as the page is. -#}
-{% from '_rule_block.html' import pin_block, pin_new, rule_mark with context %}
+{% from '_rule_block.html' import pin_block, pin_new, pins_above_stated, rule_mark with context %}
+{#- A node's own lines as its own page lists them — a leaf's and, here, a branch's
+    head and its depth-0 card: in full, each with its record and for an admin the
+    pin control at its end (ADR-0036 decision 12). -#}
+{% from '_own_lines.html' import own_lines with context %}
 {#- Maintenance pip: a click-to-open marker on a card whose subtree holds a
     pinned node but which is not itself pinned — a glance at any depth shows where to
     drill, and a click opens a popover (maintenance.js) listing that card's pins as
@@ -257,7 +294,7 @@
     {%- endif -%}
 {%- else -%}
     {%- set has_kids = child.children and depth0 < max_depth - 2 -%}
-    {%- set node_dim = child.code.name == 'OK' or (child.own_code != child.code and has_kids) -%}
+    {%- set node_dim = child.code.name == 'OK' or (child.derived and has_kids) -%}
     {#- Foldable = quiet **and** not declared. A declared node is not merely never
         marked ``is-extra``; it is not counted at all, which is the same exemption a
         warn/error box already has — counting it would spend a quiet sibling's place
@@ -397,8 +434,8 @@
         displays is what the cards below suppress (ADR-0044): the viewed head is the
         topmost visible node. -#}
     {%- set head_drawn = branch and max_depth >= 1
-        and (pinning.may or node.maintenance_entry or node.reason or node.stale
-             or node.own_code.name != 'UNDEFINED') -%}
+        and (pinning.may or node.maintenance_entry or pins_above or node.reason
+             or node.stale or node.own_code.name != 'UNDEFINED') -%}
     {%- if head_drawn %}{{ viewed_head(node, reason_cap, pinning, branch) }}{% endif %}
     {%- set head_shown = node.timestamp | localtime("%H:%M")
         if (head_drawn and node.timestamp) else "" -%}
@@ -448,16 +485,20 @@
                     {%- if settable %}{{ pin_setter(node, pinning, containers) }}{% endif %}
                 </div>
                 {#- The panel also carries the pin's block, so a pinned node that
-                    reports nothing at all still says who silenced it and why. -#}
-                {% if node.reason or node.maintenance_entry %}
-                    <div class="status-panel">{{ pin_stated(node, pinning) }}{{ reason_block(node, reason_cap) }}</div>
+                    reports nothing at all still says who silenced it and why — and
+                    the blocks of the pins above it, which silence it as much. -#}
+                {% if node.reason or node.maintenance_entry or pins_above %}
+                    {#- On a node's own page the card is its own card, and lists its
+                        lines as the head does at every other depth; the overview's
+                        is every node there is, and keeps the wall's clamp. -#}
+                    <div class="status-panel">{{ pins_above_stated(pins_above, 'card-above-maintenance-', bare=true) }}{{ pin_stated(node, pinning) }}{% if branch %}{{ own_lines(node, branch, pinning.may, focus, focus_orphan, beneath=node.path in containers, back=pinning.back, surface='grid', prefix='card-line-maintenance-', muted=false, covered=pins_above | length) }}{% else %}{{ reason_block(node, reason_cap) }}{% endif %}</div>
                 {% endif %}
             </div>
         {% else %}
         {% for system in node.children %}
             {# a card's children render only from depth 2 on (depth 1 is cards only) #}
             {% set card_has_kids = system.children and max_depth > 1 %}
-            {% set card_dim = system.code.name == 'OK' or (system.own_code != system.code and card_has_kids) %}
+            {% set card_dim = system.code.name == 'OK' or (system.derived and card_has_kids) %}
             <div class="status-card s-{{ system.code | status_slug }}{% if card_dim %} dim{% endif %}"
                  {%- if grid_layout %}
                  data-layout-weight="{{ grid_layout.weights[loop.index0] }}"

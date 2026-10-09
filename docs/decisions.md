@@ -239,10 +239,11 @@ real store. → [record](adr/0029-per-user-presentation-preferences.md)
 `/links` is a structured `links.yaml` aspect of `config/` — one flat level of groups,
 merged by title across roots, file order preserved — with icons resolved by name through
 the deployment's map and `links/icons/`, packages' packs, the built-in pack, the origin's
-favicon and a neutral glyph, so the page makes no outbound request. Structural
-validation runs at load and never touches the network; reachability is probed when the
-page is opened and its answer is older than `interval:`, under a pass deadline, reported
-on the page and never on the status tree. → [record](adr/0030-curated-links.md)
+favicon and a neutral glyph; a remote mark or a favicon is fetched by the viewer's
+browser from a host the page's own policy allows. Structural validation runs at load and
+never touches the network; reachability is probed when the page is opened and its answer
+is older than `interval:`, under a pass deadline, reported on the page and never on the
+status tree. → [record](adr/0030-curated-links.md)
 
 ### ADR-0031 — One deployment config directory, split by aspect
 
@@ -267,10 +268,11 @@ node: its addressable entries are virtual children.
 
 ### ADR-0033 — A faster second look: the budgeted failure retry
 
-A non-OK run pulls its armed next slot to `min(armed, now + retry_interval)` — earlier,
-never later — at most `retry_attempts` times per failure episode, which any change of
-the stored code ends; staleness keeps judging by the nominal frequency, `/system` marks
-a retry slot, a secret-pinned check never retries. `retry_interval` is off by default.
+A run that rolls up to something other than `OK` pulls its armed next slot to
+`min(armed, now + retry_interval)` — earlier, never later — at most `retry_attempts`
+times per failure episode, which any change of what the run rolls up to ends; staleness
+keeps judging by the nominal frequency, `/system` marks a retry slot, a secret-pinned
+check never retries. `retry_interval` is off by default.
 → [record](adr/0033-budgeted-failure-retry.md)
 
 ### ADR-0034 — Template slots for dependent packages
@@ -293,13 +295,14 @@ registration of a name wins, and registered aspects show on `/system/installed`.
 
 ### ADR-0036 — Addressable reasons: keyed entries, and maintenance on one of them
 
-A reason is a keyed entry, `slug → text`, in the check's order; prose is the default
-and members are declared (a mapping, or `entries=True`), an undeclared entry keyed by a
+A reason is a keyed entry, `slug → text`, in the check's order; prose is the default and
+members are declared (a mapping, or `entries=True`), an undeclared entry keyed by a
 content hash. A pin lives in the maintenance side-table under `(path, slug)`, joined in
 the snapshot; absence suspends a pin and only expiry disposes of it; entries are virtual
-children, so a node whose members are all pinned reads `MAINTENANCE`. An entry pin
-reports wherever a node pin does and is addressed by `?reason=<slug>`, never a path
-segment. → [record](adr/0036-addressable-reasons.md)
+children, so a node whose members are all pinned has an own status of `MAINTENANCE` that
+counts and cancels nothing, and reads it whole only where nothing beneath it counts. An
+entry pin is set on its node's own page, a leaf's or a branch's, and is addressed by
+`?reason=<slug>`, never a path segment. → [record](adr/0036-addressable-reasons.md)
 
 ### ADR-0037 — Extension static assets: a filler may ship CSS and JS
 
@@ -322,10 +325,12 @@ action is a link, and anything more is a package filler.
 ### ADR-0039 — Status roll-up: how a parent derives its status
 
 The pure derivation: worst-of `ERROR > WARN > OK` among counted statuses; `UNDEFINED`
-(*not reported yet*) ignored; `MAINTENANCE` contributes nothing and cancels its
-subtree; an updater owning a branch may set it explicitly. A node whose children are
-all ignored reads `MAINTENANCE` when any was silenced and `UNDEFINED` when they merely
-have not reported. `Status.get_status_code()` implements this and nothing else.
+(*not reported yet*) ignored; `MAINTENANCE` — a pin on the node, or its check's word for
+it — contributes nothing and cancels its subtree, while a node whose lines are all
+silenced counts nothing for itself and cancels nothing; an updater owning a branch may
+set its status explicitly. A node whose children are all ignored reads `MAINTENANCE`
+when any was silenced and `UNDEFINED` when they merely have not reported.
+`Status.get_status_code()` implements this and nothing else.
 → [record](adr/0039-status-rollup-semantics.md)
 
 ### ADR-0040 — What a failing check becomes
@@ -397,11 +402,13 @@ parameters (`notes_keep` 10, `notes_cap` 50, `notes_max_age` 13mo, `notes_min_ag
 
 ### ADR-0048 — The Content-Security-Policy is assembled, never a constant
 
-A `csp` module composes the header at application creation from the library's defaults,
-packages' contributions (`csp.allow(directive, source, by=…)` — an origin, never a
-keyword; a deployment-specific host declared as `csp.origin_of("<aspect>.<field>")`) and
-the deployment's `csp` block, which has the last word. The first policy shipped is
-Report-Only; `/system/installed` shows the effective policy with its contributors.
+A `csp` module composes the header at application creation from the library's defaults
+(`img-src` names no host and takes `data:`), packages' contributions
+(`csp.allow(directive, source, by=…)` — an origin, never a keyword; a
+deployment-specific host declared as `csp.origin_of("<aspect>.<field>")`) and the
+deployment's `csp` block, which has the last word; a page adds what its own
+configuration names — `/links` the hosts its icons load from. The first policy shipped
+is Report-Only; `/system/installed` shows the effective policy with its contributors.
 → [record](adr/0048-an-assembled-content-security-policy.md)
 
 ### ADR-0049 — The check-authoring surface is contract, and the gate holds it
@@ -480,9 +487,10 @@ check's to say. → [record](adr/0058-transport-policy-vocabulary.md)
 No sixth code: a line keeps `UNDEFINED` and makes no claim about its subject, and the
 node the check owns says `WARN` — the instrument is degraded, the reading incomplete —
 counting the could-not-ask kind only. A read failure never replaces a last-known
-reading: the check omits the node and freshness says the entries are old. Two
-amendments to ADR-0033: the retry budget re-arms on any change of the stored code, and
-a completed `UNDEFINED` does not arm a retry. → [record](adr/0060-a-line-makes-no-claim.md)
+reading: the check omits the node and freshness says the entries are old. Two amendments
+to ADR-0033: the retry budget re-arms on any change of what a run rolls up to, and a
+completed run that rolls up to `UNDEFINED` does not arm a retry.
+→ [record](adr/0060-a-line-makes-no-claim.md)
 
 ### ADR-0061 — Decoration cannot substitute for the thing it decorates
 
@@ -544,9 +552,10 @@ the way past the refusal. → [record](adr/0067-the-run-scripts-can-serve-tls.md
 
 One `before_request` hook refusing by default; `OPEN_ENDPOINTS` answer with no identity
 (the login form and its stylesheet, logout, `/csp-report`, `/health`, two redirects) and
-`SELF_AUTHENTICATING_ENDPOINTS` holds `/status` alone. `identity.current_user()` returns
-an `Identity` or `None`; `signed_in()` behind the gate answers `401`; `admin` is the
-only role. → [record](adr/0068-the-login-gate-refuses-by-default.md)
+`SELF_AUTHENTICATING_ENDPOINTS` choose their own credential: `/status`, `/series` and
+`/series/<path>`. `identity.current_user()` returns an `Identity` or `None`;
+`signed_in()` behind the gate answers `401`; `admin` is the only role.
+→ [record](adr/0068-the-login-gate-refuses-by-default.md)
 
 ### ADR-0069 — Identity comes from outside, and never from a chain
 
@@ -866,13 +875,14 @@ closed at the later of the stop's `stopped_at` stamp and the lease's last beat. 
 
 ### ADR-0095 — The instance states its memory, and a rise names what was running
 
-Linux reads the size now and the peak, macOS the peak alone, marked; the `memory` line
-grades as before. `/system`'s engine block and the engine's `report` carry the figures,
-and *This instance* stays what is settled at import. The log carries them every ten
-minutes on the clock, at the first tick and at the stop, with the series and the tree. A
-run's line, and the tick's own, carries what rose from 1 MiB — the size and the peak on
-Linux, the peak on macOS — *while it ran*, naming what else was in flight, never a cost.
-→ [record](adr/0095-the-instance-states-its-memory.md)
+Linux reads the size now and the peak, macOS the peak alone; the `memory` line grades
+what it graded before, held: the worst reading of ten minutes, with when it was and the
+size now. `/system`'s engine block and the engine's `report` carry the figures, and
+*This instance* stays what is settled at import. The log carries them every ten minutes
+on the clock, at the first tick and the stop. A run's line and the tick's own carry what
+rose from 1 MiB *while it ran*, naming what else was in flight, never a cost, and after
+a run that rose a paced collection. What the machine has left is a fact; its line is
+decided, not built; no recycle. → [record](adr/0095-the-instance-states-its-memory.md)
 
 ### ADR-0096 — A measure names its node and its things, and a curve marks only a reading that failed
 
@@ -910,21 +920,21 @@ lowest and highest, which a bucket keeps.
 
 The Time card and a node's Copy document state a status that still holds *since* its
 start, read from the kept table where its row has left the log, and when it was *last
-observed*; History's current row reads *current*. A period is a run of events that show
-one status: a pin's edit is none, and a period a pin's end began says so. A first
-reading is a bound, *since before*, and a bound is kept until the node changes; no gap
-ends a period. A node is observed, not checked; the `file` check writes a long age in
-days; a run's log line adds a roll-up unlike its own code.
-→ [record](adr/0099-a-status-that-still-holds-says-since-when.md)
+observed*; History's current row reads *current*. A period is the node's own status's,
+named so on a node above others, and a run of events that show one status: a pin's edit
+is none, and a period a pin's end began says so. A first reading is a bound, *since
+before*, kept until the node changes; no gap ends a period. A node is observed, not
+checked; the `file` check writes a long age in days; a run's log line adds a roll-up
+unlike its own code. → [record](adr/0099-a-status-that-still-holds-says-since-when.md)
 
 ### ADR-0100 — System is two views: what is running, and what is installed
 
 Tabs beneath one heading, as a node's views are. *Running*, `/system`: which instance
 this is, the engine's figures and the schedule, polled. *Installed*, `/system/installed`:
-check types, packages, extensions, identity and the policy, settled at startup, not
-polled, every section open under an index. The schedule is a row per check — its type
-and what it is reached through beneath its path — with *Declared*, the type's estimate,
-beside *Seen*, the heaviest record the last run carried.
+check types, packages, extensions, identity and the policy, settled at startup, and the
+loggers' levels; not polled, every section open under an index. The schedule is a row
+per check — its type and what it is reached through beneath its path — with *Declared*,
+the type's estimate, beside *Seen*, the heaviest record the last run carried.
 → [record](adr/0100-system-is-two-views.md)
 
 ### ADR-0101 — The Events page is filtered by its URL
@@ -959,11 +969,11 @@ A root appears once: its heading is its own row, the nodes beneath it indented.
 
 One block states a pin wherever one shows — who, until when and what is left, the note
 in full, *Edit* and *Clear* for an admin — and where it stands says what it covers: a
-node's frames its lines, a line's hangs beneath it. A pin is set and edited in place,
-on a node's page, the Maintenance page and the wall, whose refresh waits for an open
-editor, and a write comes back to its block; an edit shows the expiry it would keep,
-and one that changes nothing writes nothing. The block is a rule's, maintenance its
-first kind.
+node's frames its lines, a line's hangs beneath it, and a pin above a node is stated on
+its page too, without buttons. A pin is set and edited in place, on a node's page, the
+Maintenance page and the wall, whose refresh waits for an open editor; an edit shows
+the expiry it would keep, and one that changes nothing writes nothing. The block is a
+rule's, maintenance its first kind.
 → [record](adr/0104-a-pin-is-one-block-on-what-it-silences.md)
 
 ### ADR-0105 — A page is laid out at its screen's width, and is no wider
@@ -1133,3 +1143,58 @@ nothing migrates. A check type hands over a time with its zone; `spans.local_tim
 refuses one without. Options stay in `config/settings.yaml`: `timezone` and
 `time_format` write a page's times, and that zone reads a typed expiry and stamps the
 log, with its offset. → [record](adr/0120-every-stored-time-is-an-instant.md)
+
+### ADR-0121 — A noise cap is declared by the package that brings the noise, and `LOG_LEVEL` has the last word by name
+
+`little_sister.noise.cap(logger, level, hides=…)` declares a row and sets no level: a
+dependency's logger at `INFO` or `WARNING`, never the root nor the library's own. The
+default sets the rows once, where the application is imported, where that takes lines
+away and nobody chose: `LOG_LEVEL` does not name the logger or one above it, and no
+level that no row set stands on it or on a named logger above. `LOG_LEVEL` is a list,
+`INFO,botocore.credentials=DEBUG`, read after `.env`; an entry speaks for its name and
+all beneath it. `/system/installed` says every level. The cap on `httpx` leaves.
+→ [record](adr/0121-a-noise-cap-is-declared-and-log-level-has-the-last-word.md)
+
+### ADR-0122 — A series is read over the API as it stands: its node, its key, its measures as drawn, its readings
+
+`GET /series/<node_path>` and `GET /series`, asked for JSON with a bearer token, answer
+every series that stands at or beneath a node over the window `from` and `to` name: its
+`node`, its `key`, its readings whole and oldest first, and its measures as the page
+draws them — one for every key the kept readings hold, only those at or beneath the
+node asked. A node that stands answers a list, empty where none stands; `404` is a path
+no node stands at, `400` a window that cannot be read. Its first reader is a script or a
+session reading a running instance, and `test_api.sh` takes a path. One answer is
+written down, `series-2.json`. → [record](adr/0122-a-series-is-read-over-the-api-as-it-stands.md)
+
+### ADR-0123 — A node says one status wherever it is read
+
+The head of a node's page says what its card says one page up: what the node rolls up
+to. Whose a status is, the snapshot says — what a node counts for itself, a stale
+reading of its own degraded, and whether what it shows is derived from beneath it — and
+a head, a card and a box are pale by that. A node's periods stay its own status's, and
+no row is written for a node when one beneath it changes: on a node above others the
+Time card, History and the Copy document name the period *its own status*, and the card
+first names the node beneath that makes what it shows, with that node's *since*.
+→ [record](adr/0123-a-node-says-one-status-wherever-it-is-read.md)
+
+### ADR-0124 — A node whose lines are all silenced still counts the nodes beneath it
+
+A node whose lines are all pinned has an own status of `MAINTENANCE` that counts
+nothing and cancels nothing: the nodes beneath it count, it shows what they roll up to,
+and it reads `MAINTENANCE` whole only where nothing beneath it counts either. What
+cancels a subtree is a pin on the node or its check's word for it, said by one
+expression the roll-up and the snapshot share. Its head and its card say what it rolls
+up to, its Time card names its period its own, and its Copy document says that every
+line of its own is silenced.
+→ [record](adr/0124-a-node-whose-lines-are-all-silenced-still-counts-the-nodes-beneath-it.md)
+
+### ADR-0125 — The failure retry reads what a run rolls up to
+
+What arms the failure retry is what the run rolls up to — its root's code and every
+child it returned, by ADR-0039's rules — and not the root's own code, so a branch
+check whose root declares nothing retries when a node beneath it fails; an episode
+ends when the roll-up changes, and a run that rolls up to `UNDEFINED` arms nothing.
+It is read of the result, not the node, so a pin cannot reach it, and
+`retry_interval: 0` on one check stays the switch for an estate too expensive to
+read twice.
+→ [record](adr/0125-the-failure-retry-reads-what-a-run-rolls-up-to.md)

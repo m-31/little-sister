@@ -1,7 +1,7 @@
 # ADR-0036 — Addressable reasons: keyed entries, and maintenance on one of them
 
 - **Status:** Accepted
-- **Date:** 2026-10-04 (accepted 2026-08-01)
+- **Date:** 2026-10-10 (accepted 2026-08-01)
 - **Related:** [ADR-0032](0032-status-contribution-boundary.md) (the contribution
   boundary, amended by this decision to reach one level below a node),
   [ADR-0004](0004-status-aggregation-semantics.md) (the roll-up these entries reuse,
@@ -18,7 +18,9 @@
   [ADR-0104](0104-a-pin-is-one-block-on-what-it-silences.md) (the block that states a
   pin on `/maintenance`, where one is edited and cleared),
   [ADR-0107](0107-an-event-is-a-change-of-what-a-node-shows.md) (a line's pin as an
-  event of its node, and the change beneath one that is held back)
+  event of its node, and the change beneath one that is held back),
+  [ADR-0124](0124-a-node-whose-lines-are-all-silenced-still-counts-the-nodes-beneath-it.md)
+  (what a node whose lines are all pinned cancels: nothing)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -123,17 +125,23 @@ forgotten pin from lasting forever. An expiry that changes what the node shows i
 event of the node ([ADR-0107](0107-an-event-is-a-change-of-what-a-node-shows.md)
 decision 1), as decision 11 has it.
 
-**7. The entries are virtual children.** Each unsuppressed entry contributes the
-node's reported status; a suppressed one contributes nothing; the node's **own**
-status is the worst of what is left. That holds literally over entries that declare a
-code of their own ([ADR-0042](0042-entries-carry-their-own-code.md)): same derivation,
-same exclusions, same silenced-versus-unreported tiebreak, with one stated default —
-an entry-bearing node whose run reports **no** entries reads `OK`, because "nothing to
+**7. The entries are virtual children.** Each unsuppressed entry contributes the node's
+reported status; a suppressed one contributes nothing; the node's **own** status is the
+worst of what is left. That holds literally over entries that declare a code of their
+own ([ADR-0042](0042-entries-carry-their-own-code.md)): same derivation, same
+exclusions, same silenced-versus-unreported tiebreak, with one stated default — an
+entry-bearing node whose run reports **no** entries reads `OK`, because "nothing to
 report" is not "nothing reported". A node that reported entries and has none
-unsuppressed left presents `MAINTENANCE`. Two nodes are outside this rule entirely: one
-that reported **no** reasons (a check with a code and nothing to say), and one whose
-reasons are **prose** (decision 2) — prose has no individually suppressible parts, and
-its unit of suppression stays the node pin.
+unsuppressed left has an own status of `MAINTENANCE`, which counts nothing for itself
+and cancels nothing: the nodes beneath it count, and it reads `MAINTENANCE` whole only
+where nothing beneath it counts either ([ADR-0039](0039-status-rollup-semantics.md)
+rule 5,
+[ADR-0124](0124-a-node-whose-lines-are-all-silenced-still-counts-the-nodes-beneath-it.md)).
+A pin on a line is for that line, wherever its node stands in the tree when the pin
+applies. Two nodes are outside this rule entirely: one that reported **no** reasons (a
+check with a code and nothing to say), and one whose reasons are **prose** (decision 2)
+— prose has no individually suppressible parts, and its unit of suppression stays the
+node pin.
 
 This is [ADR-0004](0004-status-aggregation-semantics.md)'s roll-up applied one level
 below a node, and it is what the
@@ -163,7 +171,7 @@ the fold and the count is the only thing that always shows
 everywhere a node pin does — the strip pill, the "contains maintenance" pip and
 `/maintenance`, where it is edited and cleared as well as on its node's page
 ([ADR-0104](0104-a-pin-is-one-block-on-what-it-silences.md) decision 6). Setting one
-stays the leaf page's job (decision 12).
+is the node's own page's job, a leaf's or a branch's (decision 12).
 
 The **capped popover summarizes per node** — one row with a count (*3 of 20 reasons*,
 or *all 20 reasons* where every member is pinned) — while `/maintenance` states each
@@ -183,22 +191,28 @@ not fill with lines. A change beneath a line's pin is held back wherever the nod
 not show it, not only where every line is pinned.
 
 **12. An entry is addressed in a query parameter or a form field — never in a path
-segment.** The surface is the **existing leaf detail page**, which already lists every
-reason uncapped; it grows an admin control per line, and the write posts `path` plus
-**`slug`**, not `reason`: this form's `reason` is already the pin's explanation text,
-and overloading it would have made the two indistinguishable in one request — the
-*addressing* shape this decision fixes is the query parameter (`?reason=<slug>`), a
-different namespace, and it is unaffected.
+segment.** The surface is the **node's own page**, a branch's as well as a leaf's. A
+leaf's lists every reason uncapped; a branch's head, and its one card at depth 0, list
+the node's own lines as a leaf's page lists its lines — in full rather than clamped to
+`reason_cap`, each with its record, and where the reader may pin, the pause mark at its
+end and a pinned line's block beneath it — from one template the two pages share. Any
+line takes a pin, whatever it says, as a node does: a pin is an admin's intent, set
+ahead of the work as readily as on a failure. Each line grows an admin control, and the
+write posts `path` plus **`slug`**, not `reason`: this form's `reason` is already the
+pin's explanation text, and overloading it would have made the two indistinguishable in
+one request — the *addressing* shape this decision fixes is the query parameter
+(`?reason=<slug>`), a different namespace, and it is unaffected.
 
 The **query parameter is built** on the node page rather than as a second route:
 `/status/<branch>?reason=<slug>` — the node stays a path, the slug stays a query value.
 The index names a line, so its link lands on that line; the page marks the one it was
 asked for with a single fixed `pinned-reason` anchor. A slug in a *fragment* was
 considered and rejected — a declared slug may legally contain `#` or `%`, which a
-fragment silently mis-parses; it would need an id on all 150 lines; and it can only
-fail to scroll. The parameter lets the server say what nothing else could: a pin whose
-slug the current run does not report is **suspended, not deleted** (decision 6), and
-the page says so in words.
+fragment silently mis-parses; it would need an id on all 150 lines; and it can only fail
+to scroll. The parameter lets the server say what nothing else could: a pin whose slug
+the current run does not report is **suspended, not deleted** (decision 6), and the page
+says so in words, a branch's as a leaf's. A line's write comes back to the page as it
+was asked for — its depth and its filters — at the line.
 
 Two reasons, both hard: a percent-encoded `/` does **not** survive a path segment (WSGI
 hands over an already-decoded `PATH_INFO`, so `%2F` and a real separator are

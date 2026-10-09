@@ -104,13 +104,14 @@ class Config:
     # cloud — should not have to go looking for the one thing that explains the
     # failure. Set false where the dashboard has a wider audience than its logs.
     stacktrace: bool = True
-    # The budgeted failure retry (ADR-0033): while a check's last result is not
-    # OK, run it again after this interval instead of waiting out its frequency
-    # — at most `retry_attempts` times per failure episode, then back to the
-    # nominal frequency until it recovers. A duration string or bare seconds,
-    # kept as text and parsed where used (the maintenance_default_expiry
-    # pattern); empty or 0 = off, which is the default — nothing changes until
-    # a deployment opts in. A check config can override either field.
+    # The budgeted failure retry (ADR-0033, ADR-0125): while what a check's last
+    # run rolls up to is not OK, run it again after this interval instead of
+    # waiting out its frequency — at most `retry_attempts` times per failure
+    # episode, then back to the nominal frequency until what the run rolls up to
+    # changes. A duration string or bare seconds, kept as text and parsed where
+    # used (the maintenance_default_expiry pattern); empty or 0 = off, which is
+    # the default — nothing changes until a deployment opts in. A check config
+    # can override either field.
     retry_interval: str = ""
     # Fast attempts per failure episode (the budget); a non-negative int, 0
     # disables the retry even where an interval is set. The later damping work

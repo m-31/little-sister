@@ -1,7 +1,7 @@
 # ADR-0106 — A subject with a history has a node of its own, and a run is a mark at its own time
 
 - **Status:** Accepted
-- **Date:** 2026-10-03
+- **Date:** 2026-10-10 (accepted 2026-10-03)
 - **Related:** [ADR-0092](0092-a-check-declares-its-measures.md) (decisions 5 and 6,
   which left both halves of this open and which this amends),
   [ADR-0096](0096-a-measure-names-its-node-and-its-things.md) (decision 1, where a
@@ -23,7 +23,9 @@
   [ADR-0024](0024-dashboard-layout.md) (a status is never said by color alone),
   [ADR-0111](0111-a-runs-mark-says-how-the-run-stood.md) (the marks of a run that warned
   and of one without a verdict, a crowd of runs, the summary, and the records a mark is
-  drawn for; decision 2, a line written for the record alone)
+  drawn for; decision 2, a line written for the record alone),
+  [ADR-0122](0122-a-series-is-read-over-the-api-as-it-stands.md) (the read of decision
+  6, built, and what the build settled)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -195,12 +197,19 @@ URL shows: every series that stands at or beneath the node, over the window its 
 and `to` name ([ADR-0098](0098-a-series-view-is-drawn-over-a-window.md) decision 1) —
 one URL and the representation chosen by `Accept`, behind the bearer token, in one
 response, as the status read is
-([ADR-0080](0080-the-envelope-is-the-snapshot-published.md) decision 8). Each series
-says the node it stands on, the key it is kept under — its check's type and mount, and
-its subject — the measures its check declares, and its readings in the window: the time
-on the series' clock, when it was observed, the code and the sentence as they stood, the
-identity or the state, and the record. It is additive under `schema_version` 2. Nothing
-reads a series yet, and the read is built when something does.
+([ADR-0080](0080-the-envelope-is-the-snapshot-published.md) decision 8). `GET /series`
+reads the root as a node is read. Each series says the node it stands on, the key it is
+kept under — its check's type and mount, and its subject — its measures as the page
+draws them, and its readings in the window: the time on the series' clock, when it was
+observed, the code and the sentence as they stood, the identity or the state, and the
+record. A measure is published for every key the kept readings hold, each with the path
+of the node its curve stands on, and only those that stand at or beneath the node asked.
+A node that stands answers a list, empty where no series stands at or beneath it. It is
+additive under `schema_version` 2.
+
+The read is built, and [ADR-0122](0122-a-series-is-read-over-the-api-as-it-stands.md) is
+the record of what the build settled. What reads a series is a session or a script that
+reads a running instance.
 
 ## Consequences
 

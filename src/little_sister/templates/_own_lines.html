@@ -1,0 +1,134 @@
+{#- A node's own lines, as its own page lists them — a leaf's page and a branch's
+    (ADR-0036 decision 12): every line in full, uncapped, with the
+    same ``reason.actions`` slot (ADR-0034) beside each one, so a deployment's "raise
+    a ticket" button is everywhere the line itself is. ``surface`` tells a filler
+    which page it is on: `check` for a leaf's, which is not polled, and `grid` for a
+    branch's, which is.
+
+    This is also the surface for **per-entry maintenance** (ADR-0036): where a check
+    declared its lines as members, one finding somebody is working on can go quiet
+    while its nineteen siblings keep alarming. Where the reader may pin (``may``),
+    each such line ends in a pause mark, on a seat in the rail the line's other
+    actions share; it opens the pin's editor beneath the line, where its block will
+    stand (ADR-0104 decisions 3 and 4). A quiet line stays visible in the
+    maintenance tint and carries that block — who silenced it and until when, its
+    note, *Edit* and *Clear*. Prose gets no mark: its unit of suppression is the node
+    pin, and a per-line control there would offer to silence half of one condition.
+    **Any line takes a pin, whatever it says**, as a node does: a pin is an admin's
+    intent, set ahead of the work as readily as on a failure.
+
+    `?reason=<slug>` names one line (decision 12): the maintenance index links here
+    with it, and a line's set, edit and clear come back with it, because on a node
+    with 150 findings arriving at the right *page* is not the same as arriving at the
+    *line*. The named line (``focus``) — and only it — gets the `pinned-reason` id,
+    so one anchor exists instead of one per line, and only when it was asked for.
+
+    ``beneath`` says the node has nodes beneath it, read before a filter drops one: a
+    pin on one of its lines silences that line and nothing beneath it (ADR-0124),
+    which the editor of its last line still alarming says where a leaf's says that
+    nothing is left to alarm. ``back`` is the page a write comes back to, at its line
+    (``at_line``) — a branch's page as it was asked for, its depth and its filters
+    kept; a leaf's page leaves it empty, and the write's own answer is the node's page
+    at the line. ``path`` is the node's, ``prefix`` keeps the editors' field ids
+    apart from the others on the page. ``muted`` lets a record and a refusal take
+    Bootstrap's muted ink, which a leaf's alert has the pale fills for; a branch's
+    lines stand on a status fill, vivid where the node fails of its own, and take
+    their line's ink there (`_record_list.html`). ``covered`` counts the pins above
+    the node, which silence it and every line with it: a line's pin is then, as under
+    the node's own, for the day those end (ADR-0104 decision 2). -#}
+{% from '_rule_block.html' import pin_block, pin_new, rule_mark with context %}
+{% from '_status_cue.html' import status_cue %}
+{% from '_record_list.html' import record_list %}
+{% macro own_lines(node, path, may, focus='', focus_orphan=none, beneath=false,
+                   back='', surface='check', prefix='reason-maintenance-',
+                   muted=true, covered=0) -%}
+{%- set pin = node.maintenance_entry %}
+{#- What a line's pin leaves alarming beside it. A line that is silenced already is
+    not one that keeps alarming, and under the node's pin nothing alarms at all —
+    there a line's pin is for the day the node's ends. -#}
+{%- set others = node.reasons | rejectattr('quiet') | list | length - 1 %}
+{%- set line_covers %}
+    {%- if pin -%}
+        It stays silenced when the node's pin ends.
+    {%- elif covered -%}
+        It stays silenced when the {{ 'pin' if covered == 1 else 'pins' }} above the node {{ 'ends' if covered == 1 else 'end' }}.
+    {%- elif others > 1 -%}
+        The other {{ others }} keep alarming.
+    {%- elif others == 1 -%}
+        The other one keeps alarming.
+    {%- elif beneath -%}
+        No other line of its own is left to alarm, and the nodes beneath it still count.
+    {%- else -%}
+        No other line is left to alarm.
+    {%- endif -%}
+{%- endset %}
+{#- Nothing to list and no absent line to name: no block at all, so a node that
+    says nothing of itself gains no empty box. -#}
+{%- if node.reasons or focus_orphan %}
+<div class="own-lines">
+{%- if focus_orphan %}
+    {#- The pin is real and its line is absent: a slug the current run did not report
+        is **suspended, not deleted** (decision 6). Say so — this is the one surface
+        that can, and an anchor that simply failed to scroll would have left the
+        operator guessing. -#}
+    <div class="reason-orphan" id="pinned-reason">The line this pin
+        was set on is <strong>no longer reported</strong> by this
+        check. The pin is still here and still expires
+        {{ focus_orphan.expires_at | localtime }}; if the line comes
+        back, it comes back silenced.</div>
+{%- endif %}
+{% for line in node.reasons %}
+    {%- set focused = focus and line.slug == focus %}
+    {%- set settable = may and node.members and not line.quiet %}
+    {%- set next = back | at_line(line.slug) if back else '' %}
+    {#- A coded line carries its own claim (ADR-0042): state class, its state's own
+        tint, and a labeled cue as its accessible name; quiet keeps the maintenance
+        tint over any code, and is-running is display only — the words still say
+        it. -#}
+    <div {% if focused %}id="pinned-reason" {% endif %}class="small check-reason{% if line.code %} is-coded s-{{ line.code | status_slug }}{% endif %}{% if line.running %} is-running{% endif %}{% if line.quiet %} is-quiet{% endif %}{% if focused %} is-focused{% endif %}">
+        {#- The box the pause mark is placed in: the line's own paddings differ with
+            its state, and the mark has to sit where the rail does. -#}
+        <div class="check-reason__box">
+        <div class="check-reason__rail{% if settable %} check-reason__rail--seat{% endif %}">
+            <span class="reason-actions">{{ slot('reason.actions', node=node, reason=line.text, line=line, index=loop.index0, surface=surface) }}</span>
+        </div>
+        <div class="md-body check-reason__body">{% if line.code %}{{ status_cue(line.code, labeled=true) }}{% endif %}{{ line.text | markdown }}</div>
+        {#- The record (backlog #32): what the check read about this line's subject,
+            beside the sentence it wrote. A list of dotted names and values — its
+            times in the configured timezone, everything else as stored — on the
+            node's own page only: a card shows the line, and this is the surface a
+            reader comes to when the line is not enough. -#}
+        {%- if line.data %}
+            {{ record_list(line.data, muted=muted) }}
+        {#- Where the seam refused the record (ADR-0093), the line stands as its
+            grading wrote it and this says why, in the record's place — escaped like
+            any other data, since a why may quote the value it refused. -#}
+        {%- elif line.refused %}
+            <p class="reason-refused small{% if muted %} text-muted{% endif %}">Record refused: {{ line.refused }}</p>
+        {%- endif %}
+        {%- if settable %}
+            {#- After the line's text in the document, so the editor opens beneath it
+                in the flow; the mark itself is drawn on its seat in the rail. A mark
+                and not the two words: on a node with 150 lines the words were a
+                column of their own. -#}
+            <details class="reason-pin">
+                <summary class="reason-action reason-pin__toggle" title="Set maintenance for this line">{{ rule_mark('maintenance') }}<span class="visually-hidden">Set maintenance for this line</span></summary>
+                {{ pin_new('line', line_covers, path, line.slug, prefix ~ loop.index, next=next) }}
+            </details>
+        {%- elif line.quiet %}
+            {{ pin_block(line.maintenance, 'line', path, line.slug, prefix ~ loop.index, may, also=pin is not none or covered, next=next) }}
+        {%- endif %}
+        </div>
+    </div>
+{% endfor %}
+{% if node.quiet_reasons %}
+    {#- "nothing here is reporting" explains a node that went blue because its last
+        member was pinned. Under a **node** pin, the node's own or one above it, it
+        would take credit for the wrong thing — the block above already says why —
+        so the count then reports only what stays quiet once that pin is cleared;
+        and above other nodes it would be untrue, since they still count (ADR-0124). -#}
+    <div class="reason-quiet-count">{{ node.quiet_reasons }} of {{ node.reasons | length }} {% if node.maintenance or covered %}also pinned individually{% else %}in maintenance{% if node.own_code.name == 'MAINTENANCE' and not beneath %} — nothing here is reporting{% endif %}{% endif %}.</div>
+{% endif %}
+</div>
+{%- endif %}
+{%- endmacro %}

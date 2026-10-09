@@ -1,7 +1,7 @@
 # ADR-0097 — A node's series have a view of their own, beside its status and its history
 
 - **Status:** Accepted
-- **Date:** 2026-09-27
+- **Date:** 2026-10-10 (accepted 2026-09-27)
 - **Related:** [ADR-0092](0092-a-check-declares-its-measures.md) (decisions 6 and 7,
   which this amends), [ADR-0096](0096-a-measure-names-its-node-and-its-things.md) (the
   curves, and the node each stands on),
@@ -11,7 +11,9 @@
   [ADR-0094](0094-a-restart-is-no-transition.md) decision 5 (a node that declares
   nothing of its own has no periods),
   [ADR-0106](0106-a-subject-with-a-history-has-a-node-of-its-own.md) (the node that
-  stands for a subject and shows its series, and the `series` read on the API)
+  stands for a subject and shows its series, and the `series` read on the API),
+  [ADR-0122](0122-a-series-is-read-over-the-api-as-it-stands.md) (that read, built at
+  this view's URL, and the credential its two routes choose)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -68,8 +70,9 @@ series is shown on the node that stands for its subject where one does
 ([ADR-0106](0106-a-subject-with-a-history-has-a-node-of-its-own.md) decision 4), a
 subject that rides on a line among them.
 
-The `series` read on the API, once it is built, is this view's URL answered as JSON
-([ADR-0106](0106-a-subject-with-a-history-has-a-node-of-its-own.md) decision 6).
+The `series` read on the API is this view's URL answered as JSON where `Accept` asks
+for it ([ADR-0106](0106-a-subject-with-a-history-has-a-node-of-its-own.md) decision 6,
+built by [ADR-0122](0122-a-series-is-read-over-the-api-as-it-stands.md)).
 
 ### 2. A node's page shows the curves that stand on it
 
@@ -113,7 +116,10 @@ view shows. History keeps every reading, as before.
   readings it holds and when the newest was taken. A node's name opens its Status page,
   and its row says in words where else it leads — its Series view where a curve stands
   at or beneath it, its History page — and a root appears once, its heading its own row
-  ([ADR-0103](0103-the-series-index-says-where-each-link-leads.md)).
+  ([ADR-0103](0103-the-series-index-says-where-each-link-leads.md)). Asked for JSON, the
+  same URL answers the series read for the root
+  ([ADR-0122](0122-a-series-is-read-over-the-api-as-it-stands.md) decision 2), and its
+  page stays this index.
 - There is no `/history` root: the root declares nothing of its own and has no periods
   ([ADR-0094](0094-a-restart-is-no-transition.md) decision 5), and the instance's
   changes are the Events page.
@@ -122,13 +128,16 @@ view shows. History keeps every reading, as before.
 
 - **ADR-0092 decisions 6 and 7 are amended**: the curves leave the subject's node for
   their own nodes and the Series view, and the readings table goes with them.
-- **One route, two pages**: `/series` and `/series/<path>`, behind the login like every
-  other page. The node's Time card loses its History button; the tab replaces it.
+- **One route, two pages**: `/series` and `/series/<path>`. Each chooses its own
+  credential, as `/status` does, and refuses both ways
+  ([ADR-0122](0122-a-series-is-read-over-the-api-as-it-stands.md) decision 8). The
+  node's Time card loses its History button; the tab replaces it.
 - **A subject that rides only on a line, and how a series of events is drawn**, are
   [ADR-0106](0106-a-subject-with-a-history-has-a-node-of-its-own.md)'s — and have a
   view to be shown in.
-- **The Series view is HTML only.** Its JSON — a `series` read on the API — is this
-  view's URL answered as JSON, once it is built (decision 1).
+- **The Series view answers JSON as well as HTML.** The `series` read on the API is this
+  view's URL where `Accept` asks for JSON, and `/series` answers the same way (decisions
+  1 and 4).
 - **A curve seen small on the index, and a count on the Series tab**, are
   [ADR-0114](0114-a-curve-seen-small-and-the-series-tabs-count.md)'s.
 

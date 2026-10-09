@@ -536,7 +536,7 @@ class BranchDocumentTests(_Tree):
             "- **Reported:** warn ⚠️",
             "- **Shown as:** error ⛔ — rolled up from its own reading and the one "
             "node beneath it.",
-            "- **Status warn** since 2026-01-15 08:00:00 +01:00",
+            "- **Its own status warn** since 2026-01-15 08:00:00 +01:00",
             "- **Last observed:** 2026-01-15 09:59:00 +01:00",
             "",
             "**Reasons**",

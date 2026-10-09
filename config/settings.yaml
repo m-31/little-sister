@@ -85,14 +85,15 @@ maintenance_default_expiry: 7d
 # written to the log either way.
 stacktrace: true
 
-# A faster second look on failure (ADR-0033): while a check's last result is not
-# OK, run it again after this interval instead of waiting out its frequency — at
-# most retry_attempts times per failure episode, then back to the normal
-# frequency until it recovers. A duration string (e.g. 30s, 2m) or bare seconds;
-# empty or 0 = no retry, which is the default. A check config can override both
-# fields, and a per-check retry_interval: 0 switches that one check off. The
-# retry is measured from the run's completion, so it can never outrun a check's
-# timeout.
+# A faster second look on failure (ADR-0033, ADR-0125): while what a check's last
+# run rolls up to — its own node and every node beneath it — is not OK, run it
+# again after this interval instead of waiting out its frequency, at most
+# retry_attempts times per failure episode, then back to the normal frequency
+# until that changes; a run that makes no claim at all arms nothing. A duration
+# string (e.g. 30s, 2m) or bare seconds; empty or 0 = no retry, which is the
+# default. A check config can override both fields, and a per-check
+# retry_interval: 0 switches that one check off. The retry is measured from the
+# run's completion, so it can never outrun a check's timeout.
 retry_interval: 0
 
 # Fast attempts per failure episode (the budget). A non-negative integer;

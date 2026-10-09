@@ -21,10 +21,11 @@
 
     // What stands inside a node's row and is a control of its own: the maintenance
     // pip (its own click-popover, maintenance.js), and a pin's block and editors
-    // (ADR-0104), which a card's head and a branch's head carry. None of them asks
-    // for the node's inspection card — on touch that would take the first tap from
-    // *Edit*, *Clear* and the pause mark.
-    var OWN_CONTROLS = ".maintenance-pip, .pin-setter, .rule-setter, .rule-block";
+    // (ADR-0104), which a card's head and a branch's head carry — the node's, and
+    // on a branch's head each of its lines' (ADR-0036 decision 12).
+    // None of them asks for the node's inspection card — on touch that would take
+    // the first tap from *Edit*, *Clear* and the pause mark.
+    var OWN_CONTROLS = ".maintenance-pip, .pin-setter, .rule-setter, .rule-block, .reason-pin";
 
     // A pin's editor, open: the shape the refresh waits for (poll.js, ADR-0104
     // decision 7).

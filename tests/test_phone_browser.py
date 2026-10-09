@@ -69,9 +69,13 @@ _REVIEWS = {
     for number in range(4810, 4822)
 }
 #: A node four levels down, whose trail is wider than a phone, and one whose name
-#: has nowhere to break and is wider than a phone alone.
+#: has nowhere to break and is wider than a phone alone — and than a leaf's column on
+#: a desk, 772 pixels, in a narrow face as much as in a wide one: its trail is some
+#: 1050 pixels in Liberation Sans and in Inter. At half the length it was wider than
+#: that column in DejaVu Sans only.
 _DEEP = "/security/scanner/production/informational-findings"
-_UNBROKEN = "/storage/backup_of_the_primary_database_cluster_nightly"
+_UNBROKEN = ("/storage/backup_of_the_primary_database_cluster_nightly"
+             "_with_its_write_ahead_log_segments")
 _TITLE = "Findings nobody has to act on today"
 #: A line whose words have nowhere to break either — a digest, an identifier — and
 #: the name of who pinned it.
@@ -380,10 +384,24 @@ class PhoneLayoutTests(unittest.TestCase):
             .filter(el => el.textContent.trim() === '/'
                     && el.previousElementSibling.getClientRects().length === 1)
             .map(el => top(el) === top(el.previousElementSibling));
+          // what a part would take on one line of its own, wherever it stands
+          const natural = el => {
+            const copy = el.cloneNode(true);
+            copy.style.position = 'absolute';
+            copy.style.visibility = 'hidden';
+            copy.style.width = 'max-content';
+            el.parentElement.appendChild(copy);
+            const width = copy.getBoundingClientRect().width;
+            copy.remove();
+            return width;
+          };
           return {
             trail: edge(trail), title: title === null ? null : edge(title),
             band: edge(document.querySelector('.ls-band')),
             cut: title !== null && title.scrollWidth > title.clientWidth,
+            trailOwn: natural(trail),
+            titleOwn: title === null ? null : title.scrollWidth,
+            gap: parseFloat(getComputedStyle(trail.parentElement).columnGap),
             names: [...trail.children].filter(el => el.textContent.trim() !== '/')
                                       .map(el => edge(el)),
             kept,
@@ -475,15 +493,19 @@ class PhoneLayoutTests(unittest.TestCase):
     def test_on_a_desk_the_band_reads_as_it_did(self):
         # what gives way on a phone does not where the band has the room: the
         # trail keeps one line, and the title the rest of that line — all of it,
-        # or cut short where the band is narrower than the two
+        # or cut short where the band is narrower than the two. Which of the two a
+        # page is depends on the face it is drawn in — History's band is 980 pixels
+        # here, and the trail and the title need 890 of them on a Mac, 917 in
+        # Liberation Sans and 1072 in DejaVu Sans — so the band says which it is;
+        # a short page and a leaf's narrow column are far from the edge in any face
         desk = self.browser.new_context(viewport={"width": 1189, "height": 900},
                                         reduced_motion="reduce")
         self.addCleanup(desk.close)
         self.page = desk.new_page()
         self.page.route("https://cdn.jsdelivr.net/**", self._vendored)
         self._sign_in()
-        for route, cut in (("/status/alpha", False), (f"/history{_DEEP}", True),
-                           (f"/status{_DEEP}", True)):
+        read = set()
+        for route in ("/status/alpha", f"/history{_DEEP}", f"/status{_DEEP}"):
             with self.subTest(route=route):
                 self.page.goto(f"{self.base}{route}")
                 band = self.page.evaluate(self._BAND)
@@ -495,7 +517,12 @@ class PhoneLayoutTests(unittest.TestCase):
                 self.assertLess(band["title"]["top"], band["trail"]["bottom"], band)
                 self.assertLessEqual(band["title"]["right"],
                                      band["band"]["right"] + 0.5, band)
-                self.assertEqual(band["cut"], cut, band)
+                needs = band["trail"]["width"] + band["gap"] + band["titleOwn"]
+                self.assertEqual(band["cut"], needs > band["band"]["width"] + 0.5,
+                                 band)
+                read.add(band["cut"])
+        # both halves of the sentence: a title whole, and one cut short
+        self.assertEqual(read, {False, True})
         # and the stamp is ruled off from the filters beside it
         self.page.goto(f"{self.base}/status")
         self.assertEqual(
@@ -514,6 +541,8 @@ class PhoneLayoutTests(unittest.TestCase):
         self.page.goto(f"{self.base}/status{_UNBROKEN}")
         band = self.page.evaluate(self._BAND)
         self.assertIsNotNone(band)
+        # the premise: on one line of its own the trail is wider than the column
+        self.assertGreater(band["trailOwn"], band["band"]["width"], band)
         self.assertLessEqual(band["trail"]["right"], band["band"]["right"] + 0.5,
                              band)
         self.assertGreater(len({name["top"] for name in band["names"]}), 1, band)

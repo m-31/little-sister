@@ -386,6 +386,65 @@ class StatusSnapshot:
         return StatusCode.UNDEFINED
 
     @property
+    def own_counted(self) -> StatusCode:
+        """The code this node counts **for itself** in what it rolls up to: its own
+        status — or, where its own reading is past its tolerance, that reading
+        degraded, which is what the tree counts for it whichever rule is holding
+        the reading back (ADR-0005, ADR-0032 rule 6).
+
+        It is the expression the snapshot rolls the node up with
+        (:func:`_counts_for_itself`), read off the fields that expression was
+        handed. A surface that asks **whose** a status is asks here: comparing
+        ``own_code`` with ``code`` answers it wrongly for a node whose own reading
+        went stale, which shows a warning that is nobody's but its own.
+        """
+        return _counts_for_itself(self.reported_code, self.own_code, self.own_stale)
+
+    @property
+    def derived(self) -> bool:
+        """Whether what this node shows comes **from beneath it** (ADR-0123): its
+        ``code`` is not the code it counts for itself. A node with nothing beneath
+        it never is, and neither is one that counts for itself what it rolls up to
+        — a failure of its own above nodes that are well, or above one that fails
+        too.
+
+        One answer for every surface that draws a node pale where its color is a
+        child's — the head of its page, its card, its box — and for every sentence
+        that says a status is rolled up.
+        """
+        return self.code is not self.own_counted
+
+    @property
+    def counts_beneath(self) -> bool:
+        """Whether what this node shows **counts the nodes beneath it**: it has
+        some, and what it counts for itself does not cancel them — ``MAINTENANCE``
+        by a pin on the node or by its check's word for it (ADR-0039 rule 3), and
+        not by lines that are all silenced, which cancel nothing (ADR-0124). Its
+        own status is then one part of what it shows, and a surface that states a
+        period of the node — which is the own status's, as every event is
+        (ADR-0107 decision 1) — names it as that (ADR-0123).
+
+        It is the roll-up's own answer (:func:`_cancels_beneath`), read off the
+        fields that expression was handed. Read it off the snapshot the tree made:
+        a filter that takes a node's children away for a view takes this with them.
+        """
+        return bool(self.children) and not _cancels_beneath(
+            self.own_counted, self.reported_code, self.maintenance)
+
+    @property
+    def lines_silenced(self) -> bool:
+        """Whether this node counts nothing for itself because **every line of its
+        own is silenced** (ADR-0124): its own status reads ``MAINTENANCE`` by its
+        lines' pins, and not by a pin on the node or its check's word, so it
+        cancels nothing beneath it (:func:`_cancels_beneath`). A surface that says
+        where what a node shows comes from says so, rather than *rolled up from its
+        own reading* — which, with every line silenced, counts for nothing.
+        """
+        return (self.own_counted is StatusCode.MAINTENANCE
+                and not _cancels_beneath(self.own_counted, self.reported_code,
+                                         self.maintenance))
+
+    @property
     def quiet_reasons(self) -> int:
         """How many of this node's entries are pinned. The card clamps its reasons
         to ``reason_cap``, so the pinned line may sit below the fold and this count
@@ -2623,13 +2682,17 @@ class StatusTree:
         # and a node whose members are all pinned has nothing left reporting.
         own = _own_code(node.code, [(line.quiet, line.code) for line in lines],
                         node.members, node.maintenance)
-        # Staleness judges the **raw** reading and is never suppressed — a check
-        # that stopped running escalates whichever policy is holding its result
-        # back (ADR-0032 rule 6, ADR-0036 decision 9), so what a stale node gives
-        # its parent is its degraded raw code, not its quieted own status.
-        rollup = worst_of((node.code, STALE_DEGRADE)) if stale_self else own
+        # What the node counts for itself: its own status, or its raw reading
+        # degraded where that reading is stale (`_counts_for_itself`, which the
+        # snapshot reads again when a surface asks whose a status is).
+        rollup = _counts_for_itself(node.code, own, stale_self)
         counted = tuple(child.counted for child in children)
-        code = effective_code(rollup, counted)
+        # What that cancels beneath it: a pin on the node, or its check's word for
+        # it — never its lines all silenced, which count nothing and cancel nothing
+        # (`_cancels_beneath`, ADR-0124). The snapshot asks the same question again
+        # for `counts_beneath` and `lines_silenced`.
+        code = _rolls_up(rollup, counted,
+                         _cancels_beneath(rollup, node.code, node.maintenance))
         stale = stale_self or any(child.stale for child in children)
         # What the **parent** counts, and the rule that made it something other than
         # `code` (ADR-0032 rule 5). A damping counter transforms the value; a pin and
@@ -2715,7 +2778,9 @@ def _own_code(reported: StatusCode,
     leave the node ``MAINTENANCE``, entries that merely have not reported leave it
     ``UNDEFINED`` — the ADR-0039 rule-5 tiebreak, unchanged. So pinning the one
     red line of an otherwise healthy coded set turns the node ``OK``, and pinning
-    every line turns it ``MAINTENANCE``, exactly as with real children. Two kinds
+    every line turns it ``MAINTENANCE``, exactly as with real children — and as
+    with real children, that cancels nothing beneath the node, which is the
+    roll-up's to say (:func:`_cancels_beneath`, ADR-0124). Two kinds
     of node stay outside the rule entirely and read what they reported: one with
     **no** reasons (a check with a code and nothing to say), and one whose reasons
     are **prose**, which has no individually suppressible parts.
@@ -2749,6 +2814,65 @@ def _own_code(reported: StatusCode,
     if counted:
         return worst_of(counted)
     return StatusCode.MAINTENANCE if silenced else StatusCode.UNDEFINED
+
+
+def _counts_for_itself(reported: StatusCode, own: StatusCode,
+                       stale: bool) -> StatusCode:
+    """What a node counts **for itself** in what it rolls up to (ADR-0039, with the
+    one transform that is applied on top): its ``own`` status — or, where its own
+    reading is ``stale``, what its check ``reported``, degraded to at least
+    :data:`STALE_DEGRADE`.
+
+    Staleness judges the **raw** reading and is never suppressed — a check that
+    stopped running escalates whichever policy is holding its result back (ADR-0032
+    rule 6, ADR-0036 decision 9), so what a stale node counts is its degraded raw
+    code, not its quieted own status.
+
+    The roll-up comes here for every node, and the snapshot comes here again when
+    a surface asks whose a status is (:attr:`StatusSnapshot.own_counted`): one
+    expression, so the two cannot answer differently.
+    """
+    return worst_of((reported, STALE_DEGRADE)) if stale else own
+
+
+def _cancels_beneath(counts_for_itself: StatusCode, reported: StatusCode,
+                     pinned: bool) -> bool:
+    """Whether what a node counts for itself **cancels what is beneath it**
+    (ADR-0039 rule 3): ``MAINTENANCE`` by a pin on the node, or by its check's word
+    for it — a ``reported`` ``MAINTENANCE``, the uncoded lines that carry it
+    included.
+
+    Not ``MAINTENANCE`` because every line of its own is pinned. The lines are the
+    node's children too (ADR-0036 decision 7), and silenced they count nothing and
+    cancel nothing, as a child in maintenance cancels nothing but itself (ADR-0124
+    decision 1). A line's pin is set on a leaf's page, *for this line only*; the
+    node it stands on may have nodes beneath it by the time it applies.
+
+    The roll-up asks this for every node (:func:`_rolls_up`), and the snapshot asks
+    it again of the fields it was handed (:attr:`StatusSnapshot.counts_beneath`,
+    :attr:`StatusSnapshot.lines_silenced`): one expression, so a surface cannot say
+    that a node counts what is beneath it where the roll-up did not.
+    """
+    return (counts_for_itself is StatusCode.MAINTENANCE
+            and (pinned or reported is StatusCode.MAINTENANCE))
+
+
+def _rolls_up(counts_for_itself: StatusCode, children: Sequence[StatusCode],
+              cancels: bool) -> StatusCode:
+    """What a node rolls up to (ADR-0039): what it counts for itself and what each
+    child contributes, by :func:`~little_sister.status.effective_code` — with the
+    one case that function cannot tell from a pin.
+
+    A node whose lines are all silenced counts ``MAINTENANCE`` for itself and
+    cancels nothing (``cancels`` false, :func:`_cancels_beneath`): its own part is
+    skipped as a silenced child is, the nodes beneath it count, and it reads
+    ``MAINTENANCE`` whole only where nothing beneath it counts either — rule 5,
+    which is also what a leaf with every line pinned reads (ADR-0124 decision 1).
+    """
+    if counts_for_itself is StatusCode.MAINTENANCE and not cancels:
+        return effective_code(StatusCode.UNDEFINED,
+                              (*children, StatusCode.MAINTENANCE))
+    return effective_code(counts_for_itself, children)
 
 
 def _sort_key(name: str) -> str:

@@ -12,40 +12,27 @@
 
     Everything on it comes from the deployment's own `config/links.yaml`; this
     file owns only how it looks. -#}
-{%- macro icon_image(link, file, variant, favicon, side) -%}
-    {#- One image. `file` is what the search path resolved for this background;
-        where it resolved nothing we fall through to the entry's own origin
-        favicon, the step before the neutral glyph (ADR-0030 §3). A remote icon
-        keeps its own URL — the route never proxies one. -#}
-    {%- set source = (file.url or url_for('link_icon', variant=variant, name=link.icon))
-                     if file else favicon -%}
-    {%- if source %}<img class="ls-links__icon{{ ' ls-links__icon--' ~ side if side }}"
-         src="{{ source }}" alt="" width="20" height="20" loading="lazy">{% endif -%}
-{%- endmacro -%}
-
-{%- macro icon_mark(link, icon) -%}
+{%- macro icon_mark(link) -%}
     {#- A brand logo does not theme: a black mark vanishes on the dark themes and
         a white one on the light. So an icon that declared a **pair** emits both
         files and CSS hides one — the choice cannot be made here, because under
         the `auto` theme the server does not know what the OS will resolve to.
         Anything else — one file, a favicon — rides a **theme-invariant light
-        chip**, which is what keeps a single-file mark legible in every theme.
-        The chip is the floor, the pair is the upgrade (ADR-0030 §4). -#}
-    {%- set live = icon if icon and not icon.suppressed else none -%}
-    {%- set light = live.file_for('on-light') if live else none -%}
-    {%- set dark = live.file_for('on-dark') if live else none -%}
-    {%- set paired = live and live.paired -%}
-    {%- set favicon = (link.url | site_origin) ~ '/favicon.ico'
-                      if link.url | site_origin else '' -%}
-    <span class="ls-links__mark{{ '' if paired and light and dark else ' ls-links__mark--chip' }}">
-        {%- if paired -%}
-            {{ icon_image(link, light, 'on-light', favicon, 'light') }}
-            {{ icon_image(link, dark, 'on-dark', favicon, 'dark') }}
-        {%- else -%}
-            {#- One file serves both backgrounds, so one image serves both: a
-                second copy would be the same bytes fetched twice. -#}
-            {{ icon_image(link, light, 'on-light', favicon, '') }}
-        {%- endif -%}
+        chip**, which is what keeps a single-file mark legible in every theme, and
+        one image serves both backgrounds: a second would be the same bytes fetched
+        twice. The chip is the floor, the pair is the upgrade (ADR-0030 §4).
+
+        Which images, and where each is from, is `LinksConfig.mark_for`'s answer,
+        because the page's own Content-Security-Policy is taken from the same one:
+        an image with a `url` is fetched from elsewhere — a remote mark, or the
+        entry's site favicon — and one without is ours, by the entry's name. -#}
+    {%- set mark = links_config.mark_for(link) -%}
+    <span class="ls-links__mark{{ '' if mark.bare else ' ls-links__mark--chip' }}">
+        {%- for image in mark.images -%}
+            <img class="ls-links__icon{{ ' ls-links__icon--' ~ image.side if image.side }}"
+                 src="{{ image.url or url_for('link_icon', variant=image.variant, name=link.icon) }}"
+                 alt="" width="20" height="20" loading="lazy">
+        {%- endfor -%}
     </span>
 {%- endmacro -%}
 
@@ -293,7 +280,7 @@
                             the monitor stays where it was. -#}
                         <a class="ls-links__link" href="{{ link.url }}"
                            target="_blank" rel="noopener noreferrer">
-                            {{ icon_mark(link, links_config.icon_for(link.icon)) }}
+                            {{ icon_mark(link) }}
                             <span class="ls-links__text">
                                 <span class="ls-links__name">{{ link.title }}</span>
                                 {%- if link.note %}

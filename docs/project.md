@@ -248,7 +248,7 @@ The app offers:
   it runs next and what it declared beside what it did — refreshing itself like the
   dashboard. *Installed* (`/system/installed`): what the installation settled at
   startup — the check types and who answers for each, the packages, the extensions,
-  the ways in and the page policy.
+  the ways in, the page policy, and what the log leaves out.
 - **Copy** (`/copy`, `/copy/<path>`) — a compact non-OK outline with the minimum
   ancestor chain, copied as Markdown for chat or rich text for a ticket; and every
   node's own document, behind the Copy tab of its page.

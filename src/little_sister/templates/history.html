@@ -64,6 +64,13 @@
         {%- if declares_nothing_since and periods %}
         <p class="small text-muted">Declares nothing of its own since {{ declares_nothing_since | localtime }}: its page heads with what its children roll up to.</p>
         {%- endif %}
+        {#- A node above others heads its page with what it rolls up to, and its
+            periods are those of its own status, as every period is: the table
+            says whose they are, or *ok — current* would read as the node's status
+            over a child in error (ADR-0123 decision 3). -#}
+        {%- if own_periods %}
+        <p class="small text-muted">The periods of its own status: its page heads with what it rolls up to, the nodes beneath it included.</p>
+        {%- endif %}
         {%- endif %}
         </div>
 

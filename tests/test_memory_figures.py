@@ -6,12 +6,14 @@ grades the figures is ``test_limits.py``'s."""
 from __future__ import annotations
 
 import builtins
+import gc
 import os
 import re
 import tempfile
 import threading
 import time
 from collections.abc import Callable, Sequence
+from contextlib import ExitStack
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -23,13 +25,20 @@ from little_sister import engine as engine_module
 from little_sister import limits as limits_module
 from little_sister.checks import Check, CheckResult, Measurement
 from little_sister.config import config
-from little_sister.engine import Engine
+from little_sister.engine import Engine, _asks_for_a_collection
 from little_sister.limits import (
+    COLLECTION_SPACING,
     MEMORY_LINE_MINUTES,
     RISE_LOGGED,
+    STALL_SECONDS,
     EngineReport,
+    Left,
     Limits,
     Resident,
+    killed_text,
+    machine_left,
+    machine_memory,
+    machine_text,
     resident_size,
     rise_text,
 )
@@ -41,6 +50,8 @@ from little_sister.tree import StatusTree
 MIB = 1024 ** 2
 GIB = 1024 ** 3
 LOGGER = "little_sister.logger"
+#: The minus sign a collection's fall is written with, and not a hyphen.
+MINUS = "\u2212"
 
 
 class _Meter:
@@ -101,7 +112,12 @@ class _Beta(_Moving):
 
 
 def _engine(checks: Sequence[Check], meter: _Meter, **kwargs: Any) -> Engine:
+    """An engine on ``meter``, saying nothing of what the machine has left and
+    collecting nothing after a run unless a test gives it a ``left`` or a
+    ``collect`` of its own."""
     kwargs.setdefault("limits", Limits(memory_limit=None))
+    kwargs.setdefault("left", lambda: None)
+    kwargs.setdefault("collect", None)
     return Engine(list(checks), StatusTree(), resident=meter, **kwargs)
 
 
@@ -162,13 +178,450 @@ class ResidentSizeTests(TestCase):
             self.assertIsNone(resident_size())
 
 
+def _meminfo(available_kib: int) -> str:
+    """``/proc/meminfo`` as the kernel writes it, around the one line read."""
+    return ("MemTotal:         938796 kB\n"
+            "MemFree:           32372 kB\n"
+            f"MemAvailable:   {available_kib:>9} kB\n"
+            "Buffers:               8 kB\n"
+            "Cached:            69460 kB\n")
+
+
+def _events(kills: int) -> str:
+    """A v2 cgroup's ``memory.events``, as the instance's read."""
+    return (f"low 0\nhigh 0\nmax 0\noom {kills}\noom_kill {kills}\n"
+            "oom_group_kill 0\n")
+
+
+#: ``/proc/pressure/memory`` as the instance had it at its second reading: the
+#: ``some`` line's counter is 32.274242 seconds, the ``full`` line's another.
+PRESSURE = ("some avg10=0.87 avg60=1.59 avg300=1.45 total=32274242\n"
+            "full avg10=0.85 avg60=1.50 avg300=1.38 total=30815820\n")
+
+
+class MachineLeftTests(TestCase):
+    """What the machine has left (ADR-0095 decision 7): `MemAvailable` and, under a
+    memory limit, what the limit leaves — the limit less the usage, with the two
+    lists of file pages counted back — the smaller of the two; the kernel's counter
+    of the time some task stalled on memory; and, under the limit, how often the
+    kernel has ended a process of the cgroup. Read from the files the reader reads,
+    rooted in a directory of the test's and written as the kernel writes them —
+    ``/proc/self/cgroup`` among them, which names the cgroup the process runs in."""
+
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+
+    def _at(self, path: Path) -> Path:
+        return self.root / path.relative_to("/")
+
+    def _write(self, path: str, text: str) -> None:
+        where = self._at(Path(path))
+        where.parent.mkdir(parents=True, exist_ok=True)
+        where.write_text(text, encoding="utf-8")
+
+    def _machine(self, physical: int | None) -> ExitStack:
+        """The reader pointed at this test's files, the physical memory as given."""
+        controllers = tuple(replace(controller, mount=self._at(controller.mount))
+                            for controller in limits_module._CONTROLLERS)
+        stack = ExitStack()
+        for name, value in (
+                ("_MEMINFO", self._at(limits_module._MEMINFO)),
+                ("_PRESSURE", self._at(limits_module._PRESSURE)),
+                ("_SELF_CGROUP", self._at(limits_module._SELF_CGROUP)),
+                ("_CONTROLLERS", controllers)):
+            stack.enter_context(patch.object(limits_module, name, value))
+        stack.enter_context(patch.object(limits_module, "_physical_memory",
+                                         return_value=physical))
+        return stack
+
+    def _read(self, *, physical: int | None = 916 * MIB) -> Left | None:
+        with self._machine(physical):
+            return machine_left()
+
+    def _given(self, *, physical: int | None = 916 * MIB) -> int | None:
+        """What the machine gives the process, as :func:`machine_memory` reads it."""
+        with self._machine(physical):
+            return machine_memory()
+
+    def _v2(self, cgroup: str = "/", *, limit: str | None = "max", usage: int = 0,
+            inactive: int = 0, active: int = 0, shmem: int = 0, kills: int = 0,
+            own: bool = True) -> None:
+        """A v2 cgroup at ``cgroup`` beneath the mount — ``/``, its root, as a
+        container sees its own — the one ``/proc/self/cgroup`` names where ``own``.
+        ``file`` counts the shared memory, which neither list holds; a cgroup at
+        the true root has no limit file, which ``limit=None`` writes."""
+        base = "/sys/fs/cgroup" + ("" if cgroup == "/" else cgroup)
+        self._write("/sys/fs/cgroup/cgroup.controllers", "cpuset cpu io memory pids\n")
+        if limit is not None:
+            self._write(f"{base}/memory.max", f"{limit}\n")
+        self._write(f"{base}/memory.current", f"{usage}\n")
+        self._write(f"{base}/memory.stat",
+                    f"anon {max(0, usage - inactive - active - shmem)}\n"
+                    f"file {inactive + active + shmem}\nshmem {shmem}\n"
+                    "inactive_anon 0\nactive_anon 0\n"
+                    f"inactive_file {inactive}\nactive_file {active}\n")
+        self._write(f"{base}/memory.events", _events(kills))
+        if own:
+            self._write("/proc/self/cgroup", f"0::{cgroup}\n")
+
+    def _v1(self, cgroup: str = "/", *, limit: int = 9223372036854771712,
+            usage: int = 0, inactive: int = 0, active: int = 0,
+            kills: int = 0) -> None:
+        """A v1 memory cgroup at ``cgroup`` beneath the mount. Its own lists hold
+        nothing, as where the cache is the cgroups' beneath it; the hierarchical
+        ones hold ``inactive`` and ``active``."""
+        base = "/sys/fs/cgroup/memory" + ("" if cgroup == "/" else cgroup)
+        self._write(f"{base}/memory.limit_in_bytes", f"{limit}\n")
+        self._write(f"{base}/memory.usage_in_bytes", f"{usage}\n")
+        self._write(f"{base}/memory.stat",
+                    "cache 0\nrss 0\ninactive_file 0\nactive_file 0\n"
+                    f"total_cache {inactive + active}\n"
+                    f"total_inactive_file {inactive}\ntotal_active_file {active}\n")
+        self._write(f"{base}/memory.oom_control",
+                    f"oom_kill_disable 0\nunder_oom 0\noom_kill {kills}\n")
+
+    # What is left, and the two figures beside it
+
+    def test_under_no_limit_it_is_the_machine_s_figure(self) -> None:
+        """The deployment's container as it was read: `memory.max` says ``max``, and
+        its `/proc/meminfo` is the machine's."""
+        self._write("/proc/meminfo", _meminfo(40968))
+        self._v2(limit="max", usage=497 * MIB, inactive=3 * MIB, active=MIB)
+        self.assertEqual(self._read(), Left(available=40968 * 1024))
+
+    def test_a_limit_leaves_the_limit_less_the_usage_with_the_file_lists_counted_back(
+            self) -> None:
+        """Under a limit of 48 MiB with 32 MiB of a file in the cache, the usage
+        33.4 MiB: the limit less the usage says 14.6 MiB, and what the kernel then
+        gave was the limit less the usage with the two lists counted back, 46.6 —
+        which with the multi-generational LRU off stood on the active list."""
+        self._write("/proc/meminfo", _meminfo(3_500_000))
+        usage = 33 * MIB + 400 * 1024
+        self._v2(limit=str(48 * MIB), usage=usage, inactive=0, active=32 * MIB)
+        left = self._read()
+        assert left is not None
+        self.assertEqual(left.available, 48 * MIB - usage + 32 * MIB)
+        self.assertEqual(round(left.available / MIB, 1), 46.6)
+
+    def test_shared_memory_is_not_counted_back(self) -> None:
+        """`file` counts `shmem`, which is not given up; the two lists do not."""
+        self._write("/proc/meminfo", _meminfo(3_500_000))
+        usage = 40 * MIB
+        self._v2(limit=str(48 * MIB), usage=usage, inactive=4 * MIB,
+                 active=12 * MIB, shmem=8 * MIB)
+        left = self._read()
+        assert left is not None
+        self.assertEqual(left.available, 48 * MIB - usage + 16 * MIB)
+
+    def test_under_cgroup_v1_the_hierarchical_lists_are_counted_back(self) -> None:
+        """A v1 cgroup limited to 200 MiB whose usage of 198 MiB was 193 MiB of file
+        cache: its own lists hold none of it where the cache is its children's."""
+        self._write("/proc/meminfo", _meminfo(3_500_000))
+        self._write("/proc/self/cgroup", "9:memory:/docker/0123abcd\n0::/\n")
+        self._v1(limit=200 * MIB, usage=198 * MIB, inactive=150 * MIB,
+                 active=43 * MIB, kills=2)
+        self.assertEqual(self._read(), Left(available=195 * MIB, killed=2))
+
+    def test_the_smaller_of_the_two_is_what_is_left(self) -> None:
+        """A container of 512 MiB on a machine whose agents hold the rest: the
+        machine has less left than the limit leaves, and that is the figure."""
+        self._write("/proc/meminfo", _meminfo(41 * 1024))
+        self._v2(limit=str(512 * MIB), usage=440 * MIB, inactive=2 * MIB,
+                 active=2 * MIB)
+        left = self._read()
+        assert left is not None
+        self.assertEqual(left.available, 41 * MIB)
+        # and the other way round: the limit leaves less than the machine has
+        self._write("/proc/meminfo", _meminfo(58 * 1024))
+        self._v2(limit=str(512 * MIB), usage=482 * MIB, inactive=2 * MIB,
+                 active=2 * MIB)
+        left = self._read()
+        assert left is not None
+        self.assertEqual(left.available, 34 * MIB)
+
+    def test_a_limit_the_machine_cannot_reach_is_no_limit(self) -> None:
+        """What :func:`machine_memory` takes: a limit counts where it is smaller than
+        the physical memory — v1 says a very large number where there is none."""
+        self._write("/proc/meminfo", _meminfo(129 * 1024))
+        self._write("/proc/self/cgroup", "9:memory:/\n")
+        self._v1(usage=600 * MIB, kills=1)
+        self.assertEqual(self._read(), Left(available=129 * MIB))
+        self._v2(limit=str(2 * GIB), usage=600 * MIB, kills=1)
+        self.assertEqual(self._read(), Left(available=129 * MIB))
+
+    def test_a_limit_counts_where_the_physical_memory_cannot_be_read(self) -> None:
+        self._write("/proc/meminfo", _meminfo(3_500_000))
+        self._v2(limit=str(512 * MIB), usage=500 * MIB)
+        self.assertEqual(self._read(physical=None),
+                         Left(available=12 * MIB, killed=0))
+
+    def test_under_a_limit_the_kernel_s_kills_are_counted(self) -> None:
+        """`oom_kill` in `memory.events`, and not `oom_group_kill` beside it."""
+        self._write("/proc/meminfo", _meminfo(306 * 1024))
+        self._v2(limit=str(512 * MIB), usage=200 * MIB, kills=1)
+        left = self._read()
+        assert left is not None
+        self.assertEqual(left.killed, 1)
+
+    def test_under_no_limit_nothing_is_counted(self) -> None:
+        self._write("/proc/meminfo", _meminfo(129 * 1024))
+        self._v2(limit="max", usage=497 * MIB, kills=3)
+        left = self._read()
+        assert left is not None
+        self.assertIsNone(left.killed)
+
+    def test_a_limit_whose_lists_cannot_be_read_leaves_the_machine_s_figure(
+            self) -> None:
+        """The usage alone counts the cache as taken and says less is left than is,
+        so without both lists the limit says nothing and the machine's figure
+        stands."""
+        self._write("/proc/meminfo", _meminfo(129 * 1024))
+        self._v2(limit=str(512 * MIB), usage=500 * MIB)
+        self._write("/sys/fs/cgroup/memory.stat", f"anon {490 * MIB}\n"
+                                                  f"inactive_file {MIB}\n")
+        self.assertEqual(self._read(), Left(available=129 * MIB, killed=0))
+
+    def test_the_stall_counter_is_the_some_line_s_total_in_seconds(self) -> None:
+        self._write("/proc/meminfo", _meminfo(51300))
+        self._write("/proc/pressure/memory", PRESSURE)
+        left = self._read()
+        assert left is not None
+        self.assertEqual(left.stalled, 32.274242)
+
+    def test_without_the_counter_the_figure_stands_alone(self) -> None:
+        self._write("/proc/meminfo", _meminfo(51300))
+        self.assertEqual(self._read(), Left(available=51300 * 1024))
+
+    def test_without_memavailable_the_counter_stands_alone(self) -> None:
+        """A kernel older than `MemAvailable` says nothing of what is left."""
+        self._write("/proc/meminfo", "MemTotal:  938796 kB\nMemFree:  32372 kB\n")
+        self._write("/proc/pressure/memory", PRESSURE)
+        self.assertEqual(self._read(), Left(stalled=32.274242))
+
+    def test_a_platform_with_neither_file_says_nothing(self) -> None:
+        """macOS has neither file, and there is no figure — and nothing limits what
+        the machine gives the process but its memory."""
+        self.assertIsNone(self._read())
+        self.assertEqual(self._given(physical=16 * GIB), 16 * GIB)
+
+    # Which cgroup: the process's own, and each above it
+
+    def test_on_a_bare_host_a_service_s_own_limit_is_found(self) -> None:
+        """A service with `MemoryMax=512M`, beneath a slice with none, on a host
+        whose root cgroup has no limit file: what the machine gives the process is
+        the service's limit, and what is left is what that leaves."""
+        self._write("/proc/meminfo", _meminfo(3_500_000))
+        self._v2(limit=None, own=False)
+        self._v2("/system.slice", own=False)
+        self._v2("/system.slice/little-sister.service", limit=str(512 * MIB),
+                 usage=300 * MIB, inactive=6 * MIB, active=4 * MIB)
+        self.assertEqual(self._given(physical=4 * GIB), 512 * MIB)
+        self.assertEqual(self._read(physical=4 * GIB),
+                         Left(available=222 * MIB, killed=0))
+        # v2's line is the one with no controller named, whatever stands before it
+        self._v2("/init.scope", limit=str(64 * MIB), own=False)
+        self._write("/proc/self/cgroup", "1:name=systemd:/init.scope\n"
+                                         "0::/system.slice/little-sister.service\n")
+        self.assertEqual(self._given(physical=4 * GIB), 512 * MIB)
+
+    def test_a_limit_on_the_slice_above_binds_as_well(self) -> None:
+        """The slice's limit of 1 GiB, its usage 900 MiB with the services beside
+        this one: that is what the machine gives the process, and what is left."""
+        self._write("/proc/meminfo", _meminfo(3_500_000))
+        self._v2(limit=None, own=False)
+        self._v2("/system.slice", limit=str(GIB), usage=900 * MIB,
+                 inactive=12 * MIB, active=8 * MIB, own=False)
+        self._v2("/system.slice/little-sister.service", usage=300 * MIB)
+        self.assertEqual(self._given(physical=4 * GIB), GIB)
+        left = self._read(physical=4 * GIB)
+        assert left is not None
+        self.assertEqual(left.available, 144 * MIB)
+
+    def test_what_is_left_is_the_least_any_limit_leaves(self) -> None:
+        """The service's limit leaves 222 MiB and the slice's, shared, 60: the
+        process can have 60. What the machine gives it is the smaller limit."""
+        self._write("/proc/meminfo", _meminfo(3_500_000))
+        self._v2(limit=None, own=False)
+        self._v2("/system.slice", limit=str(GIB), usage=964 * MIB, own=False)
+        self._v2("/system.slice/little-sister.service", limit=str(512 * MIB),
+                 usage=300 * MIB, inactive=6 * MIB, active=4 * MIB)
+        self.assertEqual(self._given(physical=4 * GIB), 512 * MIB)
+        left = self._read(physical=4 * GIB)
+        assert left is not None
+        self.assertEqual(left.available, 60 * MIB)
+
+    def test_the_count_is_of_the_process_s_own_cgroup(self) -> None:
+        """A slice's count is of every service beneath it; the process's is its own."""
+        self._write("/proc/meminfo", _meminfo(3_500_000))
+        self._v2(limit=None, own=False)
+        self._v2("/system.slice", limit=str(GIB), usage=500 * MIB, kills=4,
+                 own=False)
+        self._v2("/system.slice/little-sister.service", usage=300 * MIB, kills=1)
+        left = self._read(physical=4 * GIB)
+        assert left is not None
+        self.assertEqual(left.killed, 1)
+
+    def test_under_v1_on_a_bare_host_the_named_cgroup_is_found(self) -> None:
+        self._write("/proc/meminfo", _meminfo(3_500_000))
+        self._write("/proc/self/cgroup",
+                    "12:pids:/user.slice\n"
+                    "9:memory:/system.slice/little-sister.service\n"
+                    "1:name=systemd:/system.slice/little-sister.service\n0::/\n")
+        self._v1()
+        self._v1("/user.slice", limit=64 * MIB)
+        self._v1("/system.slice")
+        self._v1("/system.slice/little-sister.service", limit=512 * MIB,
+                 usage=300 * MIB, inactive=6 * MIB, active=4 * MIB, kills=1)
+        self.assertEqual(self._given(physical=4 * GIB), 512 * MIB)
+        self.assertEqual(self._read(physical=4 * GIB),
+                         Left(available=222 * MIB, killed=1))
+
+    def test_memory_is_found_among_the_controllers_of_a_v1_line(self) -> None:
+        self._write("/proc/meminfo", _meminfo(3_500_000))
+        self._write("/proc/self/cgroup", "4:cpu,cpuacct,memory:/jobs/one\n")
+        self._v1()
+        self._v1("/jobs/one", limit=256 * MIB, usage=100 * MIB)
+        self.assertEqual(self._given(physical=4 * GIB), 256 * MIB)
+
+    def test_a_v1_container_names_the_host_s_path_and_sees_its_own_at_the_root(
+            self) -> None:
+        """Docker on v1 mounts the container's own cgroup at the root and names the
+        host's path for it, which is no directory there."""
+        self._write("/proc/meminfo", _meminfo(3_500_000))
+        self._write("/proc/self/cgroup", "9:memory:/docker/0123abcd\n")
+        self._v1(limit=512 * MIB, usage=300 * MIB)
+        self.assertEqual(self._given(physical=4 * GIB), 512 * MIB)
+        self.assertEqual(self._read(physical=4 * GIB),
+                         Left(available=212 * MIB, killed=0))
+
+    def test_a_host_that_mounts_v1_s_memory_beside_v2_reads_v1(self) -> None:
+        """Where `/sys/fs/cgroup` is not v2's root, the memory controller is v1's,
+        whatever `/proc/self/cgroup` says of the hierarchy beside it."""
+        self._write("/proc/meminfo", _meminfo(3_500_000))
+        self._write("/proc/self/cgroup", "9:memory:/user.slice/session.scope\n"
+                                         "0::/user.slice/session.scope\n")
+        self._write("/sys/fs/cgroup/unified/cgroup.controllers", "\n")
+        self._v1()
+        self._v1("/user.slice/session.scope", limit=6 * GIB, usage=GIB)
+        self.assertEqual(self._given(physical=8 * GIB), 6 * GIB)
+
+    def test_a_path_that_climbs_out_of_the_mount_is_not_followed(self) -> None:
+        self._write("/proc/meminfo", _meminfo(3_500_000))
+        self._v2(limit=str(512 * MIB), usage=300 * MIB, own=False)
+        self._write("/sys/etc/memory.max", f"{64 * MIB}\n")
+        self._write("/proc/self/cgroup", "0::/../../etc\n")
+        self.assertEqual(self._given(physical=4 * GIB), 512 * MIB)
+
+    def test_a_v1_list_that_names_no_memory_line_leaves_the_root(self) -> None:
+        self._write("/proc/meminfo", _meminfo(3_500_000))
+        self._write("/proc/self/cgroup", "12:pids:/jobs/one\n0::/jobs/one\n")
+        self._v1(limit=512 * MIB, usage=100 * MIB)
+        self._v1("/jobs/one", limit=64 * MIB)
+        self.assertEqual(self._given(physical=4 * GIB), 512 * MIB)
+
+    def test_what_a_limit_leaves_is_never_more_than_it_nor_less_than_nothing(
+            self) -> None:
+        """Read a moment apart, the usage can stand below the cache it counts, or
+        above the limit."""
+        self._write("/proc/meminfo", _meminfo(3_500_000))
+        self._v2(limit=str(48 * MIB), usage=10 * MIB, inactive=20 * MIB,
+                 active=20 * MIB)
+        self.assertEqual(self._read(), Left(available=48 * MIB, killed=0))
+        self._v2(limit=str(48 * MIB), usage=60 * MIB, inactive=MIB, active=MIB)
+        self.assertEqual(self._read(), Left(available=0, killed=0))
+
+    def test_a_pressure_file_without_its_counter_says_nothing_of_it(self) -> None:
+        self._write("/proc/meminfo", _meminfo(51300))
+        self._write("/proc/pressure/memory", "full avg10=0.85 total=30815820\n"
+                                             "some avg10=0.87 avg60=1.59\n")
+        self.assertEqual(self._read(), Left(available=51300 * 1024))
+
+    def test_without_proc_self_cgroup_the_root_of_the_mount_is_the_process_s(
+            self) -> None:
+        self._write("/proc/meminfo", _meminfo(3_500_000))
+        self._v2(limit=str(512 * MIB), usage=300 * MIB, own=False)
+        self.assertEqual(self._given(physical=4 * GIB), 512 * MIB)
+
+
+def _stalls(readings: Sequence[tuple[float, float | None]]) -> EngineReport:
+    """A report that observed one tick at each ``(now, counter)`` in turn, the
+    counter ``None`` where that tick could not read it — at a poll interval no gap
+    between two of them makes a late tick of, since the `lag` line is not what is
+    read here."""
+    counters = iter([Left(available=MIB, stalled=counter)
+                     for _now, counter in readings])
+    report = EngineReport((), workers=1, poll_interval=3600.0,
+                          limits=Limits(memory_limit=None),
+                          resident=lambda: None, left=lambda: next(counters))
+    for now, _counter in readings:
+        report.observe(now, entries=0, waiting=[], late=[])
+    return report
+
+
+class StallShareTests(TestCase):
+    """The share of the last ten minutes in which the machine stalled on memory:
+    two readings of the kernel's counter, the tick's own and the latest that is ten
+    minutes old or older, by the engine's clock (ADR-0095 decision 7)."""
+
+    def test_the_window_is_the_ten_minutes_between_two_memory_lines(self) -> None:
+        self.assertEqual(STALL_SECONDS, MEMORY_LINE_MINUTES * 60)
+
+    def test_the_share_of_the_last_ten_minutes(self) -> None:
+        """1.3 % of ten minutes: the counter rose by 7.8 seconds in them."""
+        report = _stalls([(float(second), 100.0 + 0.013 * second)
+                          for second in range(0, 901)])
+        assert report.stalled is not None
+        share, span = report.stalled
+        self.assertAlmostEqual(share, 0.013)
+        self.assertEqual(span, STALL_SECONDS)
+
+    def test_what_is_older_than_ten_minutes_is_not_counted(self) -> None:
+        """Twenty seconds of stall in the first five minutes, and none after: ten
+        minutes from the start they are inside, five minutes later they are not."""
+        readings = [(float(second), 100.0 + min(second, 300) / 15)
+                    for second in range(0, 901)]
+        report = _stalls(readings[:601])
+        assert report.stalled is not None
+        self.assertAlmostEqual(report.stalled[0], 20 / 600)
+        report = _stalls(readings)
+        self.assertEqual(report.stalled, (0.0, STALL_SECONDS))
+
+    def test_a_young_process_says_the_share_of_what_it_has_read(self) -> None:
+        report = _stalls([(float(second), 100.0 + 0.017 * second)
+                          for second in range(0, 241)])
+        assert report.stalled is not None
+        share, span = report.stalled
+        self.assertAlmostEqual(share, 0.017)
+        self.assertEqual(span, 240.0)
+
+    def test_one_reading_is_no_share(self) -> None:
+        self.assertIsNone(_stalls([(0.0, 100.0)]).stalled)
+
+    def test_a_tick_that_cannot_read_the_counter_keeps_the_share(self) -> None:
+        report = _stalls([(0.0, 100.0), (60.0, 101.2), (61.0, None)])
+        assert report.stalled is not None
+        share, span = report.stalled
+        self.assertAlmostEqual(share, 0.02)
+        self.assertEqual(span, 60.0)
+
+    def test_a_counter_read_lower_than_before_is_no_share_below_nothing(
+            self) -> None:
+        self.assertEqual(_stalls([(0.0, 100.0), (60.0, 99.0)]).stalled, (0.0, 60.0))
+
+    def test_the_report_keeps_what_the_last_tick_read(self) -> None:
+        report = _stalls([(0.0, 100.0), (1.0, 100.5)])
+        self.assertEqual(report.left, Left(available=MIB, stalled=100.5))
+
+
 class ReportFactTests(TestCase):
     """The engine child's `report` carries the figures as a fact, rewritten every
     tick beside the series', in the `memory` line's own words — and never a line."""
 
     def _report(self, resident: Resident | None, limits: Limits) -> EngineReport:
         report = EngineReport((), workers=1, poll_interval=1.0, limits=limits,
-                              resident=lambda: resident)
+                              resident=lambda: resident, left=lambda: None)
         report.observe(0.0, entries=0, waiting=[], late=[])
         return report
 
@@ -198,6 +651,88 @@ class ReportFactTests(TestCase):
                               limits=Limits(memory_limit=None),
                               resident=lambda: Resident(peak=MIB, now=MIB))
         self.assertNotIn("resident", report.report())
+
+    def test_what_the_machine_has_left_stands_beside_the_process_s_figures(
+            self) -> None:
+        """A fact of its own after the process's, in the words of `/system` and the
+        log — the second part joined as a sentence of a list of its own."""
+        counters = iter([100.0, 100.0 + 0.017 * 600])
+        report = EngineReport(
+            (), workers=1, poll_interval=3600.0,
+            limits=Limits(memory_limit=461 * MIB, machine_memory=512 * MIB),
+            resident=lambda: Resident(peak=451 * MIB, now=445 * MIB),
+            left=lambda: Left(available=41 * MIB, stalled=next(counters), killed=0))
+        report.observe(0.0, entries=0, waiting=[], late=[])
+        report.observe(600.0, entries=0, waiting=[], late=[])
+        self.assertEqual(report.report().splitlines(), [
+            "- resident size 445 MiB, peak 451 MiB, of a limit of 461 MiB (of the "
+            "512 MiB the machine gives the process)",
+            "- the machine has 41 MiB left; it stalled on memory for 1.7 % of the "
+            "last 10m, and the kernel has ended no process of this cgroup"])
+        # a fact and never a line: the one line here is the process's own
+        self.assertEqual([line.slug for line in report.lines()], ["memory"])
+
+    def test_where_the_platform_says_nothing_there_is_no_fact(self) -> None:
+        report = EngineReport((), workers=1, poll_interval=1.0,
+                              limits=Limits(memory_limit=None),
+                              resident=lambda: Resident(peak=MIB),
+                              left=lambda: None)
+        report.observe(0.0, entries=0, waiting=[], late=[])
+        self.assertNotIn("machine has", report.report())
+
+
+class MachineTextTests(TestCase):
+    """What the machine has left in words, one implementation for the three places
+    it stands (ADR-0095 decision 7): what is left, how long the machine stalled on
+    memory, and under a limit how often the kernel has ended a process of this
+    cgroup — each where there is one to say."""
+
+    def test_the_three_parts_in_one_sentence(self) -> None:
+        self.assertEqual(
+            machine_text(Left(available=41 * MIB, killed=0), (0.017, 600.0)),
+            "the machine has 41 MiB left, stalled on memory for 1.7 % of the last "
+            "10m, and the kernel has ended no process of this cgroup")
+
+    def test_under_no_limit_there_is_no_count(self) -> None:
+        self.assertEqual(
+            machine_text(Left(available=129 * MIB), (0.018, 600.0), joint="; it "),
+            "the machine has 129 MiB left; it stalled on memory for 1.8 % of the "
+            "last 10m")
+
+    def test_before_a_second_reading_there_is_no_share(self) -> None:
+        self.assertEqual(machine_text(Left(available=129 * MIB, stalled=32.0), None),
+                         "the machine has 129 MiB left")
+        self.assertEqual(machine_text(Left(available=41 * MIB, killed=0), None),
+                         "the machine has 41 MiB left, and the kernel has ended no "
+                         "process of this cgroup")
+
+    def test_a_young_process_names_what_it_has_read(self) -> None:
+        self.assertEqual(machine_text(Left(available=GIB), (0.012, 240.0)),
+                         "the machine has 1.0 GiB left, stalled on memory for 1.2 % "
+                         "of the last 4m")
+
+    def test_ten_minutes_read_are_named_as_ten_minutes(self) -> None:
+        """The oldest reading kept is the latest that is ten minutes old or older,
+        so the span is a part of a tick past them — and named as the window."""
+        self.assertEqual(machine_text(Left(available=GIB), (0.018, 600.9)),
+                         "the machine has 1.0 GiB left, stalled on memory for 1.8 % "
+                         "of the last 10m")
+
+    def test_without_memavailable_the_machine_stalled_is_said(self) -> None:
+        self.assertEqual(machine_text(Left(stalled=40.0), (0.018, 600.0)),
+                         "the machine stalled on memory for 1.8 % of the last 10m")
+
+    def test_nothing_to_say_is_none(self) -> None:
+        self.assertIsNone(machine_text(None, None))
+        self.assertIsNone(machine_text(Left(stalled=40.0), None))
+
+    def test_the_count_in_words(self) -> None:
+        self.assertEqual(killed_text(0),
+                         "the kernel has ended no process of this cgroup")
+        self.assertEqual(killed_text(1),
+                         "the kernel has ended 1 process of this cgroup")
+        self.assertEqual(killed_text(3),
+                         "the kernel has ended 3 processes of this cgroup")
 
 
 class RiseTextTests(TestCase):
@@ -333,6 +868,202 @@ class BesideTests(TestCase):
                         lines)
         self.assertTrue(any(line.endswith("beside /host (beta))") for line in lines),
                         lines)
+
+
+class _Rising(Check):
+    """A check whose every run leaves the meter's size ``by`` higher than it found
+    it, and its peak raised to match."""
+
+    type_name = "rising"
+
+    def __init__(self, *, meter: _Meter, by: int, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._meter = meter
+        self._by = by
+
+    def measure(self) -> Sequence[Measurement]:
+        assert self._meter.now is not None
+        size = self._meter.now + self._by
+        self._meter.move(now=size, peak=max(self._meter.peak, size))
+        return ()
+
+    def grade(self, measurements: Sequence[Measurement],
+              now: datetime) -> CheckResult:
+        return CheckResult(StatusCode.OK)
+
+
+class _Collector:
+    """The cycle collector as a test scripts it: every call takes ``took`` seconds
+    on the engine's clock and gives back ``frees`` of the meter's size, and is
+    counted. With ``hold``, the first call waits for it, having set ``started``."""
+
+    def __init__(self, clock: list[float], meter: _Meter, *, took: float = 0.018,
+                 frees: int = 0, hold: threading.Event | None = None) -> None:
+        self.calls = 0
+        self._clock = clock
+        self._meter = meter
+        self._took = took
+        self._frees = frees
+        self._hold = hold
+        self.started = threading.Event()
+
+    def __call__(self) -> int:
+        self.calls += 1
+        if self._hold is not None and self.calls == 1:
+            self.started.set()
+            self._hold.wait(timeout=5)
+        self._clock[0] += self._took
+        if self._frees and self._meter.now is not None:
+            self._meter.move(now=self._meter.now - self._frees)
+        return 0
+
+
+class CollectionTests(TestCase):
+    """A run that rose by 1 MiB or more is followed by a collection, said on that
+    run's line after the rise, and never for more than a hundredth of the time: one
+    that took *p* is followed by none for a hundred times *p* (ADR-0095 decision 8)."""
+
+    def _one(self, check: Check, meter: _Meter, collector: _Collector,
+             clock: list[float]) -> str:
+        engine = _engine([check], meter, clock=lambda: clock[0], collect=collector)
+        with self.assertLogs(LOGGER, level="INFO") as caught:
+            engine.run_once()
+        return _run_line(caught, check.path)
+
+    def test_the_spacing_is_a_hundred_times_the_collection(self) -> None:
+        self.assertEqual(COLLECTION_SPACING, 100)
+        self.assertEqual(len(MINUS), 1)
+
+    def test_the_engine_collects_with_the_cycle_collector(self) -> None:
+        self.assertIs(Engine([], StatusTree())._collect, gc.collect)
+
+    def test_a_run_that_rose_is_followed_by_one_said_on_its_line(self) -> None:
+        clock, meter = [0.0], _Meter(now=350 * MIB, peak=400 * MIB)
+        collector = _Collector(clock, meter, frees=31 * MIB)
+        line = self._one(_Moving(path="/aws", meter=meter, now=390 * MIB), meter,
+                         collector, clock)
+        self.assertEqual(collector.calls, 1)
+        self.assertEqual(line, "check /aws: OK (0 ms; resident +40.0 MiB while it "
+                               "ran; collected after it in 18 ms, resident "
+                               f"{MINUS}31.0 MiB)")
+
+    def test_a_rise_from_a_mebibyte_asks_for_one_and_below_it_none(self) -> None:
+        for rise, calls in ((RISE_LOGGED, 1), (RISE_LOGGED - 1, 0)):
+            clock, meter = [0.0], _Meter(now=350 * MIB, peak=400 * MIB)
+            collector = _Collector(clock, meter)
+            line = self._one(_Moving(path="/aws", meter=meter, now=350 * MIB + rise),
+                             meter, collector, clock)
+            self.assertEqual(collector.calls, calls, rise)
+            self.assertEqual("collected after it" in line, calls == 1, line)
+
+    def test_a_fall_below_a_mebibyte_is_not_said(self) -> None:
+        clock, meter = [0.0], _Meter(now=350 * MIB, peak=400 * MIB)
+        collector = _Collector(clock, meter, frees=RISE_LOGGED - 1)
+        line = self._one(_Moving(path="/aws", meter=meter, now=390 * MIB), meter,
+                         collector, clock)
+        self.assertTrue(line.endswith("; collected after it in 18 ms)"), line)
+
+    def test_on_macos_a_run_that_raised_the_peak_is_followed_by_one(self) -> None:
+        """The peak's rise is a run's rise there, and the time is all the clause
+        can say: no size now falls."""
+        clock, meter = [0.0], _Meter(now=None, peak=400 * MIB)
+        collector = _Collector(clock, meter)
+        line = self._one(_Moving(path="/aws", meter=meter,
+                                 peak=400 * MIB + int(18.4 * MIB)),
+                         meter, collector, clock)
+        self.assertEqual(collector.calls, 1)
+        self.assertEqual(line, "check /aws: OK (0 ms; peak +18.4 MiB while it ran; "
+                               "collected after it in 18 ms)")
+
+    def test_on_macos_a_run_beneath_the_peak_is_followed_by_none(self) -> None:
+        clock, meter = [0.0], _Meter(now=None, peak=400 * MIB)
+        collector = _Collector(clock, meter)
+        self._one(_Moving(path="/aws", meter=meter), meter, collector, clock)
+        self.assertEqual(collector.calls, 0)
+
+    def test_on_linux_a_peak_the_run_gave_back_asks_for_none(self) -> None:
+        """The size where it was and the peak 50 MiB higher: a spike freed before
+        the run ended, which left nothing for the collector."""
+        clock, meter = [0.0], _Meter(now=350 * MIB, peak=400 * MIB)
+        collector = _Collector(clock, meter)
+        line = self._one(_Moving(path="/aws", meter=meter, peak=450 * MIB), meter,
+                         collector, clock)
+        self.assertEqual(collector.calls, 0)
+        self.assertTrue(line.endswith("(0 ms; peak +50.0 MiB while it ran)"), line)
+
+    def test_none_follows_another_sooner_than_a_hundred_times_its_length(
+            self) -> None:
+        """One that took 20 ms at 0 s is followed by none until 2.02 s."""
+        clock, meter = [0.0], _Meter(now=350 * MIB, peak=400 * MIB)
+        collector = _Collector(clock, meter, took=0.02)
+        check = _Rising(path="/aws", meter=meter, by=40 * MIB)
+        engine = _engine([check], meter, clock=lambda: clock[0], collect=collector)
+        lines = []
+        for moment in (0.0, 2.0, 2.0199, 2.0201):
+            clock[0] = moment
+            with self.assertLogs(LOGGER, level="INFO") as caught:
+                engine.run_once()
+            lines.append(_run_line(caught, "/aws"))
+        self.assertEqual(collector.calls, 2)
+        self.assertEqual(["collected after it" in line for line in lines],
+                         [True, False, False, True])
+
+    def test_none_starts_while_one_runs(self) -> None:
+        """Two runs that rose end together: the second finds the first's collection
+        under way and is followed by none."""
+        clock, meter = [0.0], _Meter(now=350 * MIB, peak=400 * MIB)
+        hold = threading.Event()
+        collector = _Collector(clock, meter, hold=hold)
+        first = _Rising(path="/first", meter=meter, by=40 * MIB)
+        second = _Rising(path="/second", meter=meter, by=40 * MIB)
+        engine = _engine([first, second], meter, clock=lambda: clock[0],
+                         collect=collector)
+        items = {item.check.path: item for item in engine._scheduled}
+        with self.assertLogs(LOGGER, level="INFO") as caught:
+            runner = threading.Thread(target=engine._execute,
+                                      args=(items["/first"],), kwargs={"once": True})
+            runner.start()
+            self.assertTrue(collector.started.wait(timeout=5))
+            engine._execute(items["/second"], once=True)
+            hold.set()
+            runner.join(timeout=5)
+        self.assertEqual(collector.calls, 1)
+        self.assertIn("collected after it", _run_line(caught, "/first"))
+        self.assertNotIn("collected", _run_line(caught, "/second"))
+
+    def test_a_run_the_stop_abandoned_is_followed_by_none(self) -> None:
+        clock, meter = [0.0], _Meter(now=350 * MIB, peak=400 * MIB)
+        collector = _Collector(clock, meter)
+        check = _Moving(path="/aws", meter=meter, now=390 * MIB)
+        engine = _engine([check], meter, clock=lambda: clock[0], collect=collector)
+        engine._stop.set()
+        engine._execute(engine._scheduled[0], once=True)
+        self.assertEqual(collector.calls, 0)
+
+    def test_a_read_that_failed_asks_for_none(self) -> None:
+        size, peak = Resident(peak=400 * MIB, now=350 * MIB), Resident(peak=450 * MIB)
+        self.assertFalse(_asks_for_a_collection(None, size))
+        self.assertFalse(_asks_for_a_collection(size, None))
+        self.assertFalse(_asks_for_a_collection(size, peak))
+        self.assertFalse(_asks_for_a_collection(peak, size))
+
+    def test_a_collector_that_raises_leaves_the_run_as_it_was(self) -> None:
+        clock, meter = [0.0], _Meter(now=350 * MIB, peak=400 * MIB)
+
+        def broken() -> int:
+            raise RuntimeError("no")
+
+        check = _Moving(path="/aws", meter=meter, now=390 * MIB)
+        engine = _engine([check], meter, clock=lambda: clock[0], collect=broken)
+        with self.assertLogs(LOGGER, level="INFO") as caught:
+            engine.run_once()
+        self.assertEqual(_run_line(caught, "/aws"),
+                         "check /aws: OK (0 ms; resident +40.0 MiB while it ran)")
+        self.assertEqual(_messages(caught, "engine: the collection after a run"),
+                         ["engine: the collection after a run raised"])
+        node = engine._tree.snapshot("/aws")
+        assert node is not None
+        self.assertEqual(node.own_code, StatusCode.OK)
 
 
 class _Sweeping(MemoryStore):
@@ -481,6 +1212,34 @@ class TenMinuteLineTests(TestCase):
             "engine: memory at the start — peak resident size 369 MiB; the series "
             "hold 0 B"), lines[0])
 
+    def test_what_the_machine_has_left_follows_the_process_s_figures(self) -> None:
+        """At the start there is one reading of the stall counter and no share; at
+        the next mark, ten minutes on, the share of them."""
+        meter = _Meter(now=445 * MIB, peak=451 * MIB)
+        clock, wall = [0.0], [_on_the_logs_clock(10, 3, 0)]
+        counter = [100.0]
+        engine = _engine([], meter, clock=lambda: clock[0], wall=lambda: wall[0],
+                         limits=Limits(memory_limit=461 * MIB,
+                                       machine_memory=512 * MIB),
+                         left=lambda: Left(available=41 * MIB, stalled=counter[0],
+                                           killed=0))
+        with self.assertLogs(LOGGER, level="INFO") as caught:
+            engine._guarded_tick(submit=False)
+            clock[0], wall[0] = 600.0, _on_the_logs_clock(10, 13, 0)
+            counter[0] = 100.0 + 0.017 * 600
+            engine._guarded_tick(submit=False)
+        lines = _messages(caught, "engine: memory")
+        self.assertEqual(len(lines), 2, lines)
+        process = ("resident size 445 MiB, peak 451 MiB, of a limit of 461 MiB; ")
+        self.assertTrue(lines[0].startswith(
+            "engine: memory at the start — " + process + "the machine has 41 MiB "
+            "left, and the kernel has ended no process of this cgroup; the series "
+            "hold 0 B, the tree "), lines[0])
+        self.assertTrue(lines[1].startswith(
+            "engine: memory — " + process + "the machine has 41 MiB left, stalled "
+            "on memory for 1.7 % of the last 10m, and the kernel has ended no "
+            "process of this cgroup; the series hold 0 B, the tree "), lines[1])
+
 
 class SystemRowTests(TestCase):
     """`/system`'s engine block carries the figures as the fourth row of the card
@@ -496,7 +1255,7 @@ class SystemRowTests(TestCase):
 
     def _row(self, meter: _Meter | None, limits: Limits, label: str) -> str:
         engine = Engine([], StatusTree(), resident=meter or (lambda: None),
-                        limits=limits)
+                        limits=limits, left=lambda: None)
         if meter is not None:
             engine._observe(1.0)
         body = self._render(engine.info())
@@ -532,6 +1291,47 @@ class SystemRowTests(TestCase):
         self.assertEqual((info.resident, info.resident_peak, info.memory_limit,
                           info.machine_memory),
                          (312 * MIB, 369 * MIB, 8 * GIB, 16 * GIB))
+
+    def _left_row(self, readings: Sequence[Left]) -> str:
+        """The fifth row after one tick observed per reading, ten minutes apart."""
+        given = iter(readings)
+        engine = Engine([], StatusTree(), resident=_Meter(now=445 * MIB,
+                                                         peak=451 * MIB),
+                        limits=Limits(memory_limit=461 * MIB,
+                                      machine_memory=512 * MIB),
+                        left=lambda: next(given))
+        for tick in range(len(readings)):
+            engine._observe(600.0 * tick)
+        body = self._render(engine.info())
+        self.assertIn("Left on the machine", body)
+        return re.sub(r"\s+", " ", body.split("Left on the machine", 1)[1]
+                      .split("</div></div>")[0])
+
+    def test_what_the_machine_has_left_is_the_fifth_row(self) -> None:
+        row = self._left_row([Left(available=41 * MIB, stalled=100.0, killed=0),
+                              Left(available=41 * MIB, stalled=110.2, killed=0)])
+        self.assertIn("41 MiB", row)
+        # set off from the figure, which nothing beside it qualifies
+        self.assertIn('<span class="text-muted">· stalled on memory for 1.7 % of the '
+                      "last 10m · the kernel has ended no process of this cgroup", row)
+
+    def test_before_a_second_reading_the_row_has_no_share(self) -> None:
+        row = self._left_row([Left(available=41 * MIB, stalled=100.0, killed=1)])
+        self.assertIn("41 MiB", row)
+        self.assertIn('<span class="text-muted">· the kernel has ended 1 process of '
+                      "this cgroup", row)
+        self.assertNotIn("stalled", row)
+
+    def test_with_nothing_beside_the_figure_nothing_sets_it_off(self) -> None:
+        row = self._left_row([Left(available=129 * MIB)])
+        self.assertIn('129 MiB <span class="text-muted"></span>', row)
+
+    def test_where_the_platform_says_nothing_there_is_no_row(self) -> None:
+        engine = Engine([], StatusTree(), resident=_Meter(now=None, peak=369 * MIB),
+                        limits=Limits(memory_limit=8 * GIB), left=lambda: None)
+        engine._observe(1.0)
+        self.assertNotIn("Left on the machine", self._render(engine.info()))
+        self.assertIsNone(engine.info().machine_left)
 
 
 class StateTickTests(TestCase):

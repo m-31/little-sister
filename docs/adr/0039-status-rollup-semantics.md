@@ -1,7 +1,7 @@
 # ADR-0039 — Status roll-up: how a parent derives its status
 
 - **Status:** Accepted
-- **Date:** 2026-08-02
+- **Date:** 2026-10-10 (accepted 2026-08-02)
 - **Supersedes:** [ADR-0004](0004-status-aggregation-semantics.md) (its roll-up half;
   the *failing check* half is [ADR-0040](0040-what-a-failing-check-becomes.md) and the
   `MAINTENANCE` half is [ADR-0041](0041-maintenance-is-a-contribution-rule.md))
@@ -9,7 +9,9 @@
   derivation sits inside — *own*, *effective*, *contribution*),
   [ADR-0036](0036-addressable-reasons.md) (the same rule one level down, over an
   entry's virtual children), [ADR-0005](0005-dashboard-freshness-and-self-monitoring.md)
-  (staleness, the one transform applied on top)
+  (staleness, the one transform applied on top),
+  [ADR-0124](0124-a-node-whose-lines-are-all-silenced-still-counts-the-nodes-beneath-it.md)
+  (whose `MAINTENANCE` cancels a subtree, and why a node's silenced lines do not)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -30,9 +32,13 @@ contributions:
    only if every counted child is `OK`.
 2. **`UNDEFINED` means "not reported yet"** and is **ignored** when a parent
    accumulates — it never makes a parent `UNDEFINED`.
-3. **`MAINTENANCE` contributes nothing** and cancels its subtree. *Why* a node reads
-   `MAINTENANCE` is [ADR-0041](0041-maintenance-is-a-contribution-rule.md)'s business;
-   this rule only says what a parent does with one.
+3. **`MAINTENANCE` contributes nothing** and cancels its subtree — a node's, by a pin
+   on it or by its check's word for it. *Why* a node reads `MAINTENANCE` is
+   [ADR-0041](0041-maintenance-is-a-contribution-rule.md)'s business; this rule only
+   says what a parent does with one. A node whose lines are all silenced counts nothing
+   for itself and cancels nothing: its lines are skipped as rule 5 skips a silenced
+   child, and the nodes beneath it count as they would without them
+   ([ADR-0124](0124-a-node-whose-lines-are-all-silenced-still-counts-the-nodes-beneath-it.md)).
 4. **Always a `StatusCode`, never a downgrade.** An `ERROR` node with a `WARN` child
    stays `ERROR`.
 5. **When nothing is counted, the answer depends on why.** If any child was skipped
@@ -41,12 +47,12 @@ contributions:
 
 Rule 5 is what ADR-0004 left open ("*Edge case to confirm … proposed default:
 `UNDEFINED`"), and it is answered against the model rather than by taste: the same
-question already had an answer one level down, where a node whose **virtual** children
-— its reason entries — are all pinned reads `MAINTENANCE`
-([ADR-0036](0036-addressable-reasons.md) decision 7). Real and virtual children may
-not read differently in one model. And the two facts are genuinely different: *nothing
-under here is reporting because we silenced it* is not *nothing here has reported yet*,
-and only the first is something an operator did on purpose.
+question already had an answer one level down, where a node whose **virtual** children —
+its reason entries — are all pinned reads `MAINTENANCE` where nothing beneath it counts
+either ([ADR-0036](0036-addressable-reasons.md) decision 7). Real and virtual children
+may not read differently in one model. And the two facts are genuinely different:
+*nothing under here is reporting because we silenced it* is not *nothing here has
+reported yet*, and only the first is something an operator did on purpose.
 
 ### An explicit (non-derived) node status
 

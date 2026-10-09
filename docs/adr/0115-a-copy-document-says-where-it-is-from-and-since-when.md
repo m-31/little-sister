@@ -1,7 +1,7 @@
 # ADR-0115 — A Copy document says where it is from, when it was made and since when
 
 - **Status:** Accepted
-- **Date:** 2026-10-03
+- **Date:** 2026-10-10 (accepted 2026-10-03)
 - **Related:** [ADR-0036](0036-addressable-reasons.md) (decision 12: a line is
   addressed by a query value, never by a path),
   [ADR-0099](0099-a-status-that-still-holds-says-since-when.md) (a status that still
@@ -15,7 +15,11 @@
   invented), [ADR-0005](0005-dashboard-freshness-and-self-monitoring.md) (a reading
   past its tolerance counts degraded),
   [ADR-0097](0097-a-nodes-series-have-a-view-of-their-own.md) (decision 3: a node's
-  views are tabs beneath its title)
+  views are tabs beneath its title),
+  [ADR-0123](0123-a-node-says-one-status-wherever-it-is-read.md) (a branch's period is
+  its own status's),
+  [ADR-0124](0124-a-node-whose-lines-are-all-silenced-still-counts-the-nodes-beneath-it.md)
+  (a branch whose own lines are all silenced)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -110,14 +114,21 @@ For a node with nodes beneath it the document says, in this order:
 - its path, and the two lines of decision 1;
 - **Reported**, where the node declares a status of its own;
 - **Shown as**, where it shows something else, with the reason: *error ⛔ — rolled up
-  from the 3 nodes beneath it. It reports nothing of its own.*; under a pin, *a
-  maintenance pin is in force on it and on the 2 nodes beneath it*, followed by the
-  pin. The sentence names where the status comes from and claims nothing of each
-  node: a pinned node, one that waits and one reached through a failing check count
-  for nothing in what their branch shows
+  from the 3 nodes beneath it. It reports nothing of its own.*; where every line of its
+  own is silenced, what it shows is rolled up from the nodes beneath it alone, *rolled
+  up from the 3 nodes beneath it. Every line of its own is silenced.*
+  ([ADR-0124](0124-a-node-whose-lines-are-all-silenced-still-counts-the-nodes-beneath-it.md));
+  under a pin, *a maintenance pin is in force on it and on the 2 nodes beneath it*,
+  followed by the pin. The sentence names where the status comes from and claims nothing
+  of each node: a pinned node, one that waits and one reached through a failing check
+  count for nothing in what their branch shows
   ([ADR-0039](0039-status-rollup-semantics.md));
-- its period and its observation, as far as it has them, and its run's facts. *Stale*
-  is said of its own reading only;
+- its period and its observation, as far as it has them, and its run's facts. The period
+  is its own status's, and since what the branch shows counts the nodes beneath it, it
+  is written ***Its own status ok** since …*, beneath *Reported* and *Shown as*
+  ([ADR-0123](0123-a-node-says-one-status-wherever-it-is-read.md)); a branch in
+  maintenance keeps ***Status maintenance** since …* (decision 6). *Stale* is said of
+  its own reading only;
 - its own lines, if it has any;
 - **Beneath it** — how many of the nodes beneath it need attention, and the outline of
   those, each with its lines and since when; or *nothing needs attention*; under a

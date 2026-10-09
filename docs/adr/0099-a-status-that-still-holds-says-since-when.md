@@ -1,7 +1,7 @@
 # ADR-0099 — A status that still holds says since when
 
 - **Status:** Accepted
-- **Date:** 2026-10-03
+- **Date:** 2026-10-10 (accepted 2026-10-03)
 - **Related:** [ADR-0027](0027-observation-timestamp-semantics.md) (the observation a
   node's time is), [ADR-0094](0094-a-restart-is-no-transition.md) (a period that reaches
   back across a restart, and a container's `UNDEFINED`, which names no period),
@@ -21,7 +21,8 @@
   [ADR-0040](0040-what-a-failing-check-becomes.md) (what a measurement not taken does,
   and one that fails),
   [ADR-0115](0115-a-copy-document-says-where-it-is-from-and-since-when.md) (decision
-  6, the period of a pinned node nothing has written)
+  6, the period of a pinned node nothing has written),
+  [ADR-0123](0123-a-node-says-one-status-wherever-it-is-read.md) (whose a period is)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -86,6 +87,17 @@ is pinned: it has shown *maintenance* since its pin, and states that period
 The node's Copy document says the same in its own labels: ***Status error** since …*,
 ***Status ok** since before …* and ***Last observed:** …*. What a period is, what one
 says that a pin's end began, and what a first reading begins are decisions 6, 8 and 9.
+
+The period is the node's own status's
+([ADR-0123](0123-a-node-says-one-status-wherever-it-is-read.md)). What a node that has
+nodes beneath it shows counts them, so *Status ok since …* would say the period of all
+of it: its Time card and its Copy document name the period as its own — *Its own status
+ok since …*, ***Its own status ok** since …*. Where such a node shows something its own
+status does not account for, the Time card says that first, and names the node beneath
+it that makes it so, with that node's own period in this decision's words: *Status
+error, from load-fixtures beneath it, error since …*. A node with nothing beneath it,
+and a node in maintenance, read *Status … since …*, and what a period says of its
+beginning (decisions 6 and 8) follows either wording.
 
 ### 2. History calls the period that still holds *current*
 

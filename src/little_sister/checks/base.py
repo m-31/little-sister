@@ -700,11 +700,11 @@ class Check(abc.ABC):
             subnode_labels, subnode_defaults, label_tokens)
         self.frequency_seconds = frequency_seconds
         self.timeout_seconds = timeout_seconds
-        # The budgeted failure retry (ADR-0033): while the last result is not
-        # OK the engine schedules this check at `retry_interval_seconds`
-        # instead of its frequency, at most `retry_attempts` times per failure
-        # episode. ``None`` inherits the settings-level default; ``0`` switches
-        # the retry off for this check.
+        # The budgeted failure retry (ADR-0033, ADR-0125): while what the last
+        # run rolls up to is not OK the engine schedules this check at
+        # `retry_interval_seconds` instead of its frequency, at most
+        # `retry_attempts` times per failure episode. ``None`` inherits the
+        # settings-level default; ``0`` switches the retry off for this check.
         self.retry_interval_seconds = retry_interval_seconds
         self.retry_attempts = retry_attempts
         # How many consecutive readings of a worse code the nodes this check writes

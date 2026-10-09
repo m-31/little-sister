@@ -22,9 +22,13 @@ Three rules shape this module:
   in-memory ``deque`` (ADR-0001), so making an edit to a link cost a restart would
   cost the operator their incident history.
 
-Icon *resolution* — the search path from this map through registered packs to the
-built-in pack, the favicon and the neutral glyph — is not here; this module parses
-the deployment's own ``icons:`` map, which is only its first rung.
+Icon *resolution* below the deployment's own rungs — the registered packs and the
+built-in pack — is :mod:`little_sister.icons`'s; this module parses the deployment's
+``icons:`` map and its ``icons/`` directory, and decides how an entry's mark is drawn
+(:meth:`LinksConfig.mark_for`): from our own origin, from a remote mark's URL, or from
+the entry's site favicon. The page's own Content-Security-Policy is taken from that
+same answer (:meth:`LinksConfig.external_icon_urls`), so what the page loads and what
+its policy allows cannot drift apart.
 """
 from __future__ import annotations
 
@@ -36,7 +40,7 @@ from urllib.parse import urlsplit
 
 import yaml
 
-from little_sister import icons, values
+from little_sister import csp, icons, values
 from little_sister.config_dir import YAML_SUFFIXES, aspect_files
 from little_sister.errors import CheckError
 from little_sister.icons import Icon, IconFile
@@ -118,6 +122,43 @@ class ProbeSettings:
 
 
 @dataclass(frozen=True)
+class MarkImage:
+    """One image an entry's mark is drawn with (ADR-0030 §3–4).
+
+    ``variant`` is the background its file is for, ``on-light`` or ``on-dark``;
+    ``side`` is the class that hides it under the other theme — ``light`` or ``dark``
+    for a declared pair, empty for one image that serves both backgrounds. ``url`` is
+    set where the viewer's browser fetches the image from elsewhere — a remote mark's
+    own URL, or the entry's site favicon — and empty where the icon route serves it
+    from our own origin, by the entry's ``icon:`` name.
+    """
+    variant: str
+    side: str = ""
+    url: str = ""
+
+
+@dataclass(frozen=True)
+class Mark:
+    """How one entry's mark is drawn: its images, and whether they sit on the chip.
+
+    ``bare`` is a declared pair with a file for each background, which has solved the
+    theme itself; everything else — one file, a favicon — rides the page's
+    theme-invariant light chip (ADR-0030 §4). An entry with nothing to draw has no
+    image, and the page draws the neutral glyph.
+    """
+    images: tuple[MarkImage, ...] = ()
+    bare: bool = False
+
+
+def favicon_url(url: str) -> str:
+    """The favicon of the site ``url`` is on — the rung of ADR-0030 §3 between the
+    marks and the neutral glyph — or ``""`` where there is no host to ask, which the
+    loader's scheme check already makes unreachable for a link that survived loading."""
+    parts = urlsplit(url)
+    return f"{parts.scheme}://{parts.netloc}/favicon.ico" if parts.netloc else ""
+
+
+@dataclass(frozen=True)
 class LinksConfig:
     """Everything one load of the aspect produced, across every root.
 
@@ -152,6 +193,72 @@ class LinksConfig:
             return None
         declared = self.icons.get(name)
         return declared if declared is not None else icons.resolve(name)
+
+    def mark_for(self, link: Link) -> Mark:
+        """How ``link``'s mark is drawn: which images, and where each one is from.
+
+        The search path's last steps are decided here, per entry, because they depend
+        on the entry and not on the name: a mark that resolved to nothing, or one
+        turned off with ``none``, falls through to the site's own favicon, and a pair
+        with a file for one background only takes the favicon for the other. A
+        declared pair draws an image per background, and the page hides one by theme
+        — under ``auto`` the server cannot know what the operating system resolves
+        to; anything else draws one image, which serves both. A remote mark keeps its
+        own URL: the route never proxies one, so the viewer's browser fetches it, as
+        it fetches a favicon, and the page's own policy allows those hosts
+        (:meth:`external_icon_urls`).
+        """
+        icon = self.icon_for(link.icon)
+        live = icon if icon is not None and not icon.suppressed else None
+        light = live.file_for("on-light") if live is not None else None
+        dark = live.file_for("on-dark") if live is not None else None
+        favicon = favicon_url(link.url)
+
+        def image(file: IconFile | None, variant: str, side: str) -> MarkImage | None:
+            if file is not None:
+                return MarkImage(variant=variant, side=side, url=file.url)
+            if not favicon:
+                return None
+            return MarkImage(variant=variant, side=side, url=favicon)
+
+        drawn: tuple[MarkImage | None, ...]
+        if live is not None and live.paired:
+            drawn = (image(light, "on-light", "light"), image(dark, "on-dark", "dark"))
+        else:
+            drawn = (image(light, "on-light", ""),)
+        return Mark(images=tuple(each for each in drawn if each is not None),
+                    bare=bool(live is not None and live.paired and light and dark))
+
+    def external_icon_urls(self) -> tuple[str, ...]:
+        """Every URL the page sends a viewer's browser to for an icon, in page order,
+        each once — the remote marks it draws and the favicons it falls back to.
+
+        What the page's own Content-Security-Policy allows in ``img-src``, reduced to
+        their origins (:func:`little_sister.csp.page_sources`). Those hosts are the
+        page's to name: it exists to send the viewer to the sites it links to, so a
+        browser that can open a link can fetch its icon, and the instance fetches
+        none of them (ADR-0030). A mark from a pack or the deployment's own files is
+        served from our own origin and is not here.
+        """
+        seen: dict[str, None] = {}
+        for group in self.groups:
+            for link in group.links:
+                for drawn in self.mark_for(link).images:
+                    if drawn.url:
+                        seen.setdefault(drawn.url, None)
+        return tuple(seen)
+
+
+def links_policy_sources(config: LinksConfig) -> tuple[csp.Source, ...]:
+    """What ``/links`` adds to its own ``img-src``: the origins its icons load from.
+
+    Each is a host the file names — the site of an entry whose mark falls through to
+    its favicon, the host of a remote mark — so the deployment writes it once, in
+    ``links.yaml``, and the page's policy follows the file as it changes (ADR-0030,
+    ADR-0048). Answerable to the file that names them, for ``/system/installed``.
+    """
+    by = ", ".join(str(path) for path in config.sources) or f"{LINKS_ASPECT}.yaml"
+    return csp.page_sources(config.external_icon_urls(), by=by)
 
 
 def load_links(config_dir: str | Path | None = None) -> LinksConfig:

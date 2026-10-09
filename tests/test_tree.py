@@ -6,7 +6,7 @@ from unittest import TestCase
 
 from little_sister.maintenance import MaintenanceEntry
 from little_sister.reasons import Entry
-from little_sister.status import HEARTBEAT_PATH, StatusCode
+from little_sister.status import HEARTBEAT_PATH, StatusCode, effective_code
 from little_sister.tree import CHANGE_WINDOW_SECONDS, Event, StatusTree
 
 
@@ -2249,6 +2249,196 @@ class CodedEntryRollupTests(TestCase):
         self.assertEqual(running, {"build": True, "test": False})
         # display only: the red line's rerun changes nothing about the roll-up
         self.assertEqual(snap.own_code, StatusCode.ERROR)
+
+
+class WhoseStatusTests(TestCase):
+    """Whose a node's status is (ADR-0123): what the node counts for itself, whether
+    what it shows comes from beneath it, and whether it counts what is beneath it
+    at all — three derivations on the snapshot, each read against its sentence."""
+
+    def setUp(self):
+        self.tree = StatusTree(maintenance_store=_RecordingStore())
+        self.far = datetime.now(UTC) + timedelta(days=1)
+        self.later = datetime.now(UTC) + timedelta(seconds=200)
+
+    def _snap(self, path, now=None):
+        snap = self.tree.snapshot(path, now=now)
+        assert snap is not None
+        return snap
+
+    def _whose(self, path, now=None):
+        snap = self._snap(path, now)
+        return snap.own_counted, snap.code, snap.derived
+
+    def test_a_status_from_beneath_it_is_derived(self):
+        # the node warns of its own and a node beneath it fails
+        self.tree.upsert("/gw", StatusCode.WARN, "slow")
+        self.tree.upsert("/gw/backend", StatusCode.ERROR, "down")
+        self.assertEqual(self._whose("/gw"),
+                         (StatusCode.WARN, StatusCode.ERROR, True))
+
+    def test_a_failure_of_its_own_is_not_derived(self):
+        # above a node that is well, and above one that fails too
+        for beneath in (StatusCode.OK, StatusCode.ERROR):
+            with self.subTest(beneath=beneath):
+                self.tree.upsert("/gw", StatusCode.ERROR, "503")
+                self.tree.upsert("/gw/backend", beneath, "its own line")
+                self.assertEqual(self._whose("/gw"),
+                                 (StatusCode.ERROR, StatusCode.ERROR, False))
+
+    def test_a_node_with_nothing_beneath_it_is_never_derived(self):
+        for code in (StatusCode.OK, StatusCode.WARN, StatusCode.ERROR,
+                     StatusCode.UNDEFINED, StatusCode.MAINTENANCE):
+            with self.subTest(code=code):
+                self.tree.upsert("/leaf", code, "a line")
+                self.assertEqual(self._whose("/leaf"), (code, code, False))
+        self.tree.upsert("/pinned", StatusCode.ERROR, "boom")
+        self.tree.set_maintenance("/pinned", "planned", expires_at=self.far)
+        self.assertEqual(
+            self._whose("/pinned"),
+            (StatusCode.MAINTENANCE, StatusCode.MAINTENANCE, False))
+
+    def test_a_node_that_declares_nothing_derives_whatever_it_shows(self):
+        self.tree.upsert("/host/disk", StatusCode.OK)
+        self.assertEqual(self._whose("/host"),
+                         (StatusCode.UNDEFINED, StatusCode.OK, True))
+        # with its one child silenced it shows maintenance, and that is the child's
+        self.tree.set_maintenance("/host/disk", "swap", expires_at=self.far)
+        self.assertEqual(self._whose("/host"),
+                         (StatusCode.UNDEFINED, StatusCode.MAINTENANCE, True))
+
+    def test_what_nothing_beneath_it_reports_is_its_own_undefined(self):
+        # the roll-up of nothing is nothing: the word is the node's own again
+        self.tree.upsert("/host/disk", StatusCode.UNDEFINED)
+        self.assertEqual(self._whose("/host"),
+                         (StatusCode.UNDEFINED, StatusCode.UNDEFINED, False))
+
+    def test_a_stale_reading_of_its_own_counts_degraded_and_is_not_derived(self):
+        # its check stopped, above a node that nothing ages: the warning is the
+        # node's own (ADR-0005), though its own status still says ok
+        self.tree.upsert("/gw", StatusCode.OK, "answers", frequency_seconds=60)
+        self.tree.upsert("/gw/backend", StatusCode.OK)
+        stale = self._snap("/gw", self.later)
+        self.assertTrue(stale.own_stale)
+        self.assertIs(stale.own_code, StatusCode.OK)
+        self.assertEqual((stale.own_counted, stale.code, stale.derived),
+                         (StatusCode.WARN, StatusCode.WARN, False))
+
+    def test_a_stale_failure_of_its_own_is_never_softened(self):
+        self.tree.upsert("/gw", StatusCode.ERROR, "503", frequency_seconds=60)
+        self.tree.upsert("/gw/backend", StatusCode.OK)
+        self.assertEqual(self._whose("/gw", self.later),
+                         (StatusCode.ERROR, StatusCode.ERROR, False))
+
+    def test_a_stale_node_beneath_it_is_what_it_derives(self):
+        # the node is read on no schedule and cannot age; the one beneath it can
+        self.tree.upsert("/gw", StatusCode.OK, "answers")
+        self.tree.upsert("/gw/backend", StatusCode.OK, frequency_seconds=60)
+        self.assertEqual(self._whose("/gw", self.later),
+                         (StatusCode.OK, StatusCode.WARN, True))
+
+    def test_it_is_what_the_roll_up_counts_for_the_node(self):
+        # the sentence the property makes: what a node shows is the roll-up of
+        # what it counts for itself and what each node beneath it hands up
+        self.tree.upsert("/a", StatusCode.OK, "fine", frequency_seconds=60)
+        self.tree.upsert("/a/b", StatusCode.WARN, "slow")
+        self.tree.upsert("/a/b/c", StatusCode.ERROR, "down", frequency_seconds=60)
+        self.tree.upsert("/a/d", StatusCode.OK)
+        self.tree.upsert("/e/f", StatusCode.OK)
+        self.tree.set_maintenance("/a/b/c", "planned", expires_at=self.far)
+        for now in (None, self.later):
+            pending = [self._snap("", now)]
+            while pending:
+                snap = pending.pop()
+                pending.extend(snap.children)
+                with self.subTest(path=snap.path, stale=now is not None):
+                    self.assertIs(snap.code, effective_code(
+                        snap.own_counted,
+                        (child.counted for child in snap.children)))
+
+    def test_a_node_counts_what_is_beneath_it(self):
+        self.tree.upsert("/gw", StatusCode.OK, "answers")
+        self.tree.upsert("/gw/backend", StatusCode.OK)
+        self.tree.upsert("/host/disk", StatusCode.OK)
+        self.assertTrue(self._snap("/gw").counts_beneath)
+        # one that declares nothing counts nothing else
+        self.assertTrue(self._snap("/host").counts_beneath)
+        # and one with nothing beneath it has nothing to count
+        self.assertFalse(self._snap("/gw/backend").counts_beneath)
+
+    def test_a_node_in_maintenance_counts_nothing_beneath_it(self):
+        # a pin on it, its check's own word, and lines that carry that word: each
+        # cancels what is beneath it (ADR-0039 rule 3, ADR-0124 decision 1)
+        self.tree.upsert("/gw", StatusCode.OK, "answers")
+        self.tree.upsert("/gw/backend", StatusCode.ERROR, "down")
+        self.tree.set_maintenance("/gw", "planned", expires_at=self.far)
+        self.tree.upsert("/said", StatusCode.MAINTENANCE, "its own word")
+        self.tree.upsert("/said/backend", StatusCode.ERROR, "down")
+        self.tree.upsert("/carried", StatusCode.MAINTENANCE,
+                         {"scope": "3 in scope", "region": "eu-central-1"})
+        self.tree.upsert("/carried/backend", StatusCode.ERROR, "down")
+        for path in ("/gw", "/said", "/carried"):
+            with self.subTest(path=path):
+                snap = self._snap(path)
+                self.assertIs(snap.own_code, StatusCode.MAINTENANCE)
+                self.assertIs(snap.code, StatusCode.MAINTENANCE)
+                self.assertFalse(snap.counts_beneath)
+                self.assertFalse(snap.lines_silenced)
+                self.assertFalse(snap.derived)
+
+    def test_a_node_whose_lines_are_all_silenced_counts_what_is_beneath_it(self):
+        # its lines are its children too: silenced, they count nothing and cancel
+        # nothing, and the nodes beneath it count (ADR-0124 decision 1)
+        self.tree.upsert("/lines", StatusCode.OK,
+                         [Entry("scope", "3 in scope", StatusCode.OK),
+                          Entry("region", "eu-west-3 cannot be read", StatusCode.WARN)])
+        self.tree.upsert("/lines/backend", StatusCode.ERROR, "down")
+        for slug in ("scope", "region"):
+            self.tree.set_entry_maintenance(
+                "/lines", slug, "quiet", expires_at=self.far, set_by="ada",
+                expected_set_at=None)
+        snap = self._snap("/lines")
+        self.assertEqual((snap.own_code, snap.own_counted, snap.code),
+                         (StatusCode.MAINTENANCE, StatusCode.MAINTENANCE,
+                          StatusCode.ERROR))
+        self.assertTrue(snap.counts_beneath)
+        self.assertTrue(snap.lines_silenced)
+        self.assertTrue(snap.derived)
+        self.assertIs(self.tree.effective("/"), StatusCode.ERROR)
+
+    def test_lines_all_silenced_over_nothing_counted_read_maintenance(self):
+        # the node reads `MAINTENANCE` whole only where nothing beneath it counts
+        # either: beneath a node not reported yet, and with nothing beneath it at all
+        # (ADR-0039 rule 5)
+        self.tree.upsert("/waits", StatusCode.OK,
+                         [Entry("scope", "1 in scope", StatusCode.OK)])
+        self.tree.upsert("/waits/backend", StatusCode.UNDEFINED)
+        self.tree.upsert("/leaf", StatusCode.OK,
+                         [Entry("scope", "1 in scope", StatusCode.OK)])
+        for path in ("/waits", "/leaf"):
+            self.tree.set_entry_maintenance(
+                path, "scope", "quiet", expires_at=self.far, set_by="ada",
+                expected_set_at=None)
+        for path, beneath in (("/waits", True), ("/leaf", False)):
+            with self.subTest(path=path):
+                snap = self._snap(path)
+                self.assertIs(snap.code, StatusCode.MAINTENANCE)
+                self.assertIs(snap.counts_beneath, beneath)
+                self.assertFalse(snap.derived)
+
+    def test_a_pinned_node_whose_own_reading_went_stale_counts_what_is_beneath_it(
+            self):
+        # staleness is not silenced (ADR-0041 decision 5): the node counts its
+        # reading degraded, which cancels nothing, and its period is named its own
+        self.tree.upsert("/gw", StatusCode.ERROR, "503", frequency_seconds=60)
+        self.tree.upsert("/gw/backend", StatusCode.OK)
+        self.tree.set_maintenance("/gw", "planned", expires_at=self.far)
+        snap = self._snap("/gw", self.later)
+        self.assertTrue(snap.own_stale)
+        self.assertEqual((snap.own_code, snap.own_counted, snap.code),
+                         (StatusCode.MAINTENANCE, StatusCode.ERROR, StatusCode.ERROR))
+        self.assertTrue(snap.counts_beneath)
+        self.assertFalse(snap.lines_silenced)
 
 
 class AdoptedEventLogTests(TestCase):

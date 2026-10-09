@@ -39,7 +39,14 @@
            The process is the fourth (ADR-0095): its resident size and the peak
            beside it — the peak alone, labelled as the peak, where the platform
            keeps no size now — against the `memory` line's limit and what the
-           machine gives the process, as the last tick read them. #}
+           machine gives the process, as the last tick read them.
+
+           What the machine has left is the fifth (ADR-0095 decision 7), a fact
+           and not a line: the figure, and beside it how long the machine stalled
+           on memory and, under a memory limit, how often the kernel has ended a
+           process of this cgroup, in the words of the engine's report and its
+           log. The row stands only where the platform says any of it — not on
+           macOS. #}
         <div class="col-auto">
             <div class="card"><div class="card-body">
                 <div class="text-muted small">Declared load</div>
@@ -61,6 +68,15 @@
                         {%- if info.machine_memory %}{% set said = said + ["the machine gives the process " ~ (info.machine_memory | size)] %}{% endif %}
                         {{- said | join(" · ") }}
                     {%- endif %}</span></div>
+                {%- if info.machine_left is not none or info.machine_stalled or info.machine_killed %}
+                <div class="text-muted small mt-2">Left on the machine</div>
+                {#- The figure stands alone, and what follows is set off from it: unlike
+                    the rows above, nothing here qualifies the figure — "41 MiB stalled
+                    on memory" would read as the memory that stalled. #}
+                {%- set beside = [info.machine_stalled, info.machine_killed] | select | list %}
+                <div>{% if info.machine_left is not none %}{{ info.machine_left | size }}{% else %}—{% endif %}
+                    <span class="text-muted">{% if beside %}· {{ beside | join(" · ") }}{% endif %}</span></div>
+                {%- endif %}
             </div></div>
         </div>
     </div>

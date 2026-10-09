@@ -20,9 +20,10 @@
     is shown in the one list a line's record is shown in (`_record_list.html`).
 
     Context: ``node`` (a StatusSnapshot), ``branch`` (its path), ``since`` (the
-    start of the current own-status period, or None) and ``node_curves`` (the curves
-    that stand on the node, or None — and allowed to be absent, for a caller that
-    has no engine to ask). Never included by the kiosk, which keeps none of this. -#}
+    start of the current own-status period, or None), ``made_by`` (the node beneath
+    it that makes what it shows, or None) and ``node_curves`` (the curves that stand
+    on the node, or None — and allowed to be absent, for a caller that has no engine
+    to ask). Never included by the kiosk, which keeps none of this. -#}
 {%- from '_record_list.html' import record_list %}
 {%- from '_series.html' import curve %}
 <div class="card mb-3">
@@ -53,24 +54,57 @@
             *from 19:32:39 until 19:32:39*. *Until* belongs to a period that has
             ended, which the History tab lists.
 
-            The period is bounded by the **own**-status event log, so it names the
-            own status: on a container the rolled-up code is a statement about the
-            children, and the children are on the same page saying it themselves. A
-            container that declares nothing has no own status for a period to name —
-            its `UNDEFINED` is the roll-up's to skip, and its page heads with what it
-            rolls up to — so it states the observation, as a node with no transition
-            of its own does: the route hands it no ``since``. That is decided once, in
-            `_since_of`, from the node before a filter takes its children away, and
-            the Copy document takes its period from the same place, so the two cannot
-            differ. A leaf's `UNDEFINED` is its own, and keeps its period.
+            The period is bounded by the **own**-status event log, so it is the
+            own status's, and on a node above others it is **named** that — *Its own
+            status ok since …* (ADR-0123 decision 3). What such a node shows counts
+            the nodes beneath it, and its own status's period stated as the node's
+            said *Status ok since Monday* of a branch whose child was red on
+            Tuesday, and under a head that says *error*. Where the node shows
+            something its own status does not account for, a line before it says
+            that, and from where: the node beneath it that makes it so, with that
+            node's own *since* — *Status error, from
+            staging/codepipeline/load-fixtures beneath it, error since 10:42, and
+            2 more*. It said *from the nodes beneath it* and no more, and nothing on
+            the page said since when the branch had been red. The node named
+            counts the code for itself; a branch on the way down that only passes
+            it on is never the one. Of several it is the one that has counted the
+            code the longest, and the line says how many others do; one that
+            counts it only because its own reading went stale is *stale, last
+            observed …*, since its period is of something else. A status no one
+            node makes — *ok*, *maintenance* — is *from the nodes beneath it*.
+            Which node, and the words of its period, are `_made_by`'s, which reads
+            them where its own page does. A node in maintenance keeps *Status
+            maintenance since …*: its pin, or its check's own word, cancels what is
+            beneath it, so that period is the node's. A container that declares
+            nothing has no own status for a period to name — its `UNDEFINED` is
+            the roll-up's to skip, and its page heads with what it rolls up to — so
+            it states the observation, as a node with no transition of its own
+            does, beneath the same first line: the route hands it no ``since``. All
+            of that is decided once, in `_since_of` and `_made_by`, from the node
+            before a filter takes its children away — which status the period
+            names, whether it is named the node's own, and which node makes what it
+            shows — and the Copy document takes its period from the same place, so
+            the two cannot differ. A leaf's `UNDEFINED` is its own, and keeps its
+            period.
 
             **A period is stated wherever there is one** (ADR-0115 decision 6): a
             pinned node that no check has written has shown *maintenance* since its
             pin, and *Not yet observed* alone would say nothing of that. The
             sentence is for a node with neither an observation nor a period. -#}
+        {%- if node.derived %}
+            <p class="mb-1">Status <strong>{{ node.code.name.lower() }}</strong>, from
+            {%- if made_by %} <a class="made-by" href="{{ url_for('status', branch=made_by.path | url_branch) }}">{{ made_by.name }}</a> beneath it
+                {%- if made_by.observed %}, stale, last observed {{ made_by.observed | localtime }}
+                {%- elif made_by.since %}, {{ made_by.since.status.name.lower() }} since {% if made_by.since.before %}before {% endif %}{{ made_by.since.at | localtime }}
+                    {%- if made_by.since.began %}, {{ made_by.since.began }}{% endif %}
+                {%- endif %}
+                {%- if made_by.more %}, and {{ made_by.more }} more{% endif %}
+            {%- else %} the nodes beneath it
+            {%- endif %}</p>
+        {%- endif %}
         {% if since %}
             <p class="mb-1">
-                Status <strong>{{ node.own_code.name.lower() }}</strong>
+                {% if since.own %}Its own status{% else %}Status{% endif %} <strong>{{ since.status.name.lower() }}</strong>
                 since {% if since.before %}before {% endif %}{{ since.at | localtime }}
                 {%- if since.began %}, {{ since.began }}{% endif %}
             </p>
@@ -125,10 +159,14 @@
             without this there is no number anywhere that says *this thing is
             flapping*, only a list of events to count by eye. Suppressed transitions
             are in it: a check flapping underneath a pin is exactly what is worth
-            seeing, which is the opposite of what the History list wants. -#}
+            seeing, which is the opposite of what the History list wants. It
+            counts what the node's own check reported, so on a node above others
+            it is named as the period is (ADR-0123 decision 3). -#}
         {% if node.changes %}
-            <p class="mb-2 text-muted">{{ node.changes }} status
-                {{ "change" if node.changes == 1 else "changes" }} in the last hour</p>
+            <p class="mb-2 text-muted">{{ node.changes }}
+                {%- if since and since.own %} {{ "change" if node.changes == 1 else "changes" }} of its own status
+                {%- else %} status {{ "change" if node.changes == 1 else "changes" }}
+                {%- endif %} in the last hour</p>
         {% endif %}
         {#- The dependency graph, from whichever end this node stands at. Both
             sentences are about **reachability**, which is why they sit here with

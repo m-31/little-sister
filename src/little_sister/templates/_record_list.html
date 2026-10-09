@@ -1,14 +1,21 @@
 {#- A record as its node's page lists it: the **one** list both records are shown
-    in — a line's `data` (`check.html`) and the node's own measured record
-    (`_node_facts.html`) — so the two cannot drift apart.
+    in — a line's `data` (`_own_lines.html`, on a leaf's page and a branch's) and
+    the node's own measured record (`_node_facts.html`) — so the two cannot drift
+    apart.
 
     What kind each row is, is the `record_fields` filter's to decide, and only its;
     this says how each kind reads. An instant reads in the configured timezone and
     `time_format`, inside a `<time>` whose `datetime` keeps the UTC string the seam
     stored. Everything else reads as it was stored. Both are escaped like any other
-    data (ADR-0018). -#}
-{%- macro record_list(record, extra_class="") -%}
-<dl class="reason-record small text-muted{% if extra_class %} {{ extra_class }}{% endif %}">
+    data (ADR-0018).
+
+    Its ink is Bootstrap's muted one where the list stands on a surface whose
+    fills are pale — a leaf's alert, the node-facts card — and the ink of what it
+    stands in elsewhere (``muted=false``): a branch's head and its depth-0 card are
+    status fills, and on a vivid one the muted gray measured 3.4:1 in the light
+    themes and 1.9:1 in the dark ones. -#}
+{%- macro record_list(record, extra_class="", muted=true) -%}
+<dl class="reason-record small{% if muted %} text-muted{% endif %}{% if extra_class %} {{ extra_class }}{% endif %}">
     {%- for field in record | record_fields %}
     <dt>{{ field.name }}</dt><dd>{% if field.kind == 'instant' %}<time datetime="{{ field.stored }}">{{ field.text }}</time>{% else %}{{ field.text }}{% endif %}</dd>
     {%- endfor %}

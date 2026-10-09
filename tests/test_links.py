@@ -5,14 +5,17 @@ from pathlib import Path
 from unittest import TestCase
 
 from little_sister.config_dir import ASPECTS, aspect_in
-from little_sister.icons import BUILTIN_PACKAGE
+from little_sister.icons import BUILTIN_PACKAGE, Icon, IconFile
 from little_sister.links import (
     DEFAULT_ALIVE,
     DEFAULT_PROBE_INTERVAL,
     Group,
     Link,
+    LinksConfig,
     current_links,
+    favicon_url,
     forget_cached_links,
+    links_policy_sources,
     load_links,
 )
 
@@ -526,6 +529,123 @@ class DiscoveredIconTests(TestCase):
                              " icon: firewall}\n", name="links/links.yaml")
             config = load_links(Path(directory))
             self.assertEqual(problems_matching(config, "no icon named"), [])
+
+
+class MarkTests(TestCase):
+    """How an entry's mark is drawn — which images, and where each is from — which
+    is also what the page's own policy allows (ADR-0030 §3–4)."""
+
+    REMOTE = "https://marks.example.org/phoenix.svg"
+
+    def entry(self, url="https://chef.example.org/tool", icon="", icons=None):
+        link = Link(title="T", url=url, icon=icon)
+        return LinksConfig(icons=icons or {},
+                           groups=(Group(title="G", links=(link,)),)), link
+
+    def drawn(self, config, link):
+        mark = config.mark_for(link)
+        return mark.bare, [(each.variant, each.side, each.url) for each in mark.images]
+
+    def test_a_pack_pair_is_ours_twice_and_needs_no_chip(self):
+        config, link = self.entry(icon="grafana")
+        self.assertEqual(self.drawn(config, link),
+                         (True, [("on-light", "light", ""), ("on-dark", "dark", "")]))
+
+    def test_an_entry_without_a_mark_draws_its_site_favicon_on_the_chip(self):
+        config, link = self.entry()
+        self.assertEqual(self.drawn(config, link), (False, [
+            ("on-light", "", "https://chef.example.org/favicon.ico")]))
+
+    def test_a_name_no_rung_defines_draws_the_favicon_too(self):
+        config, link = self.entry(icon="cyberchef")
+        self.assertEqual(self.drawn(config, link), (False, [
+            ("on-light", "", "https://chef.example.org/favicon.ico")]))
+
+    def test_a_mark_turned_off_falls_through_to_the_favicon(self):
+        config, link = self.entry(icon="aws",
+                                  icons={"aws": Icon(name="aws", suppressed=True)})
+        self.assertEqual(self.drawn(config, link), (False, [
+            ("on-light", "", "https://chef.example.org/favicon.ico")]))
+
+    def test_a_remote_mark_keeps_its_own_url_in_one_image(self):
+        remote = Icon(name="phoenix", on_light=IconFile(url=self.REMOTE),
+                      on_dark=IconFile(url=self.REMOTE))
+        config, link = self.entry(icon="phoenix", icons={"phoenix": remote})
+        self.assertEqual(self.drawn(config, link),
+                         (False, [("on-light", "", self.REMOTE)]))
+
+    def test_half_a_pair_takes_the_favicon_for_the_other_background(self):
+        half = Icon(name="half", on_light=IconFile(url=self.REMOTE), paired=True)
+        config, link = self.entry(icon="half", icons={"half": half})
+        self.assertEqual(self.drawn(config, link), (False, [
+            ("on-light", "light", self.REMOTE),
+            ("on-dark", "dark", "https://chef.example.org/favicon.ico")]))
+
+    def test_the_page_names_each_host_it_sends_a_browser_to_once_in_order(self):
+        remote = Icon(name="phoenix", on_light=IconFile(url=self.REMOTE),
+                      on_dark=IconFile(url=self.REMOTE))
+        config = LinksConfig(icons={"phoenix": remote}, groups=(
+            Group(title="G", links=(
+                Link(title="Chef", url="https://chef.example.org/tool"),
+                Link(title="Grafana", url="https://grafana.example.org/",
+                     icon="grafana"),
+                Link(title="Phoenix", url="https://phoenix.example.org/",
+                     icon="phoenix"))),
+            Group(title="H", links=(
+                Link(title="Chef again", url="https://chef.example.org/other"),)),
+        ))
+        self.assertEqual(config.external_icon_urls(),
+                         ("https://chef.example.org/favicon.ico", self.REMOTE))
+
+    def test_a_page_of_our_own_marks_sends_a_browser_nowhere(self):
+        config, _ = self.entry(icon="grafana")
+        self.assertEqual(config.external_icon_urls(), ())
+
+    def test_the_favicon_is_the_root_of_the_site_the_link_is_on(self):
+        self.assertEqual(favicon_url("https://a.example.org:8443/deep/path?q=1"),
+                         "https://a.example.org:8443/favicon.ico")
+        self.assertEqual(favicon_url("not a url"), "")
+
+
+class PolicySourceTests(TestCase):
+    """The hosts ``/links`` allows for itself are the ones the file names
+    (ADR-0030, ADR-0048)."""
+
+    def test_the_icon_hosts_come_from_the_file_and_answer_to_it(self):
+        text = """
+icons:
+  phoenix: https://marks.example.org/phoenix.svg
+groups:
+  - title: T
+    links:
+      - title: Chef
+        url: https://chef.example.org/tool
+      - title: Phoenix
+        url: https://phoenix.example.org/
+        icon: phoenix
+      - title: Grafana
+        url: https://grafana.example.org/
+        icon: grafana
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            write(directory, text)
+            config = load_links(Path(directory))
+            sources = links_policy_sources(config)
+        # The favicon of the entry with no mark and the host of the remote mark —
+        # not every host the page links to: a link with a mark of its own loads
+        # nothing from its site.
+        self.assertEqual([source.value for source in sources],
+                         ["https://chef.example.org", "https://marks.example.org"])
+        self.assertEqual({source.by for source in sources},
+                         {str(path) for path in config.sources})
+        self.assertEqual(len(config.sources), 1)
+
+    def test_a_file_whose_marks_are_all_ours_adds_nothing(self):
+        text = ("groups:\n  - title: T\n    links:\n      - title: Grafana\n"
+                "        url: https://grafana.example.org/\n        icon: grafana\n")
+        with tempfile.TemporaryDirectory() as directory:
+            write(directory, text)
+            self.assertEqual(links_policy_sources(load_links(Path(directory))), ())
 
 
 class ProbeSettingsTests(TestCase):

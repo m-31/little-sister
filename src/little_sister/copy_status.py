@@ -38,9 +38,9 @@ from typing import Protocol
 
 from little_sister.config import DEFAULT_TIME_FORMAT
 from little_sister.spans import format_duration, format_span, format_tolerance
-from little_sister.status import StatusCode, worst_of
+from little_sister.status import StatusCode
 from little_sister.titles import label_parts
-from little_sister.tree import STALE_DEGRADE, ReasonLine, StatusSnapshot
+from little_sister.tree import ReasonLine, StatusSnapshot
 
 _STATUS_ICON = {
     StatusCode.OK: "✅",
@@ -273,12 +273,15 @@ def _format_branch(node: StatusSnapshot, style: TimeStyle,
     grades its children declares nothing itself, and the cue of what it reported
     would be *undefined* over a full disk and over nothing wrong alike.
     **Reported** stands where the node declares a status of its own, **Shown as**
-    where it shows something else, with where that comes from — and no claim about
+    where it shows something else, with where that comes from — the nodes beneath
+    it alone where every line of its own is silenced, which then counts for
+    nothing and cancels nothing (ADR-0124) — and no claim about
     each node beneath it: one that is pinned, one that waits and one reached
     through a failing check count for nothing in what their branch shows
     (ADR-0039).
 
-    Then its period and its observation as far as it has them, its own lines, and
+    Then the period of its own status, named as that (ADR-0123 decision 3), and
+    its observation, as far as it has them, its own lines, and
     **Beneath it**: how many of the nodes beneath it need attention and the
     outline of those, which is the tree document's own outline begun here — or
     that nothing does. Under a pin the count says what the pin is silencing.
@@ -303,6 +306,10 @@ def _format_branch(node: StatusSnapshot, style: TimeStyle,
             node.maintenance_entry.expires_at,
             style,
         ))
+    elif node.lines_silenced:
+        document.append(_item(0,
+            f"**Shown as:** {_code_word(node.code)} — rolled up from {under} "
+            f"beneath it. Every line of its own is silenced."))
     elif not declares:
         document.append(_item(0,
             f"**Shown as:** {_code_word(node.code)} — rolled up from {under} "
@@ -430,11 +437,19 @@ def _time_facts(node: StatusSnapshot, style: TimeStyle,
     node that no check has written has shown *maintenance* since its pin, and
     *Not yet observed* alone would say nothing of that. The sentence is for a node
     with neither an observation nor a period.
+
+    **The period is the own status's, and a node above others names it so**
+    (ADR-0123 decision 3): ***Its own status ok** since …*, beneath a *Shown as*
+    that says what the node rolls up to. What such a node shows counts the nodes
+    beneath it (``counts_beneath``), and *Status ok since …* said that of the
+    node. A node in maintenance, and one with nothing beneath it, show their own
+    status and keep *Status*.
     """
     facts: list[str] = []
     if since is not None:
+        named = "Its own status" if node.counts_beneath else "Status"
         facts.append(_item(0,
-            f"**Status {node.own_code.name.lower()}** since "
+            f"**{named} {node.own_code.name.lower()}** since "
             f"{'before ' if before else ''}{style.at(since)}"
             f"{', ' + began if began else ''}"))
         if node.timestamp is not None:
@@ -547,16 +562,15 @@ def _stood(node: StatusSnapshot, style: TimeStyle, periods: Periods | None) -> s
 def _shown(node: StatusSnapshot) -> StatusCode:
     """What a node shows of its own. For a node with nothing beneath it that is its
     status. For a branch it is the part of its status that is its own, since what
-    it rolls up to is said by the nodes beneath it: its own status — or, where its
-    own reading is stale, that reading degraded, which is what the tree counts for
-    it (ADR-0005). Without that a gateway whose check stopped, above backends that
-    are well, would be in no count and no outline of a tree that shows a warning.
+    it rolls up to is said by the nodes beneath it: what the tree counts for the
+    node itself (``own_counted``) — its own status, or, where its own reading is
+    stale, that reading degraded (ADR-0005). Without that a gateway whose check
+    stopped, above backends that are well, would be in no count and no outline of a
+    tree that shows a warning.
     """
     if not node.children:
         return node.code
-    if node.own_stale:
-        return worst_of((node.reported_code, STALE_DEGRADE))
-    return node.own_code
+    return node.own_counted
 
 
 def _counted(node: StatusSnapshot) -> list[StatusSnapshot]:

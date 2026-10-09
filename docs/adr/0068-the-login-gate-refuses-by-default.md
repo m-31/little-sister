@@ -1,12 +1,14 @@
 # ADR-0068 — The login gate refuses by default, and every route is classified
 
 - **Status:** Accepted
-- **Date:** 2026-08-29
+- **Date:** 2026-10-10 (accepted 2026-08-29)
 - **Related:** [ADR-0020](0020-user-list-location.md) /
   [ADR-0046](0046-user-list-from-the-configuration-roots.md) (where the login list comes
   from), [ADR-0008](0008-json-output-api.md) (the bearer token `/status` also accepts),
   [ADR-0066](0066-health-answers-liveness-and-says-almost-nothing.md) (the route that
-  made this necessary rather than tidy)
+  made this necessary rather than tidy),
+  [ADR-0122](0122-a-series-is-read-over-the-api-as-it-stands.md) (the series read, whose
+  two routes choose their own credential as `/status` does)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -59,15 +61,18 @@ first time somebody tries it.
   `/health`; and the two redirects, for two different reasons — `/` lands on
   `/status`, which refuses on its own account, and `/favicon.ico` lands on the
   packaged icon, which is `static` and therefore already open.
-- **`SELF_AUTHENTICATING_ENDPOINTS`** contains `/status` and nothing else. It serves the
-  dashboard to a session *and* the JSON API to a bearer token, choosing by content
-  negotiation ([ADR-0008](0008-json-output-api.md)), so a gate in front of it would
-  redirect an API client to a login page. It refuses both ways, in its own view, after
-  the negotiation that decides which credential applies.
+- **`SELF_AUTHENTICATING_ENDPOINTS`** contains three routes, each serving a page to a
+  session *and* a read of the JSON API to a bearer token, choosing by content
+  negotiation ([ADR-0008](0008-json-output-api.md)): `/status` serves the dashboard and
+  the status read, and `/series` and `/series/<path>` serve the Series index and a
+  node's Series view, and the series read
+  ([ADR-0122](0122-a-series-is-read-over-the-api-as-it-stands.md) decision 8). A gate in
+  front of one would redirect an API client to a login page. Each refuses both ways, in
+  its own view, after the negotiation that decides which credential applies.
 
-Two lists rather than one because `/status` is **not open**, and a single list called
-"the ungated ones" would say that it is — to a reader, and eventually to somebody
-deciding it is safe to add a route beside it.
+Two lists rather than one because the routes on the second are **not open**, and a
+single list called "the ungated ones" would say that they are — to a reader, and
+eventually to somebody deciding it is safe to add a route beside them.
 
 ### 3. `current_user()` answers, `signed_in()` insists
 

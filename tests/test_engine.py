@@ -1797,6 +1797,142 @@ class EngineOwnLinesTests(TestCase):
             engine.stop()
 
 
+class MemoryLineOnTheBeatTests(TestCase):
+    """The engine's `memory` line holds what it saw, as its `lag` line does
+    (ADR-0095), and the tree's log is where that shows: `/little-sister/engine`
+    changes when the line's code does, so a process that sits on its limit writes
+    an event when it crosses it and none for every tick it wavers there. The
+    sentences are ``test_limits.py``'s; here is what the engine feeds them — the
+    size its ``resident`` reads on the tick, the instant its ``wall`` answers — and
+    what a reader of the events is left with. The values are the deployment's the
+    line was held for: a limit of 504 MiB of the 917 MiB a machine gives, and the
+    window the ten minutes it is."""
+
+    MIB = 1024 ** 2
+
+    def setUp(self):
+        from little_sister.limits import Limits, Resident
+        self.mono = 1000.0
+        # One second before the configured zone's clock reads 09:12:00: the first
+        # tick is observed then, and every tick after it a second later on both
+        # clocks, so that none comes late.
+        self.wall = (datetime(2026, 10, 10, 9, 12, tzinfo=config.tzinfo)
+                     - timedelta(seconds=1))
+        self.size = 0
+        self.unread = False
+        self.tree = StatusTree()
+        self.engine = Engine(
+            [], self.tree, clock=lambda: self.mono, wall=lambda: self.wall,
+            limits=Limits(memory_limit=504 * self.MIB,
+                          machine_memory=917 * self.MIB),
+            resident=lambda: Resident(
+                peak=600 * self.MIB, now=None if self.unread else self.size))
+
+    def _tick(self, mib: float, *, times: int = 1, unread: bool = False) -> None:
+        """``times`` ticks at ``mib`` — with ``unread``, ticks on which the size now
+        cannot be read and the high-water mark, 600 MiB, can."""
+        self.size, self.unread = round(mib * self.MIB), unread
+        for _ in range(times):
+            self.mono += 1.0
+            self.wall += timedelta(seconds=1)
+            self.engine._guarded_tick(submit=False)
+
+    def _path(self) -> str:
+        from little_sister.engine import ENGINE_REPORT
+        return f"{HEARTBEAT_PATH}/{ENGINE_REPORT}"
+
+    def _line(self) -> tuple[StatusCode, str] | None:
+        snap = self.tree.snapshot(self._path())
+        assert snap is not None
+        found = [(line.code, line.text) for line in snap.reasons
+                 if line.slug == "memory"]
+        self.assertEqual([line.slug for line in snap.reasons],
+                         ["memory"] * len(found))
+        return found[0] if found else None
+
+    def _changes(self) -> list[tuple[StatusCode, StatusCode]]:
+        """Every event the tree wrote for the engine's node, oldest first."""
+        return [(event.old, event.new) for event in self.tree.recent_events()
+                if event.path == self._path()]
+
+    def test_a_size_past_the_limit_on_one_tick_and_below_it_on_the_next_is_one_event(
+            self):
+        self._tick(450)                       # the amber band, at 09:12:00
+        self._tick(505)                       # past the limit
+        self._tick(498)                       # and below it again
+        self.assertEqual(self._changes(),
+                         [(StatusCode.UNDEFINED, StatusCode.WARN),
+                          (StatusCode.WARN, StatusCode.ERROR)])
+        self.assertEqual(self._line(), (
+            StatusCode.ERROR,
+            "resident size 505 MiB at 09:12, past the limit of 504 MiB (now 498 MiB "
+            "of the 917 MiB the machine gives the process)"))
+
+    def test_a_size_that_crosses_the_limit_twice_inside_the_window_writes_no_second(
+            self):
+        self._tick(450)
+        self._tick(505)
+        written = self._changes()
+        self.assertEqual(written, [(StatusCode.UNDEFINED, StatusCode.WARN),
+                                   (StatusCode.WARN, StatusCode.ERROR)])
+        for mib in (498, 506, 498, 505, 498):
+            self._tick(mib)
+        self.assertEqual(self._changes(), written)
+        code, text = self._line()
+        self.assertIs(code, StatusCode.ERROR)
+        self.assertIn("resident size 506 MiB at 09:12, past the limit", text)
+
+    def test_a_size_below_the_limit_for_the_whole_window_steps_the_line_down(self):
+        self._tick(450)
+        self._tick(505)                       # past the limit, at 09:12:01
+        self._tick(498, times=600)            # ten minutes on: still in the window
+        self.assertIs(self._line()[0], StatusCode.ERROR)
+        self.assertEqual(len(self._changes()), 2)
+        self._tick(498)                       # the whole window stood below the limit
+        self.assertEqual(self._changes()[2:],
+                         [(StatusCode.ERROR, StatusCode.WARN)])
+        self.assertEqual(self._line(), (
+            StatusCode.WARN,
+            "resident size 498 MiB at 09:22, 99 % of the limit of 504 MiB (now 498 "
+            "MiB of the 917 MiB the machine gives the process)"))
+        self._tick(300, times=600)            # below the amber share for ten minutes
+        self.assertIs(self._line()[0], StatusCode.WARN)
+        self.assertEqual(len(self._changes()), 3)
+        self._tick(300)                       # the whole window below it: gone
+        self.assertEqual(self._changes()[3:], [(StatusCode.WARN, StatusCode.OK)])
+        self.assertIsNone(self._line())
+
+    def test_a_tick_that_cannot_read_the_size_now_writes_no_event(self):
+        """The process holds 300 MiB and reached 600 once. On one tick the size now
+        cannot be read, and what that tick has is the high-water mark: taken for
+        the size, graded and held, it would turn the node ERROR for ten minutes
+        over a process at three fifths of its limit."""
+        self._tick(300, times=3)
+        before = self._changes()
+        self.assertEqual(before, [(StatusCode.UNDEFINED, StatusCode.OK)])
+        self._tick(300, unread=True)
+        self.assertIsNone(self._line())
+        self._tick(300, times=3)
+        self.assertIsNone(self._line())
+        self.assertEqual(self._changes(), before)
+
+    def test_a_process_that_sits_on_its_limit_writes_the_one_event(self):
+        """Twenty minutes of what the deployment's instance did for a day and a
+        half: a tenth of a mebibyte past the limit on one tick and as far below it
+        on the next. Graded on the tick's own figure, that was an event a
+        second."""
+        self._tick(450)                       # at 09:12:00
+        for second in range(1200):            # through 09:32:00
+            self._tick(504.1 if second % 2 == 0 else 503.9)
+        self.assertEqual(self._changes(),
+                         [(StatusCode.UNDEFINED, StatusCode.WARN),
+                          (StatusCode.WARN, StatusCode.ERROR)])
+        self.assertEqual(self._line(), (
+            StatusCode.ERROR,
+            "resident size 504 MiB at 09:31, 102.4 KiB past the limit of 504 MiB "
+            "(now 504 MiB of the 917 MiB the machine gives the process)"))
+
+
 class StateOnTheTickTests(TestCase):
     """The engine drives the state layer (ADR-0071): the kept files on the tick,
     once more at stop."""

@@ -8,6 +8,292 @@ contract versions **separately** — see `docs/api/openapi.yaml` `info.version`.
 
 ## [Unreleased]
 
+## [0.3.20] - 2026-10-10
+
+**The instance says what the machine has left and collects after a run that rose, its
+`memory` line holds ten minutes instead of turning with every tick, a series can be
+read over the API, a branch's own lines take a pin on its own page, and
+`/system/installed` says what the log leaves out.** Upgrading from 0.3.19 asks four
+things. A `LOG_LEVEL` or `LOG_FILE` line in `.env` takes effect now, where it was
+ignored, so read what yours says. The library no longer caps `httpx`: a deployment
+that brings it and wants its line for each request out of the log declares the cap, or
+sets the level in its startup file. Where the failure retry is on, a check that hands
+back a branch — `host-metrics`, `aws`, `github` — takes its second look when something
+beneath it fails; one too dear to read twice keeps `retry_interval: 0`. And a pin on
+every line of a node silences those lines alone: where such pins stood in for a pin on
+the node, what is beneath it alarms again until the node itself is pinned.
+Coming from 0.3.18, 0.3.19's cost comes first: the event log and the maintenance pins
+start empty, every instance on one keeper's prefix is stopped before the first one
+starts on the new version, and the version before is not started on that state again.
+Nothing a check type imports is taken away, no stored key moves, and the JSON API only
+grows, to 2.7.0.
+
+### Removed
+
+- **The noise cap on `httpx`.** The logging default capped the `httpx` logger at
+  `WARNING` wherever it ran, and nothing the library depends on logs under that name.
+  A package or a deployment that brings `httpx` and wants its line for each request
+  out of the log declares the cap beside its registrations —
+  `noise.cap("httpx", logging.WARNING, hides="a line for each request")` — or sets
+  the level in its startup file, before the application is imported:
+  `logging.getLogger("httpx").setLevel(logging.WARNING)`
+  ([ADR-0121](docs/adr/0121-a-noise-cap-is-declared-and-log-level-has-the-last-word.md)).
+
+### Added
+
+- **A series can be read over the API.** `GET /series/<path>` with
+  `Accept: application/json` and a bearer token answers every series that stands at or
+  beneath a node, and `GET /series` every series the instance keeps, over the window
+  `from` and `to` name, read as the Series view's own URL reads them. Each series says
+  the node it is shown on, the key it is kept under — its check's type and mount, and
+  its subject — the measures drawn at or beneath the node asked, one for every key the
+  kept readings hold, and its readings whole and oldest first: the time on the series'
+  clock, when it was observed, the code and the sentences as they stood, the identity
+  or the state, and the record. A node that exists answers `200`, with an empty list
+  where no series stands at or beneath it; a path no node stands at is `404`, and a
+  window the server cannot read is `400`, the first this API answers. It is what a
+  script or a session asks that reads a running instance. The contract moves to 2.7.0,
+  additively — `docs/api/openapi.yaml` and the guide beside it say the rest — and
+  `little_sister.contract.golden_series()` is one answer that holds every shape of
+  it, shipped in the wheel
+  ([ADR-0122](docs/adr/0122-a-series-is-read-over-the-api-as-it-stands.md)).
+- **`./test_api.sh` takes the path to ask.** `./test_api.sh
+  '/series/hosts/alpha?from=now-1h'` asks that path of the running instance, with its
+  query, and `./test_api.sh` alone asks `/status`, as it did. The script reads the token
+  itself and prints it nowhere, so it is how a session reads an instance without
+  reading its credential. One path is asked at a time: a second, and an argument that
+  is neither a flag nor a path, are refused before anything is asked. A path is asked
+  as it was written, its brackets and braces included
+  ([ADR-0122](docs/adr/0122-a-series-is-read-over-the-api-as-it-stands.md) decision 11).
+- **A package declares the noise caps of the dependencies it brings.**
+  `little_sister.noise.cap("botocore.credentials", logging.WARNING, hides="where each
+  new session found its credentials, a line a run")`, in the import-before-app slot
+  beside a package's other registrations, records a cap and sets no level. The
+  library sets the declared caps once, where the application is imported, and only
+  where that takes lines away and nobody chose a level: not where the application
+  configured logging itself, not where `LOG_LEVEL` names the logger or one above it,
+  and not where a level stands on it, or on a logger above it, that the deployment's
+  code or the dependency itself set. So a deployment that installs a package has that
+  package's dependencies quiet without knowing their names, the order of its imports
+  decides nothing, and a level it set in its startup file stands. A package may cap a
+  dependency's logger at `INFO` or `WARNING` — never the root, nor the library's own
+  loggers — and says what the cap hides; a declaration outside that is a warning, a
+  skip and a line on `/little-sister/startup`. Where two packages cap one logger the
+  higher level stands. `architecture.md` §11 promises the call, and a package that
+  declares a cap raises its floor to this release
+  ([ADR-0121](docs/adr/0121-a-noise-cap-is-declared-and-log-level-has-the-last-word.md)).
+- **`LOG_LEVEL` names loggers beside the level.** It is a list:
+  `LOG_LEVEL=INFO,botocore.credentials=DEBUG`. The entry without an `=` is the root's
+  level, as before; an entry `name=LEVEL` is that logger's, speaks for every name
+  beneath it down to the next name the variable has an entry for, and stands over a
+  declared cap and over a level the deployment's code set before the application was
+  imported — so a login that fails on one machine is one variable and a restart,
+  without every other line a dependency writes at `DEBUG`. A bare `DEBUG` lowers the
+  root and lifts no cap. An entry that cannot be read is skipped and said in the log —
+  `logger: LOG_LEVEL entry 'chatty' is skipped: 'chatty' is not a level name; the
+  root is at INFO` — and the rest of the variable stands; `NOTSET` names no level, and
+  the root has no name in the variable. Against an application that configured
+  logging itself the variable does nothing, as before.
+- **`/system/installed` says what the log leaves out.** A *Logging* section: whether
+  the library's default is in charge of the log, the root's level and where it comes
+  from, every logger that carries a level of its own with where that comes from — a
+  cap, with the package that declared it and what it hides, an entry of `LOG_LEVEL`,
+  or the application's code or the dependency itself — every declared cap that was
+  not set, with the reason, every level an entry of `LOG_LEVEL` took off, and every
+  entry that could not be read. A package's caps stand in the package inventory
+  beside its other registrations, and where the log begins it carries an `INFO` line
+  for each cap that was set, which names the entry that shows that logger's lines:
+  the logger at the level it is at without the cap — `botocore.credentials=INFO`
+  under the default — so that what the cap hid comes back and nothing below it. The
+  page prints that entry after the variable as it stands, as a line to copy. A cap
+  that was not set leaves nothing out of the log and has no line in it.
+- **The instance says what the machine has left.** Beside the process's own figures,
+  the engine's report on `/little-sister/engine`, `/system`'s engine card and the log's
+  ten-minute line say what the machine has left — `MemAvailable`, or under a memory
+  limit what the limit leaves, with the file cache the kernel gives up first counted
+  back, whichever is smaller — and beside it the share of the last ten minutes in which
+  the machine stalled on memory and, under a limit, how often the kernel has ended a
+  process of the cgroup: `the machine has 41 MiB left, stalled on memory for 1.7 % of
+  the last 10m, and the kernel has ended no process of this cgroup`. A worker the
+  kernel ended at its limit leaves nothing else behind, so the one that begins after
+  it says so. In a process's first ten minutes the share is of what it has read, named
+  as long as it is. It is a fact and not a line: nothing is graded on it yet. On
+  macOS, which has neither file, nothing is said
+  ([ADR-0095](docs/adr/0095-the-instance-states-its-memory.md) decision 7).
+- **The engine collects after a run that rose.** A run across which the process rose
+  by 1 MiB or more — its resident size, or on macOS its peak — is followed by a call to
+  the cycle collector, which frees what only it can: the garbage a type builds out of
+  reference cycles and leaves behind it, which took one process to 419 MiB. A
+  collection stops the process while it runs, so one that took *p* is followed by
+  none for a hundred times *p*, and never two at once. The run's own line says it,
+  after its rise, and is written once the collection is done: `check /aws: OK (5812
+  ms; resident +38.2 MiB while it ran; collected after it in 18 ms, resident −31.0
+  MiB)` ([ADR-0095](docs/adr/0095-the-instance-states-its-memory.md) decision 8).
+- **A branch's own lines take a pin on its own page.** A line's pin was set on a leaf's
+  page only, so the lines a node above others says of itself — an `aws` aspect's scope,
+  a region it cannot read, a `github` check's coverage — took none from the GUI, and the
+  one pin their page offered was the node's, which silences everything beneath it. A
+  branch's head now lists its own lines as a leaf's page does — in full rather than cut
+  at `reason_cap`, each with its record, for an admin the pause mark at its end and a
+  pinned line's block beneath it — and so does its one card at depth 0. Any line takes a
+  pin, whatever it says; it silences that line and nothing beneath it, and the editor of
+  the last line still alarming says that the nodes beneath it still count.
+  `?reason=<slug>` names a branch's line as it names a leaf's, so the Maintenance page's
+  link and a card's pip land on it, a pin whose line is no longer reported says so
+  there, and a line pinned while its node was a leaf is edited on that node's page
+  again, where only the Maintenance page could. A line's write comes back to the page as
+  it was asked for, its depth and its filters, at the line
+  ([ADR-0036](docs/adr/0036-addressable-reasons.md)).
+
+### Changed
+
+- **The cap on `markdown_it` is a declared one, set only where it takes lines away.**
+  It was set to `INFO` wherever the logging default ran. It is the library's own
+  declared cap now, set where the application is imported and only under a root below
+  `INFO` — which is `LOG_LEVEL=DEBUG`, the session it exists for. Under the default's
+  `INFO` root and above, the logger carries no level of its own; a level a deployment
+  sets on it before the application is imported stands, where the default overwrote
+  one set before the library's first import; and a process that imports the library
+  and never the application — a tool, a script — sets no cap at all
+  ([ADR-0121](docs/adr/0121-a-noise-cap-is-declared-and-log-level-has-the-last-word.md)).
+- **`./test_api.sh` prints what a refusal says.** At a status of 400 and above the
+  script printed curl's line and nothing of the answer. It now prints the body — the
+  Problem JSON, whose `detail` says which token, node or window was refused — then
+  names the path and the status on stderr, and still ends with 22. An answer is printed
+  as it was, and an instance that does not answer is still curl's own failure. The
+  script asks without `--fail` for this, so it needs no newer curl than it did
+  ([ADR-0122](docs/adr/0122-a-series-is-read-over-the-api-as-it-stands.md) decision 11).
+- **The engine's `memory` line holds what it saw, as its `lag` line does.** The line on
+  `/little-sister/engine` was graded on each tick's own reading of the resident size,
+  so a process that sits on its limit — past it on one tick, below it on the next —
+  turned the node from WARN to ERROR and back again and again, an event each time. The
+  line is now written from the worst reading of the last ten minutes, and says what
+  that was, when it was, and what the size is now: `resident size 514 MiB at 09:12,
+  past the limit of 504 MiB (now 481 MiB of the 917 MiB the machine gives the
+  process)`. It steps down, ERROR to WARN to nothing, only when the whole ten minutes
+  stood below. So a reader of the events sees one event where the process crosses its
+  limit and one when it has stayed below it for ten minutes, where there was one for
+  every crossing — and the line stands for ten minutes after the size has fallen,
+  saying beside the worst reading what the size is now. Where the sentence would read
+  as though the size were the limit, it says how far apart they are: `97.0 KiB past
+  the limit of 504 MiB` where it said `504 MiB, past the limit of 504 MiB`, and `1.0
+  MiB below the limit of 504 MiB` where it said `100 % of the limit of 504 MiB`. On
+  macOS, where the peak is all the platform keeps, the line names no time and no size
+  now, and says the distance the same way. On Linux a tick that could not read the
+  size now is no longer graded on the peak. No stored key moves: the slug is still
+  `memory`, so a pin on the line holds, and `memory_share`, the ten-minute line in the
+  log and a run's rise are as they were
+  ([ADR-0095](docs/adr/0095-the-instance-states-its-memory.md)).
+- **The failure retry reads what a run rolls up to.** The retry that follows a failed
+  run was armed by the code of the check's own node, so a check that hands back a branch
+  — `host-metrics` and `aws`, whose own node declares nothing, and `github`, whose own
+  node says its coverage — never took its fast second look when a disk, an alarm or a
+  workflow beneath it failed. It is armed now by what the run rolls up to: its own
+  node's code and every node beneath it the run wrote, which the run's log line already
+  says (*UNDEFINED, rolls up to ERROR*). A failure episode ends when that changes rather
+  than when the check's own node does, and a run that makes no claim at all arms
+  nothing; `/system` marks the slot `retry 1/2` as before. Nothing moves where the retry
+  is off, which is the default, and a check whose whole estate is too dear to read twice
+  keeps a `retry_interval: 0` of its own
+  ([ADR-0125](docs/adr/0125-the-failure-retry-reads-what-a-run-rolls-up-to.md)).
+- **Every line whose subject has work in flight carries `running`, in every type.**
+  The guide for a check's author said what the mark is; it says now what work in flight
+  is — a run started, or queued to start, and not yet finished — and that every such
+  line carries the mark, so that work in flight reads the same on every node. It stays
+  display and never severity, and the line's text still says it in words
+  ([ADR-0042](docs/adr/0042-entries-carry-their-own-code.md) decision 6,
+  `docs/implementing-checks.md`).
+
+### Fixed
+
+- **`LOG_LEVEL` and `LOG_FILE` written in `.env` are read.** The module that reads
+  the two variables was imported before the one that reads `.env` wherever a process
+  imported a check package or the application first — the order every deployment
+  starts in — so a value written only in the file was ignored, while one in the
+  process's own environment worked. Both are read after `.env` now, whatever is
+  imported first, and a value in the environment still stands over the file's. **A
+  deployment whose `.env` holds either line starts logging at that level, or into
+  that file, at this upgrade**: in the order a deployment starts in, the line was
+  dead until now
+  ([ADR-0121](docs/adr/0121-a-noise-cap-is-declared-and-log-level-has-the-last-word.md) decision 6).
+- **A node says one status wherever it is read.** The head of a node's page showed
+  the node's own status, so a node that was well of its own headed its page green,
+  `ok`, over a node beneath it in error, while the page above drew the same node red.
+  The head now says what the node rolls up to, as its card does: pale where that
+  comes from beneath it, vivid where it is the node's own. On the page of a node that
+  has nodes beneath it, the Time card names the period it states as the node's own —
+  *Its own status ok since …*, and *1 change of its own status in the last hour* —
+  and says first what the node shows where that comes from beneath it, naming the node
+  beneath it that makes it so, with that node's own *since* and a link to its page:
+  *Status error, from staging/codepipeline/load-fixtures beneath it, error since
+  10:42, and 2 more* (of several, the one that has shown it the longest). It read
+  *Status ok since …* there, which was the period of the node's own line and said
+  nothing of the time a node beneath it had failed. Such a node's Copy document writes
+  ***Its own status ok** since …*, and its History says under its table that the
+  periods are those of its own status. A container that declares nothing, whose card
+  said *Observed …* alone, says the card's first line above it. A node with nothing
+  beneath it and a node in maintenance read as they did. A node whose own reading has
+  gone stale is drawn vivid on its card and its box as well, where it was pale, as if
+  a node beneath it had caused the warning. The JSON API does not move: `code` is what
+  a node rolls up to and `own` its own status, as before
+  ([ADR-0123](docs/adr/0123-a-node-says-one-status-wherever-it-is-read.md)).
+- **A node whose lines are all silenced still counts the nodes beneath it.** A node
+  whose every line was pinned showed `maintenance` and silenced every node beneath it,
+  while the pin's form had said *this line only*. A line is pinned on a leaf's page, so
+  it came about where the node has had nodes beneath it since: a subject list that
+  filled, or a package release that gave an aspect nodes for its subjects. Its own
+  status still reads `maintenance` and counts for nothing; the nodes beneath it count,
+  and it shows what they roll up to — on its head, its card and in the API's `code` —
+  while its Time card names its period its own and its Copy document says that every
+  line of its own is silenced. **A line's pin that silenced the nodes beneath its node
+  stops doing so at this upgrade, and what it silenced alarms again**: a pin on the
+  node is what silences what is beneath it. A pinned node whose own reading went stale
+  names its period its own on its Time card too
+  ([ADR-0124](docs/adr/0124-a-node-whose-lines-are-all-silenced-still-counts-the-nodes-beneath-it.md)).
+- **A memory limit set on a service is found on a bare host.** What the machine gives
+  the process — of which the `memory` line's limit is the `memory_share` — was read
+  from the cgroup at the root of the mount alone, which in a container is the
+  container's own and on a Linux host is the machine's: a service's `MemoryMax=`, or a
+  slice's above it, went unseen, and the line was drawn against the host's whole
+  memory. The cgroups read are now the process's own, as `/proc/self/cgroup` names it,
+  and each above it, under cgroup v2 or v1, and the smallest limit among them counts
+  where it is smaller than the physical memory. **On such a host the `memory` line's
+  limit falls to its share of the service's limit at this upgrade**; a container
+  reads as it did ([ADR-0095](docs/adr/0095-the-instance-states-its-memory.md)
+  decision 7).
+- **The Series index keeps a curve's numbers on one line from 1400 pixels, as the
+  notes of 0.3.19 said.** It kept them on one line from 1200, where in a typeface
+  wider than a Mac's an open fold put the table up to a hundred pixels past its box;
+  between the two they wrap beneath their curve, as on a narrower window
+  ([ADR-0114](docs/adr/0114-a-curve-seen-small-and-the-series-tabs-count.md)
+  decision 3).
+- **A page whose stylesheet did not load holds still.** Where Bootstrap's stylesheet
+  did not arrive, the settings menu stood open in the bar, and on a window too short
+  for it the bar grew and shrank twice a second, and the page with it: the menu's
+  height cap was read from the bar it changed. The cap is the opened menu's now.
+- **Our own pages report nothing of their own images to the Content-Security-Policy.**
+  Every view of `/status` and the pages under it sent a report for the switches, and
+  on a phone every page for the bar's burger: Bootstrap draws both as `data:` images,
+  which the library's `img-src` takes — a `data:` image calls no host. And `/links`
+  sent one for each icon it loads from elsewhere: its own policy allows the hosts its
+  icons load from — the site of an entry that falls back to its favicon, the host of a
+  remote mark — taken from `links.yaml` as the page renders, so a deployment writes no
+  `img-src` line in `config/csp.yaml` for them, and one it wrote for them can go. The
+  viewer's browser fetches those icons, as it did. `/system/installed` lists what
+  `/links` adds beneath the policy, with the file that names it
+  ([ADR-0048](docs/adr/0048-an-assembled-content-security-policy.md),
+  [ADR-0030](docs/adr/0030-curated-links.md)).
+- **A node's page says that a pin above it silences it.** A node beneath a pinned
+  branch said *Status: error* and offered *Set maintenance* on its own page, and
+  nothing of the pin that kept it from alarming. Its page — a leaf's, a branch's head,
+  and the node's card at depth 0 — states each pin set above it as that pin's block:
+  who silenced it, until when and what is left, and its note, without *Edit* or
+  *Clear*, since a pin is edited where it stands: *This node is silenced from
+  /nexus/qnap*, linked to that node, outermost first where there are several. The
+  node's own pin under one, and a line's, say *also silenced on its own*, and their
+  editors say that such a pin is for the day the one above ends
+  ([ADR-0104](docs/adr/0104-a-pin-is-one-block-on-what-it-silences.md)).
+
 ## [0.3.19] - 2026-10-04
 
 ### Removed

@@ -137,8 +137,14 @@ def render_page(fixture: Fixture) -> str:
                 # behind it, so there is no period to bound and the card reports
                 # the single observation instead.
                 since=None,
+                # And names no node beneath it that makes what it shows, whose
+                # period is in the same log (ADR-0123 decision 3): the card's
+                # first line, where it has one, says *from the nodes beneath it*.
+                made_by=None,
                 focus="",
                 focus_orphan=None,
+                # A hand-built snapshot has no tree above it to hold a pin.
+                pins_above=[],
                 # The curves that stand on the node (ADR-0097 decision 2), where a
                 # fixture's engine keeps a series, and the views beside this one.
                 node_curves=_node_curves(node) if fixture.branch else None,

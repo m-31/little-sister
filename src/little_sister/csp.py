@@ -43,7 +43,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import re
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -81,16 +81,19 @@ CDN = "https://cdn.jsdelivr.net"
 #:   ``/about`` — and a computed attribute cannot be hashed even in principle. An
 #:   inline style is also not the vector a reason line is; reporting it on every page
 #:   view would drown the log in the one violation nobody can act on.
-#: * ``img-src`` is deliberately strict. Markdown images are on and unconstrained
-#:   (ADR-0018), so a note's external image makes every viewer's browser announce
-#:   itself to that host. This is the directive with something to measure, and a
-#:   deployment that legitimately embeds one adds the host in its own
-#:   ``config/csp.yaml``.
+#: * ``img-src`` names no host. Markdown images are on and unconstrained (ADR-0018),
+#:   so a note's external image makes every viewer's browser announce itself to that
+#:   host. This is the directive with something to measure, and a deployment that
+#:   legitimately embeds one adds the host in its own ``config/csp.yaml``. It does
+#:   take ``data:``: Bootstrap draws its controls as ``data:`` images — a switch's
+#:   knob, the bar's burger — and a ``data:`` image calls no host, so it gives away
+#:   nothing this directive keeps. Refused, our own controls would report on every
+#:   page view and bury the reports the policy is there to collect.
 DEFAULTS: Mapping[str, tuple[str, ...]] = {
     "default-src": ("'self'",),
     "script-src": ("'self'", CDN),
     "style-src": ("'self'", CDN, "'unsafe-inline'"),
-    "img-src": ("'self'",),
+    "img-src": ("'self'", "data:"),
     "font-src": ("'self'",),
     # The ~10s fragment poll, and nothing else, is same-origin fetch.
     "connect-src": ("'self'",),
@@ -210,6 +213,37 @@ class Policy:
             if name == directive:
                 return tuple(source.value for source in sources)
         return ()
+
+    def adding(self, directive: str, sources: Iterable[Source]) -> Policy:
+        """This policy with ``sources`` added to one directive — for one page.
+
+        A page may allow what its own configuration names and nothing else knows:
+        ``/links`` adds the hosts its icons load from, each written in ``links.yaml``
+        and nowhere else (:func:`page_sources`). The assembled policy is not touched,
+        so what one page adds reaches no other page. A source the directive already
+        holds is not repeated, and the directive is one a package may add to — the
+        library's own, such as ``object-src 'none'``, take nothing from a page either.
+        """
+        if directive not in CONTRIBUTABLE:
+            raise ValueError(f"a page adds to {directive!r}, which takes nothing "
+                             f"beyond the library's own sources (ADR-0048)")
+        held: dict[str, Source] = {}
+        for source in sources:
+            held.setdefault(source.value, source)
+        if not held:
+            return self
+        directives: list[tuple[str, tuple[Source, ...]]] = []
+        for name, present in self.directives:
+            if name == directive:
+                values = {source.value for source in present}
+                present = (*present,
+                           *(source for value, source in held.items()
+                             if value not in values))
+                held = {}
+            directives.append((name, present))
+        if held:
+            directives.append((directive, tuple(held.values())))
+        return Policy(directives=tuple(directives))
 
 
 #: Accepted contributions, in registration order — so a deployment reading ``/system``
@@ -354,6 +388,25 @@ def assemble(*, inline_scripts: tuple[str, ...] = (),
     return Policy(directives=tuple(
         (directive, tuple(_without_none(directive, sources)))
         for directive, sources in ordered.items()))
+
+
+def page_sources(urls: Iterable[str], *, by: str) -> tuple[Source, ...]:
+    """The origins a page loads ``urls`` from, as sources answerable to ``by``.
+
+    For :meth:`Policy.adding`: a page that allows what its own configuration names —
+    ``/links`` and the hosts its icons load from (ADR-0030), where ``by`` is the file
+    that names them. Each URL is reduced to ``scheme://host[:port]`` by the parse a
+    package's source goes through (:func:`_origin`), so whatever the file holds, a
+    source is one token naming one origin: a path, a query and credentials are
+    dropped, and a URL that names no host a policy can is skipped. In order, each
+    origin once.
+    """
+    seen: dict[str, None] = {}
+    for url in urls:
+        origin = _origin(url, reduce=True)
+        if origin is not None:
+            seen.setdefault(origin, None)
+    return tuple(Source(origin, by) for origin in seen)
 
 
 def inline_hash(text: str) -> str:

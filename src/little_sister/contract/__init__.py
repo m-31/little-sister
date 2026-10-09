@@ -30,6 +30,17 @@ instance's ``version``, and a pin's ``set_at`` and ``created_at``. Everywhere th
 occur the artifact holds a fixed placeholder and a comparison normalizes them. A pin's
 ``expires_at`` is **not** among them: the scene fixes it, so it is a real value a
 client's date decoding is tested against.
+
+**The series read has an artifact of its own**, ``series-2.json`` (ADR-0122 decision
+9): one request and its answer, holding every shape that read has — a series on its
+check's node and one on its subject's, a measure a ``*`` expanded and one with no
+``axis_to``, a series without measures, a reading that failed, a run with its own
+time, a run without a verdict, a state, and a series with no reading in the window.
+It is made the same way and held to the server by the same test. Its scene fixes
+every instant, so its ``volatile`` list is short — ``generated_at`` and the
+instance's ``version`` — and every time a reading carries is a real value. It ships
+in the wheel and is not a shared file of the family: no client of ours that cannot
+import the wheel reads a series.
 """
 from __future__ import annotations
 
@@ -37,23 +48,43 @@ import json
 from importlib import resources
 from typing import Any
 
-__all__ = ["ARTIFACT", "golden_artifact", "golden_envelope", "normalize"]
+__all__ = ["ARTIFACT", "SERIES_ARTIFACT", "golden_artifact", "golden_envelope",
+           "golden_series", "golden_series_artifact", "normalize"]
 
 #: The artifact's file name inside this package.
 ARTIFACT = "envelope-2.json"
 
+#: The series read's artifact, beside it (ADR-0122 decision 9).
+SERIES_ARTIFACT = "series-2.json"
+
+
+def _artifact(name: str) -> dict[str, Any]:
+    text = resources.files(__name__).joinpath(name).read_text(encoding="utf-8")
+    loaded: dict[str, Any] = json.loads(text)
+    return loaded
+
 
 def golden_artifact() -> dict[str, Any]:
     """The whole artifact: ``schema_version``, ``volatile`` and ``envelope``."""
-    text = resources.files(__name__).joinpath(ARTIFACT).read_text(encoding="utf-8")
-    loaded: dict[str, Any] = json.loads(text)
-    return loaded
+    return _artifact(ARTIFACT)
 
 
 def golden_envelope() -> dict[str, Any]:
     """Just the envelope, as `GET /status` answers it."""
     envelope: dict[str, Any] = golden_artifact()["envelope"]
     return envelope
+
+
+def golden_series_artifact() -> dict[str, Any]:
+    """The whole artifact of the series read: ``schema_version``, ``volatile``, the
+    ``request`` that was asked — a path and its query — and its ``answer``."""
+    return _artifact(SERIES_ARTIFACT)
+
+
+def golden_series() -> dict[str, Any]:
+    """Just the answer, as the series read answers the artifact's ``request``."""
+    answer: dict[str, Any] = golden_series_artifact()["answer"]
+    return answer
 
 
 def normalize(value: Any, volatile: list[str]) -> Any:

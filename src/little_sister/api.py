@@ -4,6 +4,9 @@ Pure, framework-agnostic functions shared by the web layer and — later — the
 satellite parser (ADR-0080). The Flask glue (content negotiation, building the
 HTTP responses) stays in :mod:`little_sister.app`.
 
+Two reads: the status tree (:func:`status_envelope`) and the series that stand at or
+beneath a node (:func:`series_envelope`, ADR-0122).
+
 **The envelope is the snapshot, published** (ADR-0080). Everything the dashboard
 renders it renders from :class:`~little_sister.tree.StatusSnapshot`, and this module
 is that snapshot in JSON — no projection, no second vocabulary. The rule that keeps it
@@ -15,13 +18,16 @@ schema promises and no run ever fills is a promise no test can check.
 """
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
 from little_sister import instants
 from little_sister.maintenance import MaintenanceEntry
+from little_sister.measures import Measure
 from little_sister.secrets import same_secret
+from little_sister.series import Placed
 from little_sister.tree import ReasonLine, StatusSnapshot
 
 #: Major version of the JSON / federation schema (ADR-0080). Bumped only when a field
@@ -225,6 +231,102 @@ def status_envelope(snapshot: StatusSnapshot, *, version: str = "",
         "generated_at": instants.stamp(now or instants.now()),
         "instance": {"version": version, "engine": engine},
         "status": snapshot_to_dict(snapshot),
+    }
+
+
+@dataclass(frozen=True)
+class StandingSeries:
+    """A series where the series read answers it (ADR-0122 decision 3): the ``node``
+    it is shown on, by its path; the key it is kept under — its check's
+    ``type_name`` and ``mount``, and its ``subject``; the measures that stand at or
+    beneath the node asked, each with the path of the node its curve stands on; and
+    its readings in the window, oldest first.
+
+    What stands where is the web layer's to say — it holds the tree and the engine,
+    and the Series view asks the same question — so this is what it hands over, and
+    everything below is spelling.
+    """
+
+    node: str
+    type_name: str
+    mount: str
+    subject: str
+    measures: tuple[tuple[Measure, str], ...]
+    readings: tuple[Placed, ...]
+
+
+def _reading(placed: Placed) -> dict[str, Any]:
+    """One kept reading, as ADR-0106 decision 6 lists it and ADR-0122 decision 5
+    names it.
+
+    ``at`` is the time on the series' clock — the record's own where it has one, and
+    otherwise when it was first observed — and ``observed_at`` when the engine last
+    took it: two clocks, both kept (ADR-0087 decision 6). ``code`` and ``texts`` are
+    what stood where the reading landed (decision 8): null and empty where it stood
+    nowhere, and an absence is never an ``OK``. ``identity`` and ``state`` are text,
+    at most one of them set, both empty for a reading that is always a new one.
+    ``record`` is the record whole — the word a node's measurement has in the status
+    read — copied, so that nothing here hands out what the store holds.
+    """
+    record = placed.record
+    return {
+        "at": instants.stamp(placed.at),
+        "observed_at": instants.stamp(record.observed_at),
+        "code": None if record.code is None else record.code.name,
+        "texts": list(record.texts),
+        "identity": record.identity,
+        "state": record.state,
+        "record": dict(record.data),
+    }
+
+
+def _measure(measure: Measure, node: str) -> dict[str, Any]:
+    """One measure as the page draws it (ADR-0122 decision 4): already expanded, so
+    ``field`` holds a key where its declaration held a ``*``, and ``node`` is the path
+    of the node its curve stands on. ``axis_to`` is null where its axis ends past its
+    own highest reading (ADR-0117)."""
+    return {
+        "field": measure.field,
+        "unit": measure.unit,
+        "label": measure.label,
+        "node": node,
+        "axis_to": measure.axis_to,
+    }
+
+
+def series_to_dict(series: StandingSeries) -> dict[str, Any]:
+    """One series of the series read: where it stands, what it is kept under, what
+    of it is drawn there, and what it read."""
+    return {
+        "node": series.node,
+        "key": {"type": series.type_name, "mount": series.mount,
+                "subject": series.subject},
+        "measures": [_measure(measure, node) for measure, node in series.measures],
+        "readings": [_reading(placed) for placed in series.readings],
+    }
+
+
+def series_envelope(path: str, series: Sequence[StandingSeries], *,
+                    start: datetime | None = None, end: datetime | None = None,
+                    version: str = "", engine: str = "",
+                    now: datetime | None = None) -> dict[str, Any]:
+    """Wrap the series that stand at or beneath ``path`` in the answer of the series
+    read (ADR-0122 decision 6).
+
+    ``schema_version``, ``generated_at`` and ``instance`` are the status read's.
+    ``path`` is the node asked, ``/`` for the root, and ``window`` the two instants
+    the server read the URL's ``from`` and ``to`` as — ``start`` and ``end``, each
+    null where the URL left it to what is kept — because a window back from now is
+    read by the server's clock, and the answer says which instants it meant.
+    """
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "generated_at": instants.stamp(now or instants.now()),
+        "instance": {"version": version, "engine": engine},
+        "path": path,
+        "window": {"from": None if start is None else instants.stamp(start),
+                   "to": None if end is None else instants.stamp(end)},
+        "series": [series_to_dict(one) for one in series],
     }
 
 

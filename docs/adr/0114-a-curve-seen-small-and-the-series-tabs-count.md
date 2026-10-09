@@ -1,7 +1,7 @@
 # ADR-0114 — A curve is seen small beside its name, from zero, and the Series tab counts its curves
 
 - **Status:** Accepted
-- **Date:** 2026-10-03
+- **Date:** 2026-10-10 (accepted 2026-10-03)
 - **Related:** [ADR-0097](0097-a-nodes-series-have-a-view-of-their-own.md) (decision 3,
   the tabs; decision 4, the index, which this draws on),
   [ADR-0103](0103-the-series-index-says-where-each-link-leads.md) (decision 2: a row
@@ -61,11 +61,15 @@ sparkline says nothing to a reader that hears the page; the words do.
 ### 3. The index draws one beside each label, in the row's fold
 
 A row of the Series index still counts its curves, and the count still unfolds
-([ADR-0103](0103-the-series-index-says-where-each-link-leads.md) decision 2): for
-each curve to its label, its sparkline and its three values, each on a line of its
-own, the values wrapping. So the strips stand in a column and a fold asks for no more
-width than a strip: opening one does not widen the table past its box. The closed row
-is as it was.
+([ADR-0103](0103-the-series-index-says-where-each-link-leads.md) decision 2): for each
+curve to its label, its sparkline and its three values, each on a line of its own, so
+the strips stand in a column. The three values keep one line on a window of 1400 pixels
+or more, where the table has the room for them, and wrap beneath the sparkline on a
+narrower one, so that opening a fold does not widen the table past its box. How much
+room the line takes is the typeface's to say: at 1200 pixels a wide face put the open
+table as much as a hundred pixels past its box, where a Mac's face fitted. The values of
+a deployment whose labels and units are longer than a host's can still do so from 1400;
+below it they wrap, and do not. The closed row is as it was.
 
 On a phone the index is no table to the eye. Eight columns are wider than that screen
 whatever a fold does, and the column the folds stand in was out of sight; so below a

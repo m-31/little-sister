@@ -448,13 +448,16 @@ header, it ships as `Content-Security-Policy-Report-Only`, and it blocks nothing
 
 **`/system/installed`, as an admin.** The policy table prints every directive with the
 contributor of each source, and the demo is rigged so all three kinds appear at once:
-`'self'` and the CDN from the library, `https://tracker.example.org` in `connect-src`
-from **`tests.demo_extension`** (a `csp.allow` in `demo_wsgi.py` — the origin its
-`demo.js` would call, which `'self'` cannot cover), and
+`'self'`, `data:` and the CDN from the library, `https://tracker.example.org` in
+`connect-src` from **`tests.demo_extension`** (a `csp.allow` in `demo_wsgi.py` — the
+origin its `demo.js` would call, which `'self'` cannot cover), and
 `https://assets.example.org` in `img-src` from **`demo_config/csp.yaml`** (a source no
 package knew about, which only the deployment can add). That the package's line is
 there at all is the decision demonstrating itself: it was registered before the app
-import, and the policy was assembled after it.
+import, and the policy was assembled after it. The table's last row is what `/links`
+adds to its own `img-src`: the hosts of the two favicons the demo's links fall back
+to — CyberChef's, a name no rung defines, and PagerDuty's, a mark the demo turns off
+— answerable to `demo_config/links/links.yaml`.
 
 **The log, by causing a violation.** This one is a recipe rather than a state, because
 a demo that permanently violated its own policy would just look broken:
@@ -569,7 +572,9 @@ The read/edit interaction has one concrete walk:
    its editor. A branch's page states its node's pin in its head, above the children,
    and an admin's *Set maintenance* stands there: open `/status/ci`, set a pin from the
    head and read it back in the block, whose *Edit* fills the expiry field the same
-   way. Then edit the node's note once more and read
+   way. Open `/status/ci/reviews`: its frame is headed by `/ci`'s block too, without
+   buttons — *This node is silenced from /ci* — whose link leads back to the pin. Back
+   on `/status/ci`, edit the node's note once more and read
    its **Time** card and its History: the card still says *maintenance since* the
    moment the pin was set, and History has one maintenance row, *current*, with the
    note as it reads now
@@ -840,29 +845,33 @@ clears the rendered bar, then checks the control and anchor positions. A narrow 
 enlarges the first row, proves its measured viewport budget, opens the collapsed
 sections, scrolls to their last entry, then opens the settings menu and reaches its
 last layout choice. A reason editor scrolled into the bar proves content panels paint
-beneath the chrome. These claims have all been wrong before, and none is visible in
+beneath the chrome. And without Bootstrap's stylesheet, on a phone's window and on a
+short desk's, the bar keeps its height: the settings panel then stands in the bar's
+own flow, and a cap on it read from the bar's measured height made the bar grow and
+shrink twice a second. These claims have all been wrong before, and none is visible in
 one screenshot.
 
 The same module carries one claim that is about **paint alone**: an action chip laid
 over a node's title must not read through to it
 ([ADR-0034](adr/0034-template-slots-for-dependent-packages.md)). It is measured by
 comparing the pixels inside a chip with the title in place and with it hidden — the
-same image while the chip is showing, and a *different* one on a card at rest, which
-is what keeps the first comparison from passing on a blind measurement or on a veil
-that never lifts. That page is not on the fixture sheet: the sheet registers no
-filler, so it has no chip to collide with anything, which is how the collision
-shipped. The check builds its own page through the same `render_page` pipeline, with
-the demo package filling the real slot.
+same image while the chip is showing, but for the level the rasterizer moves a pixel
+by on its own, and a *different* one on a card at rest, which is what keeps the first
+comparison from passing on a blind measurement or on a veil that never lifts. That
+page is not on the fixture sheet: the sheet registers no filler, so it has no chip to
+collide with anything, which is how the collision shipped. The check builds its own
+page through the same `render_page` pipeline, with the demo package filling the real
+slot.
 
-This is the one harness the ordinary gate does **not** run: it needs a browser
-download. Without Playwright or Chromium the whole module skips. Its two stable-flow
-boundary checks abort every jsDelivr request before their first navigation, assert
-that Bootstrap CSS was among the intercepted requests, and compare a consistently
-unstyled render. Each chrome test declares whether it needs Bootstrap CSS or its
-behavior bundle; the harness probes those exact URLs in a blank page and skips only
-the affected test when that asset is directly unavailable. Fixture navigation waits
-for the DOM and the specific Bootstrap condition, not for unrelated tail scripts
-such as Floating UI. Run it explicitly when the layout model,
+This module, like every browser file below, is one the ordinary gate does **not** run:
+it needs a browser download. Without Playwright or Chromium the whole module skips.
+Its two stable-flow boundary checks abort every jsDelivr request before their first
+navigation, assert that Bootstrap CSS was among the intercepted requests, and compare
+a consistently unstyled render. Each chrome test declares whether it needs Bootstrap
+CSS or its behavior bundle; the harness probes those exact URLs in a blank page and
+skips only the affected test when that asset is directly unavailable. Fixture
+navigation waits for the DOM and the specific Bootstrap condition, not for unrelated
+tail scripts such as Floating UI. Run it explicitly when the layout model,
 `dashboard-layout.js`, `rail.js`, the shell or card templates, or the grid/chrome
 stylesheet rules change:
 
@@ -984,11 +993,12 @@ uv run pytest tests/test_curve_frame_browser.py
 `tests/test_index_folds_browser.py` holds the Series index to a narrow screen
 ([ADR-0114](adr/0114-a-curve-seen-small-and-the-series-tabs-count.md) decision 3): a
 real server over an estate shaped like a deployment's — eight hosts of five curves each,
-two checks on one node, checks that draw nothing — and Chromium at 946 pixels and
-emulating a phone. With every fold open the table has to be no wider than its box, a
-fold's strips have to stand in a column, and a closed fold has to be one line; on the
-phone every fold's control and every open fold's label, strip and values have to be
-inside the screen, and a row has to say everything its columns said. Run it when
+two checks on one node, checks that draw nothing — and Chromium at desk widths from
+946 pixels to 1600 and emulating a phone. With every fold open the table has to be no
+wider than its box, a curve's three numbers have to keep one line from 1400, a fold's
+strips have to stand in a column, and a closed fold has to be one line; on the phone
+every fold's control and every open fold's label, strip and values have to be inside
+the screen, and a row has to say everything its columns said. Run it when
 `series_index.html` or the index's and the sparklines' stylesheet rules change:
 
 ```
@@ -1009,6 +1019,23 @@ with another, to reload once and then go on showing what it is sent. Run it when
 uv run pytest tests/test_assets_browser.py
 ```
 
+`tests/test_csp_browser.py` holds our own pages to sending no Content-Security-Policy
+report ([ADR-0048](adr/0048-an-assembled-content-security-policy.md),
+[ADR-0030](adr/0030-curated-links.md)): every `securitypolicyviolation` a page raises is
+counted, on the wall and a node's page — whose switches Bootstrap draws as `data:`
+images, which the check first makes sure of, since a page its stylesheet never reached
+would report nothing and prove nothing — and on `/links`, whose icon from a remote mark
+and whose favicon sit on names reserved never to resolve, so each is asked for, fails
+and becomes the neutral glyph, which is how the check knows it was asked for; at a
+desk's width and a phone's, where the bar shows its burger. Its conditions are asked
+from the test rather than through `wait_for_function`, which evaluates in the page and
+would raise a `script-src` report of the test's own. Run it when the policy, the
+templates' images or `links.py`'s marks change:
+
+```
+uv run pytest tests/test_csp_browser.py
+```
+
 `tests/test_copy_browser.py` holds the two Copy buttons to what a paste receives
 ([ADR-0115](adr/0115-a-copy-document-says-where-it-is-from-and-since-when.md) decision
 8): one real server reached twice — on `127.0.0.1`, where a page has a clipboard
@@ -1024,6 +1051,33 @@ still being answered. Run it when `copy.js` or `_copy_controls.html` change:
 
 ```
 uv run pytest tests/test_copy_browser.py
+```
+
+**A width is measured in the face the machine has.** A browser draws `system-ui` in
+its machine's typeface: San Francisco on a Mac, and in the cloud container it has been
+Inter and it has been DejaVu Sans. The faces differ by more than a layout's margins —
+one breadcrumb trail of the phone checks is 595 pixels on a Mac, 624 in Liberation
+Sans, 640 in Inter and 742 in DejaVu Sans — so a check whose premise is a width, a
+name wider than its column or a line that fits its box, makes the premise hold in every
+face and asserts it before it relies on it, or reads which way the page has to go off
+the widths it measures. One written to hold in the face it was written in is red in
+another. On Linux, Chromium draws `system-ui` in the face fontconfig puts first for
+`sans-serif`, so a file that puts another face there, named in `FONTCONFIG_FILE`, runs
+a check in that face:
+
+```
+cat > var/scratch/dejavu.conf <<'EOF'
+<?xml version="1.0"?>
+<!DOCTYPE fontconfig SYSTEM "fonts.dtd">
+<fontconfig>
+  <include ignore_missing="yes">/etc/fonts/fonts.conf</include>
+  <match target="pattern">
+    <test name="family"><string>sans-serif</string></test>
+    <edit name="family" mode="prepend" binding="strong"><string>DejaVu Sans</string></edit>
+  </match>
+</fontconfig>
+EOF
+FONTCONFIG_FILE=var/scratch/dejavu.conf uv run pytest tests/test_phone_browser.py
 ```
 
 ## Mode 6 — the walk (a review, repeated)
@@ -1063,12 +1117,11 @@ not hold **marks** the step.
 **Nothing fails.** A review collects, so the walk always ends with its gallery,
 `var/gui-walk/index.html`: each fact with how many steps it marked, the marked steps
 first, then every step in the order it was taken; `walk.json` beside it is the same as
-data. Two things to know when reading it. A layout shift is counted whatever caused it
+data. One thing to know when reading it: a layout shift is counted whatever caused it
 — but for a raised card's own move from one node to the next, which a browser counts
 and nothing in the layout makes — and the demo's readings change under the walk, so a refresh that swapped in a longer
 list marks a step as a real shift does — a mark that comes back at the same step on a
-second walk is the one to believe. And the library's own pages still send an `img-src`
-report for a `data:` image, which marks every wall until that is settled.
+second walk is the one to believe.
 
 **A fact that is fixed moves into a test of Mode 5**, which is where a claim is held;
 the walk finds, Mode 5 keeps. `tests/test_walk_gui.py` holds the facts themselves, each

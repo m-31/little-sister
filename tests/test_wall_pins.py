@@ -595,6 +595,85 @@ class BranchHeadTests(_WallCase):
              "next": "/status/hemulen?depth=0"})
 
 
+class PinAboveHeadTests(_WallCase):
+    """ADR-0104 decision 2 on a branch's page: a pin set on a node above it
+    is stated in the head, where it acts, as the pin's block without buttons,
+    naming and linking the node it stands on."""
+
+    @classmethod
+    def _above(cls, where: Element) -> list[Element]:
+        """The blocks in ``where`` that state a pin set above it."""
+        return [block for block in cls._stated(where)
+                if "ilenced from" in block.one("rule-block__what").text()]
+
+    def test_the_head_states_a_pin_above_as_its_block(self):
+        entry = self._pin("/nexus")
+        page = self._page("/status/nexus/qnap")
+        block, = self._above(page.one("viewed-head"))
+        what = block.one("rule-block__what")
+        self.assertEqual(
+            what.text(),
+            f"This node is silenced from /nexus by lex until {self._until(entry)} "
+            "· 1d 23h left")
+        link, = what.all(tag="a")
+        self.assertEqual(link.attrs.get("href"), "/status/nexus")
+        self.assertEqual(len(block.one("rule-block__note").all(tag="p")), 3)
+        self.assertEqual(block.all(tag="form") + block.all(tag="details"), [])
+        # above the children it covers
+        self.assertLess(block.order, page.one("status-grid").order)
+
+    def test_a_viewer_gets_the_head_for_it(self):
+        # a container with nothing of its own and nobody to pin it has no head —
+        # unless a pin above silences it, which is something to say of it
+        self._viewer()
+        self.assertEqual(self._page("/status/nexus/qnap").all("viewed-head"), [])
+        self._pin("/nexus")
+        head = self._page("/status/nexus/qnap").one("viewed-head")
+        block, = self._above(head)
+        self.assertEqual(block.all(tag="form") + block.all(tag="details"), [])
+
+    def test_the_refresh_s_fragment_carries_it(self):
+        self._pin("/nexus")
+        frag = parse(self._body("/status/nexus/qnap?fragment=1"))
+        self.assertEqual(len(self._above(frag.one("viewed-head"))), 1)
+
+    def test_the_head_s_editor_says_its_pin_outlasts_the_one_above(self):
+        self._pin("/nexus")
+        said = self._setter(self._page("/status/nexus/qnap").one("viewed-head")).one(
+            "rule-block__scope").text()
+        self.assertTrue(said.startswith(
+            "Maintenance for this node. It keeps everything beneath it silenced when "
+            "the pin above it ends: nothing under here will alarm before this pin "
+            "expires."), said)
+
+    def test_the_node_s_own_pin_under_one_is_also_silenced_on_its_own(self):
+        self._pin("/nexus", by="anna")
+        own = self._pin("/nexus/qnap")
+        head = self._page("/status/nexus/qnap").one("viewed-head")
+        above, mine = self._stated(head)
+        self.assertIn("silenced from /nexus by anna",
+                      above.one("rule-block__what").text())
+        self.assertEqual(
+            mine.one("rule-block__what").text(),
+            f"This node is also silenced on its own by lex until {self._until(own)} "
+            "· 1d 23h left")
+        self.assertTrue(mine.all("rule-block__clear"))
+
+    def test_at_depth_zero_the_node_s_card_states_it(self):
+        entry = self._pin("/nexus")
+        card = self._page("/status/nexus/qnap?depth=0").one("status-card")
+        block, = self._above(card)
+        self.assertEqual(
+            block.one("rule-block__what").text(),
+            f"Silenced from /nexus by lex until {self._until(entry)} · 1d 23h left")
+
+    def test_the_wall_and_the_pinned_node_s_own_page_have_none(self):
+        self._pin("/nexus")
+        for url in ("/status", "/status/nexus"):
+            with self.subTest(url=url):
+                self.assertNotIn("silenced from", self._body(url))
+
+
 class DialogGoneTests(_WallCase):
     """Decision 7: the pin dialog goes, and with it its script and its styles."""
 

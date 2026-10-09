@@ -45,7 +45,7 @@ little-sister/
 │   └── users.yaml       # login list, or users/{users.yaml, avatars/} (gitignored)
 ├── src/little_sister/
 │   ├── app.py           # Flask app: routing, login, .env load, engine start
-│   ├── api.py           # JSON serialization for backend mode (ADR-0080)
+│   ├── api.py           # JSON serialization for backend mode: the status read and the series read (ADR-0080, ADR-0122)
 │   ├── status.py        # Status / StatusCode domain model + roll-up
 │   ├── codes.py         # the status vocabulary, a leaf module nothing imports from
 │   ├── reasons.py       # addressable reasons: a node's reason list as keyed entries (ADR-0036)
@@ -92,7 +92,9 @@ little-sister/
 │   │                    # and the assets it ships for them (ADR-0037)
 │   ├── actions.py       # the declarative action list, config/actions.yaml (ADR-0038)
 │   ├── csp.py           # the assembled Content-Security-Policy (ADR-0048)
-│   ├── logger.py        # root logging, if nobody else set it up (stderr + file)
+│   ├── logger.py        # root logging, if nobody else set it up (stderr + file),
+│   │                    # and LOG_LEVEL, a list that names loggers (ADR-0121)
+│   ├── noise.py         # noise caps a package declares for what it brings (ADR-0121)
 │   ├── users.example.yaml  # sample login list — the real one is a config aspect
 │   ├── templates/       # Jinja2 pages
 │   └── static/          # CSS, the page JS (poll, popover, reason overflow, rail,
@@ -386,6 +388,25 @@ other contribution rule applied, is `StatusTree.effective` / the snapshot's `cod
 records split off with this one: what a **failing check** becomes is
 [ADR-0040](adr/0040-what-a-failing-check-becomes.md) (§4.6), and what an admin pin
 does is [ADR-0041](adr/0041-maintenance-is-a-contribution-rule.md).
+
+**Whose a status is, the snapshot says**
+([ADR-0123](adr/0123-a-node-says-one-status-wherever-it-is-read.md) decision 2). What
+a node counts for itself in what it rolls up to is its own status — or, where its own
+reading is stale, what its check reported, degraded (§4.4): `_counts_for_itself` in
+`tree.py`, the expression the snapshot rolls every node up with, which
+`StatusSnapshot.own_counted` reads again off the snapshot's own fields. `derived` says
+that what the node shows is not that, and so comes from beneath it; `counts_beneath`
+says that the node counts nodes beneath it at all — it has some, and what it counts for
+itself does not cancel them. A pin on the node and its check's word for it do; lines
+that are all silenced do not: they count nothing and cancel nothing, so the node shows
+what the nodes beneath it roll up to, and reads `MAINTENANCE` whole only where nothing
+beneath it counts either
+([ADR-0124](adr/0124-a-node-whose-lines-are-all-silenced-still-counts-the-nodes-beneath-it.md)).
+`_cancels_beneath` says which, once, for the roll-up (`_rolls_up`) and for the
+snapshot, whose `lines_silenced` names the case for a surface that says where what a
+node shows comes from. A surface that draws a node pale, or names a period as the
+node's own, reads these and compares no two codes itself: `own_code` beside `code`
+reads a stale reading of the node's own as a color from beneath it.
 
 ### 4.4 Status tree, event log & history — `tree.py`
 The single in-memory state everything hangs off (ADR-0001/0002). `StatusTree`
@@ -747,7 +768,8 @@ holds one root `Status` and a bounded `deque` of `Event`s behind one `RLock`.
   are ignored, as everywhere), and a node with nothing counted presents
   `MAINTENANCE` when something was silenced and `UNDEFINED` when nothing has
   reported — so pinning the one red line of an otherwise healthy coded set turns
-  the node `OK`. Prose and reason-less nodes stay outside the entry rule. What the check actually said survives beside the
+  the node `OK`, and pinning every line turns its own status `MAINTENANCE`, which
+  cancels nothing beneath it (§4.3). Prose and reason-less nodes stay outside the entry rule. What the check actually said survives beside the
   derivation as the snapshot's `reported_code`, so a card can say `maintenance ·
   error` and show the failure text under the pin's banner
   ([ADR-0032](adr/0032-status-contribution-boundary.md) rule 5: a transformed
@@ -1262,13 +1284,18 @@ its leaves, and its own `about` carries the node-level "what is this box" (ADR-0
   **once**, at the first re-arm, by a stable per-check offset (a digest of
   path + type within `min(frequency, 60s)`), so equal-frequency checks don't
   fire in one tick forever and a host carrying two checks isn't hit by both at
-  once. A check already running is not re-submitted. While a check's **last
-  result is not OK**, a configured **failure retry**
-  ([ADR-0033](adr/0033-budgeted-failure-retry.md)) pulls its next slot to
-  `retry_interval` — measured from the run's completion, and never later than
-  the nominal slot — at most `retry_attempts` times per failure episode, then
-  nominal cadence until an OK re-arms it. A secret-pinned check never retries,
-  and freshness keeps judging by the nominal frequency.
+  once. A check already running is not re-submitted. While what a check's **last
+  run rolls up to is not OK** — its root's code and every child it returned, by
+  the roll-up's rules
+  ([ADR-0125](adr/0125-the-failure-retry-reads-what-a-run-rolls-up-to.md)) — a
+  configured **failure retry** ([ADR-0033](adr/0033-budgeted-failure-retry.md))
+  pulls its next slot to `retry_interval` — measured from the run's completion,
+  and never later than the nominal slot — at most `retry_attempts` times per
+  failure episode, then nominal cadence until what the run rolls up to changes
+  ([ADR-0060](adr/0060-a-line-makes-no-claim.md) decision 4); a run that rolls up
+  to `UNDEFINED` arms nothing. It reads the result and not the node, so a pin
+  cannot reach it. A secret-pinned check never retries, and freshness keeps
+  judging by the nominal frequency.
 - A **raising check** becomes `ERROR` with `check error: <message>` as its reason —
   **escaped** with `plain()`, since an exception message routinely carries a captured
   line, a path or an API error body ([ADR-0018](adr/0018-markdown-rendering.md)).
@@ -1384,7 +1411,9 @@ its leaves, and its own `about` carries the node-level "what is this box" (ADR-0
   which the page shows as the third line beside the declared load and the entries
   held — and the fourth, what the process held at that tick: the size now, the peak,
   the memory limit and what the machine gives the process
-  ([ADR-0095](adr/0095-the-instance-states-its-memory.md)).
+  ([ADR-0095](adr/0095-the-instance-states-its-memory.md)) — and the fifth, what the
+  machine had left, with how long it stalled on memory and how often the kernel has
+  ended a process of the cgroup, worded as the report words them (decision 7).
 - At **construction** the engine tells the tree where each of its checks writes —
   `set_check_mount(check.path)` for every check (§4.4) — so a container above a single
   check can publish that check's run time as its own observation
@@ -1441,7 +1470,20 @@ its leaves, and its own `about` carries the node-level "what is this box" (ADR-0
   [ADR-0095](adr/0095-the-instance-states-its-memory.md)): the size now where the
   kernel keeps one (`/proc/self/statm`, Linux) and the peak, the high-water mark
   `getrusage` keeps, raised to the size now where the two disagree — the peak alone
-  on macOS, and every surface says *peak* there.
+  on macOS, and every surface says *peak* there. It reads what the machine has left
+  as well (`limits.machine_left`, ADR-0095 decision 7): `MemAvailable`, and under a
+  memory limit what the limit leaves — the limit less the usage with the two lists
+  of file pages counted back, `inactive_file` and `active_file` in `memory.stat` (v1's
+  `total_` ones) — the smaller of the two; the `total` of the `some` line of
+  `/proc/pressure/memory`, of which it keeps ten minutes of readings
+  (`STALL_SECONDS`) to say the share in which the machine stalled; and under a limit
+  `oom_kill` in the process's own cgroup's `memory.events` (v1's
+  `memory.oom_control`). The cgroups are the process's own, as `/proc/self/cgroup`
+  names it beneath the mount, and each above it to the root of the mount — a
+  container's own at the root, a service's and the slice's above it on a bare host —
+  and a limit counts on any of them where it is smaller than the physical memory:
+  what is left is the least any leaves, and the smallest limit is what the machine
+  gives the process. macOS has neither file, and says none of it.
   The lines, each under a slug of its own on `/little-sister/engine` (ADR-0072
   decision 4, ADR-0076 decision 3 — the path carries the engine's name, not the slug):
   - `entries` — the entry count against `ENTRY_LIMIT` (100,000): WARN at 80 % of
@@ -1449,12 +1491,31 @@ its leaves, and its own `about` carries the node-level "what is this box" (ADR-0
     measured half kilobyte an entry the snapshot copied per poll binds long
     before memory does.
   - `memory` — the resident size against half of what the machine gives the
-    process (physical memory, or the cgroup's limit where one is set and smaller —
-    the number that kills the process), WARN at 80 %, ERROR at the limit, the
-    machine's figure named beside it. What it grades is the size now where the
-    platform keeps one and the peak where that is all there is: a line that graded a
-    high-water mark could never clear once it had stood. No line where the machine
-    cannot say.
+    process (physical memory, or the smallest limit set on the cgroups the process
+    runs under, above, where it is smaller — the number that kills the process),
+    WARN at 80 %, ERROR at the limit, the machine's figure named beside it. What it
+    grades is the size now where the platform keeps one and the peak where that is
+    all there is: a line that graded a high-water mark could never clear once it had
+    stood. No line where the machine cannot say. **It holds what it saw, as `lag`
+    does**
+    ([ADR-0095](adr/0095-the-instance-states-its-memory.md)): `observe` puts every
+    tick's reading that stands at or past the amber share into a held record (§4.8's
+    `Held`) for ten minutes (`MEMORY_HOLD_SECONDS`, the `lag` line's window), with no
+    log line of its own, and the line is written from the worst reading inside that
+    window — its code, what it was, when it was read (the engine's `wall`, written by
+    `spans.local_time`) and, beside it, the size now: *resident size 514 MiB at 09:12,
+    past the limit of 504 MiB (now 481 MiB of the 917 MiB the machine gives the
+    process)*. So it steps down, ERROR to WARN to nothing, only when the whole window
+    stood below, and a process that sits on its limit — past it on one tick, below it
+    on the next — changes the node once and not once a tick. A peak is said without a
+    time and without a size now, which a high-water mark does not have; and where the
+    platform keeps a size now, a tick that could not read it records nothing, since
+    the high-water mark is all it has. The size is compared with the limit in bytes,
+    and where the sentence would read as though the size were the limit — the two
+    figures written as one, or a size below the limit that comes to 100 % of it — it
+    says how far apart they are: *97.0 KiB past the limit of 504 MiB*, *1.0 MiB below
+    the limit of 504 MiB*. So a size past its limit never reads as equal to it, nor
+    one below it.
   - `series` — what every series weighs together (§4.10) against `series_limit`
     (`SERIES_LIMIT`, 8 MiB): WARN at 80 % of it, with what is held; ERROR while a
     sweep in the last ten minutes (`EVICTION_MEMORY_SECONDS`) evicted a series to stay
@@ -1494,7 +1555,13 @@ its leaves, and its own `about` carries the node-level "what is this box" (ADR-0
     own, from the first tick on, in the `memory` line's words
     (`limits.resident_text`): *resident size 312 MiB, peak 369 MiB, of a limit of
     8.0 GiB (of the 16.0 GiB the machine gives the process)*, or *peak resident size
-    …* where the peak is all there is (ADR-0095 decision 2).
+    …* where the peak is all there is (ADR-0095 decision 2) — and after it what the
+    machine has left, in the words `/system` and the log say it too
+    (`limits.machine_text`, decision 7): *the machine has 41 MiB left; it stalled on
+    memory for 1.7 % of the last 10m, and the kernel has ended no process of this
+    cgroup* — the share of what a process younger than ten minutes has read, named
+    as long as it is, none at its first tick, and the count, under a limit only,
+    said at none too.
   The path in a line's slug is `slug(path)` (§4.3's declared slug, narrowed to
   `[A-Za-z0-9._-]`), so a line is pinnable per check like any entry. A run is measured on the engine's one
   clock — the `clock` it was constructed with — which is what lets the tick see a
@@ -1507,7 +1574,11 @@ its leaves, and its own `about` carries the node-level "what is this box" (ADR-0
   own — the engine
   logs the figures at INFO, as the tick's report recorded them: `engine: memory —
   resident size 312 MiB, peak 369 MiB, of a limit of 8.0 GiB; the series hold 3.1
-  MiB, the tree 12,345 entries`, on macOS beginning `peak resident size`. Once more
+  MiB, the tree 12,345 entries`, on macOS beginning `peak resident size`, and where
+  the platform says what the machine has left, that after the process's figures —
+  `…, of a limit of 461 MiB; the machine has 41 MiB left, stalled on memory for 1.7 %
+  of the last 10m, and the kernel has ended no process of this cgroup; the series
+  hold …`. Once more
   `at the start`, on the first tick, as the baseline, and `at the stop`, read fresh
   after the stop's save — at `stop()`, or at the halt a lost lease forces. A run
   reads the figures (the engine's `resident`, `resident_size` unless a caller
@@ -1519,7 +1590,17 @@ its leaves, and its own `about` carries the node-level "what is this box" (ADR-0
   other run in flight at any point of it, five and a count: each run's start adds
   itself to the runs already going and them to itself (`_Scheduled.beside`, under
   the engine lock), and a check sharing its mount with another is named with its
-  type. The tick is measured the same way, and a tick that raised either figure by
+  type. **After a run that rose, a collection**
+  ([ADR-0095](adr/0095-the-instance-states-its-memory.md) decision 8): where the run
+  rose by `RISE_LOGGED` — the size's rise where both reads have a size now, the
+  peak's where neither has, as on macOS — the engine calls the cycle collector (its
+  `collect`, `gc.collect` unless a caller composed its own), never sooner after the
+  end of the last than `COLLECTION_SPACING` (100) times what that one took, and never
+  two at once (`_collect_from`, under the engine lock); and the run's line, written
+  once it is done, says it after the rise — `; collected after it in 18 ms, resident
+  −31.0 MiB` (`limits.collection_text`), the fall from `RISE_LOGGED`, on macOS the
+  time alone. A collector that raises is logged and leaves the run as it was. The
+  tick is measured the same way, and a tick that raised either figure by
   1 MiB or more logs `engine: resident +12.3 MiB, peak +3.0 MiB during the tick,
   including a state save, beside /web` — *including a state save* where
   `StateLayer.tick()` answered that it ran the interval save. Web requests are not
@@ -1797,12 +1878,13 @@ disciplines, one atomic write, and a seam for what the instance says about itsel
     — and the library's own is `self_report.startup`, registered as `startup`
     beside `readiness`. `Held(hold_seconds)` keeps occurrences of what recurs —
     `see(slug, text, code=WARN, measure=None, now=None)` records and logs one — for
-    the window after each; `lines()` writes the plain line per slug (the latest
-    text, *n times in the last …* where there was more than one), and `worst()`,
-    `latest()`, `count()` and `slugs()` are for a contributor that writes its own
-    sentence, as the engine's `lag` line does from the worst measure inside the
-    window. Every method takes `now` so a caller with the engine's clock in hand
-    gives it; the clock is otherwise monotonic and injectable.
+    the window after each, and with `log=False` records it alone, where the call site
+    has logged already or the occurrence comes every tick; `lines()` writes the plain
+    line per slug (the latest text, *n times in the last …* where there was more than
+    one), and `worst()`, `latest()`, `count()` and `slugs()` are for a contributor that
+    writes its own sentence, as the engine's `lag` and `memory` lines do from the worst
+    measure inside the window. Every method takes `now` so a caller with the engine's
+    clock in hand gives it; the clock is otherwise monotonic and injectable.
   - **The library's three, registered in `app.py`**: `startup` (a `Standing`) for
     what the process learned at startup — an unresolved `SECRET_KEY` or
     `LITTLE_SISTER_API_TOKENS` reference, no identity door or none the default
@@ -1811,7 +1893,8 @@ disciplines, one atomic write, and a seam for what the instance says about itsel
     registration, `instance:` refused, `retry_interval` unreadable, `nodes.yaml`
     metadata no check covers or the file not loaded, a links interval unreadable,
     an avatar not shown, the retired maintenance file, a slot template, asset, icon
-    or action refused, the theme bootstrap's hash missing; `runtime` (a `Held`, ten
+    or action refused, a noise cap refused, the theme bootstrap's hash missing;
+    `runtime` (a `Held`, ten
     minutes) for what recurs — a slot's provider or template raising, an identity
     door raising, a scheduler tick, an upsert, a series store or its sweep raising, a
     reachability pass failing, overrunning, stuck or giving up; and `security` (a
@@ -1820,8 +1903,9 @@ disciplines, one atomic write, and a seam for what the instance says about itsel
     used.
     `plain()` lives in `little_sister.reasons` so these sites can fold a path or an
     error into a line; `little_sister.checks.plain` is the same function. Three sites
-    stay log-only and say why in place: `LOG_LEVEL` unreadable (`logger.py`, beneath
-    the seam), a machine whose clock is not the one the log is stamped in (`logger.py`:
+    stay log-only and say why in place: an entry of `LOG_LEVEL` that cannot be read
+    (`logger.py`, beneath the seam; §11 says where it is listed), a machine whose
+    clock is not the one the log is stamped in (`logger.py`:
     a note would stand for the life of the process on a machine whose zone is another
     on purpose) and an engine that did not start (no tick to read a line on).
 - **The keeper** (`keeper.py`) — a file store that mirrors the whole directory to
@@ -2254,17 +2338,17 @@ the node above them
 | `/` | GET | Redirect to `/status`. |
 | `/login`, `/logout` | GET, POST / GET | The **default door's** login step — the built-in login list on an install that registered it (`local_login.use_local()`), which stores `username`, name and an `admin` flag — or, under `identity.choose_at_login()`, a page offering every **enterable** door as a link to its own route, which takes no credential itself (§5.2) / runs the session's door `end_session` step, if it has one, and clears the session ([ADR-0069](adr/0069-identity-comes-from-outside-and-one-account-does-not.md)). |
 | `/login/<door>`, `/auth/callback/<door>` | GET, POST / GET | **One named door's** own login step and the return leg of its redirect flow (§5.2, [ADR-0069](adr/0069-identity-comes-from-outside-and-one-account-does-not.md)). Both dispatch on the name in the path to the provider registered under it — a provider never registers a route, so this costs no general route seam — and both answer `404` for a name nothing claims and for a hook the provider does not implement, since either is a way in this deployment does not have and a redirect there risks a loop. A door's own route matters mechanically rather than stylistically: under a provider that redirects, `/login` never renders a local form. |
-| `/status`, `/status/<path:branch>` | GET | Renders the dashboard from a live snapshot (whole tree or a branch; the `path:` converter passes the slash-separated node path, ADR-0016). A **leaf** check renders its **detail** page. `hide_ok` / `hide_idle` filter the view; `depth` caps how deep the tree renders (clamped to `MAX_DEPTH`, remembered in a `depth` cookie); `fragment=1` returns just the grid (for the page's live polling). With `Accept: application/json` and a valid bearer token, the same routes return the subtree as JSON instead (ADR-0008). No Status page carries a document, or the buttons that copy one: a node's hand-off is its Copy view, `/copy/<branch>`, which the **Copy** tab of every node's views leads to ([ADR-0115](adr/0115-a-copy-document-says-where-it-is-from-and-since-when.md) decision 7). A path **no node stands at** is `404` with one page, the same at each of a node's addresses — Status, Series, History and Copy ([ADR-0116](adr/0116-a-path-with-no-node-says-what-is-known-of-it.md)): its removal with when and why, where the event log holds it, and a link to its rows on Events; every pin held against the path or beneath it, edited there by an admin; and the nearest node above that stands, on whose History the readings kept of a removed subject are listed. `fragment=1` at such a path is still `200` and says the same, so a node that leaves under an open page is not a failed refresh. |
-| `/series`, `/series/<path>` | GET | A node's **Series view**: every curve that stands at or beneath the node, grouped by the node each stands on, on one time axis, with the newest `reading_cap` readings of each series they were drawn from beneath them, folded — and the index at the root, every node a series is kept on, a name opening the node's Status page, *curves* and *readings* beside it its Series view and its History, and the count of its curves unfolding to each one's label, sparkline and newest, lowest and highest value, each on a line of its own, so a fold is no wider than a strip; on a phone each row is laid out as a block of its own and nothing is scrolled sideways — the curve's own plot on its own scale, from zero, drawn over sixty columns with no instant written ([ADR-0114](adr/0114-a-curve-seen-small-and-the-series-tabs-count.md)), which is also where a node's Series tab gets the number of curves its view draws (§4.11, [ADR-0097](adr/0097-a-nodes-series-have-a-view-of-their-own.md), [ADR-0103](adr/0103-the-series-index-says-where-each-link-leads.md)). `?from=…&to=…` draws the view over a window, Grafana-style — `now`, `now-6h` or an instant — named in a bar above the curves that holds the presets and the moves, with the time axis's stretches as links ([ADR-0098](adr/0098-a-series-view-is-drawn-over-a-window.md)); a window the server cannot read is `400`, naming the parameter. A node where no curve can stand is `404`, and a path no node stands at is `404` with the page that says what is known of it ([ADR-0116](adr/0116-a-path-with-no-node-says-what-is-known-of-it.md)). Not polled. |
-| `/history/<path>` | GET | A node's status history (Status / Since / Until / Reason) and, beneath it, **every reading** each check mounted on the node kept, newest first (§4.11), in a box as wide as the page that holds its heading row and its Time column while it scrolls ([ADR-0102](adr/0102-a-readings-table-keeps-time-and-names-in-view.md)). Where the log holds no change of the node, a node that declares nothing of its own says so, and one a check has written shows the period that holds, begun when the kept table says or *before* its bound. A path the tree holds no node at — one its check no longer reports among them — is answered `404` with the page that says what is known of the path, as its Status address is ([ADR-0116](adr/0116-a-path-with-no-node-says-what-is-known-of-it.md)). Not polled. A node's views — Status, Series where a curve can stand, History on every node but the root, Copy on every node — are tabs beneath its title, and the breadcrumb, `nodes` and a crumb per segment, opens the same view of each ancestor. |
+| `/status`, `/status/<path:branch>` | GET | Renders the dashboard from a live snapshot (whole tree or a branch; the `path:` converter passes the slash-separated node path, ADR-0016). A **leaf** check renders its **detail** page. `?reason=<slug>` names one line of the node, a leaf's or a branch's, which the page marks, or says is no longer reported where only its pin is left (ADR-0036 decision 12). `hide_ok` / `hide_idle` filter the view; `depth` caps how deep the tree renders (clamped to `MAX_DEPTH`, remembered in a `depth` cookie); `fragment=1` returns just the grid (for the page's live polling). With `Accept: application/json` and a valid bearer token, the same routes return the subtree as JSON instead (ADR-0008). No Status page carries a document, or the buttons that copy one: a node's hand-off is its Copy view, `/copy/<branch>`, which the **Copy** tab of every node's views leads to ([ADR-0115](adr/0115-a-copy-document-says-where-it-is-from-and-since-when.md) decision 7). A path **no node stands at** is `404` with one page, the same at each of a node's addresses — Status, Series, History and Copy ([ADR-0116](adr/0116-a-path-with-no-node-says-what-is-known-of-it.md)): its removal with when and why, where the event log holds it, and a link to its rows on Events; every pin held against the path or beneath it, edited there by an admin; and the nearest node above that stands, on whose History the readings kept of a removed subject are listed. `fragment=1` at such a path is still `200` and says the same, so a node that leaves under an open page is not a failed refresh. |
+| `/series`, `/series/<path>` | GET | A node's **Series view**: every curve that stands at or beneath the node, grouped by the node each stands on, on one time axis, with the newest `reading_cap` readings of each series they were drawn from beneath them, folded — and the index at the root, every node a series is kept on, a name opening the node's Status page, *curves* and *readings* beside it its Series view and its History, and the count of its curves unfolding to each one's label, sparkline and newest, lowest and highest value, each on a line of its own, so a fold is no wider than a strip; on a phone each row is laid out as a block of its own and nothing is scrolled sideways — the curve's own plot on its own scale, from zero, drawn over sixty columns with no instant written ([ADR-0114](adr/0114-a-curve-seen-small-and-the-series-tabs-count.md)), which is also where a node's Series tab gets the number of curves its view draws (§4.11, [ADR-0097](adr/0097-a-nodes-series-have-a-view-of-their-own.md), [ADR-0103](adr/0103-the-series-index-says-where-each-link-leads.md)). `?from=…&to=…` draws the view over a window, Grafana-style — `now`, `now-6h` or an instant — named in a bar above the curves that holds the presets and the moves, with the time axis's stretches as links ([ADR-0098](adr/0098-a-series-view-is-drawn-over-a-window.md)); a window the server cannot read is `400`, naming the parameter. A node where no curve can stand is `404`, and a path no node stands at is `404` with the page that says what is known of it ([ADR-0116](adr/0116-a-path-with-no-node-says-what-is-known-of-it.md)). Not polled. With `Accept: application/json` and a valid bearer token both routes answer the **series read** instead ([ADR-0106](adr/0106-a-subject-with-a-history-has-a-node-of-its-own.md) decision 6, [ADR-0122](adr/0122-a-series-is-read-over-the-api-as-it-stands.md); `_series_json`): every series that stands at or beneath the node — at the root, every series the instance keeps — over the same `from` and `to`, each with the node it is shown on, the key it is kept under, the measures that stand at or beneath the node asked — one for every key the kept readings hold, each with the path of the node its curve stands on — and its readings in the window whole, oldest first (`_series_standing`, which asks the helpers the view asks; `api.series_envelope` spells it). A series shown above the node asked is in the answer where one of its measures names a node at or beneath it. The answer says the node asked and the two instants the window was read as, and orders its series by the node each stands on: one above the node asked first, then the tree's own order, then the key. There a node that stands answers `200` and a list, empty where no series stands at or beneath it — a node no check keeps a series of, and every node of an instance that runs no engine — `404` is a path no node stands at and nothing else, and a window the server cannot read is `400`, as Problem JSON with the page's sentence. |
+| `/history/<path>` | GET | A node's status history (Status / Since / Until / Reason) — the periods of its **own** status, which the page says of a node above others ([ADR-0123](adr/0123-a-node-says-one-status-wherever-it-is-read.md) decision 3) — and, beneath it, **every reading** each check mounted on the node kept, newest first (§4.11), in a box as wide as the page that holds its heading row and its Time column while it scrolls ([ADR-0102](adr/0102-a-readings-table-keeps-time-and-names-in-view.md)). Where the log holds no change of the node, a node that declares nothing of its own says so, and one a check has written shows the period that holds, begun when the kept table says or *before* its bound. A path the tree holds no node at — one its check no longer reports among them — is answered `404` with the page that says what is known of the path, as its Status address is ([ADR-0116](adr/0116-a-path-with-no-node-says-what-is-known-of-it.md)). Not polled. A node's views — Status, Series where a curve can stand, History on every node but the root, Copy on every node — are tabs beneath its title, and the breadcrumb, `nodes` and a crumb per segment, opens the same view of each ancestor. |
 | `/little-sister/<contributor>/act/<slug>` | POST | **Admin only.** Runs an action a package offered on its self-report child ([ADR-0076](adr/0076-the-instance-node-is-a-branch.md)) — `self_report.register_action(contributor, slug, label, handler)` — logs who ran what, flushes the state layer (what the action changed reaches the store now), and redirects to `/status/little-sister/<contributor>` with the sentence the handler returned shown once (a flashed message, rendered by `_said.html` on the status and leaf pages); a handler that raises is caught and its label and error are the sentence. Unknown action: 404. The buttons are the library's built-in filler on `node.actions` (`_self_report_actions.html`), rendered only on a child of `/little-sister` and only for an admin, as POST forms. |
 | `/maintenance` | GET, POST | **GET** — the full, uncapped maintenance overview as its own page (the leaf-detail pattern), reached from the navigation and the strip pill's "+N more": **every pin as the block a node's own page states it with** ([ADR-0104](adr/0104-a-pin-is-one-block-on-what-it-silences.md)), grouped under its node's path — the node's own pin first, then its reasons' ([ADR-0036](adr/0036-addressable-reasons.md)) in the check's order. A block opens with what the pin *silences* — *The whole node*, or the reason line itself — and says who silenced it, until when and what is left, then the note that explains *why*, rendered Markdown in full, and authorship for everyone (*pinned by … , last changed by …*). What is silenced and why are two texts in two places on purpose: both are called "reason" in the model and are not the same thing. A line's block links to its line as `/status/<branch>?reason=<slug>#pinned-reason`; the slug is never rendered as text. An **admin's** block carries *Edit* and *Clear*, and a write made here comes back here with its node named — `?node=<path>#pinned-node`, which marks that node's section and no other; a viewer reads the same page without them. **A pin whose node is not reported** — its check no longer returns the node, or has not written it yet since the start — stands under its path as well ([ADR-0109](adr/0109-a-node-says-its-children-are-complete.md) decision 4), read against the snapshot the page lists the others from (`_suspended_pins`, over `StatusTree.pins()`): the path is no link, a sentence says that the node is not reported at present and that its pins silence nothing until it returns, and each block says what it silences *when it is reported* — the whole node, or one of its lines, whose text went with the node. It is edited and cleared there like any other, and neither makes a node; the wall's pill counts what is silenced now, so not this. **POST** — **admin only**: set/edit/clear a node's maintenance with a raw-Markdown reason and optional duration-or-expiry (blank uses the duration from `settings.yaml`), recording who set it. Unit-suffixed durations and full ISO date/times are accepted alongside `MM-DD`, a day-of-month, `HH:MM`, and weekday/time shortcuts; a bare weekday uses 12:00, and unzoned values use the configured timezone. The resolved expiry must be **at least one second and at most 365 days away**; invalid, past, ambiguous-DST or out-of-range input is refused with the admin's words returned, and a blank reason on an *edit* keeps the stored one ([ADR-0014](adr/0014-maintenance-persistence.md)). An edit's form also carries what its expiry field was filled with (`expiry_was`, the stored expiry as the field reads one): a field that still reads that **keeps the stored instant exactly** and is not read again, and anything else — a blank included — is read as above ([ADR-0104](adr/0104-a-pin-is-one-block-on-what-it-silences.md)). A `slug` field addresses **one reason** of the node instead of the node ([ADR-0036](adr/0036-addressable-reasons.md)) — never a path segment, since the natural slug for a discovered entry contains a `/`; redirects to the node — for one of its reasons to that line, `?reason=<slug>#pinned-reason`, where the node's page marks it — or back to the page the form was opened on, via a validated `next` (a card's and a branch's head's way home, and the Maintenance page's). A set that says what the stored pin says writes nothing and is answered as a save is. Every form carries the entry's `set_at` as a hidden **compare-and-set token**, so a write against a pin someone else has since changed is **refused whole** and answered with the conflict page — both rendered stored text and the admin's raw source, who set the stored one and when, the admin's own words preserved and one click to take the stored ones instead ([ADR-0014](adr/0014-maintenance-persistence.md)); the page is headed by the node's path as every page writes one, however the form spelled it, and each way off it leads where the write would have. |
 | `/events` | GET | The transition log, newest first (When / Status / Service / Reason), narrowed by what its URL names ([ADR-0101](adr/0101-the-events-page-is-filtered-by-its-url.md), `event_filter.py`, `_events_view`): `under`, a node and everything beneath it, compared segment by segment; `words`, each found in the reason, in any order and ignoring case; `status`, the switches that are on of *error*, *warn*, *ok*, *maintenance* and *undefined*, by the status an event moved to; `held`, `no` for what reached anybody and `yes` for what a rule held back; `cause`, the switches that are on of `reading`, `pin` and `removed`, by what wrote the row — a row that says no cause being a reading's ([ADR-0109](adr/0109-a-node-says-its-children-are-complete.md) decision 5); and `from` and `to`, read as the Series view reads them (`_window`), an event inside when its time is, ends included. A group with every switch on, or none, filters nothing and no link writes it; a switch the page does not offer, like a window it cannot read, is a `400` naming the parameter. The filter row, the Series view's bar (`_window_bar`, `_window_bar.html`) over the log's own oldest and newest event, and a line counting the window and what matches in it stay in view while the table scrolls; the line adds how far back the log reaches where the window starts before it, *reset* leads to `/events`, the form carries the window and every link the bar draws the filters, and nothing remembers a filter. An empty table says which empty it is. A Service path opens the node's current Status page when the node still exists; a removed node's path remains plain text. A node its check no longer reports writes a row for itself and for each node beneath it, to *undefined*, with the chip *removed*, and the *removals* switch hides them. A transition that reached nobody is **shown and marked** with the contribution rule that held it back ([ADR-0032](adr/0032-status-contribution-boundary.md) rule 5, [ADR-0041](adr/0041-maintenance-is-a-contribution-rule.md)) — it keeps the status color it would have alarmed in, and the chip beside the code is what says it did not. A status that a wait held back and that then reached has a second row, at the reading that completed the count, with the chip *reached* ([ADR-0119](adr/0119-a-wait-that-ends-by-its-count-writes-a-row.md)): a reading's row and unmarked, so with *held back* off the page lists what alarmed, and when. Marked events are what makes *did it break during the window?* answerable. One that maintenance held back is left out of `/history`, which answers the other question; one that damping or a dependency shield held back stays there, since the node showed it ([ADR-0083](adr/0083-a-node-may-wait-before-it-escalates.md), `HIDES_THE_READING`). |
-| `/system` | GET | **Admin only** — the System page's *Running* view ([ADR-0100](adr/0100-system-is-two-views.md)): which instance this is, and engine uptime, pool size, check counts; the declared load, the entries held and the series held beside what each is measured against (the series with the projection, §4.10), and the process's resident size and peak against the memory limit and what the machine gives it ([ADR-0095](adr/0095-the-instance-states-its-memory.md)); per check its type and the in-flight / armed-next / last run, each a time of day plus interval. Carries the dashboard's freshness stamp and ~10s poll (`fragment=1` returns just the info block). |
-| `/system/installed` | GET | **Admin only** — the System page's *Installed* view ([ADR-0100](adr/0100-system-is-two-views.md)), settled at startup and not polled, every section open under an index: the **check-type roster** (§11) — the types this configuration runs first, each with the number of checks behind it, a count that opens into the node path of every one of them so it can be believed without reading a config file, the rest folded into a disclosure so a registered-but-unused type stays readable without filling the card — the **package inventory** (§11), one row per installation outside the library with its distribution, version, loaded path and everything it registered, because a version belongs to the *installation* and a package that registers no check type would otherwise have one nowhere on the page — both tables print that loaded path **against a root the reader has** (`paths.py`): `site-packages/…` or `./…` under the working directory, whichever root is the nearer, because the diagnostic it carries is *which root the module came from* rather than the absolute string, nine tenths of which is the same prefix on every row and starts with somebody's home directory (the origins and the hover `title` keep it whole; a path under neither root stays long, which is the signal) — the **extension seams** (which package fills which slot, which configuration aspects were registered, and who registered each one), the **identity card** — one row per registered door with its route, its provider, the package that registered it and which one is the default, and beneath it whether a system-admin account is configured, whether its credential resolved and which keyword configured it, because a way into an application must not be knowable only by reading the source (§5.2, [ADR-0069](adr/0069-identity-comes-from-outside-and-one-account-does-not.md)) — and the **effective Content-Security-Policy**, directive by directive, with the contributor of every source — a request blocked inside somebody else's package is otherwise undebuggable from the running instance (§5.4, [ADR-0048](adr/0048-an-assembled-content-security-policy.md)). |
+| `/system` | GET | **Admin only** — the System page's *Running* view ([ADR-0100](adr/0100-system-is-two-views.md)): which instance this is, and engine uptime, pool size, check counts; the declared load, the entries held and the series held beside what each is measured against (the series with the projection, §4.10), and the process's resident size and peak against the memory limit and what the machine gives it, and what the machine has left beside it ([ADR-0095](adr/0095-the-instance-states-its-memory.md)); per check its type and the in-flight / armed-next / last run, each a time of day plus interval. Carries the dashboard's freshness stamp and ~10s poll (`fragment=1` returns just the info block). |
+| `/system/installed` | GET | **Admin only** — the System page's *Installed* view ([ADR-0100](adr/0100-system-is-two-views.md)), settled at startup and not polled, every section open under an index: the **check-type roster** (§11) — the types this configuration runs first, each with the number of checks behind it, a count that opens into the node path of every one of them so it can be believed without reading a config file, the rest folded into a disclosure so a registered-but-unused type stays readable without filling the card — the **package inventory** (§11), one row per installation outside the library with its distribution, version, loaded path and everything it registered, because a version belongs to the *installation* and a package that registers no check type would otherwise have one nowhere on the page — both tables print that loaded path **against a root the reader has** (`paths.py`): `site-packages/…` or `./…` under the working directory, whichever root is the nearer, because the diagnostic it carries is *which root the module came from* rather than the absolute string, nine tenths of which is the same prefix on every row and starts with somebody's home directory (the origins and the hover `title` keep it whole; a path under neither root stays long, which is the signal) — the **extension seams** (which package fills which slot, which configuration aspects were registered, and who registered each one), the **identity card** — one row per registered door with its route, its provider, the package that registered it and which one is the default, and beneath it whether a system-admin account is configured, whether its credential resolved and which keyword configured it, because a way into an application must not be knowable only by reading the source (§5.2, [ADR-0069](adr/0069-identity-comes-from-outside-and-one-account-does-not.md)) — and the **effective Content-Security-Policy**, directive by directive, with the contributor of every source — a request blocked inside somebody else's package is otherwise undebuggable from the running instance (§5.4, [ADR-0048](adr/0048-an-assembled-content-security-policy.md)). Last, **what the log leaves out** (§11, [ADR-0121](adr/0121-a-noise-cap-is-declared-and-log-level-has-the-last-word.md)): whether the library's logging default is in charge, the root's level, every logger that carries a level of its own with where the level comes from — a noise cap a package declared, an entry of `LOG_LEVEL`, or neither — and every declared cap that was not set, with the reason; read off the loggers at the request rather than kept from startup, since what code sets after the import, it sets. |
 | `/about` | GET | The identity page — the gaze, the name and the reasoning behind it, the running instance's `__version__`, the repository link. Auth-gated like every other surface: it names the version of a live instance. |
 | `/preferences` | POST | Records this browser's **theme** and **layout** (§5.3, [ADR-0029](adr/0029-per-user-presentation-preferences.md)) and redirects back to the posting page. A value outside the roster is dropped in favor of what the browser already had; the return path is validated by `_safe_next` (a single leading `/`, and none of the characters a browser rewrites into a second one), so the hidden field cannot become an open redirect. |
-| `/copy`, `/copy/<path:branch>` | GET | Auth-gated incident hand-off, four documents from one route and one formatter ([ADR-0115](adr/0115-a-copy-document-says-where-it-is-from-and-since-when.md)): the **tree** (`/copy`), a **branch** or a **leaf** (`/copy/<branch>`) and one **reason line** (`/copy/<branch>?reason=<slug>` — the node a path, the entry a query value, [ADR-0036](adr/0036-addressable-reasons.md) decision 12, because a discovered entry's slug contains a `/`). **Copy is a view of its node** ([ADR-0097](adr/0097-a-nodes-series-have-a-view-of-their-own.md) decision 3): the page stands in the node's band, under the tabs the node's other views carry with *Copy* the current one, its crumbs opening the Copy page of each ancestor — the tree's page in the root's band, a line's in its node's — and beneath the band it says which of the four it holds. **Every document says where it is from and when it was made**: *Dashboard*, the address of the page it describes as the request reached it — the wall, the node's page, that page with the line marked — and *As of*, the instant the document was made, which is when its page was opened and not when a button was pressed. A line's document is the line and just enough to locate it — the node's title, path and observation — and deliberately not the node's run facts, report or configuration, which the node's own document carries and which is where a secret reference would appear. A slug this run does not report is `404` with a page that says so: a suspended pin is not deleted, but a document made from its stored text would hand over a finding the check is no longer making. A path no node stands at is `404` with the page that says what is known of the path, as its other addresses are, and so is a line asked of it ([ADR-0116](adr/0116-a-path-with-no-node-says-what-is-known-of-it.md)). **The tree's document**: one immutable root snapshot becomes one canonical Markdown document — a head (*little-sister status* with the cue of what the tree shows, the two lines, and a count, *Needs attention — 6 of 12 nodes: 2 error ⛔, …*) over an outline: every non-OK leaf (`WARN`, `ERROR`, `MAINTENANCE`, `UNDEFINED`) plus only the ancestors needed to locate it, in snapshot order; the synthetic root and wholly healthy branches are omitted. A node is counted where it shows a status of its own — a node with nothing beneath it, and a branch that declares a status or is pinned — and the count is the number of findings the outline lists. **A listed node says since when** it has shown its status, from the period its own page states (`_period_of`, which is the Time card's `_since_of`): *since before* where that is a bound, and with what began it where a pin did. **A branch's line says what the branch itself holds**, above what is beneath it: a pin on it, and a status of its own that is not ok with its own lines — a reading of its own gone stale among them, which the tree counts degraded and the snapshot names (`own_stale`, §4.4). A tree with nothing to list is a document too — *Nothing needs attention — all 12 nodes are ok.* — and a pin that stands on the tree itself is stated in the head. **A branch's document** hands over what is beneath it: *Reported* where the node declares a status, *Shown as* where it shows something else and where that comes from, its period and observation, its own lines, then *Beneath it* — how many of the nodes beneath it need attention, and the outline of those — and what its own run found and ran with. **A leaf's document** carries what only its page knows and the tree's has no room for — the path, the observation and the period it bounds, the next update, the run's wall time, the frequency, the report, the configuration and every reason line uncapped. A pin does not change it: the document keeps the **measurement** and says a pin is in force, rather than presenting the pinned code as the reading. Leaves carry a non-color emoji cue, and so does a **reason line that declared a code of its own** ([ADR-0042](adr/0042-entries-carry-their-own-code.md)) — a healthy workflow under a failing node has to read as healthy in a pasted document too, and a line that declared none takes no cue because it carries its node's. A line whose subject is **running** says so in words: the page's italic is the glance, and a document has none. Authored check and maintenance explanations keep their Markdown, while node/per-reason maintenance also names who set it and its expiry. Every instant a document writes names its **UTC offset**: the pages render local time and stay silent about the zone, which is right for a screen somebody is standing in front of, and wrong for a document read in another office. The page renders the rich preview through the same hardened Markdown renderer as every other surface. **Copy Markdown** writes `text/plain`; **Copy Rich HTML** writes both `text/html` and the Markdown as `text/plain` — through the clipboard interface where the page has one, and through the browser's copy event where it has none or is refused, which is every instance reached over plain `http` by a host's name: the interface exists in a secure context only. Where neither carries the rendered document it falls back honestly to plain/manual selection. The two buttons stand on this page alone (`_copy_controls.html`), and the label names the clipboard member rather than claiming RTF. |
+| `/copy`, `/copy/<path:branch>` | GET | Auth-gated incident hand-off, four documents from one route and one formatter ([ADR-0115](adr/0115-a-copy-document-says-where-it-is-from-and-since-when.md)): the **tree** (`/copy`), a **branch** or a **leaf** (`/copy/<branch>`) and one **reason line** (`/copy/<branch>?reason=<slug>` — the node a path, the entry a query value, [ADR-0036](adr/0036-addressable-reasons.md) decision 12, because a discovered entry's slug contains a `/`). **Copy is a view of its node** ([ADR-0097](adr/0097-a-nodes-series-have-a-view-of-their-own.md) decision 3): the page stands in the node's band, under the tabs the node's other views carry with *Copy* the current one, its crumbs opening the Copy page of each ancestor — the tree's page in the root's band, a line's in its node's — and beneath the band it says which of the four it holds. **Every document says where it is from and when it was made**: *Dashboard*, the address of the page it describes as the request reached it — the wall, the node's page, that page with the line marked — and *As of*, the instant the document was made, which is when its page was opened and not when a button was pressed. A line's document is the line and just enough to locate it — the node's title, path and observation — and deliberately not the node's run facts, report or configuration, which the node's own document carries and which is where a secret reference would appear. A slug this run does not report is `404` with a page that says so: a suspended pin is not deleted, but a document made from its stored text would hand over a finding the check is no longer making. A path no node stands at is `404` with the page that says what is known of the path, as its other addresses are, and so is a line asked of it ([ADR-0116](adr/0116-a-path-with-no-node-says-what-is-known-of-it.md)). **The tree's document**: one immutable root snapshot becomes one canonical Markdown document — a head (*little-sister status* with the cue of what the tree shows, the two lines, and a count, *Needs attention — 6 of 12 nodes: 2 error ⛔, …*) over an outline: every non-OK leaf (`WARN`, `ERROR`, `MAINTENANCE`, `UNDEFINED`) plus only the ancestors needed to locate it, in snapshot order; the synthetic root and wholly healthy branches are omitted. A node is counted where it shows a status of its own — a node with nothing beneath it, and a branch that declares a status or is pinned — and the count is the number of findings the outline lists. **A listed node says since when** it has shown its status, from the period its own page states (`_period_of`, which is the Time card's `_since_of`): *since before* where that is a bound, and with what began it where a pin did. **A branch's line says what the branch itself holds**, above what is beneath it: a pin on it, and a status of its own that is not ok with its own lines — a reading of its own gone stale among them, which the tree counts degraded and the snapshot names (`own_stale`, §4.4). A tree with nothing to list is a document too — *Nothing needs attention — all 12 nodes are ok.* — and a pin that stands on the tree itself is stated in the head. **A branch's document** hands over what is beneath it: *Reported* where the node declares a status, *Shown as* where it shows something else and where that comes from (the nodes beneath it alone where every line of its own is silenced, [ADR-0124](adr/0124-a-node-whose-lines-are-all-silenced-still-counts-the-nodes-beneath-it.md)), the period of its own status, named so ([ADR-0123](adr/0123-a-node-says-one-status-wherever-it-is-read.md) decision 3), and its observation, its own lines, then *Beneath it* — how many of the nodes beneath it need attention, and the outline of those — and what its own run found and ran with. **A leaf's document** carries what only its page knows and the tree's has no room for — the path, the observation and the period it bounds, the next update, the run's wall time, the frequency, the report, the configuration and every reason line uncapped. A pin does not change it: the document keeps the **measurement** and says a pin is in force, rather than presenting the pinned code as the reading. Leaves carry a non-color emoji cue, and so does a **reason line that declared a code of its own** ([ADR-0042](adr/0042-entries-carry-their-own-code.md)) — a healthy workflow under a failing node has to read as healthy in a pasted document too, and a line that declared none takes no cue because it carries its node's. A line whose subject is **running** says so in words: the page's italic is the glance, and a document has none. Authored check and maintenance explanations keep their Markdown, while node/per-reason maintenance also names who set it and its expiry. Every instant a document writes names its **UTC offset**: the pages render local time and stay silent about the zone, which is right for a screen somebody is standing in front of, and wrong for a document read in another office. The page renders the rich preview through the same hardened Markdown renderer as every other surface. **Copy Markdown** writes `text/plain`; **Copy Rich HTML** writes both `text/html` and the Markdown as `text/plain` — through the clipboard interface where the page has one, and through the browser's copy event where it has none or is refused, which is every instance reached over plain `http` by a host's name: the interface exists in a secure context only. Where neither carries the rendered document it falls back honestly to plain/manual selection. The two buttons stand on this page alone (`_copy_controls.html`), and the label names the clipboard member rather than claiming RTF. |
 | `/links` | GET | The **shared toolbox**: this deployment's curated links (§7, [ADR-0030](adr/0030-curated-links.md)), one flat level of groups flowed into columns, each entry a mark and a title in the configured order. Icons resolve through the search path; a name nothing defines falls through to the entry's own origin favicon and then to a neutral glyph. Structural problems in the file are shown on the page — the person who maintains it is the one looking. A **client-side filter** sits above the columns and narrows by entry and group title. The configuration is re-read only when it changed, so an edit needs no restart. Opening the page is also what **triggers a reachability pass** (§7) when the newest answer is older than the configured interval — on a daemon thread, so the render never waits on the network. A page with **no links** says so in one sentence and holds its setup guide in two folds, the browser's own disclosures and closed: *Add links* — the file's shape and where it goes — and *Icon names*, the registry's roster with both drawings of each mark and how a deployment adds one of its own. A page that has links keeps *Icon names* at its foot, outside what the filter narrows. Every reader gets the same page. |
 | `/links/check` | POST | **Check now**: probes the links page's targets and redirects back to it, the return path validated by `_safe_next`. Unlike an open this one **waits**, under a deadline, joining the pass already running rather than starting a second — whatever has not answered by then keeps its previous verdict and age while the pass finishes behind the response, and the page says a pass is still going. A forced pass has a minimum gap, which is the whole of the abuse story; open to every logged-in viewer, not only an admin, because whoever maintains the file is not necessarily one (§7, [ADR-0030](adr/0030-curated-links.md)). |
 | `/links/icon/<variant>/<name>` | GET | One resolved icon, for the background `variant` names (`on-light` / `on-dark`). Serves every rung of the search path that holds bytes — the deployment's own file, a registered pack's package data, the built-in pack — so the page has one URL shape for all of them; a **remote** icon is 404 here and is emitted as its own URL rather than proxied. The name is a registry key and never builds a path. Auth-gated, `private` cache with an ETag (§7, [ADR-0030](adr/0030-curated-links.md)). |
@@ -2299,9 +2383,12 @@ filter logic is `_filter_snapshot` (drops nodes whose effective code is hidden).
   `OPEN_ENDPOINTS`, which answer without an identity at all (`/login`,
   `/login/<door>`, `/auth/callback/<door>`, `/logout`, `static`, `/`,
   `/favicon.ico`, `/csp-report`, `/health`, `/ready`), and
-  `SELF_AUTHENTICATING_ENDPOINTS`, which is `/status` alone because it negotiates
-  between a session and a bearer token and a gate in front of it would redirect an API
-  client to a login form. Everything else is gated, including a route added tomorrow.
+  `SELF_AUTHENTICATING_ENDPOINTS`, which are the routes the JSON API reads —
+  `/status`, and `/series` with `/series/<path>`
+  ([ADR-0122](adr/0122-a-series-is-read-over-the-api-as-it-stands.md) decision 8) —
+  because each negotiates between a session and a bearer token and a gate in front of
+  it would redirect an API client to a login form; each refuses both ways.
+  Everything else is gated, including a route added tomorrow.
 - **`identity.current_user()` is the one answer to *who is this request***, returning an
   `Identity` (`name`, `firstname`, `lastname`, `admin`) or `None`; `signed_in()` is the
   same for a view already behind the gate, and answers `401` rather than redirecting,
@@ -2445,16 +2532,22 @@ filter logic is `_filter_snapshot` (drops nodes whose effective code is hidden).
   ([ADR-0003](adr/0003-config-and-secrets-via-env-file.md),
   [ADR-0023](adr/0023-secret-references.md)). `.env` feeds the
   environment via a dependency-free loader.
-- **JSON backend mode** — `GET /status[/<path:branch>]` with `Accept: application/json`
-  is gated by a **bearer token** (named per-client tokens from the
+- **JSON backend mode** — `GET /status[/<path:branch>]` and `GET /series[/<path>]`
+  with `Accept: application/json`
+  are gated by a **bearer token** (named per-client tokens from the
   `LITTLE_SISTER_API_TOKENS` setting — a literal, or itself a secret reference —
   compared with `secrets.compare_digest`); the session
   cookie isn't accepted there. Errors are **Problem JSON** (RFC 9457), and an inbound
   `X-Flow-Id` is echoed. Read-only; the contract is
   [`api/openapi.yaml`](api/openapi.yaml)
-  ([ADR-0080](adr/0080-the-envelope-is-the-snapshot-published.md)), and what it
-  publishes is the snapshot the dashboard renders — a field added to one is added to
-  the other in the same change.
+  ([ADR-0080](adr/0080-the-envelope-is-the-snapshot-published.md)), and what the
+  status read publishes is the snapshot the dashboard renders — a field added to one
+  is added to the other in the same change. The series read publishes what the
+  memory tier keeps (§4.10) where the Series view shows it (§5.1,
+  [ADR-0122](adr/0122-a-series-is-read-over-the-api-as-it-stands.md)). Each read has
+  one answer written down in `little_sister.contract` — `envelope-2.json` and
+  `series-2.json` — generated from this API and held to it by
+  `test_contract_fixture.py`.
 
 ### 5.3 Presentation preferences
 How a viewer sees the surface — the **theme** and the **layout** — is theirs to
@@ -2531,8 +2624,10 @@ is a compatibility break to revise.
   deliberate. `style-src` keeps `'unsafe-inline'`, because several `style=` attributes
   carry *computed* values (a card's reason-line cap, `/about`'s ring geometry) which
   cannot be hashed even in principle, and an inline style is not the vector a reason
-  line is. `img-src` is left strict, because Markdown images are on and unconstrained
-  (§4.7) — that is the directive with something to measure.
+  line is. `img-src` names no host, because Markdown images are on and unconstrained
+  (§4.7) — that is the directive with something to measure. It takes `data:`:
+  Bootstrap draws a switch's knob and the bar's burger as `data:` images, and a
+  `data:` image calls no host, so our own controls report nothing.
 - **The one inline script is named, not reported.** The theme bootstrap (§5.3) enters
   `script-src` as a `'sha256-…'` taken from the **rendered partial** at assembly, so
   the hash is the bytes the document actually carries and cannot drift from a second
@@ -2572,9 +2667,19 @@ is a compatibility break to revise.
   contribution lands on a directive the library set to `'none'`, that keyword is
   dropped — it is invalid beside anything else — and the drop is a `WARNING`, because
   the directive is then *wider* than the default.)
+- **A page adds what its own configuration names**, on its own response and no other
+  page's. `/links` adds to `img-src` the hosts its icons load from — the site of an
+  entry whose mark falls back to its favicon, the host of a remote mark — taken from
+  `links.yaml` as the page renders: `LinksConfig.mark_for` decides which images an
+  entry is drawn with and where each comes from, and the page's policy is read off the
+  same answer, so the two cannot drift. The viewer's browser fetches those icons,
+  never the instance: a browser that can open a link can fetch its icon
+  ([ADR-0030](adr/0030-curated-links.md)). A favicon that redirects to a host the file
+  does not name is still reported.
 - The assembled policy is a **value**, which is why what a browser would be told is
   asserted in unit tests without a browser, and printed on `/system/installed` with the
-  contributor of every source.
+  contributor of every source — and, on its last row, what `/links` adds, answerable to
+  the file that names it.
 
 
 ---
@@ -2718,7 +2823,9 @@ on a card and in a pin's sentence.
   box is shown **vivid** only when it reports its own status; a box whose status is
   merely *derived* from a visible child — and any healthy (OK) box — is **dimmed**
   (pale fill, dark text), so the eye follows a faded trail down to the bold
-  originating node. So status never rests on **color alone**, each card, node box and
+  originating node. Whether a status is derived is the snapshot's one answer for a
+  card, a box and a page's head (`StatusSnapshot.derived`, §4.3), and no template
+  compares a node's two statuses for it. So status never rests on **color alone**, each card, node box and
   the strip also carries a small **per-state shape cue** — a check (OK), triangle
   (warn), filled disc (error), pause bars (maintenance), a hollow ring (idle) — beside
   the fill, and the warn/error status word is lifted out of the muted state text, so a
@@ -2750,13 +2857,18 @@ on a card and in a pin's sentence.
   level 0, so depth 0 collapses to a single card carrying that node's rolled-up
   status (an overall traffic light), depth 1 shows its top-level systems, and so on.
   It is clamped to `MAX_DEPTH` and remembered in a `depth` cookie (resolved by
-  `_resolve_depth`). From depth 1 the viewed node **heads** its page with its **own**
-  status wherever it has something of its own to say, since the children right below
-  say theirs — except a node that declares nothing: its `UNDEFINED` is a container's,
-  which the roll-up skips ([ADR-0039](adr/0039-status-rollup-semantics.md)), so one
-  that carries a sentence (an `aws` check's root states its scope) heads with what it
-  rolls up to, pale as its card on the parent's page is, and that is the code a kept
-  reading records for it too
+  `_resolve_depth`). From depth 1 the viewed node **heads** its page, wherever it has
+  something of its own to say or its reader may pin it, with **what it rolls up to**:
+  the status its card says on the page above, so a node is one status wherever it is
+  read ([ADR-0123](adr/0123-a-node-says-one-status-wherever-it-is-read.md) decision
+  1). The head is pale where that status is **derived** — not what the node counts for
+  itself, so from beneath it, where the node that makes it so stands — and vivid where
+  it is the node's own, its own reading gone stale included (decision 2). A node that
+  declares nothing is the plain case of a derived one: its `UNDEFINED` is a
+  container's, which the roll-up skips
+  ([ADR-0039](adr/0039-status-rollup-semantics.md)), so one that carries a sentence
+  (an `aws` check's root states its scope) heads with what it rolls up to, which is
+  the code a kept reading records for it too
   ([ADR-0087](adr/0087-a-check-keeps-its-subjects-readings.md) decision 8).
   Nodes drill down; a **hide-ok** switch drops OK nodes and a
   **hide-idle** switch drops never-reported (UNDEFINED) ones — beneath the viewed node,
@@ -2823,12 +2935,24 @@ on a card and in a pin's sentence.
   snapshot, so a card whose children *hide ok* dropped says the same. A **branch's
   page** states its node's pin in the head above its children, and an admin sets one
   from there with *Set maintenance*; that head is drawn for an admin on every branch's
-  page, and for every reader where the node has something of its own to say. The kiosk
-  layout and a viewer get the block without buttons and no mark. The overview's own
-  card sets no pin — silencing everything stays a curl, not a click — though a pin
-  that stands there is stated and changed like any other. A write from a card or from
-  a head comes back to the page as it was asked for, its filters and its depth: the
-  form's `next` is the page's own address, without the `fragment` the poll adds.
+  page, and for every reader where the node has something of its own to say. **Its
+  head lists the node's own lines as a leaf's page does** — in full rather than
+  clamped to `reason_cap`, each with its record, the pause mark at its end and a
+  pinned line's block beneath it — and so does its one card at depth 0, from the
+  block the two pages share (`_own_lines.html`,
+  [ADR-0036](adr/0036-addressable-reasons.md) decision 12): a line of
+  a node above others is silenced there, without the node's pin that silences
+  everything beneath it. Any line takes a pin, whatever it says, and the editor of
+  the last of its lines still alarming says that the nodes beneath it still count
+  (ADR-0124). There a line's record takes the line's ink rather than Bootstrap's
+  muted one, since a status fill can be vivid. The kiosk layout and a viewer get the
+  block without buttons and no mark. The overview's own card sets no pin — silencing
+  everything stays a curl, not a click — though a pin that stands there is stated and
+  changed like any other. A write from a card or from a head comes back to the page
+  as it was asked for, its filters and its depth: the form's `next` is the page's own
+  address, without the `fragment` the poll adds — and a line's, at the line
+  (`at_line`: `?reason=<slug>#pinned-reason`, in place of any line the page was
+  asked at).
   Who pinned a pin and who changed it last stand in the block's editor, and on the
   Maintenance page for everyone; the strip's popover, with room for one name, shows
   the last writer.
@@ -2842,11 +2966,18 @@ on a card and in a pin's sentence.
   page that had dimmed is polled at once. A close does not poll by itself, because a
   swap takes the keyboard's focus with it and Cancel has just put that back on what
   opened the editor.
-  A **leaf's own page states a pin as one block where it acts**
+  A **node's own page states a pin as one block where it acts** — a leaf's, below,
+  and a branch's head, above
   ([ADR-0104](adr/0104-a-pin-is-one-block-on-what-it-silences.md), `_rule_block.html`):
   the node's at the top of its status card, heading a frame that runs round every line
   the pin covers, and a line's beneath its line — *also silenced on its own* under the
-  node's pin, because it stays quiet when that pin ends. The block says who silenced
+  node's pin, because it stays quiet when that pin ends. A **pin set on a node above**
+  silences this one with everything beneath that node, and the page states it where it
+  acts too: the same block without buttons, one row of the frame's list for each pin
+  above, outermost first, its sentence naming and linking the node the pin stands on —
+  *This node is silenced from /nexus/qnap* — and the node's own pin and a line's
+  under one say *also silenced on its own*; a branch's page draws its head for them
+  (`_pins_above` in `app.py`). The block says who silenced
   it, until when and what is left — *until 2026-10-03 20:44:28 · 1d 23h left* — and
   its note in full; an admin's carries *Edit* and *Clear*, and a viewer reads the same
   block without them. A pin is **set where its block will stand**: *Set maintenance* is
@@ -3042,8 +3173,10 @@ on a card and in a pin's sentence.
   aligned; a nested node, which has no status word, gets it at the top-right of its
   name row. Like the popover it binds once via event delegation on `#status-grid` and
   keeps a page-lifetime set of expanded paths, so an expanded card survives the ~10s
-  fragment swap. The leaf detail page (`check.html`) always renders every reason and
-  the JSON envelope ([ADR-0008](adr/0008-json-output-api.md)) is untouched.
+  fragment swap. A node's own page always renders every reason of its own
+  (`_own_lines.html`): a leaf's detail page (`check.html`), and a branch's head and
+  its card at depth 0. The JSON envelope ([ADR-0008](adr/0008-json-output-api.md)) is
+  untouched.
 - `check.html` — a leaf check's detail page (its `title` following the breadcrumb in
   the header ([ADR-0017](adr/0017-node-title.md)); the node name + `description` — its
   `about` ([ADR-0012](adr/0012-node-metadata.md)) is the band's, folded, as on every
@@ -3057,7 +3190,9 @@ on a card and in a pin's sentence.
   admin's controls to set, edit and clear either).
 - `_rule_block.html` — a rule's block
   ([ADR-0104](adr/0104-a-pin-is-one-block-on-what-it-silences.md)): `pin_block` states
-  a pin — the node's or a line's — with its editor and its *Clear*, `pin_new` is the
+  a pin — the node's or a line's — with its editor and its *Clear*, or, given the node
+  a pin above stands on (`source`), without them and naming it; `pins_above_stated`
+  states each pin above a node that way; `pin_new` is the
   editor of a pin still to be set, and `rule_mark` draws the kind's mark. `instant`
   writes an instant of the block with each of its words whole — the date, the time of
   day — so a sentence that wraps in a narrow card ends no line inside one. A page that
@@ -3085,6 +3220,25 @@ on a card and in a pin's sentence.
   as *Status error since …* and, on a line of its own, *Last observed …*, also where the
   two are one instant: the latest reading is no end, and *until* belongs to a period
   that has ended ([ADR-0099](adr/0099-a-status-that-still-holds-says-since-when.md)).
+  **On a node above others the period is named the own status's** — *Its own status
+  ok since …*, and its changes *of its own status* — because what such a node shows
+  counts the nodes beneath it, and where it shows something its own status does not
+  account for, a line before it says that, naming the node beneath it that makes it
+  so, with that node's own *since* and a link to its page: *Status error, from
+  staging/codepipeline/load-fixtures beneath it, error since 10:42, and 2 more*. The
+  node named counts the code for itself — never a branch on the way down that only
+  passes it on — and of several it is the one that has counted the code the longest;
+  one that counts it only because its own reading went stale is *stale, last observed
+  …*, and is weighed from when it went stale, its last observation and its tolerance
+  after it (`_made_by` in `app.py`, a `_MadeBy`, from the same unfiltered node as the
+  period). A status no one node makes, *ok* or *maintenance*, is *from the nodes
+  beneath it*.
+  A node in maintenance keeps *Status maintenance since …*, since that cancels what
+  is beneath it
+  ([ADR-0123](adr/0123-a-node-says-one-status-wherever-it-is-read.md) decision 3) —
+  by a pin on it or its check's word; one whose lines are all silenced cancels
+  nothing, and says *Its own status maintenance since …*
+  ([ADR-0124](adr/0124-a-node-whose-lines-are-all-silenced-still-counts-the-nodes-beneath-it.md)).
   When the period began is the tree's to say, which keeps it beside the log
   (ADR-0110 decision 5), so the card reads *since* that instant however far the log
   has moved on. Where the tree did not see the period begin it is stated *since
@@ -3096,10 +3250,12 @@ on a card and in a pin's sentence.
   6 and 8). One that a line's pin began says which it was — *when a line was
   silenced*, *when a line's maintenance ended* — read off the cause of the event that
   began it (`_began`; ADR-0107 decision 3). It falls back to
-  a single *Observed …* where the node declares nothing above nodes that report, since a
+  a single *Observed …* where the node declares nothing above nodes that report (beneath
+  that first line, since all it shows comes from beneath it), since a
   container's `UNDEFINED` is no status for a period to name, or where the tree keeps
   nothing of the node — decided once, where the routes take the period's start
-  (`_since_of` in `app.py`, a `_Since`), from the node before a filter takes its
+  (`_since_of` in `app.py`, a `_Since`, which also says which status the period names
+  and whether it is named the node's own), from the node before a filter takes its
   children, so the node's Copy document and History's row for the period that holds
   state the period its page does, in the same words — and says *Not yet observed* when
   no check has written it and nothing gives it a period: a pinned node that nothing has
@@ -3174,7 +3330,10 @@ on a card and in a pin's sentence.
   `UNDEFINED`, children present, the Time card's test — ending where it stopped
   declaring and saying so in a line
   ([ADR-0094](adr/0094-a-restart-is-no-transition.md)), in the table itself where no
-  earlier period is left; where the log holds no change of a node, one that declares
+  earlier period is left; says under the table of a node above others that its
+  periods are those of its own status, since its page heads with what it rolls up to
+  ([ADR-0123](adr/0123-a-node-says-one-status-wherever-it-is-read.md) decision 3);
+  where the log holds no change of a node, one that declares
   nothing says so, one a check has written shows the period that holds, begun when
   the kept table says or *before* its bound, and only one nothing is kept of says *No
   status changes recorded*
@@ -3271,10 +3430,11 @@ decides where a deployment's action belongs
 ([ADR-0036](adr/0036-addressable-reasons.md)):
 
 - **`reason.actions`** — beside every rendered reason line, on the dashboard grid
-  (`_status_grid.html`'s `reason_block`) and on the leaf detail page (`check.html`),
-  with `node`, the **unshortened** `reason`, the whole `line` (its slug, its own
-  code, its `running` flag and any pin), its `index` and the `surface`
-  (`grid` / `check`). The place for an action about **one** finding, where a node's
+  (`_status_grid.html`'s `reason_block`) and on a node's own page (`_own_lines.html`:
+  a leaf's `check.html`, a branch's head and its card at depth 0), with `node`, the
+  **unshortened** `reason`, the whole `line` (its slug, its own code, its `running`
+  flag and any pin), its `index` and the `surface` (`check` on a leaf's page, which is
+  not polled, `grid` wherever the poll draws). The place for an action about **one** finding, where a node's
   reasons are individually addressable members. A provider receives **the names it
   declares** — or all of them if it declares `**kwargs` — so a context that grows
   never costs a filler written against an earlier one its chip
@@ -3371,7 +3531,9 @@ icon registry keeps its built-in pack. `/system/installed` marks each filler *bu
   [ADR-0045](adr/0045-user-avatars.md)).
 - **Secrets** — a git-ignored `.env` file may supply `SECRET_KEY` (optional —
   unset means a random per-start key) and any check credentials via the
-  environment ([ADR-0003](adr/0003-config-and-secrets-via-env-file.md)).
+  environment ([ADR-0003](adr/0003-config-and-secrets-via-env-file.md)). It feeds
+  the two variables of the logging default as well, `LOG_LEVEL` and `LOG_FILE`,
+  which are read after it whatever a process imports first (§11).
   A check names its credentials in a `secrets:` block, each a **secret
   reference** — `env://NAME` for the environment, or another `scheme://address`
   resolved by a deployment-registered resolver — once at check construction
@@ -3435,8 +3597,9 @@ icon registry keeps its built-in pack. `/system/installed` marks each filler *bu
   mark is displaying it whichever server the bytes came from (nominative use is what
   makes either arrangement fine), it *adds* a terms-of-service question since asset
   hosts commonly forbid it, and it is the least reliable of the three — referrer
-  checks, URLs that rot on a redesign, one `img-src` line in `config/csp.yaml` per
-  host (§5.4), and nothing at all for a deployment without outbound access. Each name ships
+  checks, URLs that rot on a redesign, and nothing at all for a viewer whose network
+  cannot reach the host. Its host is one the page's own policy allows, taken from the
+  file (§5.4), so `config/csp.yaml` needs no line for it. Each name ships
   `<name>-on-light.svg` / `<name>-on-dark.svg`, named for the background the file goes
   on and differing only in ink (the two `--ls-ink` values, [ADR-0028](adr/0028-design-tokens-and-themes.md));
   the pack's `manifest.yaml` records what every glyph depicts and its terms
@@ -3562,10 +3725,6 @@ Current gaps.
   itself survives a restart now (§4.8); what a store would add is a package's seam,
   never a database in the core
   ([ADR-0071](adr/0071-what-a-restart-keeps-is-a-directory-of-files.md)).
-- **A reader for the series on the API.** A series survives a restart and all of them
-  are bounded together (§4.10), and the node that stands for a subject draws its
-  measures' curves and newest readings from it (§4.11); no `series` read on the JSON API
-  exists yet, so a client sees a kept series nowhere.
 - **A drawing for a state.** A record with a state has no mark (§4.11,
   [ADR-0111](adr/0111-a-runs-mark-says-how-the-run-stood.md) decision 5): it is a row of
   its readings table, and how long each state lasted is drawn nowhere.
@@ -3665,7 +3824,7 @@ root a loaded-from path is drawn against, and what stays long), `test_links.py` 
 `links` aspect and its reachability pass, ADR-0030), `test_icons.py` (icon names,
 the pack registry and resolution),
 `test_web.py` (the routes via the Flask test client), `test_web_pins.py` (branch
-pins: a card's pause mark and a branch's head),
+pins: a card's pause mark and a branch's head, and a branch's own lines on its page),
 `test_pin_block.py` (a pin's block on a leaf's page, the controls that set one, and
 the expiry an edit shows and keeps), `test_wall_pins.py` (the block in a card and in
 a branch's head, the editors that open there, and what the poll that waits for them
@@ -3676,8 +3835,11 @@ as elements by class, tag and id and the text a reader gets), `test_pin_write.py
 (where a pin's write returns to, and the save that changes nothing) with
 `test_pin_browser.py` (the same in Chromium: a line far down a long page back in
 view, the cursor in an opened editor, an editor opening in its card and the poll
-holding off while it is open), `test_api.py`
-(the JSON backend: serialization, content negotiation, token auth),
+holding off while it is open, and a branch's own line pinned in its head),
+`test_api.py`
+(the JSON backend: serialization, content negotiation, token auth, and both reads
+held to the spec in both directions) with `test_series_read.py` (the series read,
+against its record's sentences),
 `test_contrast.py` (the AA bar of ADR-0028, measured rather than eyeballed),
 `test_ui_fixtures.py` and `test_demo_check.py` (gate coverage for the two UI
 harnesses), and `test_docs_links.py`
@@ -4025,25 +4187,29 @@ is explicit. A tag promises to keep these stable:
   renamed or dropped in a refactor, or exported without being promised. A rename that
   edits the code *and* this block in one commit is caught by the epoch snapshot
   below, which is the one thing a same-commit edit cannot quietly satisfy.
-- **Logging** — a *behavior*, not a name. little-sister logs through the standard
-  hierarchy and never switches propagation off, and `little_sister.logger`
+- **Logging** — a *behavior*, and one call beside it. little-sister logs through the
+  standard hierarchy and never switches propagation off, and `little_sister.logger`
   configures the **root** logger only when the application has not — no handlers on
   it at import. So a deployment or a plugin that sets up its own logging **before**
   importing `little_sister.app` (the same import-before-app slot as everything else
   here) keeps its handlers *and its level*, and little-sister's own records arrive
   there too; one that sets up none gets the default: the console (stderr) plus a log
-  file, whose path is `LOG_FILE` or `var/little-sister.log`, at the level `LOG_LEVEL`
-  names or **INFO**. Both variables belong to that default and are consulted nowhere
-  else — against an application that configured its own logging, `LOG_LEVEL` does
-  nothing, because the level is then that application's to choose. An unrecognized
-  name falls back to INFO and says so in the log it just opened. A plugin imports
-  nothing
-  from here — it calls `logging.getLogger(__name__)` like any Python library. The
-  module and its
-  `logger` object are **not** contract — what is promised is that the records reach
-  whoever owns the root logger, which is the whole of what a dependent package needs.
-  `tests/test_logger.py` holds it, because a library that quietly reconfigures
-  logging is only noticed when somebody's log file is empty.
+  file, whose path is `LOG_FILE` or `var/little-sister.log`, at the levels `LOG_LEVEL`
+  names, the root at **INFO** where it names none. Both variables belong to that
+  default and are consulted nowhere else — against an application that configured its
+  own logging, `LOG_LEVEL` does nothing, because the levels are then that
+  application's to choose — and both are read **after `.env`**, whatever a process
+  imports first: `logger.py` imports the module that reads the file into the
+  environment before it reads either, and a value in the process's own environment
+  stands over the file's, as for every variable. A plugin imports nothing from
+  `little_sister.logger` — it calls `logging.getLogger(__name__)` like any Python
+  library. That module and its `logger` object are **not** contract — what is
+  promised is that the records reach whoever owns the root logger, the list
+  `LOG_LEVEL` takes, and the call a package declares a noise cap with, both below
+  ([ADR-0049](adr/0049-the-check-authoring-surface.md) decision 4,
+  [ADR-0121](adr/0121-a-noise-cap-is-declared-and-log-level-has-the-last-word.md)).
+  `tests/test_logger.py` and `tests/test_noise.py` hold it, because a library that
+  quietly reconfigures logging is only noticed when somebody's log file is empty.
   - **The default's lines are stamped in the configured `timezone`, each with the
     offset in force** — `2026-10-04 13:02:35,893 +0200`, on stderr and in the file
     ([ADR-0120](adr/0120-every-stored-time-is-an-instant.md) decision 9) — so a line
@@ -4063,12 +4229,93 @@ is explicit. A tag promises to keep these stable:
     and no note on `/little-sister`, which would stand at WARN for the life of the
     process on a machine whose zone is another on purpose.
   - **INFO rather than DEBUG, because nothing here logs below it.** A DEBUG root
-    collects no line the library writes and every line its dependencies write — the
-    caps on `httpx` and `markdown_it` are two such dependencies noticed one at a
-    time, and a deployment carrying an AWS check type was two thirds `botocore`
-    request detail. A deployment that wants that detail asks for it with
-    `LOG_LEVEL=DEBUG`; one that wants a *dependency* quiet caps that dependency's
-    own logger by name, which adds no handler and so leaves this default intact.
+    collects no line the library writes and every line its dependencies write — a
+    deployment carrying an AWS check type was two thirds `botocore` request detail.
+    A deployment that wants that detail asks for it with `LOG_LEVEL=DEBUG`, which
+    lowers the root and lifts no cap: the declared caps are what keeps such a
+    session readable, and a capped logger is asked for by name.
+  - **`LOG_LEVEL` is a list, and names loggers beside the level** —
+    `LOG_LEVEL=INFO,botocore.credentials=DEBUG`, separated by commas
+    ([ADR-0121](adr/0121-a-noise-cap-is-declared-and-log-level-has-the-last-word.md)
+    decision 5). The entry with no `=` is the root's level, which is all the variable
+    was. An entry `name=LEVEL` is that logger's level — any logger and any level, the
+    library's own loggers and `ERROR` included, since the log is the deployment's —
+    and it speaks for its name **and for every name beneath it**, down to the next
+    name the variable has an entry for: a level that stands on a logger there is
+    taken off, whoever set it, so that the nearest entry at or above a logger's name
+    is that logger's level. A named entry is set twice with that reach: with the
+    default, so that it holds from the first line, and again where the application
+    is imported and the caps are set, after the code of the slot, over which it then
+    stands; between the two the later `setLevel` stands, as it does anywhere. The
+    bare level is set once, with the default. A level is written by its name in
+    `logging`, in either case, and `NOTSET` names none; a logger's name is taken as
+    it is written; spaces around an entry and around its `=` are dropped, an empty
+    entry is nothing, and what follows the first `=` is the level; a later entry for
+    a name replaces an earlier one, the bare level too; and the root has no name in
+    the variable, so `root=DEBUG` is an entry that cannot be read. Such an entry is
+    skipped and said in the log, a line for each — written before the variable's
+    levels are set, so that no entry takes out the line about another — and the rest
+    of the variable stands.
+  - **A package declares the noise caps of the dependencies it brings, and sets no
+    level** — `little_sister.noise.cap(logger, level, hides=…)`, in the
+    import-before-app slot beside its other registrations
+    ([ADR-0121](adr/0121-a-noise-cap-is-declared-and-log-level-has-the-last-word.md)
+    decisions 1 to 4). The call records a **row** — the logger's name, the level, the
+    package, inferred from the call site as a resolver's is, and what the cap hides —
+    and touches no logger. What a package may declare is bounded: a dependency's
+    logger, never the root and never `little_sister` or a logger beneath it;
+    `logging.INFO` or `logging.WARNING`, so that a package takes a dependency's
+    `DEBUG` and `INFO` lines out of a log and nothing above them; `hides`, which
+    finishes the sentence *it hides …* for a reader deciding whether to ask for the
+    lines back; and in the slot — after the application was imported a declaration
+    is refused, unless it repeats a row as it stands. One outside these is a warning,
+    a skip and a line on `/little-sister/startup`, and never an exception. The
+    library's own rows are those for its own dependencies, and that is one:
+    `markdown_it` at `INFO`.
+
+    **The rows are set once, where the application is imported** — `noise.settle()`,
+    called there beside `announce_aspects()` — and a row is set on its logger unless
+    one of four things holds, asked in this order: the application configured
+    logging itself; `LOG_LEVEL` names the logger or one above it; a level stands on
+    the logger, or on one above it short of the root, that no row set — the code of
+    the slot set it, or the dependency itself; or the row would take no line away,
+    the logger being at its level already or above it without it. So nothing is set
+    where a row is declared, and the order of a deployment's imports decides nothing;
+    a cap takes lines away and adds none; where two rows reach one logger the higher
+    level stands, whichever was declared first; and what code sets after the
+    application was imported, it sets, and no row follows it.
+
+    **A deployment that wants a dependency quiet which no package declared** sets
+    that logger's level by name in the slot, as it always could —
+    `logging.getLogger("urllib3").setLevel(logging.WARNING)` adds no handler, so it
+    leaves the default intact, and it stands against every row — or declares a row
+    with the same call, which puts what the cap hides on the page. It has any capped
+    logger's lines back by name: `LOG_LEVEL=INFO,botocore.credentials=DEBUG`, in
+    `.env` or in the environment, and a restart.
+  - **The instance says what its log leaves out**
+    ([ADR-0121](adr/0121-a-noise-cap-is-declared-and-log-level-has-the-last-word.md)
+    decision 7). `/system/installed` has a *Logging* section: whether the default is
+    in charge, the root's level with where it comes from, and every logger that
+    carries a level of its own with where *that* comes from — a row, with each
+    package that declared one and what it hides; an entry of `LOG_LEVEL`; or
+    neither, which is the application's code or the dependency itself. Then every
+    row that was not set, with the first of the four reasons that held; every level
+    an entry took off, with the logger it stood on; and every entry of the variable
+    that could not be read. The levels are read off the loggers at the request
+    (`noise.report()`), so the page says what stands and not what startup left. The
+    package inventory names a package's caps beside its other registrations. And
+    the log says it where it begins: setting the rows writes an `INFO` line for each
+    row that was set, which names the entry that shows its lines — a log that
+    leaves lines out says which. The entry is the logger at the level it is at
+    without the row, `botocore.credentials=INFO` under the default's root: what the
+    row hid comes back and nothing below it, where `DEBUG` would be more than was
+    hidden, and on a wide logger a wire trace. The page prints the same entry as a
+    line to copy, after the variable as it was read (`Entries.written()`), so that
+    pasting it changes one thing. A row that was not set leaves nothing out, so the
+    log says nothing of it — not at a start with nothing to cap, and not in the log
+    of an application that configured logging itself — and the page says why it was
+    not. A deployment that took the library's own lines out with the variable reads
+    the set rows on the page as well.
 - **Secret references** — `little_sister.secrets`: `resolve(reference)` /
   `register_resolver(scheme, resolver, *, replace=False)` / `resolve_setting(value)`
   (an app setting

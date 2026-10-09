@@ -1,0 +1,323 @@
+{
+  "answer": {
+    "generated_at": "<volatile>",
+    "instance": {
+      "engine": "running",
+      "version": "<volatile>"
+    },
+    "path": "/",
+    "schema_version": 2,
+    "series": [
+      {
+        "key": {
+          "mount": "/batch",
+          "subject": "job/export",
+          "type": "jobs"
+        },
+        "measures": [
+          {
+            "axis_to": null,
+            "field": "seconds",
+            "label": "Run time",
+            "node": "/batch",
+            "unit": "s"
+          }
+        ],
+        "node": "/batch",
+        "readings": []
+      },
+      {
+        "key": {
+          "mount": "/batch",
+          "subject": "queue/live",
+          "type": "jobs"
+        },
+        "measures": [
+          {
+            "axis_to": null,
+            "field": "seconds",
+            "label": "Run time",
+            "node": "/batch",
+            "unit": "s"
+          }
+        ],
+        "node": "/batch",
+        "readings": [
+          {
+            "at": "2026-09-26T15:00:00Z",
+            "code": "OK",
+            "identity": "",
+            "observed_at": "2026-09-26T15:30:00Z",
+            "record": {
+              "jobs": 2
+            },
+            "state": "open",
+            "texts": [
+              "2 job names in the queue"
+            ]
+          }
+        ]
+      },
+      {
+        "key": {
+          "mount": "/batch",
+          "subject": "job/import",
+          "type": "jobs"
+        },
+        "measures": [
+          {
+            "axis_to": null,
+            "field": "seconds",
+            "label": "Run time",
+            "node": "/batch/import",
+            "unit": "s"
+          }
+        ],
+        "node": "/batch/import",
+        "readings": [
+          {
+            "at": "2026-09-26T15:06:01Z",
+            "code": "OK",
+            "identity": "import-41",
+            "observed_at": "2026-09-26T15:08:00Z",
+            "record": {
+              "at": "2026-09-26T15:06:01Z",
+              "ended": "2026-09-26T15:06:01Z",
+              "job": "import",
+              "run": 41,
+              "seconds": 61,
+              "started": "2026-09-26T15:05:00Z"
+            },
+            "state": "",
+            "texts": [
+              "import #41: succeeded in 1m 1s"
+            ]
+          },
+          {
+            "at": "2026-09-26T15:20:07Z",
+            "code": "ERROR",
+            "identity": "import-42",
+            "observed_at": "2026-09-26T15:22:00Z",
+            "record": {
+              "at": "2026-09-26T15:20:07Z",
+              "ended": "2026-09-26T15:20:07Z",
+              "job": "import",
+              "run": 42,
+              "seconds": 7,
+              "started": "2026-09-26T15:20:00Z"
+            },
+            "state": "",
+            "texts": [
+              "import #42: failed after 7 s"
+            ]
+          },
+          {
+            "at": "2026-09-26T15:40:00Z",
+            "code": null,
+            "identity": "import-43",
+            "observed_at": "2026-09-26T15:42:00Z",
+            "record": {
+              "at": "2026-09-26T15:40:00Z",
+              "ended": "2026-09-26T15:40:00Z",
+              "job": "import",
+              "run": 43,
+              "seconds": 58,
+              "started": "2026-09-26T15:39:02Z"
+            },
+            "state": "",
+            "texts": []
+          }
+        ]
+      },
+      {
+        "key": {
+          "mount": "/hosts/alpha",
+          "subject": "alpha.example",
+          "type": "host-metrics"
+        },
+        "measures": [
+          {
+            "axis_to": 100.0,
+            "field": "mem_pct",
+            "label": "Memory in use",
+            "node": "/hosts/alpha/memory",
+            "unit": "%"
+          },
+          {
+            "axis_to": 100.0,
+            "field": "cpu_pct",
+            "label": "CPU busy",
+            "node": "/hosts/alpha/cpu",
+            "unit": "%"
+          },
+          {
+            "axis_to": null,
+            "field": "load1_per_core",
+            "label": "Load per core",
+            "node": "/hosts/alpha/load",
+            "unit": "per core"
+          },
+          {
+            "axis_to": 100.0,
+            "field": "disk_pct",
+            "label": "Disk space used",
+            "node": "/hosts/alpha/disk",
+            "unit": "%"
+          },
+          {
+            "axis_to": 100.0,
+            "field": "volumes.root.pct",
+            "label": "Disk space used on root",
+            "node": "/hosts/alpha/disk/root",
+            "unit": "%"
+          },
+          {
+            "axis_to": 100.0,
+            "field": "volumes.data.pct",
+            "label": "Disk space used on data",
+            "node": "/hosts/alpha/disk/data",
+            "unit": "%"
+          }
+        ],
+        "node": "/hosts/alpha",
+        "readings": [
+          {
+            "at": "2026-09-26T15:00:00Z",
+            "code": "OK",
+            "identity": "",
+            "observed_at": "2026-09-26T15:00:00Z",
+            "record": {
+              "cpu_pct": 11,
+              "disk_pct": 51,
+              "exit_code": 0,
+              "hostname": "alpha",
+              "load1": 0.4,
+              "load1_per_core": 0.1,
+              "mem_pct": 62,
+              "ncpu": 4,
+              "os": "Linux",
+              "volumes": {
+                "data": {
+                  "path": "/data",
+                  "pct": 72
+                },
+                "root": {
+                  "path": "/",
+                  "pct": 51
+                }
+              }
+            },
+            "state": "",
+            "texts": [
+              "memory fine",
+              "disk fine"
+            ]
+          },
+          {
+            "at": "2026-09-26T15:02:00Z",
+            "code": "ERROR",
+            "identity": "",
+            "observed_at": "2026-09-26T15:02:00Z",
+            "record": {
+              "cpu_pct": null,
+              "disk_pct": null,
+              "error": "ssh to alpha.example failed (exit 255): refused",
+              "exit_code": 255,
+              "load1": null,
+              "load1_per_core": null,
+              "mem_pct": null,
+              "ncpu": null
+            },
+            "state": "",
+            "texts": [
+              "ssh to alpha.example failed (exit 255): refused"
+            ]
+          },
+          {
+            "at": "2026-09-26T15:04:00Z",
+            "code": "OK",
+            "identity": "",
+            "observed_at": "2026-09-26T15:04:00Z",
+            "record": {
+              "cpu_pct": 11,
+              "disk_pct": 51,
+              "exit_code": 0,
+              "hostname": "alpha",
+              "load1": 0.4,
+              "load1_per_core": 0.1,
+              "mem_pct": 66,
+              "ncpu": 4,
+              "os": "Linux",
+              "volumes": {
+                "data": {
+                  "path": "/data",
+                  "pct": 72
+                },
+                "root": {
+                  "path": "/",
+                  "pct": 51
+                }
+              }
+            },
+            "state": "",
+            "texts": [
+              "memory fine",
+              "disk fine"
+            ]
+          }
+        ]
+      },
+      {
+        "key": {
+          "mount": "/hosts/alpha/beat",
+          "subject": "/var/run/beat",
+          "type": "file"
+        },
+        "measures": [],
+        "node": "/hosts/alpha/beat",
+        "readings": [
+          {
+            "at": "2026-09-26T15:01:00Z",
+            "code": "OK",
+            "identity": "",
+            "observed_at": "2026-09-26T15:01:00Z",
+            "record": {
+              "modified": {
+                "at": "2026-09-26T14:59:30Z"
+              }
+            },
+            "state": "",
+            "texts": [
+              "fresh"
+            ]
+          },
+          {
+            "at": "2026-09-26T15:04:00Z",
+            "code": "OK",
+            "identity": "",
+            "observed_at": "2026-09-26T15:04:00Z",
+            "record": {
+              "modified": {
+                "at": "2026-09-26T14:59:30Z"
+              }
+            },
+            "state": "",
+            "texts": [
+              "fresh"
+            ]
+          }
+        ]
+      }
+    ],
+    "window": {
+      "from": "2026-09-26T15:00:00Z",
+      "to": "2026-09-26T16:00:00Z"
+    }
+  },
+  "request": "/series?from=2026-09-26T15:00:00Z&to=2026-09-26T16:00:00Z",
+  "schema_version": 2,
+  "volatile": [
+    "generated_at",
+    "version"
+  ]
+}

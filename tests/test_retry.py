@@ -1,10 +1,13 @@
-"""The budgeted failure retry (ADR-0033, amended by ADR-0060 decision 4).
+"""The budgeted failure retry (ADR-0033, amended by ADR-0060 decision 4 and
+ADR-0125).
 
-A non-OK completion pulls the check's armed next slot to the retry interval —
-earlier, never later — at most ``retry_attempts`` times per episode. **Any change
-of the reading ends an episode and re-arms the budget**, not only an OK, and a
-completed ``UNDEFINED`` arms nothing at all. Staleness keeps judging by the
-nominal frequency; ``/system`` says when a slot is a retry slot.
+A completion whose run rolls up to a non-OK code — its root's and every child's
+it returned, by ADR-0039's rules — pulls the check's armed next slot to the retry
+interval, earlier and never later, at most ``retry_attempts`` times per episode.
+**Any change of what the run rolls up to ends an episode and re-arms the budget**,
+not only an OK, and a run that rolls up to ``UNDEFINED`` arms nothing at all.
+Staleness keeps judging by the nominal frequency; ``/system`` says when a slot is a
+retry slot.
 """
 
 import os
@@ -216,6 +219,143 @@ class RetrySchedulingTests(TestCase):
         check.result = CheckResult(StatusCode.OK)
         self._run(engine, item)
         self.assertFalse(engine.info().checks[0].retrying)
+
+
+def _branch(root: StatusCode, *children: CheckResult,
+            said: Sequence[str] = ()) -> CheckResult:
+    """A run that hands back a branch: its root's own code — ``UNDEFINED`` where it
+    declares nothing, as `host-metrics` and `aws` do — and the nodes beneath it."""
+    return CheckResult(root, list(said), children=children)
+
+
+def _child(name: str, code: StatusCode, *, say: str = "") -> CheckResult:
+    return CheckResult(code, [say] if say else [], name=name)
+
+
+class WhatTheRunRollsUpToTests(TestCase):
+    """ADR-0125: the retry reads what the run rolls up to, wherever the root
+    stands. A check that hands back a branch says its failures on the nodes beneath
+    its root — `host-metrics` and `aws` declare nothing on theirs and `github`'s
+    own node says its coverage — so armed by the root's own code, a failing disk,
+    alarm or workflow never pulled the next run in."""
+
+    def setUp(self):
+        self.now = 1000.0
+
+    def _engine(self, check):
+        tree = StatusTree()
+        engine = Engine([check], tree, clock=lambda: self.now)
+        item = engine._scheduled[0]
+        item.stagger = 0.0
+        return engine, item
+
+    def _run(self, engine, item):
+        """One scheduled run, inline, as RetrySchedulingTests drives it."""
+        item.next_due = self.now + item.check.frequency_seconds + item.stagger
+        item.stagger = 0.0
+        item.retrying = False
+        engine._execute(item)
+
+    def _check(self, result: CheckResult) -> _Probe:
+        check = _Probe(path="/host", frequency_seconds=300,
+                       retry_interval_seconds=30, retry_attempts=2)
+        check.result = result
+        return check
+
+    def _armed(self, item, used: int = 1) -> None:
+        self.assertEqual(item.next_due, self.now + 30)
+        self.assertEqual(item.retry_used, used)
+        self.assertTrue(item.retrying)
+
+    def _nominal(self, item, used: int = 0) -> None:
+        self.assertEqual(item.next_due, self.now + 300)
+        self.assertEqual(item.retry_used, used)
+        self.assertFalse(item.retrying)
+
+    def test_a_root_that_declares_nothing_above_a_failing_child_arms_the_retry(self):
+        check = self._check(_branch(
+            StatusCode.UNDEFINED, _child("disk", StatusCode.ERROR, say="disk full"),
+            _child("memory", StatusCode.OK)))
+        engine, item = self._engine(check)
+        self._run(engine, item)
+        self._armed(item)
+
+    def test_a_root_that_declares_ok_above_a_failing_child_arms_the_retry(self):
+        check = self._check(_branch(
+            StatusCode.OK, _child("api", StatusCode.WARN, say="no run in a week"),
+            said=["3 repositories in scope"]))
+        engine, item = self._engine(check)
+        self._run(engine, item)
+        self._armed(item)
+
+    def test_a_failure_nodes_deep_arms_the_retry(self):
+        # `aws`: the account, the aspect, the pipeline — the failure is two
+        # levels beneath a root that declares nothing.
+        aspect = CheckResult(StatusCode.OK, ["3 pipelines in scope"],
+                             name="codepipeline",
+                             children=(_child("deploy", StatusCode.ERROR,
+                                              say="Failed"),))
+        account = CheckResult(StatusCode.UNDEFINED, name="staging",
+                              children=(aspect,))
+        engine, item = self._engine(self._check(
+            _branch(StatusCode.UNDEFINED, account)))
+        self._run(engine, item)
+        self._armed(item)
+
+    def test_a_branch_whose_nodes_are_all_well_arms_nothing(self):
+        check = self._check(_branch(
+            StatusCode.UNDEFINED, _child("disk", StatusCode.OK),
+            _child("memory", StatusCode.OK)))
+        engine, item = self._engine(check)
+        self._run(engine, item)
+        self._nominal(item)
+
+    def test_a_run_that_rolls_up_to_undefined_arms_nothing(self):
+        # ADR-0060 decision 4(b), one level down: nothing beneath the root makes
+        # a claim, so the run as a whole makes none.
+        quiet = CheckResult(reason=[Entry("core", "no limit for this resource",
+                                          StatusCode.UNDEFINED)], name="core")
+        engine, item = self._engine(self._check(
+            _branch(StatusCode.UNDEFINED, quiet)))
+        for _ in range(3):
+            self._run(engine, item)
+        self._nominal(item)
+
+    def test_a_change_of_what_the_run_rolls_up_to_rearms_the_budget(self):
+        check = self._check(_branch(
+            StatusCode.UNDEFINED, _child("disk", StatusCode.WARN, say="84%")))
+        engine, item = self._engine(check)
+        for _ in range(3):                                 # spend it, then some
+            self._run(engine, item)
+        self._nominal(item, used=2)
+        check.result = _branch(
+            StatusCode.UNDEFINED, _child("disk", StatusCode.ERROR, say="97%"))
+        self._run(engine, item)
+        self._armed(item)                                  # a new episode
+
+    def test_the_root_moving_beneath_a_roll_up_that_stays_is_no_new_episode(self):
+        # The root's own code is not the news: here it turns from OK to WARN while
+        # the run goes on rolling up to the same ERROR, and the budget stays spent.
+        check = self._check(_branch(
+            StatusCode.OK, _child("load", StatusCode.ERROR, say="load 14.2")))
+        engine, item = self._engine(check)
+        for _ in range(3):
+            self._run(engine, item)
+        self._nominal(item, used=2)
+        check.result = _branch(
+            StatusCode.WARN, _child("load", StatusCode.ERROR, say="load 14.2"),
+            said=["one sensor did not answer"])
+        self._run(engine, item)
+        self._nominal(item, used=2)
+
+    def test_a_branch_that_recovers_ends_the_episode(self):
+        check = self._check(_branch(
+            StatusCode.UNDEFINED, _child("disk", StatusCode.ERROR, say="full")))
+        engine, item = self._engine(check)
+        self._run(engine, item)
+        check.result = _branch(StatusCode.UNDEFINED, _child("disk", StatusCode.OK))
+        self._run(engine, item)
+        self._nominal(item)
 
 
 class RunFactsScheduleTests(TestCase):
@@ -433,3 +573,18 @@ class SystemRetryDisplayTests(TestCase):
             next_run_at=datetime(2026, 7, 31, 10, 5, tzinfo=UTC), next_in_seconds=300.0,
             last_run_at=None, elapsed_seconds=None))
         self.assertNotIn("retry", body.split("<tbody>", 1)[1])
+
+    def test_a_branch_with_a_failing_child_is_marked_by_the_engine_itself(self):
+        # ADR-0125, end to end: the engine's own account of a run whose root
+        # declares nothing above a failing disk, not a hand-made CheckInfo.
+        check = _Probe(path="/host", frequency_seconds=300,
+                       retry_interval_seconds=30, retry_attempts=2)
+        check.result = _branch(
+            StatusCode.UNDEFINED, _child("disk", StatusCode.ERROR, say="disk full"))
+        engine = Engine([check], StatusTree(), clock=lambda: 1000.0)
+        item = engine._scheduled[0]
+        item.stagger = 0.0
+        item.next_due = 1300.0
+        engine._execute(item)
+        body = self._body(engine.info().checks[0])
+        self.assertIn("· retry 1/2", body)

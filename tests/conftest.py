@@ -19,9 +19,23 @@ is not an instance (ADR-0091). The suite imports it and never starts it, so ever
 begins with no engine and the banner that says it was never started; a test that
 wants another state sets it, and one that starts the application does so in a child
 interpreter of its own (``test_start.py``, ``test_gunicorn_hooks.py``).
+
+**The level the suite logs at is said before the library is imported**, and it is the
+one line that has to come first. In the suite the logging default is in charge —
+the first import below happens before pytest installs a handler — and the default
+reads ``.env`` before it reads ``LOG_LEVEL`` (ADR-0121 decision 6). So a ``LOG_LEVEL``
+line in the ``.env`` of the directory the suite runs in, a developer's own, decided
+what the suite logs at, and the tests that read the log failed on ``WARNING`` and
+above. ``setdefault`` is enough for that: the file never replaces what the
+environment holds. A level exported in the shell still stands, as an override does.
 """
 
 import os
+
+# Ahead of every import of the library, the first of which is below: it reads `.env`
+# and then `LOG_LEVEL` (the docstring's last paragraph). An import sorter leaves a
+# line that sets the environment where it stands; nothing of ours may move above it.
+os.environ.setdefault("LOG_LEVEL", "INFO")
 
 import pytest
 

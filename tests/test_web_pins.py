@@ -16,10 +16,12 @@ os.environ.setdefault("SECRET_KEY", "test-key")
 from little_sister import app as app_module
 from little_sister import instants
 from little_sister.app import (
+    _at_line,
     _maintenance_pins,
     _maintenance_rows,
     _MaintenancePin,
 )
+from little_sister.checks import Entry
 from little_sister.status import StatusCode
 from little_sister.tree import StatusTree
 from tests.page_tree import parse
@@ -1011,6 +1013,256 @@ class EntryPinIndexTests(TestCase):
             sess["firstname"] = "Vera"
             sess["admin"] = False
         self.assertIn("waiting on review", self._page())
+
+
+class BranchLinePinTests(TestCase):
+    """A branch's own lines take a pin on its own page (ADR-0036 decision 12). Its
+    head lists them as a leaf's page lists its lines — in
+    full, each with its record, for an admin the pause mark at its end and a pinned
+    line's block beneath it — and so does its one card at depth 0; the line a page is
+    asked at is marked there, and a write comes back to it.
+
+    The node is an aspect of `aws`'s shape: its scope, `OK`, and a region that cannot
+    be read, `WARN`, above a node for a pipeline that fails. Any line takes a pin,
+    whatever it says, as a node does."""
+
+    BRANCH = "/cloud/aws/codepipeline"
+    URL = "/status/cloud/aws/codepipeline"
+    SCOPE = "3 pipelines in scope (eu-central-1)"
+    UNREAD = "read/eu-west-1"
+    CANNOT = "eu-west-1: pipelines cannot be read: AccessDenied"
+
+    def setUp(self):
+        app_module.app.config["TESTING"] = True
+        self.tree = StatusTree()
+        app_module.status_tree = self.tree
+        self.client = app_module.app.test_client()
+        self.client.post("/login",
+                         data={"username": "pan", "password": "12345678"})
+        self.tree.upsert(self.BRANCH, StatusCode.WARN, [
+            Entry("scope", self.SCOPE, StatusCode.OK),
+            Entry(self.UNREAD, self.CANNOT, StatusCode.WARN,
+                  data={"region": "eu-west-1", "error": "AccessDenied"})],
+            members=True)
+        self.tree.upsert(f"{self.BRANCH}/deploy", StatusCode.ERROR,
+                         ["last execution Failed"])
+
+    def _viewer(self):
+        self.client.get("/logout")
+        with self.client.session_transaction() as sess:
+            sess["username"] = "viewer"
+            sess["firstname"] = "Vera"
+            sess["admin"] = False
+
+    def _get(self, url):
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200, url)
+        return response.get_data(as_text=True)
+
+    def _head(self, query=""):
+        return parse(self._get(self.URL + query)).one("viewed-head")
+
+    def _line(self, box, text):
+        found = [line for line in box.all("check-reason")
+                 if line.one("check-reason__body").text() == text]
+        self.assertEqual(len(found), 1, text)
+        return found[0]
+
+    def _form(self, line):
+        return {field.attrs.get("name"): field.attrs.get("value")
+                for field in line.one(EDITOR).all(tag="input")
+                if field.attrs.get("type") == "hidden"}
+
+    def _pin(self, slug, note="ada is on it"):
+        written = self.tree.set_entry_maintenance(
+            self.BRANCH, slug, note,
+            expires_at=datetime.now(UTC) + timedelta(days=1), set_by="ada")
+        self.assertTrue(written.applied)
+
+    # ----- what the page lists -----
+
+    def test_the_head_lists_its_own_lines_in_full_with_their_record(self):
+        head = self._head()
+        self.assertEqual(
+            [line.one("check-reason__body").text()
+             for line in head.all("check-reason")], [self.SCOPE, self.CANNOT])
+        # in full: no clamp of the wall's, which is what the cards below keep
+        self.assertEqual(head.all("reason-block"), [])
+        record = self._line(head, self.CANNOT).one("reason-record")
+        self.assertIn("AccessDenied", record.text())
+        self.assertEqual(self._line(head, self.SCOPE).all("reason-record"), [])
+
+    def test_a_record_takes_its_lines_ink_on_a_status_fill(self):
+        # A branch's head is a status fill, vivid where the node fails of its own,
+        # and there Bootstrap's muted gray measured 3.4:1 in the light themes and
+        # 1.9:1 in the dark ones; a leaf's record stands in a pale alert and keeps it.
+        record = self._line(self._head(), self.CANNOT).one("reason-record")
+        self.assertFalse(record.has("text-muted"))
+        self.tree.upsert("/cloud/leaf", StatusCode.WARN, [
+            Entry("one", "a line of a leaf", StatusCode.WARN, data={"seen": "yes"})],
+            members=True)
+        leaf = parse(self._get("/status/cloud/leaf")).one("reason-record")
+        self.assertTrue(leaf.has("text-muted"))
+
+    def test_an_admin_gets_the_pause_mark_on_each_line_whatever_it_says(self):
+        head = self._head()
+        for text, slug in ((self.SCOPE, "scope"), (self.CANNOT, self.UNREAD)):
+            with self.subTest(slug=slug):
+                line = self._line(head, text)
+                self.assertEqual(len(line.all("reason-pin")), 1)
+                fields = self._form(line)
+                self.assertEqual(
+                    (fields["path"], fields["slug"], fields["action"],
+                     fields["set_at"]),
+                    ("cloud/aws/codepipeline", slug, "set", ""))
+
+    def test_a_viewer_reads_the_lines_and_gets_no_control(self):
+        self._viewer()
+        head = self._head()
+        self.assertEqual(len(head.all("check-reason")), 2)
+        self.assertEqual(head.all("reason-pin"), [])
+        self.assertEqual(head.all(EDITOR), [])
+
+    def test_the_kiosk_gets_no_control(self):
+        self.client.set_cookie("ls_prefs", "layout=kiosk")
+        self.assertNotIn('class="reason-pin"', self._get(self.URL))
+
+    def test_its_card_at_depth_zero_lists_them_too(self):
+        page = parse(self._get(self.URL + "?depth=0"))
+        self.assertEqual(page.all("viewed-head"), [])
+        card = page.one("status-card")
+        self.assertEqual(len(card.all("reason-pin")), 2)
+        self.assertIn("AccessDenied", card.one("reason-record").text())
+
+    def test_the_overviews_card_keeps_the_walls_clamp(self):
+        # the overview's one card is every node there is, not a node's own page
+        self.tree.upsert("/", StatusCode.WARN, {"note": "a word of the root's"})
+        card = parse(self._get("/status?depth=0")).one("status-card")
+        self.assertEqual(len(card.all("reason-block")), 1)
+        self.assertEqual(card.all("reason-pin"), [])
+
+    # ----- what a pin does, and what its editor says -----
+
+    def test_a_write_from_the_head_comes_back_to_the_page_at_its_line(self):
+        head = self._head("?depth=2")
+        fields = self._form(self._line(head, self.CANNOT))
+        back = ("/status/cloud/aws/codepipeline?depth=2"
+                "&reason=read%2Feu-west-1#pinned-reason")
+        self.assertEqual(fields["next"], back)
+        response = self.client.post("/maintenance", data={
+            **fields, "reason": "the role is being granted", "duration": "2d"})
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.headers["Location"], back)
+        marked = parse(self._get(back.split("#")[0])).with_id("pinned-reason")
+        self.assertTrue(marked.has("is-focused"))
+        self.assertEqual(marked.one("check-reason__body").text(), self.CANNOT)
+
+    def test_the_pin_silences_its_line_and_nothing_else(self):
+        self._pin(self.UNREAD)
+        snap = self.tree.snapshot(self.BRANCH)
+        assert snap is not None
+        self.assertEqual((snap.own_code, snap.code),
+                         (StatusCode.OK, StatusCode.ERROR))
+        line = self._line(self._head(), self.CANNOT)
+        self.assertTrue(line.has("is-quiet"))
+        block = line.one("rule-block")
+        self.assertIn("ada is on it", block.text())
+        self.assertIn("Clear", block.text())
+        self.assertIn("1 of 2 in maintenance.",
+                      self._head().one("reason-quiet-count").text())
+
+    def test_the_last_lines_editor_says_the_nodes_beneath_still_count(self):
+        def said():
+            line = self._line(self._head(), self.SCOPE)
+            return line.one("rule-block__scope").text()
+
+        self.assertEqual(
+            said(), "Maintenance for this line only. The other one keeps alarming.")
+        self._pin(self.UNREAD)
+        self.assertEqual(
+            said(), "Maintenance for this line only. No other line of its own is "
+                    "left to alarm, and the nodes beneath it still count.")
+
+    def test_every_line_silenced_says_nothing_untrue_about_what_reports(self):
+        self._pin("scope")
+        self._pin(self.UNREAD)
+        count = self._head().one("reason-quiet-count").text()
+        self.assertEqual(count, "2 of 2 in maintenance.")
+        snap = self.tree.snapshot(self.BRANCH)
+        assert snap is not None
+        self.assertIs(snap.code, StatusCode.ERROR)
+
+    # ----- the line a page is asked at -----
+
+    def test_the_index_and_the_pip_lead_to_the_line(self):
+        self._pin(self.UNREAD)
+        index = re.search(r'href="(/status/cloud/aws/codepipeline\?reason=[^"]*)"',
+                          self._get("/maintenance")).group(1)
+        pip = re.search(r'href="(/status/cloud/aws/codepipeline\?reason=[^"]*)"',
+                        self._get("/status")).group(1)
+        for href in (index, pip):
+            with self.subTest(href=href):
+                self.assertTrue(href.endswith("#pinned-reason"), href)
+                url = href.split("#")[0].replace("&amp;", "&")
+                head = parse(self._get(url)).one("viewed-head")
+                marked = head.with_id("pinned-reason")
+                self.assertTrue(marked.has("is-focused"))
+                self.assertEqual(marked.one("check-reason__body").text(),
+                                 self.CANNOT)
+
+    def test_an_unasked_page_marks_nothing(self):
+        self.assertNotIn('id="pinned-reason"', self._get(self.URL))
+
+    def test_a_pin_whose_line_is_no_longer_reported_says_so(self):
+        # suspended, not deleted (ADR-0036 decision 6), on a branch as on a leaf
+        self._pin("read/us-east-1")
+        head = self._head("?reason=read/us-east-1")
+        orphan = head.with_id("pinned-reason")
+        self.assertTrue(orphan.has("reason-orphan"))
+        self.assertIn("no longer reported", orphan.text())
+
+    def test_the_refresh_carries_the_controls_and_the_line_asked_for(self):
+        body = self._get(self.URL + "?depth=2&reason=scope&fragment=1")
+        head = parse(body).one("viewed-head")
+        self.assertEqual(len(head.all("reason-pin")), 2)
+        self.assertEqual(head.with_id("pinned-reason").one(
+            "check-reason__body").text(), self.SCOPE)
+        # and a write from what the refresh drew comes back to the page
+        self.assertNotIn("fragment", self._form(self._line(head, self.CANNOT))["next"])
+
+    def test_the_inspection_card_leaves_a_lines_controls_alone(self):
+        script = self.client.get("/static/js/inspect.js").get_data(as_text=True)
+        found = re.search(r'var OWN_CONTROLS = "([^"]+)";', script)
+        assert found is not None
+        own = {name.lstrip(".") for name in found.group(1).split(", ")}
+        self._pin(self.UNREAD)
+        row = self._head().one("status-node__self")
+        self.assertIn("data-path", row.attrs)
+        controls = row.all(tag="form") + row.all(tag="summary")
+        self.assertGreater(len(controls), 0)
+        for control in controls:
+            inside, node = False, control
+            while node is not None and "data-path" not in node.attrs:
+                inside = inside or any(node.has(name) for name in own)
+                node = node.parent
+            self.assertTrue(inside, control.source()[:120])
+
+
+class AtLineTests(TestCase):
+    """Where a write to one of a page's lines comes back to (`at_line`)."""
+
+    def test_it_keeps_the_page_and_names_the_line(self):
+        self.assertEqual(_at_line("/status/x?depth=2&hide_ok=1", "scope"),
+                         "/status/x?depth=2&hide_ok=1&reason=scope#pinned-reason")
+
+    def test_it_replaces_the_line_the_page_was_asked_at(self):
+        self.assertEqual(_at_line("/status/x?reason=old&depth=2", "new"),
+                         "/status/x?depth=2&reason=new#pinned-reason")
+
+    def test_a_slug_is_a_query_value_whatever_it_holds(self):
+        # a declared slug may hold `/`, `#`, `%` or `&` (ADR-0036 decision 12)
+        self.assertEqual(_at_line("/status/x", "a/b#c%d&e"),
+                         "/status/x?reason=a%2Fb%23c%25d%26e#pinned-reason")
 
 
 class PinnedCardTests(TestCase):

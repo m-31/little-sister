@@ -534,8 +534,10 @@ constructor, but it is wrong: say why.
 
   Declaring **both** a result code and entry codes is refused at construction — a
   silently ignored code would be believed. `running` marks a line whose subject
-  has work in flight; it is display (an italic and a class), never severity, so
-  the line's **text must still say it** in words. An entry carrying a code or
+  has work in flight — a run started, or queued to start, and not yet finished —
+  and **every such line carries it**, in every type, so that work in flight reads
+  the same on every node. It is display (an italic and a class), never severity,
+  so the line's **text must still say it** in words. An entry carrying a code or
   `running` declares members by shape, like a mapping. Three author rules come
   with the power: **order the list non-OK first, then in-flight, then healthy**
   (`reason_cap` clamps the card, and healthy lines above the fold would bury the
@@ -760,7 +762,9 @@ and point the runner at it (gunicorn → `wsgi:app` instead of
 directory where it resolves on `sys.path`. The same wrapper (and the same import
 slot) also registers **secret resolvers** (§6), **template slot fillers**
 ([ADR-0034](adr/0034-template-slots-for-dependent-packages.md)) and **configuration
-aspects** ([ADR-0035](adr/0035-registering-a-config-aspect.md)).
+aspects** ([ADR-0035](adr/0035-registering-a-config-aspect.md)), and it is where a
+**noise cap** is declared for what a dependency writes into the log (the end of this
+section).
 
 The `# isort: off` fence is not decoration. Note that this file needs **no**
 `# noqa: E402`: nothing sits between the two imports, and with this repo's ruff
@@ -806,6 +810,36 @@ little-sister's **published version contract** ([`architecture.md`](architecture
 *behavior* rather than a name: call `logging.getLogger(__name__)` and your records
 reach whatever the application configured — including your own setup, if you install
 it before importing `little_sister.app`.
+
+**What your dependencies write into that log is yours to declare.** A type that brings
+a library which logs — an SDK that says at `INFO`, at every run, where it found its
+credentials — knows that before any deployment has read a log. So it declares a
+**noise cap** in the same slot — a package does in its `__init__.py`, after
+`require_api()` — and sets no level itself:
+
+```python
+import logging
+
+from little_sister import noise
+
+noise.cap("botocore.credentials", logging.WARNING,
+          hides="where each new session found its credentials, a line a run")
+```
+
+The call records a row and touches no logger. little-sister sets the rows once, where
+the application is imported; a level the deployment's own startup file set stands
+against them; `LOG_LEVEL=INFO,botocore.credentials=DEBUG` has a capped logger's lines
+back by name; and `/system/installed` lists every cap with what it hides. A cap is
+`logging.INFO` or `logging.WARNING` on a dependency's logger — never the root, never
+`little_sister` or a logger beneath it — and `hides` finishes the sentence *it hides …*
+for whoever decides whether to ask for the lines back. A declaration outside that,
+or one that arrives after the application was imported, is a warning, a skip and a
+line on `/little-sister/startup`, and never an exception. Cap at `INFO` what a
+dependency writes at `DEBUG`, so that a `LOG_LEVEL=DEBUG` session shows your code and
+not its request detail. And declare what you have seen it write: a row names somebody
+else's logger, so hold it in a test against a line that library itself writes
+([`architecture.md`](architecture.md) §11,
+[ADR-0121](adr/0121-a-noise-cap-is-declared-and-log-level-has-the-last-word.md)).
 
 ---
 

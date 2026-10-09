@@ -184,13 +184,17 @@ class IndexFoldsBrowserTests(unittest.TestCase):
     # --- a laptop's window --------------------------------------------------------
 
     def test_with_every_fold_open_the_table_is_no_wider_than_its_box(self) -> None:
-        page = self._index(**_DESK)
-        closed = page.evaluate(_TABLE)
-        self.assertLessEqual(closed["table"], closed["box"], closed)
-        page.evaluate(_OPEN_ALL)
-        opened = page.evaluate(_TABLE)
-        self.assertLessEqual(opened["table"], opened["box"], opened)
-        self.assertEqual(page.locator("svg.ls-spark").count(), 5 * len(_HOSTS) + 1)
+        # at the laptop's window, and up to the width where the numbers keep one line
+        for width in (946, 1200, 1399):
+            page = self._index(viewport={"width": width, "height": 900})
+            with self.subTest(width=width):
+                closed = page.evaluate(_TABLE)
+                self.assertLessEqual(closed["table"], closed["box"], closed)
+                page.evaluate(_OPEN_ALL)
+                opened = page.evaluate(_TABLE)
+                self.assertLessEqual(opened["table"], opened["box"], opened)
+                self.assertEqual(page.locator("svg.ls-spark").count(),
+                                 5 * len(_HOSTS) + 1)
 
     def test_a_closed_fold_is_one_line_in_its_row(self) -> None:
         # ADR-0103 decision 2, as it was: closed, a fold is its count and nothing
@@ -242,8 +246,10 @@ class IndexFoldsBrowserTests(unittest.TestCase):
 
     def test_on_a_wide_window_a_curves_numbers_are_one_line(self) -> None:
         # newest, lowest and highest beneath a strip, where the table has the room:
-        # from 1200 pixels, the narrowest window that holds them
-        for width in (1200, 1400):
+        # from 1400 pixels. How much room is the face's to say — this estate's table
+        # needs 1097 pixels with the numbers on one line in Inter and 1162 in DejaVu
+        # Sans, against a box of 1066 at 1200 — and the line has to hold in each
+        for width in (1400, 1600):
             page = self._index(viewport={"width": width, "height": 900})
             page.evaluate(_OPEN_ALL)
             lines = page.evaluate("""() => Array.from(document.querySelectorAll(

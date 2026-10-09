@@ -1,14 +1,16 @@
 # ADR-0100 — System is two views: what is running, and what is installed
 
 - **Status:** Accepted
-- **Date:** 2026-10-03
+- **Date:** 2026-10-10 (accepted 2026-10-03)
 - **Related:** [ADR-0097](0097-a-nodes-series-have-a-view-of-their-own.md) (a node's
   views as tabs beneath its title, the idiom followed here),
   [ADR-0005](0005-dashboard-freshness-and-self-monitoring.md) (the stamp that dates a
   polled page), [ADR-0074](0074-this-instance-has-a-name.md) (which instance this is),
   [ADR-0075](0075-a-check-declares-what-it-costs.md) (decision 8, the declared figures
   beside the measured ones), [ADR-0084](0084-a-check-may-be-reached-through-another.md)
-  (what a check is reached through), and the records whose sections move:
+  (what a check is reached through),
+  [ADR-0121](0121-a-noise-cap-is-declared-and-log-level-has-the-last-word.md) (the
+  *Logging* section of *Installed*), and the records whose sections move:
   [ADR-0034](0034-template-slots-for-dependent-packages.md),
   [ADR-0035](0035-registering-a-config-aspect.md),
   [ADR-0037](0037-extension-static-assets.md),
@@ -62,6 +64,12 @@ helps; the types this configuration does not use keep their fold, which hides no
 rather than the answer. Identity is here: a door startup could not open is also a line
 on the instance's own startup node, where problems are raised, and that line names this
 view.
+
+*Logging* is the last section
+([ADR-0121](0121-a-noise-cap-is-declared-and-log-level-has-the-last-word.md) decision
+7): every logger that carries a level and where the level comes from, and every declared
+cap that was not set. It is read off the loggers at the request, since a level may be
+set after startup.
 
 ### 4. The schedule is a row per check, and a column for each thing it holds
 

@@ -1,21 +1,23 @@
 # ADR-0104 — A pin is one block on what it silences, and it is edited there
 
 - **Status:** Accepted
-- **Date:** 2026-10-03
+- **Date:** 2026-10-10 (accepted 2026-10-03)
 - **Related:** [ADR-0014](0014-maintenance-persistence.md) (the pin, its expiry, its
   compare-and-set token and its editor — decisions 6, 7, 9, 13 and 16 to 18, which
   this amends), [ADR-0036](0036-addressable-reasons.md) (a pin on one line, and how
   `/maintenance` lists pins — decisions 10 and 12, which this amends),
   [ADR-0032](0032-status-contribution-boundary.md) (rule 5: a transformed contribution is
   visible and attributable), [ADR-0041](0041-maintenance-is-a-contribution-rule.md) (a
-  pin is a rule in the snapshot), [ADR-0047](0047-node-notes-and-their-retention.md)
-  (a pin's text is its note), [ADR-0005](0005-dashboard-freshness-and-self-monitoring.md)
-  (the refresh and the stamp that dates the page),
-  [ADR-0056](0056-stable-useful-dashboard-flow.md) (the wall's cards),
-  [ADR-0006](0006-config-file-and-timezones.md) (the configured timezone),
+  pin is a rule in the snapshot, and one on a node silences everything beneath it),
+  [ADR-0047](0047-node-notes-and-their-retention.md) (a pin's text is its note),
+  [ADR-0005](0005-dashboard-freshness-and-self-monitoring.md) (the refresh and the stamp
+  that dates the page), [ADR-0056](0056-stable-useful-dashboard-flow.md) (the wall's
+  cards), [ADR-0006](0006-config-file-and-timezones.md) (the configured timezone),
   [ADR-0019](0019-inspection-popover.md) (the inspection card a node's row answers to),
   [ADR-0109](0109-a-node-says-its-children-are-complete.md) (decision 4: a pin whose
-  node is not reported)
+  node is not reported),
+  [ADR-0124](0124-a-node-whose-lines-are-all-silenced-still-counts-the-nodes-beneath-it.md)
+  (a pin on a line of a node above silences that line alone)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -35,6 +37,9 @@ One expiry read three ways: *Time left 1d 23h* on the Maintenance page, *until
 at the foot. And an edit that left the expiry field as it found it — blank — renewed
 the pin for the configured default from now, so correcting a word in the explanation
 moved a pin that had two days left to seven.
+
+And a node silenced by a pin on a node above it said nothing of that pin on its own
+page: *Status: error* and *Set maintenance*, on a node that would not alarm.
 
 ## Decision
 
@@ -57,6 +62,20 @@ branch's page the block stands in the node's head, above the children it covers,
 on the wall in the card: under the card's head and above its lines and the boxes it
 covers, its sentence opening *Silenced by*, since the card's head names the node. A
 box inside a card states its own pin the same way.
+
+A pin set on a node above this one silences it with everything else beneath that node
+([ADR-0041](0041-maintenance-is-a-contribution-rule.md)), so this node's page states it
+where it acts as well as where it was set: the same block, its note whole and **without
+buttons**, since a pin is edited where it stands, its sentence naming the node it stands
+on, linked to that node's page — *This node is silenced from /nexus/qnap by anna until
+…*. Each such pin is a row of decision 8's list, outermost first. On a branch's page
+they stand in the head, which is drawn for them where nothing else would draw it, and at
+depth 0 in the node's card. The node's own pin under one says *also silenced on its
+own*, as a line's does under its node's, and a line's pin says the same under a pin
+above; the editors that set either say that it is for the day the pin above ends. A pin
+on a **line** of a node above silences that line alone
+([ADR-0124](0124-a-node-whose-lines-are-all-silenced-still-counts-the-nodes-beneath-it.md))
+and is stated on its own node's page only.
 
 ### 3. A pin is set where its block will stand
 
