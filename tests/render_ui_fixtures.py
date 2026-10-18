@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from dataclasses import replace
 from datetime import UTC, datetime
 from html import escape
 from pathlib import Path
@@ -48,18 +49,23 @@ from flask import render_template, session  # noqa: E402
 from little_sister import app as app_module  # noqa: E402
 from little_sister.app import (  # noqa: E402
     MAX_DEPTH,
+    _chip_counts_map,
     _containers,
     _copy_origin,
     _copy_style,
+    _first_drawn,
+    _leaves_map,
     _maintenance_rows,
     _maintenance_view,
     _node_curves,
     _node_meta_map,
+    _priced,
     _series_tab,
     _split_heartbeat,
     app,
 )
 from little_sister.copy_status import format_tree_markdown  # noqa: E402
+from little_sister.first_look import FirstLooks  # noqa: E402
 from little_sister.render import render_markdown  # noqa: E402
 from tests.ui_fixtures import FIXTURES, FIXTURES_BY_NAME, Fixture  # noqa: E402
 
@@ -67,8 +73,10 @@ _DEFAULT_OUT = _REPO_ROOT / "var" / "ui-harness"
 _STATIC_SRC = _REPO_ROOT / "src" / "little_sister" / "static"
 
 # The sheet is a static artifact: a fixed stamp keeps re-runs diffable (the
-# live server formats the real time into this slot — ADR-0006).
+# live server formats the real time into this slot — ADR-0006), and the same
+# instant in whole seconds rides on the grid for the tab's map.
 _RENDERED_AT = "2026-07-20 12:00:00"
+_RENDERED_S = int(datetime(2026, 7, 20, 12, 0, 0, tzinfo=UTC).timestamp())
 
 
 def render_page(fixture: Fixture) -> str:
@@ -91,6 +99,15 @@ def render_page(fixture: Fixture) -> str:
         node, datetime.now(UTC))
     maintenance_rows = _maintenance_rows(node_pins, entry_pins)
     path = f"/status/{fixture.branch}" if fixture.branch else "/status"
+    # The first look as the route draws it (ADR-0128), from nothing but the
+    # settings — a fixture is a hand-built snapshot no check writes — at the
+    # fixture's line budget; `dense=False` leaves every level nobody spoke for
+    # open, as the chips switch off did.
+    reason_cap = (fixture.reason_cap if fixture.reason_cap is not None
+                  else app_module.config.reason_cap)
+    looks = FirstLooks((), {}, replace(app_module.config, reason_cap=reason_cap),
+                       lambda _path: False)
+    drawn = _first_drawn(node, None, looks, dense=fixture.dense)
     previous_error = app_module.engine_error
     app_module.engine_error = fixture.engine_error
     # The series the node's facts show come from the engine, as on a live page; a
@@ -111,10 +128,14 @@ def render_page(fixture: Fixture) -> str:
                 branch=fixture.branch,
                 dependents=fixture.dependents,
                 max_depth=MAX_DEPTH,
-                depth_limit=MAX_DEPTH,
+                depth_closed=None,
+                drawn=drawn,
+                priced=_priced(node, drawn, _leaves_map(node)),
                 hide_ok=False,
                 hide_idle=False,
-                dense=fixture.dense,
+                chip_counts=_chip_counts_map(node),
+                chip_leaves=_leaves_map(node),
+                rendered_s=_RENDERED_S,
                 is_admin=True,
                 maintenance_default=app_module.config.maintenance_default_expiry,
                 maintenance_timezone=app_module.config.timezone,
@@ -125,8 +146,7 @@ def render_page(fixture: Fixture) -> str:
                 heartbeat=heartbeat,
                 node_meta=_node_meta_map(node) | _node_meta_map(heartbeat),
                 rendered_at=_RENDERED_AT,
-                reason_cap=(fixture.reason_cap if fixture.reason_cap is not None
-                            else app_module.config.reason_cap),
+                reason_cap=reason_cap,
                 branch_cap=app_module.config.branch_cap,
                 maintenance_cap=app_module.config.maintenance_cap,
                 maintenance_rows=maintenance_rows,

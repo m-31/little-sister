@@ -5,7 +5,7 @@
  * markup that happened to be in the document at load is the kind of thing that
  * breaks silently the day polling arrives. So: no per-element listeners bound once
  * (the icon handler is delegated), and a MutationObserver re-applies the filter to
- * whatever markup is there now — the same shape reasons.js, branches.js and
+ * whatever markup is there now — the same shape tree.js and
  * maintenance.js already use.
  */
 (function () {
@@ -132,7 +132,7 @@
     function refresh() {
         /* Detach while we mutate — swapping a glyph in and setting `hidden` are
          * both DOM changes, and an observer that watched its own edits would loop
-         * forever. Reattach when done. (Same guard reasons.js uses.) */
+         * forever. Reattach when done. (Same guard tree.js uses.) */
         if (observer) { observer.disconnect(); }
         sweepBrokenImages();
         apply();

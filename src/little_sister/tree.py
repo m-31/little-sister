@@ -172,12 +172,45 @@ class ReasonLine:
     #: ``None`` — and empty everywhere else (ADR-0093). The line itself stands as its
     #: grading wrote it; the node's page says this where the record would be.
     refused: str = ""
+    #: The form the line was written from, where its grading asked the library for
+    #: it (ADR-0126), and empty for a line written as a sentence of its own. The
+    #: node's page shows it beside the line: the key a check's ``display:`` block
+    #: re-words the line under.
+    form: str = ""
+    #: The grading that decided the line's code, where one did (ADR-0131 decision 1),
+    #: and empty on every other line. The node's page shows it beside the form: the
+    #: name a deployment writes the keys of to grade the line differently.
+    grading: str = ""
 
     @property
     def quiet(self) -> bool:
         """Whether this entry is suppressed. Quiet is **shown**, not hidden
         (ADR-0032 rule 5) — the surfaces render it in the maintenance color."""
         return self.maintenance is not None
+
+
+def failing_first(lines: Iterable[ReasonLine]) -> list[ReasonLine]:
+    """A box's lines in the order its line budget shows them (ADR-0127 decision 6):
+    the errors, then the warnings, then the rest, each group in the order the check
+    wrote them — so what the budget clips is healthy lines, never the reason for the
+    box's color, which stood past the sixth line of a roster whose failing name came
+    late. A pinned line counts among the rest whatever its code, since what it says
+    is silenced (ADR-0041); so does a line with no code of its own, which says
+    nothing for itself (ADR-0042). Where nothing clips the lines — a node's own on
+    its page, the Copy documents — the check's order stands, and this is not asked.
+    """
+    errors: list[ReasonLine] = []
+    warnings: list[ReasonLine] = []
+    rest: list[ReasonLine] = []
+    for line in lines:
+        code = None if line.quiet else line.code
+        if code is StatusCode.ERROR:
+            errors.append(line)
+        elif code is StatusCode.WARN:
+            warnings.append(line)
+        else:
+            rest.append(line)
+    return errors + warnings + rest
 
 
 @dataclass(frozen=True)
@@ -274,7 +307,10 @@ class StatusSnapshot:
     the subtree holds **one** check — the sole mount itself and the unwritten
     ancestors above it — and ``None`` on a mount two checks share, on that
     mount's ancestors, and on the leaves *below* a branch mount, whose next
-    update belongs to the node where the check is named.
+    update belongs to the node where the check is named — unless a **unit** of
+    the check answers for that node (ADR-0130): then it carries the unit's own
+    facts, and so does every container between it and the mount, with the
+    earliest slot armed beneath it.
 
     ``report`` is what the run **found** (ADR-0044), beside ``config``'s what it
     ran **with**. Both are the owning check's own text, so both answer to the
@@ -300,14 +336,13 @@ class StatusSnapshot:
     title: str = ""
     #: The declared sibling rank this node was sorted by (ADR-0055), ``0`` where
     #: nobody declared one. Carried so a surface can *see* the order it was handed
-    #: rather than infer it; the JSON envelope does not emit it yet — that field
-    #: rides the client contract round with the others held back for it.
+    #: rather than infer it; the JSON envelope publishes it as ``order`` (ADR-0080).
     order: int = 0
     #: "This node's quiet lines are still information" (ADR-0063). ``None`` where
     #: nobody said, and a stated ``False`` is a declaration rather than a silence —
-    #: the tri-state the seed and the fill both turn on. The web reads it; the JSON
-    #: envelope does not carry it, and a client drawing its own chips is entitled to
-    #: its own decision until the field joins the contract deliberately.
+    #: the tri-state the seed and the fill both turn on. The web reads it, and the
+    #: JSON envelope publishes it as the same tri-state (ADR-0080); a client drawing
+    #: its own chips decides for itself how to honour it.
     show_when_quiet: bool | None = None
     maintenance: bool = False
     maintenance_entry: MaintenanceEntry | None = None
@@ -450,6 +485,176 @@ class StatusSnapshot:
         to ``reason_cap``, so the pinned line may sit below the fold and this count
         is the only thing that always shows (ADR-0032 rule 5)."""
         return sum(1 for line in self.reasons if line.quiet)
+
+
+# --- what each node contributes to the wall's tree (ADR-0127) -----------------------
+#
+# One vocabulary over what a node counts for itself, which the chip's counts, the
+# healthy fold and, from stage 4, the failure budget read — so that the round on
+# maintenance and aggregation changes them once (backlog #91, §7.9).
+
+#: The states a chip counts, in the order its glyphs are drawn: ● ▲ ‖ ✓ ○.
+COUNTED_STATES: tuple[str, ...] = ("error", "warn", "maintenance", "ok", "idle")
+_STATE_OF: dict[StatusCode, str] = {
+    StatusCode.ERROR: "error", StatusCode.WARN: "warn",
+    StatusCode.MAINTENANCE: "maintenance", StatusCode.OK: "ok",
+    StatusCode.UNDEFINED: "idle",
+}
+#: The code a counted state's glyph is drawn with — a chip's counts reuse the
+#: status cue's shapes, so ● ▲ ‖ ✓ ○ look as the cues beside them do.
+STATE_CODE: dict[str, StatusCode] = {state: code for code, state in _STATE_OF.items()}
+_PLURAL: dict[str, tuple[str, str]] = {
+    "error": ("error", "errors"), "warn": ("warning", "warnings"),
+    "maintenance": ("in maintenance", "in maintenance"), "ok": ("ok", "ok"),
+    "idle": ("idle", "idle"),
+}
+
+
+def counts_as(node: StatusSnapshot) -> str:
+    """The state a node counts **for itself**, as a chip counts it: ``error``,
+    ``warn``, ``maintenance``, ``ok`` or ``idle`` — its :attr:`own_counted`, under
+    which a stale leaf is the warning it counts as and a pinned node is in
+    maintenance (ADR-0127 decision 2)."""
+    return _STATE_OF[node.own_counted]
+
+
+def line_counts_as(node: StatusSnapshot, line: ReasonLine) -> str:
+    """The state a line counts for: its own code (ADR-0042), or, having none, the
+    code its node rolls up to; a pinned line is in maintenance (ADR-0041)."""
+    if line.quiet:
+        return "maintenance"
+    return _STATE_OF[line.code if line.code is not None else node.code]
+
+
+def failing(node: StatusSnapshot) -> bool:
+    """Whether a node is drawn as an error or a warning — a stale leaf among them,
+    whatever pins stand beneath it — which a close's incident reads (ADR-0127
+    decision 9)."""
+    return node.code in (StatusCode.ERROR, StatusCode.WARN)
+
+
+def pin_beneath(node: StatusSnapshot) -> bool:
+    """Whether a rule stands on this node or beneath it: a pin on the node, on one of
+    its lines, or on any node of its subtree."""
+    if node.maintenance or node.maintenance_entry is not None:
+        return True
+    if any(line.quiet for line in node.reasons):
+        return True
+    return any(pin_beneath(child) for child in node.children)
+
+
+def healthy(node: StatusSnapshot) -> bool:
+    """What the healthy fold folds (ADR-0127 decision 4): a node whose code is
+    ``OK``, nothing beneath it stale, and no pin on it or beneath it."""
+    return node.code is StatusCode.OK and not node.stale and not pin_beneath(node)
+
+
+def line_healthy(node: StatusSnapshot, line: ReasonLine) -> bool:
+    """A line is healthy when its own code is ``OK``, or, having none, when the code
+    its node rolls up to is, and no pin covers it — the node's own, or the line's."""
+    if line.quiet or node.maintenance or node.maintenance_entry is not None:
+        return False
+    code = line.code if line.code is not None else node.code
+    return code is StatusCode.OK
+
+
+def own_failure(node: StatusSnapshot) -> str | None:
+    """What a node fails with **for itself**, as the failure budget reads it
+    (backlog #91 §3.3, §7.9): ``error`` or ``warn``, by what it counts for itself — a
+    leaf's reading, a stale one as the warning it counts as, and a branch's own,
+    whatever its children say — or ``None``. A node a damping counter still holds
+    back from its parent is no failure until it escalates, and a pinned one counts as
+    maintenance, so neither spends the budget."""
+    state = counts_as(node)
+    if state not in ("error", "warn") or node.damping is not None:
+        return None
+    return state
+
+
+@dataclass(frozen=True)
+class ChipCounts:
+    """What a chip says beneath its name (ADR-0127 decision 2): a count per state,
+    whether a rule stands beneath, how many lines are running, and the damped
+    escalations beneath it as *(seen, needed)* pairs."""
+
+    counts: dict[str, int]
+    rule: bool = False
+    running: int = 0
+    damped: tuple[tuple[int, int], ...] = ()
+
+    @property
+    def total(self) -> int:
+        return sum(self.counts.values())
+
+    @property
+    def states(self) -> tuple[str, ...]:
+        """The states counted, in glyph order, those with a count."""
+        return tuple(state for state in COUNTED_STATES if self.counts.get(state))
+
+    @property
+    def mixed(self) -> bool:
+        """Whether the chip draws each state's glyph and count rather than one total."""
+        return len(self.states) > 1
+
+    @property
+    def words(self) -> str:
+        """The counts in words, the chip's tooltip and accessible name: *2 errors, 1
+        warning, 119 ok*, a damped count with how near it is to escalating, a running
+        line, and a bare rule."""
+        said: list[str] = []
+        damped = iter(self.damped)
+        for state in self.states:
+            count = self.counts[state]
+            one, many = _PLURAL[state]
+            phrase = f"{count:,} {one if count == 1 else many}"
+            if state in ("error", "warn"):
+                held = [f"{seen} of {needed} to escalate" for seen, needed in damped]
+                if held:
+                    phrase += ", damped: " + "; ".join(held)
+            said.append(phrase)
+        if self.running:
+            said.append(f"{self.running:,} running")
+        if self.rule and not said:
+            return "a rule stands beneath"
+        return ", ".join(said)
+
+
+def chip_counts(node: StatusSnapshot) -> ChipCounts:
+    """What a closed node's chip counts (ADR-0127 decision 2): each leaf beneath it
+    by what it counts for itself, each branch beneath that fails for itself — the
+    chip's own node among them — by that; a leaf's chip its lines; a rule beneath
+    as ‖. Taken on the snapshot before *hide ok* and *hide idle* drop nodes, as the
+    page's containers are."""
+    counts = dict.fromkeys(COUNTED_STATES, 0)
+    damped: list[tuple[int, int]] = []
+    running = 0
+    if not node.children:
+        if node.reasons:
+            for line in node.reasons:
+                counts[line_counts_as(node, line)] += 1
+                running += 1 if line.running else 0
+        else:
+            counts[counts_as(node)] += 1
+        if node.damping is not None:
+            damped.append((node.damping.seen, node.damping.needed))
+    else:
+        def walk(branch: StatusSnapshot) -> None:
+            nonlocal running
+            if counts_as(branch) in ("error", "warn"):
+                counts[counts_as(branch)] += 1
+                if branch.damping is not None:
+                    damped.append((branch.damping.seen, branch.damping.needed))
+            for child in branch.children:
+                if child.children:
+                    walk(child)
+                else:
+                    counts[counts_as(child)] += 1
+                    running += sum(1 for line in child.reasons if line.running)
+                    if child.damping is not None:
+                        damped.append((child.damping.seen, child.damping.needed))
+        walk(node)
+    return ChipCounts(counts=counts, rule=pin_beneath(node), running=running,
+                      damped=tuple(damped))
 
 
 @dataclass(frozen=True)
@@ -886,6 +1091,15 @@ class StatusTree:
         # unwritten ancestor may inherit, from a shared one, whose two run times
         # must not be attributed upward as if they were one.
         self._check_mounts: dict[str, int] = {}
+        # The nodes a run named (ADR-0118) — a result that says ``dynamic``: the
+        # first look's resolver and the engine read it, since such a node takes
+        # nothing declared for its name, only its parent's ``children:`` (ADR-0128).
+        # Beside the mounts and for their reason: what the check behind a node says
+        # of it, kept off the nodes, so the snapshot and the envelope do not grow
+        # (ADR-0025, ADR-0080). It fills as runs write and starts empty after a
+        # restart, so no node is read as named before its run has said; a node a
+        # run removes leaves it.
+        self._named_by_run: set[str] = set()
         # The damping counter per path (backlog #38 B): what this node last
         # published upward, the worse status it is holding back, and how many
         # consecutive readings have shown it — the node's **own** status, what it
@@ -1097,6 +1311,15 @@ class StatusTree:
         the field only; it is not status, so no event. Thread-safe."""
         self._seed(path, "about", about)
 
+    def about(self, path: str) -> str:
+        """The ``about`` the node at ``path`` carries, or ``""`` where it carries
+        none or no node stands there — so whether a run's label would fill it
+        (ADR-0025), which the engine asks before it names a long one (backlog #91
+        §3.5). Thread-safe."""
+        with self._lock:
+            node = self._find_node(path)
+            return node.about if node is not None else ""
+
     def set_title(self, path: str, title: str) -> None:
         """Seed a node's ``title`` (a short display label; ADR-0017) — like
         :meth:`set_about`, metadata only, no event. Thread-safe."""
@@ -1158,6 +1381,23 @@ class StatusTree:
             key = join_path(path)
             self._check_mounts[key] = self._check_mounts.get(key, 0) + 1
 
+    def note_named_by_run(self, path: str, named: bool) -> None:
+        """Keep whether the run that wrote the node at ``path`` named it — said
+        ``dynamic`` (ADR-0118) — as the engine writes each node. Registry-only, like
+        :meth:`set_check_mount`: nothing is written onto a node. Thread-safe."""
+        with self._lock:
+            key = join_path(path)
+            if named:
+                self._named_by_run.add(key)
+            else:
+                self._named_by_run.discard(key)
+
+    def named_by_run(self, path: str) -> bool:
+        """Whether the last run that wrote the node at ``path`` named it. A node no
+        run has written since the start is not, until one says. Thread-safe."""
+        with self._lock:
+            return join_path(path) in self._named_by_run
+
     def set_dependency(self, path: str, on_path: str) -> None:
         """Register that the check mounted at ``path`` is reached **through** the
         check mounted at ``on_path`` (backlog #38 A).
@@ -1184,12 +1424,15 @@ class StatusTree:
     def set_run_facts(self, path: str, *, wall_seconds: float | None,
                       next_run_at: datetime | None) -> None:
         """Record the owning check's last-run facts for the mount at ``path`` —
-        the run's wall time and the engine's **armed next slot** (ADR-0044).
+        the run's wall time and the engine's **armed next slot** (ADR-0044) — or
+        a unit's for the node it answers for, and a container's between that node
+        and the mount (ADR-0130 decision 5).
 
         Registry-only, like :meth:`set_check_mount`: no node is created, nothing
         is stored on one, and the snapshot resolves the facts onto exactly the
         nodes whose subtree holds **one** check — never a shared mount, never
-        its ancestors. ``next_run_at`` must come from the engine's schedule,
+        its ancestors — and onto every node the engine set facts for by this
+        call. ``next_run_at`` must come from the engine's schedule,
         already projected onto the wall clock: under the budgeted retry
         (ADR-0033) the armed slot is pulled in, which is why it is never
         computed from ``timestamp + frequency``.
@@ -1503,6 +1746,7 @@ class StatusTree:
                                           node.timestamp is not None)
                     self._entry_count -= len(node.reason_entries)
                     self._damping.pop(node.path, None)
+                    self._named_by_run.discard(node.path)
             # What was restored of nodes the tree does not hold: beneath a child
             # that just left, or one that never came back after the restart. What
             # is kept of a node already removed stays: it is how its return is
@@ -2660,6 +2904,15 @@ class StatusTree:
         if mounts != 1:
             mount_stamp = None
             mount_run = None
+        # A node a **unit** answers for carries that unit's own facts (ADR-0130
+        # decision 5), whether it is the mount or stands beneath it — and so does
+        # a container between a unit's node and the mount, with the earliest slot
+        # armed beneath it: the engine sets the facts on exactly those nodes and
+        # on no other. Never a shared mount, whose facts no one check can claim
+        # (ADR-0044); the unwritten ancestors above a sole mount inherit as before.
+        own_run = self._run_facts.get(node.path)
+        if own_run is not None and not shared:
+            mount_run = own_run
         # Own stamp when a check has written this node; otherwise the sole mount's,
         # if the subtree holds exactly one. Staleness and `age_seconds` deliberately
         # keep reading the **own** stamp — an inherited time is a display value, not
@@ -2676,7 +2929,8 @@ class StatusTree:
                        pins.get((node.path, entry.slug)) if node.members else None,
                        code=entry.code, running=entry.running,
                        subject=entry.subject, data=entry.data,
-                       refused=entry.refused)
+                       refused=entry.refused, form=entry.form,
+                       grading=entry.grading)
             for entry in node.reason_entries)
         # Own status is now a **derived** value: the entries are virtual children,
         # and a node whose members are all pinned has nothing left reporting.

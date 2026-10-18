@@ -21,6 +21,7 @@ from tests.demo_extension import (
     node_action,
     recorder,
 )
+from tests.page_tree import parse
 
 DEMO = "tests.demo_extension"
 TEMPLATE = "reason_action.html"
@@ -257,8 +258,12 @@ class NodeActionTests(TestCase):
 
     def test_the_slot_is_declared_with_its_context(self):
         # Adding a name to a slot's context is compatible; removing one is not, so
-        # the contract is worth a test of its own (ADR-0034).
-        self.assertEqual(slots.SLOTS["node.actions"].context, ("node", "surface"))
+        # the contract is worth a test of its own (ADR-0034). `place` joined with the
+        # head's row (ADR-0127 decision 3), so a filler can tell a card's head from
+        # a nested box's.
+        self.assertEqual(slots.SLOTS["node.actions"].context,
+                         ("node", "surface", "place"))
+        self.assertIn("`place`", slots.SLOTS["node.actions"].where)
 
     def test_no_registration_means_no_pixels(self):
         self._login()
@@ -297,14 +302,23 @@ class NodeActionTests(TestCase):
         # /hosts is the card; /hosts/alpha and its /disk leaf are nested boxes
         self.assertIn("tracker.example.org/new?node=/hosts/alpha/disk", body)
 
-    def test_a_quiet_leaf_is_a_chip_and_carries_no_slot(self):
-        # Nothing quiet is worth acting on, and a chip has no room to say so.
+    def test_a_quiet_leaf_is_a_chip_whose_box_carries_the_slot(self):
+        # A chip has no room for an action, and nothing quiet is worth acting on;
+        # the node's box, drawn beside the chip and hidden until found (ADR-0127
+        # decision 1), carries the slot as every box does, so a click that opens
+        # the node shows the action without a request.
         slots.register("node.actions", DEMO, NODE_TEMPLATE, node_action)
         self._login()
         self.tree.upsert("/hosts/alpha/disk", StatusCode.OK, "disk at 12%")
-        body = self._body()
-        self.assertIn("leaf-chip", body)
-        self.assertNotIn("node=/hosts/alpha/disk", body)
+        page = parse(self._body())
+        node = next(node for node in page.all("tree-node")
+                    if node.attrs.get("data-node") == "/hosts/alpha/disk")
+        self.assertEqual(node.attrs.get("data-state"), "closed")
+        chip = node.one("tree-chip")
+        self.assertEqual(chip.all("node-action"), [])
+        self.assertEqual(node.one("tree-hold").attrs.get("hidden"), "until-found")
+        action = node.one("tree-box").one("node-actions").one("node-action")
+        self.assertIn("node=/hosts/alpha/disk", action.attrs.get("href", ""))
 
     def test_the_filler_declines_a_node_whose_reasons_are_members(self):
         # placement policy stays with the filler: there the per-line control is
@@ -569,6 +583,23 @@ class ContextContractTests(TestCase):
                 slots.forget_fillers()
                 seen = self._seen("node.actions", url)
                 self.assertEqual({handed["surface"] for handed in seen}, {surface})
+
+    def test_the_place_names_are_the_documented_ones(self):
+        # a card's head, a nested box's and a page's frame head (ADR-0127 decision
+        # 3), a leaf's page framed as a branch's is (backlog #91 §3.5): the filler is
+        # called for every node the grid draws, open or closed, and told where
+        self.tree.upsert("/db/disk/smart", StatusCode.OK)
+        for url, places in (("/status", {"/db": "card", "/db/disk": "box",
+                                         "/db/disk/smart": "box"}),
+                            ("/status/db", {"/db": "frame", "/db/disk": "card",
+                                            "/db/disk/smart": "box"}),
+                            ("/status/db?depth=0", {"/db": "card"}),
+                            ("/status/db/disk/smart", {"/db/disk/smart": "frame"})):
+            with self.subTest(page=url):
+                slots.forget_fillers()
+                seen = self._seen("node.actions", url)
+                self.assertEqual(
+                    {handed["node"].path: handed["place"] for handed in seen}, places)
 
 
 class ContextGrowthTests(TestCase):

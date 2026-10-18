@@ -1,4 +1,4 @@
-"""The settings menu and the dead verdict hold AA in every gated theme.
+"""The settings menu and the dead verdict hold AA in every theme.
 
 ADR-0028 puts the accessibility bar above any picked swatch and says status
 color is verified by *measurement*, not by class presence. The faithful
@@ -57,9 +57,9 @@ DROPDOWN_INK = {"light": "#212529", "dark": "#dee2e6"}
 
 # (label, the token block to read, which dropdown surface). `auto` is the dark
 # block a second time — the browser resolves it, and its light half is byte-for-
-# byte the `:root` set `default` already covers.
+# byte the `:root` set `plain` already covers.
 THEMES = (
-    ("default", None, "light"),
+    ("plain", None, "light"),
     ("vivid", 'body[data-ls-theme="vivid"]', "light"),
     ("pastel", 'body[data-ls-theme="pastel"]', "light"),
     ("dark", 'body[data-ls-theme="dark"]', "dark"),
@@ -67,9 +67,9 @@ THEMES = (
     ("cyberpunk", 'body[data-ls-theme="cyberpunk"]', "dark"),
 )
 
-# Cyberpunk is the declared fun theme (ADR-0028): measured and reported, never
-# gated. Every other theme owes the bar.
-UNGATED = {"cyberpunk"}
+# Every theme owes the bar — cyberpunk too, the library's default theme (ADR-0028),
+# which was the declared fun theme, measured and reported and never gated, until it
+# became the default.
 AA = 4.5
 
 # The rows the menu actually renders: the ink each one paints with — a token of
@@ -171,13 +171,30 @@ def _by_selector(blocks):
     """The same bodies, keyed by each **single** selector in a grouped rule.
 
     ``a:hover, a:focus-visible { … }`` is one block under one long key; a reader
-    asking about `a:hover` should not have to know what it was grouped with.
+    asking about `a:hover` should not have to know what it was grouped with. The list
+    splits where the rule's own commas stand: one inside ``:is()`` or ``:not()``
+    belongs to the selector it is in.
     """
     table = {}
     for key, body in blocks.items():
-        for part in key.split(","):
-            table.setdefault(part.strip(), body)
+        for part in _selectors(key):
+            table.setdefault(part, body)
     return table
+
+
+def _selectors(group):
+    """A rule's selector list, split at its own commas and never inside brackets."""
+    parts, depth, start = [], 0, 0
+    for i, char in enumerate(group):
+        if char in "([":
+            depth += 1
+        elif char in ")]":
+            depth -= 1
+        elif char == "," and depth == 0:
+            parts.append(group[start:i].strip())
+            start = i + 1
+    parts.append(group[start:].strip())
+    return parts
 
 
 def _tokens(blocks, selector):
@@ -329,18 +346,13 @@ class MenuContrastTests(TestCase):
         tint = ink if wash == "currentColor" else _rgb(wash)
         return _ratio(ink, _over(tint, surface, 0.08))
 
-    def test_every_row_clears_aa_in_every_gated_theme(self):
+    def test_every_row_clears_aa_in_every_theme(self):
         for theme, selector, canvas in THEMES:
             palette = _tokens(self.blocks, selector)
             for row, token, hoverable in MENU_ROWS:
                 for hover in (False, True) if hoverable else (False,):
                     with self.subTest(theme=theme, row=row, hover=hover):
                         ratio = self._measure(palette, token, canvas, hover)
-                        if theme in UNGATED:
-                            # measured, not gated — but it must still be a
-                            # number, so a broken palette cannot hide here
-                            self.assertGreater(ratio, 1.0)
-                            continue
                         self.assertGreaterEqual(
                             round(ratio, 2), AA,
                             f"{row} is {ratio:.2f}:1 on {DROPDOWN[canvas]}")
@@ -353,9 +365,6 @@ class MenuContrastTests(TestCase):
             with self.subTest(theme=theme):
                 ratio = _ratio(_rgb(palette["--ls-danger-ink"]),
                                _rgb(palette["--ls-canvas"]))
-                if theme in UNGATED:
-                    self.assertGreater(ratio, 1.0)
-                    continue
                 self.assertGreaterEqual(round(ratio, 2), AA,
                                         f"dead verdict is {ratio:.2f}:1")
 
@@ -369,9 +378,6 @@ class MenuContrastTests(TestCase):
             for row, ink, surface in PAGE_ROWS:
                 with self.subTest(theme=theme, row=row):
                     ratio = _ratio(_rgb(palette[ink]), _rgb(palette[surface]))
-                    if theme in UNGATED:
-                        self.assertGreater(ratio, 1.0)
-                        continue
                     self.assertGreaterEqual(
                         round(ratio, 2), AA,
                         f"{row} is {ratio:.2f}:1 on {palette[surface]}")
@@ -385,14 +391,11 @@ class MenuContrastTests(TestCase):
                     # a literal, or another token, and the number is fiction
                     self.assertIn(f"color: var({ink})", rules[row])
                     ratio = _ratio(_rgb(palette[ink]), _rgb(DROPDOWN[canvas]))
-                    if theme in UNGATED:
-                        self.assertGreater(ratio, 1.0)
-                        continue
                     self.assertGreaterEqual(
                         round(ratio, 2), AA,
                         f"{row} is {ratio:.2f}:1 on {DROPDOWN[canvas]}")
 
-    def test_every_hero_row_clears_aa_in_every_gated_theme(self):
+    def test_every_hero_row_clears_aa_in_every_theme(self):
         # The hero is on the canvas, so each theme paints it with its own inks —
         # which is the point, and which means each theme owes the bar.
         for theme, selector, _ in THEMES:
@@ -400,9 +403,6 @@ class MenuContrastTests(TestCase):
             for row, ink, surface in HERO_ROWS:
                 with self.subTest(theme=theme, row=row):
                     ratio = _ratio(_rgb(palette[ink]), _rgb(palette[surface]))
-                    if theme in UNGATED:
-                        self.assertGreater(ratio, 1.0)
-                        continue
                     self.assertGreaterEqual(round(ratio, 2), AA,
                                             f"{row} is {ratio:.2f}:1")
 
@@ -428,9 +428,6 @@ class MenuContrastTests(TestCase):
                 with self.subTest(theme=theme, opacity=dim):
                     ratio = _ratio(_over(_rgb(palette[QUIET_INK]), surface, dim),
                                    surface)
-                    if theme in UNGATED:
-                        self.assertGreater(ratio, 1.0)
-                        continue
                     self.assertGreaterEqual(
                         round(ratio, 2), AA,
                         f"a silenced reason at opacity {dim} is {ratio:.2f}:1 "
@@ -439,7 +436,7 @@ class MenuContrastTests(TestCase):
     def test_a_coded_reason_line_clears_aa_on_its_own_tint(self):
         """Every coded line (ADR-0042) paints its own tint pair at full
         opacity — `.is-coded` resets the reason wash — so the pair *is* the
-        measurement, on every gated theme, independent of the card beneath. All
+        measurement, on every theme, independent of the card beneath. All
         four states, because a mixed list sits on a vivid fill, where a
         surfaceless line would inherit the drama; the quiet override keeps a
         pinned coded line on the maintenance pair, measured above."""
@@ -449,9 +446,6 @@ class MenuContrastTests(TestCase):
                 with self.subTest(theme=theme, state=state):
                     ratio = _ratio(_rgb(palette[f"--ls-tint-{state}-ink"]),
                                    _rgb(palette[f"--ls-tint-{state}"]))
-                    if theme in UNGATED:
-                        self.assertGreater(ratio, 1.0)
-                        continue
                     self.assertGreaterEqual(
                         round(ratio, 2), AA,
                         f"a coded {state} line is {ratio:.2f}:1 on its tint "
@@ -474,9 +468,6 @@ class MenuContrastTests(TestCase):
             for ink, surface in pairs:
                 with self.subTest(theme=theme, ink=ink):
                     ratio = _ratio(_rgb(palette[ink]), _rgb(palette[surface]))
-                    if theme in UNGATED:
-                        self.assertGreater(ratio, 1.0)
-                        continue
                     self.assertGreaterEqual(
                         round(ratio, 2), AA,
                         f"{ink} is {ratio:.2f}:1 on {palette[surface]} in {theme}")
@@ -498,9 +489,6 @@ class MenuContrastTests(TestCase):
                 with self.subTest(state=state, theme=theme):
                     ratio = _ratio(_rgb(palette[f"--ls-tint-{state}-ink"]),
                                    _rgb(palette[f"--ls-tint-{state}"]))
-                    if theme in UNGATED:
-                        self.assertGreater(ratio, 1.0)
-                        continue
                     self.assertGreaterEqual(
                         round(ratio, 2), AA,
                         f"a chip that says reached is {ratio:.2f}:1 on its "
@@ -519,54 +507,195 @@ class MenuContrastTests(TestCase):
         self.assertIn("opacity: 1", block.group(1))
 
     def test_the_state_clusters_hold_their_rows(self):
-        """A box's self row is a wrapping flex row and its state cluster never
-        breaks internally — a floated cluster dropped out of its box under
+        """A head's row never wraps and its state cluster never breaks internally
+        (ADR-0127 decision 3): a floated cluster dropped out of its box under
         width pressure (action chips) and overlaid the next one, and a card's
-        state used to wrap between its time and its word. Structural, because
-        no rendered-count test can see a float escape its container."""
+        state used to wrap between its time and its word. Where the name would
+        be cut, the cluster takes a line of its own beneath — placed from the
+        head, never a full-basis flex line, which a toolbar's item cannot take.
+        Structural, because no rendered-count test can see a float escape its
+        container."""
         sheet = STYLESHEET.read_text()
-        self_row = re.search(r"\.status-node__self\s*\{([^}]*)\}", sheet)
-        self.assertIsNotNone(self_row, "the box self-row rule is gone")
-        assert self_row is not None
-        self.assertIn("display: flex", self_row.group(1))
-        self.assertIn("flex-wrap: wrap", self_row.group(1))
+        card_head = re.search(r"\.status-card__head\s*\{([^}]*)\}", sheet)
+        self.assertIsNotNone(card_head, "the card head rule is gone")
+        assert card_head is not None
+        self.assertIn("display: flex", card_head.group(1))
+        self.assertIn("flex-wrap: nowrap", card_head.group(1))
+        self.assertIn("position: relative", card_head.group(1))
+        # a box's row, and a node page's head, which is the row a box draws
+        box_row = re.search(
+            r":is\(\.tree-box, \.viewed-head\) > \.status-node__self"
+            r"\s*\{([^}]*)\}", sheet)
+        self.assertIsNotNone(box_row, "the box row rule is gone")
+        assert box_row is not None
+        self.assertIn("flex-wrap: nowrap", box_row.group(1))
         for selector in (r"\.status-node__state", r"\.status-card__state"):
-            block = re.search(selector + r"\s*\{([^}]*)\}", sheet)
+            block = re.search(r"(?m)^" + selector + r"\s*\{([^}]*)\}", sheet)
             with self.subTest(rule=selector):
                 self.assertIsNotNone(block)
                 assert block is not None
                 self.assertIn("white-space: nowrap", block.group(1))
-                self.assertIn("margin-left: auto", block.group(1))
                 self.assertNotIn("float", block.group(1))
+                self.assertNotIn("flex-basis", block.group(1))
+        # the toolbar holds the cluster among the controls and never wraps either
+        toolbar = re.search(r"(?m)^\.node-controls\s*\{([^}]*)\}", sheet)
+        self.assertIsNotNone(toolbar, "the toolbar rule is gone")
+        assert toolbar is not None
+        self.assertIn("display: inline-flex", toolbar.group(1))
+        self.assertIn("flex: none", toolbar.group(1))
+        # the head places the state's line, not the toolbar
+        self.assertNotIn("position: relative", toolbar.group(1))
         # The standing second line is the deployment's opt-in (settings.yaml
-        # `card_status_line: below`, rendered as a body attribute): the compact
-        # default keeps the cluster beside the title, so the base rule must NOT
-        # carry the full basis — and the opted-in block must.
-        card_state = re.search(r"\.status-card__state\s*\{([^}]*)\}", sheet)
-        assert card_state is not None
-        self.assertNotIn("flex-basis", card_state.group(1))
+        # `card_status_line: below`, rendered as a body attribute) or the script's
+        # word where the name would be cut (`.is-state-below`): the cluster is
+        # placed at the head's foot, and the head is padded by a line for it.
         below = re.search(
-            r"body\[data-ls-card-state=\"below\"\] \.status-card__state"
-            r"\s*\{([^}]*)\}", sheet)
+            r"\.is-state-below > \.node-controls > \.status-card__state,\s*"
+            r"\.is-state-below > \.node-controls > \.status-node__state,\s*"
+            r"body\[data-ls-card-state=\"below\"\] \.status-card__head > "
+            r"\.node-controls > \.status-card__state\s*\{([^}]*)\}", sheet)
         self.assertIsNotNone(below, "the standing-second-line rule is gone")
         assert below is not None
-        self.assertIn("flex-basis: 100%", below.group(1))
-        self.assertIn("text-align: right", below.group(1))
-        # The head's middle (title + action chips) has zero say in line-fitting:
-        # wrapping preempts shrinking, so only a zero-basis middle stays out of
-        # the equation — and the chips inside it sit absolutely, over the title
-        # where the two collide, costing the row no width at all.
+        self.assertIn("position: absolute", below.group(1))
+        self.assertIn("bottom: 0", below.group(1))
+        padded = re.search(
+            r"\.status-card__head\.is-state-below,\s*"
+            r":is\(\.tree-box, \.viewed-head\) > "
+            r"\.status-node__self\.is-state-below,\s*"
+            r"body\[data-ls-card-state=\"below\"\] \.status-card__head\s*\{([^}]*)\}",
+            sheet)
+        self.assertIsNotNone(padded, "the head's padding for the line is gone")
+        assert padded is not None
+        self.assertIn("padding-bottom", padded.group(1))
+        # The head's middle (the title) has zero say in line-fitting, so it gives
+        # way first; nothing is laid over it any more, so no rail sits absolutely in
+        # it and no veil repaints the fill under a chip.
         middle = re.search(r"\.status-head__middle\s*\{([^}]*)\}", sheet)
         self.assertIsNotNone(middle, "the head-middle rule is gone")
         assert middle is not None
         self.assertIn("flex: 1 1 0", middle.group(1))
         self.assertIn("min-width: 0", middle.group(1))
-        self.assertIn("position: relative", middle.group(1))
-        chips = re.search(
-            r"\.status-head__middle > \.node-actions\s*\{([^}]*)\}", sheet)
-        self.assertIsNotNone(chips, "the overlaying-chips rule is gone")
-        assert chips is not None
-        self.assertIn("position: absolute", chips.group(1))
+        self.assertNotIn(".status-head__middle > .node-actions", sheet)
+        # the node's actions are shown always, as the head's own icons are
+        chip = re.search(r"\.node-action\s*\{([^}]*)\}", sheet)
+        assert chip is not None
+        self.assertNotRegex(chip.group(1), r"opacity\s*:")
+        # Where the name broke onto a second line anyway, the state stands on it
+        # (`.is-state-beside`, Lex's word of 2026-10-16): no padding for a line of
+        # its own, and the toolbar level with the name's first line.
+        beside = re.search(
+            r"\.status-card__head\.is-state-below\.is-state-beside,\s*"
+            r":is\(\.tree-box, \.viewed-head\) > "
+            r"\.status-node__self\.is-state-below\.is-state-beside,\s*"
+            r"body\[data-ls-card-state=\"below\"\] \.status-card__head\.is-state-beside"
+            r"\s*\{([^}]*)\}", sheet)
+        self.assertIsNotNone(beside, "the state's place beside a broken name is gone")
+        assert beside is not None
+        self.assertIn("padding-bottom: 0", beside.group(1))
+        self.assertRegex(sheet, r"\.is-state-beside > \.node-controls\s*\{\s*"
+                                r"align-self: flex-start;")
+
+    def test_the_heads_glyphs_and_a_cards_lines_have_their_room(self):
+        """The head's glyph is two thirds of its square, 16 of 24 pixels at the
+        browser's own size, and in rem as the square is, so a larger font grows
+        both alike; and a card's children stand 6 pixels below its own lines, as a
+        box's do (Lex's word of 2026-10-16) — and a title squeezed below two
+        letters shows nothing rather than a clipped glyph. Held in Chromium by
+        `test_tree_browser.py`; here so the gate, which has no browser, holds them
+        too."""
+        sheet = STYLESHEET.read_text()
+        self.assertRegex(sheet, r"(?m)^\.node-icon\s*\{[^}]*width: 1\.5rem;[^}]*"
+                                r"height: 1\.5rem;")
+        self.assertRegex(sheet, r"(?m)^\.icon-mark\s*\{[^}]*width: 1rem; height: 1rem;")
+        self.assertRegex(sheet, r"(?m)^\.node-action\.is-icon > \.action-icon\s*\{"
+                                r"[^}]*width: 1rem; height: 1rem;")
+        self.assertRegex(sheet, r"\.status-panel > \.reason-block ~ \.node-children\s*"
+                                r"\{\s*margin-top: 6px;")
+        self.assertRegex(sheet, r"\.status-node__children\s*\{\s*margin-top: 6px;")
+        self.assertRegex(sheet, r"\.status-head__middle\s*\{\s*"
+                                r"container-type: inline-size;")
+        self.assertRegex(sheet, r"@container \(max-width: 2\.5em\)\s*\{\s*"
+                                r"\.status-head__middle > \.node-title\s*\{\s*"
+                                r"visibility: hidden;")
+
+    def test_a_heads_row_answers_the_pointer_from_its_tokens(self):
+        """A head's row opens and closes its node by a click anywhere on it but its
+        own controls, and with the caret gone says so itself (Lex's word of
+        2026-10-16): under the pointer, where hover is the input's, an outline of
+        its surface's ink at 60 %, 3 pixels out; pressed, a wash of 12 %, 4 pixels
+        past it; neither on a control of its own; both from tokens, which a viewer's
+        choice of the wash will set. The name no longer underlines. Held in Chromium
+        by `test_tree_browser.py`; here for the gate."""
+        sheet = _strip_comments(STYLESHEET.read_text())
+        palette = _tokens(_blocks(sheet), None)
+        self.assertEqual((palette["--ls-toggle-hover-line"],
+                          palette["--ls-toggle-hover-wash"],
+                          palette["--ls-toggle-press-wash"]), ("60%", "0%", "12%"))
+        heads = r":is\(\.status-card__head, \.tree-box > \.status-node__self\)"
+        own = (r":not\(:has\(:is\(\.node-icons, \.node-actions, \.node-more, "
+               r"\.node-actions-menu, \.maintenance-pip\):{0}\)\)")
+        hover = re.search(
+            r"@media \(hover: hover\)\s*\{\s*" + heads + ":hover" + own.format("hover")
+            + r"\s*\{([^}]*)\}", sheet)
+        self.assertIsNotNone(hover, "the row's outline under the pointer is gone")
+        assert hover is not None
+        self.assertIn("outline: 1px solid color-mix(in srgb, currentColor "
+                      "var(--ls-toggle-hover-line), transparent);", hover.group(1))
+        self.assertIn("outline-offset: 3px;", hover.group(1))
+        self.assertIn("background-color: color-mix(in srgb, currentColor "
+                      "var(--ls-toggle-hover-wash), transparent);", hover.group(1))
+        self.assertIn("box-shadow: 0 0 0 4px color-mix(in srgb, currentColor "
+                      "var(--ls-toggle-hover-wash), transparent);", hover.group(1))
+        press = re.search(r"(?m)^" + heads + ":active" + own.format("active")
+                          + r"\s*\{([^}]*)\}", sheet)
+        self.assertIsNotNone(press, "the row's wash when pressed is gone")
+        assert press is not None
+        self.assertIn("background-color: color-mix(in srgb, currentColor "
+                      "var(--ls-toggle-press-wash), transparent);", press.group(1))
+        self.assertIn("box-shadow: 0 0 0 4px color-mix(in srgb, currentColor "
+                      "var(--ls-toggle-press-wash), transparent);", press.group(1))
+        self.assertRegex(sheet, r"(?m)^" + heads + r"\s*\{\s*border-radius: 4px;")
+        # the row's cursor is the pointer's, and only a name whose pause brings
+        # the node's card wears the help cursor (ADR-0019 decision 3)
+        self.assertRegex(sheet, r"(?m)^" + heads + r"\s*\{\s*cursor: pointer;")
+        self.assertRegex(sheet, r"(?m)^:is\(\.status-card__name, \.status-node__name, "
+                                r"\.ls-strip__name\)\.inspect-trigger\s*\{\s*"
+                                r"cursor: help;")
+        self.assertRegex(sheet, r"(?m)^\.status-node__self\s*\{\s*cursor: default;")
+        self.assertNotIn("tree-caret", sheet)
+        self.assertNotIn(".status-card__name:hover", sheet)
+        self.assertRegex(sheet, r'(?m)^\.status-node a:not\(\[data-control="toggle"\], '
+                                r'\.tree-chip\):hover\s*\{\s*'
+                                r'text-decoration: underline;')
+
+    def test_a_chip_answers_the_pointer_as_the_row_does(self):
+        """A chip, which a click opens as a head's row closes, says so as the row
+        does (Lex's word of 2026-10-16): under the pointer, where hover is the
+        input's, an outline of its ink from the row's token, a pixel out where chips
+        stand close, never over a keyboard's focus ring; pressed a wash of its ink
+        laid over its tint, which stays; its name no longer underlined. Held in
+        Chromium by `test_tree_browser.py`; here for the gate."""
+        sheet = _strip_comments(STYLESHEET.read_text())
+        hover = re.search(r"@media \(hover: hover\)\s*\{\s*"
+                          r"\.tree-chip:hover:not\(:focus-visible\)\s*\{([^}]*)\}",
+                          sheet)
+        self.assertIsNotNone(hover, "the chip's outline under the pointer is gone")
+        assert hover is not None
+        self.assertIn("outline: 1px solid color-mix(in srgb, currentColor "
+                      "var(--ls-toggle-hover-line), transparent);", hover.group(1))
+        self.assertIn("outline-offset: 1px;", hover.group(1))
+        self.assertIn("background-image: linear-gradient(color-mix(in srgb, "
+                      "currentColor var(--ls-toggle-hover-wash), transparent),",
+                      hover.group(1))
+        self.assertNotIn("background-color", hover.group(1))
+        press = re.search(r"(?m)^\.tree-chip:active:not\(:focus-visible\)"
+                          r"\s*\{([^}]*)\}", sheet)
+        self.assertIsNotNone(press, "the chip's wash when pressed is gone")
+        assert press is not None
+        self.assertIn("background-image: linear-gradient(color-mix(in srgb, "
+                      "currentColor var(--ls-toggle-press-wash), transparent),",
+                      press.group(1))
+        self.assertNotIn(".tree-chip:hover .tree-chip__name", sheet)
 
     def test_a_quiet_signal_clears_aa_as_the_mix_it_is(self):
         # A term at rest is a `color-mix` of the body ink and the muted furniture
@@ -580,9 +709,6 @@ class MenuContrastTests(TestCase):
                 mixed = _over(_rgb(palette[ink_token]),
                               _rgb(palette[muted_token]), weight)
                 ratio = _ratio(mixed, _rgb(palette["--ls-canvas"]))
-                if theme in UNGATED:
-                    self.assertGreater(ratio, 1.0)
-                    continue
                 self.assertGreaterEqual(round(ratio, 2), AA,
                                         f"a quiet signal is {ratio:.2f}:1")
 
@@ -637,7 +763,7 @@ GRAPHICS = 3.0
 
 
 class CurveContrastTests(TestCase):
-    """The curve's marks and words, on the card surface, in every gated theme."""
+    """The curve's marks and words, on the card surface, in every theme."""
 
     @classmethod
     def setUpClass(cls):
@@ -658,9 +784,6 @@ class CurveContrastTests(TestCase):
             for rule, _, token in CURVE_MARKS:
                 with self.subTest(theme=theme, rule=rule):
                     ratio = _ratio(_rgb(palette[token]), _rgb(DROPDOWN[canvas]))
-                    if theme in UNGATED:
-                        self.assertGreater(ratio, 1.0)
-                        continue
                     self.assertGreaterEqual(round(ratio, 2), GRAPHICS,
                                             f"{rule} is {ratio:.2f}:1")
 
@@ -680,8 +803,270 @@ class CurveContrastTests(TestCase):
             for rule, _, token in CURVE_WORDS:
                 with self.subTest(theme=theme, rule=rule):
                     ratio = _ratio(_rgb(palette[token]), _rgb(DROPDOWN[canvas]))
-                    if theme in UNGATED:
-                        self.assertGreater(ratio, 1.0)
-                        continue
                     self.assertGreaterEqual(round(ratio, 2), AA,
                                             f"{rule} is {ratio:.2f}:1")
+
+
+# Cyberpunk's logs (ADR-0028): a log — the Events page, a node's
+# History tab — restates the five status tints, weighed by status, and lights each
+# row's status word in its state's neon. The logs alone: the wall and a node's Status
+# tab keep the theme's own tints, so the restated ones live on the log's block and
+# nowhere else.
+LOG_BLOCK = 'body[data-ls-theme="cyberpunk"] .ls-log'
+STATES = ("error", "warn", "maintenance", "ok", "undefined")
+GLOWING = ("error", "warn", "maintenance", "ok")
+
+
+class CyberpunkLogTests(TestCase):
+    """A log's rows weighed by their status, and their words lit, in the logs alone."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.blocks = _blocks(STYLESHEET.read_text(encoding="utf-8"))
+        cls.rules = _by_selector(cls.blocks)
+        cls.theme = _tokens(cls.blocks, 'body[data-ls-theme="cyberpunk"]')
+        restated = re.findall(r"(--ls-[\w-]+)\s*:\s*([^;]+);", cls.blocks[LOG_BLOCK])
+        cls.log = {**cls.theme, **{name: value.strip() for name, value in restated}}
+
+    def _off_the_canvas(self, palette, state):
+        return _ratio(_rgb(palette[f"--ls-tint-{state}"]), _rgb(palette["--ls-canvas"]))
+
+    def test_a_failures_row_stands_further_from_the_canvas_than_a_recovery(self):
+        # the theme's own near-black tints put an error's row nearest the canvas of
+        # all; in a log every failure's row stands further from it than an ok's
+        recovery = self._off_the_canvas(self.log, "ok")
+        for state in ("error", "warn", "maintenance"):
+            with self.subTest(state=state):
+                self.assertGreater(self._off_the_canvas(self.log, state), recovery)
+
+    def test_the_failures_are_lifted_and_a_recovery_sunk_in_the_logs_alone(self):
+        for state in ("error", "warn", "maintenance"):
+            with self.subTest(state=state):
+                self.assertGreater(self._off_the_canvas(self.log, state),
+                                   self._off_the_canvas(self.theme, state))
+        self.assertLess(self._off_the_canvas(self.log, "ok"),
+                        self._off_the_canvas(self.theme, "ok"))
+        # a tint is declared by the root, by a theme, and by cyberpunk's log — by no
+        # other rule, so nothing else of the theme's is lifted
+        declared = {selector for selector, body in self.blocks.items()
+                    if re.search(r"--ls-tint-[\w-]+\s*:", body)}
+        self.assertIn(LOG_BLOCK, declared)
+        for selector in declared - {LOG_BLOCK}:
+            with self.subTest(selector=selector):
+                self.assertRegex(selector, r'^(:root|body\[data-ls-theme="[a-z]+"\])$')
+
+    def test_each_status_word_wears_its_states_ink_and_glows_but_undefined(self):
+        for state in STATES:
+            rule = self.rules[f"{LOG_BLOCK} .row-{state} .ls-log__status"]
+            with self.subTest(state=state):
+                self.assertIn(f"color: var(--ls-tint-{state}-ink)", rule)
+                if state in GLOWING:
+                    # the theme's glow, as its state words wear it on the wall
+                    self.assertIn("text-shadow: 0 0 7px currentColor", rule)
+                else:
+                    self.assertNotIn("text-shadow", rule)
+                self.assertNotRegex(rule, r"opacity\s*:")
+
+    def test_each_word_reads_on_its_row(self):
+        # the lift stops where an error's pink still reads on its row
+        for state in STATES:
+            with self.subTest(state=state):
+                ratio = _ratio(_rgb(self.log[f"--ls-tint-{state}-ink"]),
+                               _rgb(self.log[f"--ls-tint-{state}"]))
+                self.assertGreaterEqual(round(ratio, 2), AA,
+                                        f"the {state} word is {ratio:.2f}:1 on its row")
+
+
+# Cyberpunk's culprit (ADR-0028): a node reporting its own
+# problem is a neon tube — its fill dark glass, its words white-hot, and its edge, an
+# inner and an outer glow and its words' halo in its state's neon, which is the ink its
+# state's words wear everywhere else in the theme. Every vivid surface, in this theme
+# alone.
+THEME = 'body[data-ls-theme="cyberpunk"]'
+VIVID = ("error", "warn", "maintenance", "undefined")
+EVERY_STATE = ":is(.s-error, .s-warn, .s-maintenance, .s-undefined)"
+FAILING = ":is(.s-error, .s-warn)"
+TUBES = (
+    f"{THEME} :is(.status-card, .status-node){EVERY_STATE}:not(.dim)",
+    f"{THEME} .status-card.is-closed.dim{FAILING}",
+    f"{THEME} .tree-chip{FAILING}",
+    f"{THEME} .ls-strip{EVERY_STATE}",
+)
+WORDS = (
+    f"{THEME} .status-card{EVERY_STATE}:not(.dim) > .status-card__head"
+    " > .status-card__name",
+    f"{THEME} .status-card{EVERY_STATE}:not(.dim) > .status-card__head > .node-controls"
+    " > .status-card__state",
+    f"{THEME} .status-card.is-closed.dim{FAILING} > .status-card__head"
+    " > .status-card__name",
+    f"{THEME} .status-card.is-closed.dim{FAILING} > .status-card__head > .node-controls"
+    " > .status-card__state",
+    f"{THEME} .status-node{EVERY_STATE}:not(.dim) > .status-node__self"
+    " > .status-node__name",
+    f"{THEME} .status-node{EVERY_STATE}:not(.dim) > .status-node__self > .node-controls"
+    " > .status-node__state",
+    f"{THEME} .tree-chip{FAILING} > .tree-chip__name",
+    f"{THEME} .ls-strip{EVERY_STATE} > .ls-strip__name",
+    f"{THEME} .ls-strip{EVERY_STATE} > .ls-strip__state",
+)
+
+
+class CyberpunkCulpritTests(TestCase):
+    """The culprit a neon tube in the theme's own neons, on every vivid surface."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.blocks = _blocks(STYLESHEET.read_text(encoding="utf-8"))
+        cls.rules = _by_selector(cls.blocks)
+        cls.theme = _tokens(cls.blocks, THEME)
+
+    def test_a_culprit_is_lit_dark_glass_and_its_words_white_hot(self):
+        # the theme's own block restates each vivid pair: a fill a little off the
+        # canvas, where today's were the plain theme's lit fills, and words that
+        # read at 13:1 or more on it
+        canvas = _rgb(self.theme["--ls-canvas"])
+        own = re.findall(r"(--ls-[\w-]+)\s*:", self.blocks[THEME])
+        for state in VIVID:
+            with self.subTest(state=state):
+                self.assertIn(f"--ls-{state}", own)
+                self.assertIn(f"--ls-{state}-ink", own)
+                fill = _rgb(self.theme[f"--ls-{state}"])
+                off = _ratio(fill, canvas)
+                self.assertGreater(off, 1.1, f"{state}'s glass is unlit, {off:.2f}:1")
+                self.assertLess(off, 1.5, f"{state}'s glass is a lit fill, {off:.2f}:1")
+                words = _ratio(_rgb(self.theme[f"--ls-{state}-ink"]), fill)
+                self.assertGreaterEqual(round(words, 2), 13.0,
+                                        f"the {state} words are {words:.2f}:1")
+
+    def test_each_state_burns_in_the_neon_its_words_wear(self):
+        for state in VIVID:
+            rule = self.rules[f"{THEME} :is(.status-card, .status-node, .tree-chip,"
+                              f" .ls-strip).s-{state}"]
+            with self.subTest(state=state):
+                self.assertEqual(rule.strip(),
+                                 f"--ls-neon: var(--ls-tint-{state}-ink);")
+                # the edge is a graphic, and clears its bar against the canvas
+                edge = _ratio(_rgb(self.theme[f"--ls-tint-{state}-ink"]),
+                              _rgb(self.theme["--ls-canvas"]))
+                self.assertGreaterEqual(round(edge, 2), GRAPHICS)
+
+    def test_every_vivid_surface_is_a_tube_drawn_from_its_neon(self):
+        for tube in TUBES:
+            with self.subTest(tube=tube):
+                rule = self.rules[tube]
+                self.assertIn("border-color: var(--ls-neon)", rule)
+                shadow = re.search(r"box-shadow:([^;]+);", rule).group(1)
+                self.assertRegex(shadow, r"^\s*0 0 0 1px var\(--ls-neon\),")
+                self.assertRegex(shadow, r"inset 0 0 \d+px color-mix\(in srgb, "
+                                         r"var\(--ls-neon\) \d+%, transparent\)")
+                self.assertRegex(shadow, r",\s*0 0 \d+px color-mix\(in srgb, "
+                                         r"var\(--ls-neon\) \d+%, transparent\)\s*$")
+                self.assertNotRegex(rule, r"#[0-9a-fA-F]{3,6}\b")
+
+    def test_every_culprits_words_wear_a_halo_of_its_neon(self):
+        for words in WORDS:
+            with self.subTest(words=words):
+                rule = self.rules[words]
+                self.assertRegex(rule, r"text-shadow:\s*0 0 \d+px var\(--ls-neon\)"
+                                       r"(,\s*0 0 \d+px var\(--ls-neon\))+;")
+                self.assertNotRegex(rule, r"opacity\s*:")
+
+    def test_the_tube_is_this_themes_alone(self):
+        for selector, body in self.blocks.items():
+            if "--ls-neon" in body:
+                with self.subTest(selector=selector):
+                    for part in _selectors(selector):
+                        self.assertTrue(part.startswith(THEME + " "), part)
+
+    def test_the_pip_keeps_its_edge_and_the_warned_mark_its_amber(self):
+        # two marks painted from the vivid fills, which the glass turned dark: the
+        # pause pip on a parent's head is ringed in maintenance's neon, and the warned
+        # triangle on a measure's curve filled with the warning's
+        pip = self.rules[f"{THEME} .maintenance-pip"]
+        self.assertRegex(pip, r"box-shadow:\s*0 0 0 1px "
+                              r"var\(--ls-tint-maintenance-ink\)")
+        warned = self.rules[f"{THEME} .ls-curve__warned"]
+        self.assertIn("fill: var(--ls-tint-warn-ink)", warned)
+        amber = _ratio(_rgb(self.theme["--ls-tint-warn-ink"]), _rgb(DROPDOWN["dark"]))
+        self.assertGreaterEqual(round(amber, 2), GRAPHICS)
+
+
+
+# A culprit's words on its vivid fill (ADR-0028): every
+# vivid pair clears the bar in every theme — its name and its lines at full ink,
+# and its state word at the weight the sheet gives it, which lifts an error's and a
+# warning's to the full ink and leaves maintenance's and undefined's at the quiet
+# opacity every state word starts from.
+STATE_WORDS = (".status-card__state", ".status-node__state", ".ls-strip__state")
+LIFTED = ("error", "warn")
+
+
+def _resolved(palette, token):
+    """A token's color, following a token that names another (`var(--ls-…)`)."""
+    value = palette[token]
+    while value.startswith("var("):
+        value = palette[re.fullmatch(r"var\((--ls-[\w-]+)\)", value).group(1)]
+    return value
+
+
+def _in_order(css):
+    """Every rule of the sheet as ``(selector, body)``, in the sheet's order — a
+    selector stated twice is two rules, which :func:`_blocks` keeps one of."""
+    css = _strip_comments(css)
+    out = []
+    for match in re.finditer(r"(?m)^\s*([^{}@\s][^{}]*?)\s*\{", css):
+        depth, i = 1, match.end()
+        while depth:
+            depth += {"{": 1, "}": -1}.get(css[i], 0)
+            i += 1
+        out.append((match.group(1).strip(), css[match.end():i - 1]))
+    return out
+
+
+class VividWordsTests(TestCase):
+    """Every culprit's words read on its fill, in every theme."""
+
+    @classmethod
+    def setUpClass(cls):
+        css = STYLESHEET.read_text(encoding="utf-8")
+        cls.blocks = _blocks(css)
+        cls.in_order = _in_order(css)
+
+    def _quiet(self):
+        """The opacity a state word starts from: the last one the sheet gives each of
+        the three on its own, the same for all three."""
+        alphas = set()
+        for word in STATE_WORDS:
+            given = [float(found.group(1)) for selector, body in self.in_order
+                     if word in _selectors(selector)
+                     for found in [re.search(r"opacity:\s*([\d.]+)", body)] if found]
+            self.assertTrue(given, word)
+            alphas.add(given[-1])
+        self.assertEqual(len(alphas), 1, alphas)
+        return alphas.pop()
+
+    def test_only_an_errors_and_a_warnings_state_word_is_lifted(self):
+        # what the quiet opacity below is measured for: the rules that lift a state
+        # word to the full ink name an error's and a warning's, and no other state's
+        lifts = [selector for selector, body in self.blocks.items()
+                 if re.search(r"(?m)^\s*opacity:\s*1\s*;", body)
+                 and any(word in selector for word in STATE_WORDS)]
+        named = {state for selector in lifts
+                 for state in re.findall(r"\.s-(\w+)", selector)}
+        self.assertEqual(named, set(LIFTED))
+
+    def test_every_culprits_words_clear_aa_in_every_theme(self):
+        quiet = self._quiet()
+        for theme, selector, _ in THEMES:
+            palette = _tokens(self.blocks, selector)
+            for state in ("error", "warn", "maintenance", "undefined"):
+                fill = _rgb(_resolved(palette, f"--ls-{state}"))
+                ink = _rgb(_resolved(palette, f"--ls-{state}-ink"))
+                weight = 1.0 if state in LIFTED else quiet
+                with self.subTest(theme=theme, state=state):
+                    name = _ratio(ink, fill)
+                    self.assertGreaterEqual(round(name, 2), AA,
+                                            f"{state}'s words are {name:.2f}:1")
+                    word = _ratio(_over(ink, fill, weight), fill)
+                    self.assertGreaterEqual(round(word, 2), AA,
+                                            f"{state}'s state word is {word:.2f}:1")

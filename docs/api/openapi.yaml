@@ -9,8 +9,9 @@ openapi: 3.1.0
 # Field provenance (maintainers — little-sister's ADRs, in its docs/adr/, also where a
 # client keeps a copy of this file): the envelope is the snapshot published ADR-0080;
 # node addressing ADR-0016; the three statuses and the contribution ADR-0032; entries
-# ADR-0036 / ADR-0042; about + leaf description ADR-0012; title ADR-0017; config +
-# report ADR-0013 / ADR-0044; Markdown text fields ADR-0018; maintenance ADR-0014;
+# ADR-0036 / ADR-0042, an entry's form ADR-0126; about + leaf description ADR-0012;
+# title ADR-0017; config + report ADR-0013 / ADR-0044; Markdown text fields ADR-0018;
+# maintenance ADR-0014;
 # roll-up & staleness ADR-0039 / ADR-0005 / ADR-0079; the run facts ADR-0044 and the
 # unit that answers for a node ADR-0078; sibling rank ADR-0055; show_when_quiet
 # ADR-0063; instance facts ADR-0066; bearer token ADR-0003. The series read is
@@ -68,9 +69,14 @@ info:
     2.7.0 adds the series read: two paths and their schemas, and the first `400` this
     API answers, for a window it cannot read. Nothing of the status read moves.
 
+    2.8.0 adds an entry's `form`: the form its line was written from, where its
+    check's grading named one, and null on every other line; and its `grading`: the
+    grading that decided its line's code, where one did, and null on every other line.
+    Nothing else moves.
+
     See `docs/api/README.md` (linked below) for auth, `curl` examples and how tokens
     are provisioned.
-  version: 2.7.0
+  version: 2.8.0
   contact:
     name: little-sister
     url: https://github.com/m-31/little-sister
@@ -428,7 +434,9 @@ components:
             is answering. While it is set, nothing of this node reaches its parent:
             a reading taken through a broken path is not evidence, in either
             direction, so an `OK` is withheld exactly as an `ERROR` is. The node's own
-            `code` is untouched and says what the check actually found.
+            `code` is untouched and says what the check actually found. Its
+            `contribution` names the rule, `dependency`, with a null `code` — unless
+            the node is pinned or has never reported, which are named first.
           examples: ["/net/vpn"]
         changes:
           type: integer
@@ -489,9 +497,12 @@ components:
         by:
           type: string
           description: >-
-            The rule that transformed the contribution. `maintenance` — the node, or
-            every one of its addressable entries, is pinned. `undefined` — the node has
-            never reported. `damping` — the node has read a worse code but not yet as
+            The rule that transformed the contribution — one per node, the first of
+            these that applies. `maintenance` — the node, or every one of its
+            addressable entries, is pinned. `undefined` — the node has never reported.
+            `dependency` — the node is reached through a failing dependency, which
+            `shielded_by` names, so its parent counts nothing of it, an `OK` no more
+            than an `ERROR`. `damping` — the node has read a worse code but not yet as
             many times in a row as this deployment asked for, so the parent still counts
             what it published before. Further rules add further names, which is a
             compatible change; treat an unknown name as "something changed what this
@@ -578,6 +589,26 @@ components:
             are the check's, and only the record is missing.
           type: ["string", "null"]
           examples: ["it is 2,811 bytes and the limit is 2,048"]
+        form:
+          description: >-
+            The form this line was written from, where its check's grading named one:
+            the sentence the grading chose to say, which a deployment may re-word in
+            the check's configuration under this name — so `text` is that form,
+            rendered over `data`. Null on a line its check wrote as a sentence of its
+            own. A key to show beside the line, never to parse: the grading decides
+            which form it says, and `text` and `code` mean what they always do.
+          type: ["string", "null"]
+          examples: ["actions.verdict"]
+        grading:
+          description: >-
+            The grading that decided this line's code, where one did: a value the
+            check's type declares it grades — levels over a number, a map of words, a
+            set of accepted values — whose keys a deployment writes under this name to
+            grade the line differently. Null on a line no grading decided. A key to
+            show beside the line, never to parse: `code` is still the line's code, and
+            this only names what decided it.
+          type: ["string", "null"]
+          examples: ["max_disk", "actions.disabled_severity_map"]
         maintenance:
           description: The pin on this entry, or null when it is not pinned.
           oneOf:
@@ -591,6 +622,8 @@ components:
         - subject
         - data
         - refused
+        - form
+        - grading
         - maintenance
 
     Run:

@@ -71,8 +71,8 @@ MAC_SAMPLE = (
     "proc_count=2\n")
 
 PROCESSES = [{"name": "mail", "pattern": "Mail.app"},
-             {"name": "collector", "pattern": "collector", "warn_mb": 512,
-              "error_mb": 1024}]
+             {"name": "collector", "pattern": "collector",
+              "max_rss_warn": "512 MiB", "max_rss_error": "1 GiB"}]
 
 T0 = datetime(2026, 9, 26, 15, 0, tzinfo=UTC)
 
@@ -166,7 +166,7 @@ class LoadPerCoreTests(TestCase):
         record["load1_per_core"] = 2.5
         load = _graded(host, record)["load"]
         self.assertEqual(load.code, StatusCode.ERROR)
-        self.assertEqual(load.reason, ["2.50 per core — load1 2.20 over 8 CPUs"])
+        self.assertEqual(load.reason_texts, ["2.50 per core — load1 2.20 over 8 CPUs"])
 
 
 class ThingsByNameTests(TestCase):
@@ -195,7 +195,7 @@ class ThingsByNameTests(TestCase):
                          {"root", "data", "ext"})
         data, = (child for child in disk.children if child.name == "data")
         self.assertEqual(data.code, StatusCode.ERROR)             # 91 %
-        self.assertIn("on /srv/data", data.reason[0])
+        self.assertIn("on /srv/data", data.reason_texts[0])
 
     def test_a_volume_keeps_its_curve_when_the_order_moves(self) -> None:
         swapped = (VOLUMES_SAMPLE.replace("disk1_", "diskX_")
@@ -387,7 +387,7 @@ class DefaultsTests(TestCase):
     def test_file_declares_none(self) -> None:
         check = FileFreshnessCheck.from_config(
             {"type": "file", "path": "/beat", "file": "/tmp/beat",
-             "max_age": "5m"}, Path("."))
+             "max_age_error": "5m"}, Path("."))
         self.assertEqual(check.measures, {})
 
     def test_every_default_reads_a_number_out_of_its_type_s_reading(self) -> None:
@@ -439,7 +439,7 @@ class SentenceTests(TestCase):
         with _checks() as make:
             mac = make["mac"]()
             swap = _graded(mac, _read(mac, MAC_SAMPLE))["swap"]
-        self.assertEqual(swap.reason, ["1.4 GiB used of 3.0 GiB allocated"])
+        self.assertEqual(swap.reason_texts, ["1.4 GiB used of 3.0 GiB allocated"])
         self.assertEqual(mac.measures["swap_used_mb"].write(1419), "1.4 GiB")
 
     def test_a_process_reads_in_the_curve_s_units(self) -> None:
@@ -447,7 +447,7 @@ class SentenceTests(TestCase):
             mac = make["mac"]()
             processes = _graded(mac, _read(mac, MAC_SAMPLE))["processes"]
         mail, = (child for child in processes.children if child.name == "mail")
-        self.assertEqual(mail.reason,
+        self.assertEqual(mail.reason_texts,
                          ["412.0 MiB RSS over 1 process, oldest up 2h 13m"])
         self.assertEqual(mac.measures["processes.*.rss_kb"]
                          .expand([{"processes": {"mail": {}}}])[0].write(421888),

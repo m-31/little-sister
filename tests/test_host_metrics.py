@@ -99,7 +99,7 @@ class HostMetricsCheckTests(TestCase):
         kids = self._kids(check.grade((Measurement(record=record),),
                                       datetime.now(UTC)))
         self.assertEqual(kids["memory"].code, StatusCode.WARN)
-        self.assertEqual(kids["memory"].reason, ["unavailable"])
+        self.assertEqual(kids["memory"].reason_texts, ["unavailable"])
 
     def test_the_grading_works_from_a_record_it_never_measured(self):
         """The whole point of the split, tested the way the authoring guide now
@@ -111,8 +111,8 @@ class HostMetricsCheckTests(TestCase):
         cannot pass by quietly reaching for the world.
         """
         with tempfile.TemporaryDirectory() as directory:
-            check = self._check(directory, thresholds={"disk": {"warn": 80,
-                                                                "error": 90}})
+            check = self._check(directory, max_disk_warn="80%",
+                                max_disk_error="90%")
         typed = Measurement(record={
             "exit_code": 0, "disk_pct": 93, "disk_avail_kb": 70000,
             "disk_total_kb": 1000000, "disk_path": "/", "mem_pct": 50,
@@ -122,7 +122,7 @@ class HostMetricsCheckTests(TestCase):
                         side_effect=AssertionError("the grading read the world")):
             kids = self._kids(check.grade((typed,), datetime.now(UTC)))
         self.assertEqual(kids["disk"].code, StatusCode.ERROR)
-        self.assertIn("93% used", kids["disk"].reason[0])
+        self.assertIn("93% used", kids["disk"].reason_texts[0])
         self.assertEqual(kids["ssh"].reason[0],
                          "alpha reachable — Linux, 4 CPUs, up 1d 1h")
 
@@ -158,13 +158,13 @@ class HostMetricsCheckTests(TestCase):
         self.assertIn("up 1d 1h", kids["ssh"].reason[0])
         # disk 85% lands in the default warn band (>=80, <90)
         self.assertEqual(kids["disk"].code, StatusCode.WARN)
-        self.assertIn("85% used", kids["disk"].reason[0])
-        self.assertIn("free of", kids["disk"].reason[0])
+        self.assertIn("85% used", kids["disk"].reason_texts[0])
+        self.assertIn("free of", kids["disk"].reason_texts[0])
         # OK aspects still carry their number
         self.assertEqual(kids["memory"].code, StatusCode.OK)
-        self.assertIn("50% used", kids["memory"].reason[0])
-        self.assertEqual(kids["cpu"].reason, ["7% busy"])
-        self.assertIn("0.10 per core", kids["load"].reason[0])
+        self.assertIn("50% used", kids["memory"].reason_texts[0])
+        self.assertEqual(kids["cpu"].reason_texts, ["7% busy"])
+        self.assertIn("0.10 per core", kids["load"].reason_texts[0])
 
     def test_metric_children_and_ssh_leaf_carry_config(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -364,18 +364,53 @@ class HostMetricsCheckTests(TestCase):
         with tempfile.TemporaryDirectory() as directory:
             result, _ = self._run(directory, stdout)
         aspects = {child.name: child.code for child in result.children}
-        self.assertEqual(aspects["disk"], StatusCode.ERROR)    # >=90
-        self.assertEqual(aspects["memory"], StatusCode.WARN)   # 85<=90<95
-        self.assertEqual(aspects["cpu"], StatusCode.ERROR)     # >=95
+        self.assertEqual(aspects["disk"], StatusCode.ERROR)    # above 90
+        self.assertEqual(aspects["memory"], StatusCode.WARN)   # above 85, not 95
+        self.assertEqual(aspects["cpu"], StatusCode.ERROR)     # above 95
         self.assertEqual(aspects["load"], StatusCode.ERROR)    # 10/4=2.5/core
 
     def test_threshold_override_from_config(self):
         with tempfile.TemporaryDirectory() as directory:
-            result, _ = self._run(
-                directory, "disk_pct=15\n",
-                thresholds={"disk": {"warn": 10, "error": 20}})
+            result, _ = self._run(directory, "disk_pct=15\n",
+                                  max_disk_warn="10%", max_disk_error="20%")
         disk = next(c for c in result.children if c.name == "disk")
         self.assertEqual(disk.code, StatusCode.WARN)
+
+    def test_a_level_is_the_last_value_that_passes(self):
+        """Each aspect is a pair (ADR-0131): a value at its level passes, and one
+        beyond it fires — what warned at 90 warns above 90 now."""
+        stdout = "disk_pct=90\nmem_pct=85\ncpu_pct=95\nload1=4\nncpu=4\n"
+        with tempfile.TemporaryDirectory() as directory:
+            result, _ = self._run(directory, stdout)
+        aspects = {child.name: child.code for child in result.children}
+        self.assertEqual(aspects["disk"], StatusCode.WARN)     # at 90, above 80
+        self.assertEqual(aspects["memory"], StatusCode.OK)     # at 85
+        self.assertEqual(aspects["cpu"], StatusCode.WARN)      # at 95, above 85
+        self.assertEqual(aspects["load"], StatusCode.WARN)     # 1.0 per core
+
+    def test_null_switches_an_aspect_off_and_a_sentence_rides_what_fired(self):
+        stdout = "disk_pct=95\nmem_pct=30\ncpu_pct=100\nload1=0.1\nncpu=4\n"
+        with tempfile.TemporaryDirectory() as directory:
+            result, _ = self._run(directory, stdout, max_cpu=None,
+                                  max_disk_warn="90%",
+                                  max_disk_reason="The backups land here.")
+        kids = self._kids(result)
+        self.assertEqual(kids["cpu"].code, StatusCode.OK)
+        self.assertIn("not graded", kids["cpu"].config)
+        self.assertEqual(kids["disk"].code, StatusCode.WARN)
+        self.assertTrue(kids["disk"].reason_texts[0].endswith(
+            "% used — The backups land here."))
+        self.assertEqual(kids["disk"].reason_entries[0].grading, "max_disk")
+
+    def test_the_retired_thresholds_stop_the_start_naming_what_replaces_them(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                self.assertRaises(CheckError) as caught:
+            self._check(directory, thresholds={
+                "cpu": {"warn": 101, "error": 101}, "disk": {"warn": 90,
+                                                             "error": 95}})
+        self.assertIn("'thresholds' is retired", str(caught.exception))
+        self.assertIn("write max_cpu_error: 101%, max_disk_warn: 90%, "
+                      "max_disk_error: 95% (ADR-0131)", str(caught.exception))
 
     def test_disk_all_builds_a_branch_per_volume(self):
         stdout = (
@@ -395,12 +430,12 @@ class HostMetricsCheckTests(TestCase):
         vols = {c.name: c for c in disk.children}
         self.assertEqual(set(vols), {"root", "MD0_DATA", "ext"})
         self.assertEqual(vols["root"].code, StatusCode.OK)        # 52%
-        self.assertEqual(vols["MD0_DATA"].code, StatusCode.ERROR)  # 91% (>=90)
+        self.assertEqual(vols["MD0_DATA"].code, StatusCode.ERROR)  # 91%, above 90
         self.assertEqual(vols["ext"].code, StatusCode.ERROR)       # 99%
-        self.assertIn("91% used", vols["MD0_DATA"].reason[0])
-        self.assertIn("/share/MD0_DATA", vols["MD0_DATA"].reason[0])
+        self.assertIn("91% used", vols["MD0_DATA"].reason_texts[0])
+        self.assertIn("/share/MD0_DATA", vols["MD0_DATA"].reason_texts[0])
         # the other aspects are unaffected
-        self.assertEqual(self._kids(result)["cpu"].reason, ["5% busy"])
+        self.assertEqual(self._kids(result)["cpu"].reason_texts, ["5% busy"])
 
     def test_disk_path_list_is_joined_and_passed_to_script(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -431,7 +466,7 @@ class HostMetricsCheckTests(TestCase):
         kids = self._kids(result)
         self.assertEqual(kids["ssh"].code, StatusCode.OK)
         self.assertEqual(kids["memory"].code, StatusCode.WARN)
-        self.assertEqual(kids["memory"].reason, ["unavailable"])
+        self.assertEqual(kids["memory"].reason_texts, ["unavailable"])
 
     def test_ssh_failure_marks_ssh_leaf_error(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -293,9 +293,26 @@ resolve_users_document() {
   return 1
 }
 
-# PIDs currently LISTENing on a port (a gunicorn master and its workers all
-# share the one listening socket, so this may return more than one PID).
-listeners_on() { lsof -ti "tcp:$1" -sTCP:LISTEN 2>/dev/null | sort -u || true; }
+# Is there a process with this PID? `ps -p` rather than `kill -0`: the signal is
+# refused for another user's process, which is exactly the stranger a refusal has to
+# name, and `ps` sees every user's.
+process_exists() { ps -p "$1" >/dev/null 2>&1; }
+
+# PIDs currently LISTENing on a port (a gunicorn master and its workers all share
+# the one listening socket, so this may return more than one PID) -- the ones that
+# still exist. `lsof` lists what held the socket a moment ago, and a worker of an
+# instance whose worker keeps crashing -- a start on incompatible versions leaves one
+# -- exits every few seconds: judged by its command line, which there is no process
+# left to read, such a PID read as a stranger on the port, and a start refused over a
+# process that did not exist (a deployment, 2026-10-15: `PID 86962: `). A listener
+# gone by the time it is looked at holds nothing.
+listeners_on() {
+  local pid
+  for pid in $(lsof -ti "tcp:$1" -sTCP:LISTEN 2>/dev/null | sort -u || true); do
+    if process_exists "$pid"; then echo "$pid"; fi
+  done
+  return 0
+}
 
 # The same, for the port this run resolved to.
 listeners() { listeners_on "$PORT"; }
@@ -458,14 +475,37 @@ is_ours() {
   return 1
 }
 
+# Is this PID a stranger on the port -- a process that is not ours **and is there**?
+# The verdict is asked at the moment it is given: a listener that exited while the
+# ones before it were being looked at -- `cwd_of` is an `lsof`, slow on macOS -- has
+# no command line and no working directory, which is how a process that is gone used
+# to read as one that is not ours. Gone holds nothing, and is no reason to refuse.
+is_a_stranger() {
+  if is_ours "$1"; then
+    return 1
+  fi
+  process_exists "$1"
+}
+
+# One PID for a refusal: its command line, or that it is gone -- which a refusal
+# used to print as nothing after the colon.
+named_pid() {
+  local command
+  command="$(cmd_of "$1")"
+  echo "PID $1: ${command:-(gone)}"
+}
+
 # Given a set of related gunicorn PIDs, the master is the one whose parent is
-# *not* itself in the set (workers are children of the master).
+# *not* itself in the set (workers are children of the master). A PID whose parent
+# cannot be read is gone, and is passed over: it used to be taken for the master
+# where it came first in the set, having no parent anybody could find.
 master_of() {
   local pids="$*" pid ppid other
   for pid in $pids; do
     ppid="$(ps -p "$pid" -o ppid= 2>/dev/null | tr -d ' ')"
+    [ -n "$ppid" ] || continue                     # no process -> not the master
     for other in $pids; do
-      [ "$other" = "${ppid:-0}" ] && continue 2   # parent in set -> a worker
+      [ "$other" = "$ppid" ] && continue 2         # parent in set -> a worker
     done
     echo "$pid"; return 0                          # parent not in set -> master
   done

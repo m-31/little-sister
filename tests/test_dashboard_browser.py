@@ -13,16 +13,20 @@ test whose Bootstrap prerequisite is directly unavailable skips.
 from __future__ import annotations
 
 import shutil
-import struct
 import tempfile
 import unittest
-import zlib
 from pathlib import Path
 
 try:  # pragma: no cover - environment probe
     from playwright.sync_api import sync_playwright
 except ImportError:  # pragma: no cover
     sync_playwright = None  # type: ignore[assignment]
+
+#: A sandbox pins one browser build; a Playwright from the lock may expect another,
+#: so the one that is there is what runs (as ``tests/sweep_contrast.py`` does).
+#: Without it this file launched Playwright's own revision and skipped where the
+#: other browser files ran.
+_SANDBOX_CHROMIUM = Path("/opt/pw-browsers/chromium-1194/chrome-linux/chrome")
 
 # `document.scrollHeight` is clamped to the viewport, so a page shorter than
 # the window reports the window's height and a "did it grow?" assertion goes
@@ -73,77 +77,6 @@ def _make_cdn_deterministically_unavailable(page) -> list[str]:
     return aborted
 
 
-def _samples(png: bytes) -> tuple[int, int, int, bytes]:
-    """A capture's width, height, channels and 8-bit samples, row after row.
-
-    Chromium writes a screenshot as 8-bit RGB or RGBA, never interlaced; anything
-    else is refused rather than misread. Its filters are the specification's
-    five, so a few lines decode it and no image library joins the browser group.
-    """
-    if png[:8] != b"\x89PNG\r\n\x1a\n":
-        raise ValueError("not a PNG")
-    header, data, at = b"", [], 8
-    while at < len(png):
-        (length,) = struct.unpack(">I", png[at:at + 4])
-        kind, body = png[at + 4:at + 8], png[at + 8:at + 8 + length]
-        if kind == b"IHDR":
-            header = body
-        elif kind == b"IDAT":
-            data.append(body)
-        at += 12 + length
-    width, height, depth, color, _, _, interlace = struct.unpack(">IIBBBBB", header)
-    if depth != 8 or color not in (2, 6) or interlace:
-        raise ValueError(f"a PNG of depth {depth}, color type {color}, "
-                         f"interlace {interlace}")
-    step = 3 if color == 2 else 4
-    stride = width * step
-    raw = zlib.decompress(b"".join(data))
-    rows: list[bytes] = []
-    above = bytearray(stride)
-    for y in range(height):
-        start = y * (stride + 1)
-        kind, row = raw[start], bytearray(raw[start + 1:start + 1 + stride])
-        for i in range(stride):
-            left = row[i - step] if i >= step else 0
-            up, corner = above[i], above[i - step] if i >= step else 0
-            if kind == 1:
-                row[i] = (row[i] + left) & 0xFF
-            elif kind == 2:
-                row[i] = (row[i] + up) & 0xFF
-            elif kind == 3:
-                row[i] = (row[i] + (left + up) // 2) & 0xFF
-            elif kind == 4:
-                guess = left + up - corner
-                far_left, far_up = abs(guess - left), abs(guess - up)
-                far_corner = abs(guess - corner)
-                if far_left <= far_up and far_left <= far_corner:
-                    row[i] = (row[i] + left) & 0xFF
-                elif far_up <= far_corner:
-                    row[i] = (row[i] + up) & 0xFF
-                else:
-                    row[i] = (row[i] + corner) & 0xFF
-        rows.append(bytes(row))
-        above = row
-    return width, height, step, b"".join(rows)
-
-
-#: How far apart two captures of one unchanged region come out: the rasterizer's
-#: own, measured at one level in one channel where a title had been hidden from
-#: under an opaque veil — at some widths and not at others, and not on every run.
-#: A title's glyph is some 145 levels off the fill it is drawn on.
-_RASTER_NOISE = 2
-
-
-def _largest_difference(first: bytes, second: bytes) -> int:
-    """The largest difference, in any channel of any pixel, between two captures
-    of the same region."""
-    one, other = _samples(first), _samples(second)
-    if one[:3] != other[:3]:
-        raise AssertionError(f"captures of different shapes: {one[:3]}, {other[:3]}")
-    return max((abs(a - b) for a, b in zip(one[3], other[3], strict=True)),
-               default=0)
-
-
 class ChromiumBoundaryTests(unittest.TestCase):
     """One-pixel walks across the widths the model publishes bands at."""
 
@@ -161,7 +94,9 @@ class ChromiumBoundaryTests(unittest.TestCase):
             raise unittest.SkipTest("playwright is not installed")
         try:
             cls.playwright = sync_playwright().start()
-            cls.browser = cls.playwright.chromium.launch()
+            cls.browser = cls.playwright.chromium.launch(
+                executable_path=(str(_SANDBOX_CHROMIUM) if _SANDBOX_CHROMIUM.is_file()
+                                 else None))
         except Exception as error:  # pragma: no cover - no browser here
             if cls.playwright is not None:
                 cls.playwright.stop()
@@ -494,17 +429,18 @@ class ChromiumBoundaryTests(unittest.TestCase):
 
                     # Keeping the settings trigger on screen is not enough on a
                     # short window: its menu is taller than this viewport. Show
-                    # it without submitting a preference, scroll it to the last
-                    # layout choice, and prove that choice is reachable inside
-                    # the menu's own bounded scrollport.
+                    # it without submitting a preference, scroll it to its last
+                    # choice — the last look's, below the layout's — and prove
+                    # that choice is reachable inside the menu's own bounded
+                    # scrollport.
                     menu = page.evaluate(
                         """
                         () => {
                           const panel = document.querySelector('.ls-menu__panel');
                           panel.classList.add('show');
                           panel.scrollTop = panel.scrollHeight;
-                          const choice = panel.querySelector('[value="kiosk"]')
-                              .closest('label');
+                          const choices = panel.querySelectorAll('input[type=radio]');
+                          const choice = choices[choices.length - 1].closest('label');
                           const box = panel.getBoundingClientRect();
                           const item = choice.getBoundingClientRect();
                           return {
@@ -757,8 +693,8 @@ class ChromiumBoundaryTests(unittest.TestCase):
                 () => {
                   const panel = document.querySelector('.ls-menu__panel');
                   panel.scrollTop = panel.scrollHeight;
-                  const choice = panel.querySelector('[value="kiosk"]')
-                      .closest('label');
+                  const choices = panel.querySelectorAll('input[type=radio]');
+                  const choice = choices[choices.length - 1].closest('label');
                   const box = panel.getBoundingClientRect();
                   const item = choice.getBoundingClientRect();
                   const maxHeight = parseFloat(
@@ -953,26 +889,26 @@ class ChromiumBoundaryTests(unittest.TestCase):
             page.wait_for_function(
                 "document.activeElement !== null"
                 " && document.activeElement.name === 'reason'")
-            field = page.locator("#node-maintenance-duration")
+            field = page.locator("#head-maintenance-duration")
             was = field.input_value()
             self.assertRegex(was, r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
             field.click()
             # the selection is made after the click has placed its caret
             page.wait_for_function(
                 "(() => { const f = document.activeElement; return f !== null"
-                " && f.id === 'node-maintenance-duration' && f.value !== ''"
+                " && f.id === 'head-maintenance-duration' && f.value !== ''"
                 " && f.selectionStart === 0"
                 " && f.selectionEnd === f.value.length; })()")
             page.keyboard.type("3d")
             self.assertEqual(field.input_value(), "3d")
             # changed, it is somebody's text: entering it again selects nothing
-            page.click("#node-maintenance-reason")
+            page.click("#head-maintenance-reason")
             field.click()
             page.wait_for_timeout(150)
             ends = page.evaluate(
                 "() => { const f = document.activeElement; return "
                 "[f.id, f.selectionStart, f.selectionEnd]; }")
-            self.assertEqual(ends[0], "node-maintenance-duration")
+            self.assertEqual(ends[0], "head-maintenance-duration")
             self.assertEqual(ends[1], ends[2])
             # Escape puts the block back as it was read, the field as filled
             page.keyboard.press("Escape")
@@ -984,51 +920,28 @@ class ChromiumBoundaryTests(unittest.TestCase):
             page.close()
 
 
-class ActionChipPaintTests(unittest.TestCase):
-    """A chip laid over a title must not read through to it (ADR-0034).
+class ActionRowTests(unittest.TestCase):
+    """A node's actions stand in the head's row, shown always, and nothing is laid
+    over the title any more (ADR-0127 decision 3).
 
-    The head's action rail is positioned over the title's space on purpose — a
-    chip is something to click, a title is a nicety (`.status-head__middle` in
-    `overview.css`) — and a chip is deliberately transparent, inking in
-    `currentColor` so it reads on every status fill. Together those two right
-    decisions drew both sets of glyphs in the same pixels: a real deployment's
-    `+ Jira` chip sat in the middle of the word "analysis" and neither could be
-    read.
-
-    The claim the fix makes is about **paint**, so it is measured in paint: the
-    area the chips occupy is the same image whether the title is there or
-    hidden, because the rail repaints the box's own fill underneath. The
-    counterpart matters as much and is asserted beside it — at rest the same
-    comparison must come out *different*, because a card that offers nothing to
-    click keeps every pixel of its title. A test that could not tell those two
-    apart would pass just as happily on a veil that is always on, or on a
-    screenshot comparison that is blind.
-
-    Both captures are **settled** first — see `_stable_screenshot`. A single
-    capture can come back with a band Chromium has not rasterised yet, and that
-    is what made the first version of this test fail about one run in five, on
-    a machine whose fractional layout made the blank frame likelier. The blank
-    band is white, so it reads exactly like a difference in what the veil
-    covers; the pixels themselves were never in doubt.
-
-    And the two are compared as pixels, not as files. Hiding the title under an
-    opaque veil can still move a pixel of the chip's own edge by one level, at
-    some widths and on some runs, and two files that differ by that are not two
-    images of which one shows a title. `_RASTER_NOISE` is that allowance, and a
-    title's glyph is far beyond it.
-
-    This builds its own page rather than reading one off the fixture sheet: the
-    sheet registers no filler, so it has no chip to collide with anything, which
-    is exactly how the collision shipped. The page is the real Jinja pipeline
-    with the demo package filling the real slot.
+    The rail of actions used to sit over the title's space on purpose and veil what
+    it covered, quiet until the card was hovered; a real deployment's `+ Jira` chip
+    once sat in the middle of the word "analysis" (ADR-0034). The head's row now
+    holds the actions among its controls, before the state and the head's own
+    icons: the title gives way to them, with an ellipsis, so no pixel of a title is
+    ever under a chip, and the chips are shown at rest as the icons are. Measured
+    in geometry, which is what the claim is about now, on the real Jinja pipeline
+    with the demo package filling the real slot — the fixture sheet registers no
+    filler, so it has no chip to collide with anything, which is exactly how the
+    collision shipped.
     """
 
     browser = None
     playwright = None
     out: Path | None = None
 
-    #: Long enough that the title's box reaches under the rail at card width —
-    #: asserted, not assumed, by the first test below.
+    #: Long enough that the title would reach under the rail at card width, if
+    #: anything let it.
     TITLE = "A very long human-friendly title that ought to ellipse"
     REASON = "analysis not readable: no status at all, and no freetext"
 
@@ -1038,7 +951,9 @@ class ActionChipPaintTests(unittest.TestCase):
             raise unittest.SkipTest("playwright is not installed")
         try:
             cls.playwright = sync_playwright().start()
-            cls.browser = cls.playwright.chromium.launch()
+            cls.browser = cls.playwright.chromium.launch(
+                executable_path=(str(_SANDBOX_CHROMIUM) if _SANDBOX_CHROMIUM.is_file()
+                                 else None))
         except Exception as error:  # pragma: no cover - no browser here
             if cls.playwright is not None:
                 cls.playwright.stop()
@@ -1065,8 +980,8 @@ class ActionChipPaintTests(unittest.TestCase):
                        "node_action.html", node_action)
         try:
             html = render_page(Fixture(
-                "action_chip_over_title",
-                "a card whose action chip lands on its title", build))
+                "action_chip_in_the_row",
+                "a card whose action chip stands in its head's row", build))
         finally:
             # a reset puts the library's own fillers back; the demo one goes
             slots.forget_fillers()
@@ -1082,36 +997,9 @@ class ActionChipPaintTests(unittest.TestCase):
         if cls.out is not None:
             shutil.rmtree(cls.out, ignore_errors=True)
 
-    #: The chip's resting and revealed opacities, from `overview.css`. Waiting
-    #: for "not 0" would catch the fade mid-flight and compare two screenshots
-    #: taken at different opacities — a difference that is about the clock.
-    SHOWN = "0.75"
-    HIDDEN = "0"
-
     def _open(self):
-        """One card on a phone's window, on a page that has stopped moving.
-
-        The card has to be narrow enough for its chips to land on its title, and
-        a window of 360 pixels makes it so. Below 576 the rail gives way
-        (ADR-0105 decision 8) and a card is the window's width less its margins:
-        at 360 about as narrow as it was beside the rail in the 420-pixel window
-        this test was written at, where its title now ends before the chips.
-
-        Two screenshots taken a moment apart are only comparable if nothing
-        relaid out between them, and this page has two ways to move after its
-        first paint: a render-blocking stylesheet arriving from a CDN, and
-        `rail.js` replacing the scriptless bar height with the measured one.
-        Either one slides the card out from under a pointer that never moved,
-        the chips fade, and the comparison silently becomes one about `:hover`.
-        That is not hypothetical — it failed about one run in five before both
-        were pinned down here. A third way was the page itself: unstyled, its bar
-        grew and shrank twice a second on a window this short, until the settings
-        panel's cap became the open menu's
-        (`test_an_unstyled_bar_keeps_its_height_on_a_short_window`).
-
-        The clip has to be on screen as well: the header band puts the grid
-        below the fold at any sane window height.
-        """
+        """One card on a phone's window, 360 pixels: narrow enough that the title
+        has to give way to the chip, on a page that has stopped moving."""
         page = self.browser.new_page()
         page.set_viewport_size({"width": 360, "height": 700})
         aborted = _make_cdn_deterministically_unavailable(page)
@@ -1127,165 +1015,68 @@ class ActionChipPaintTests(unittest.TestCase):
         return page
 
     @staticmethod
-    def _point_at_card(page):
-        """Hover by coordinates, at the middle of the card's own body.
-
-        Playwright's `hover` waits for the element to be *stable* and a status
-        page never is — it carries a live countdown and re-measures its rail —
-        so the actionability check times out on a card that is perfectly
-        hoverable. The pointer only has to be inside the card: that is what the
-        `:hover` rule asks for. The **middle**, not an edge, so that the pixel
-        or two a browser may still shift cannot leave the pointer outside the
-        card it is meant to be on.
-        """
-        point = page.evaluate(
-            """
-            () => {
-              const box = document.querySelector('.status-card')
-                  .getBoundingClientRect();
-              return {x: box.x + box.width / 2,
-                      y: Math.min(box.y + box.height / 2, innerHeight - 8)};
-            }
-            """
-        )
-        page.mouse.move(point["x"], point["y"])
-
-    def _wait_for_chip(self, page, opacity: str):
-        page.wait_for_function(
-            "expected => getComputedStyle(document.querySelector("
-            "'.status-card .node-action')).opacity === expected",
-            arg=opacity)
-
-    @staticmethod
-    def _chip_opacity(page) -> str:
-        return page.evaluate(
-            "() => getComputedStyle(document.querySelector("
-            "'.status-card .node-action')).opacity")
-
-    @staticmethod
     def _geometry(page):
         return page.evaluate(
             """
             () => {
               const card = document.querySelector('.status-card');
-              const rail = card.querySelector(
-                  '.status-head__middle > .node-actions');
-              const drawn = [...rail.querySelectorAll('.node-action')];
-              const chips = drawn.map(c => c.getBoundingClientRect());
-              const title = card.querySelector('.node-title');
+              const head = card.querySelector('.status-card__head');
+              const rail = head.querySelector('.node-controls > .node-actions');
+              const chip = rail.querySelector('.node-action');
+              const title = head.querySelector('.node-title');
+              const name = head.querySelector('.status-card__name');
               const box = element => {
                 const b = element.getBoundingClientRect();
                 return {x: b.x, y: b.y, width: b.width, height: b.height,
-                        right: b.right};
+                        right: b.right, bottom: b.bottom};
               };
-              const span = {
-                x: Math.min(...chips.map(c => c.x)),
-                y: Math.min(...chips.map(c => c.y)),
-                right: Math.max(...chips.map(c => c.right)),
-                bottom: Math.max(...chips.map(c => c.bottom)),
-              };
-              span.width = span.right - span.x;
-              span.height = span.bottom - span.y;
               return {
-                rail: box(rail), chip: span, title: box(title),
-                fill: getComputedStyle(card).backgroundColor,
-                veil: getComputedStyle(rail).backgroundImage,
-                chipOpacity: getComputedStyle(drawn[0]).opacity,
+                rail: box(rail), chip: box(chip), title: box(title), name: box(name),
+                state: box(head.querySelector('.node-controls > .status-card__state')),
+                icons: box(head.querySelector('.node-icons')),
+                titleCut: title.scrollWidth > title.clientWidth,
+                chipOpacity: getComputedStyle(chip).opacity,
+                railPosition: getComputedStyle(rail).position,
               };
             }
             """
         )
 
-    def _clip(self, geometry):
-        """The pixels the chips occupy — the region the claim is about."""
-        chip = geometry["chip"]
-        return {"x": chip["x"], "y": chip["y"],
-                "width": chip["width"], "height": chip["height"]}
-
-    def _stable_screenshot(self, page, clip):
-        """Capture the region until two consecutive frames agree.
-
-        A capture can return a region Chromium has not rasterised yet — a band
-        of blank canvas where the card's fill belongs, seen here on a page that
-        had just been scrolled. It has nothing to do with what is being
-        measured and everything to do with when the frame was taken, so the
-        settle is two identical frames in a row. Five tries is many more than
-        it has ever needed; never settling is a failure worth reporting as
-        itself.
-        """
-        previous = page.screenshot(clip=clip)
-        for _ in range(5):
-            current = page.screenshot(clip=clip)
-            if current == previous:
-                return current
-            previous = current
-        raise AssertionError("the clipped region never stopped repainting")
-
-    @staticmethod
-    def _hide_title(page):
-        page.eval_on_selector(
-            ".status-card .node-title",
-            "element => { element.style.visibility = 'hidden'; }")
-
-    def test_the_title_runs_under_the_chips(self):
-        # The premise of everything below: at card width the ellipsed title
-        # reaches past the chip's left edge, so its glyphs are painted there.
-        page = self._open()
-        try:
-            geometry = self._geometry(page)
-            self.assertGreater(geometry["title"]["right"],
-                               geometry["chip"]["x"] + 2)
-        finally:
-            page.close()
-
-    def test_nothing_of_the_title_paints_inside_a_shown_chip(self):
-        page = self._open()
-        try:
-            self._point_at_card(page)
-            self._wait_for_chip(page, self.SHOWN)
-            geometry = self._geometry(page)
-            self.assertEqual(geometry["chipOpacity"], self.SHOWN)
-            clip = self._clip(geometry)
-            with_title = self._stable_screenshot(page, clip)
-            self._hide_title(page)
-            # The pointer has not moved, so the chips must still be shown. If
-            # they are not, the page moved under them and the two screenshots
-            # are of different states — a failure to report as itself rather
-            # than as a difference in what the veil covers.
-            self.assertEqual(self._chip_opacity(page), self.SHOWN)
-            without_title = self._stable_screenshot(page, clip)
-            self.assertLessEqual(
-                _largest_difference(with_title, without_title), _RASTER_NOISE)
-        finally:
-            page.close()
-
-    def test_a_card_at_rest_keeps_the_title_it_is_not_covering(self):
-        # The same measurement, the opposite verdict: no chip is offered, so
-        # nothing may be veiled — and a comparison that cannot see the title
-        # here was proving nothing in the test above either.
+    def test_the_title_gives_way_to_the_chip_and_nothing_lies_under_it(self):
         page = self._open()
         try:
             page.mouse.move(0, 0)
-            self._wait_for_chip(page, self.HIDDEN)
-            clip = self._clip(self._geometry(page))
-            with_title = self._stable_screenshot(page, clip)
-            self._hide_title(page)
-            self.assertEqual(self._chip_opacity(page), self.HIDDEN)
-            without_title = self._stable_screenshot(page, clip)
-            self.assertGreater(
-                _largest_difference(with_title, without_title), _RASTER_NOISE)
+            geometry = self._geometry(page)
+            # the premise: at card width the title would reach under the chip
+            self.assertTrue(geometry["titleCut"])
+            # so it ends before the chip, which stands in the row's flow, before the
+            # state and the head's own icons
+            self.assertLessEqual(geometry["title"]["right"],
+                                 geometry["chip"]["x"] + 1)
+            self.assertEqual(geometry["railPosition"], "static")
+            self.assertLess(geometry["chip"]["right"], geometry["state"]["x"] + 1)
+            self.assertLess(geometry["state"]["right"], geometry["icons"]["x"] + 1)
+            # on the name's line, whole
+            chip_middle = geometry["chip"]["y"] + geometry["chip"]["height"] / 2
+            name_middle = geometry["name"]["y"] + geometry["name"]["height"] / 2
+            self.assertLess(abs(chip_middle - name_middle),
+                            geometry["name"]["height"] / 2)
         finally:
             page.close()
 
-    def test_the_veil_is_the_card_own_fill(self):
-        # Not merely *some* opaque color: the fill the chip was already
-        # sitting on, which is what keeps every measured ink pair unchanged.
+    def test_the_chip_is_shown_at_rest_and_the_same_under_the_pointer(self):
         page = self._open()
         try:
-            self._point_at_card(page)
-            self._wait_for_chip(page, self.SHOWN)
-            geometry = self._geometry(page)
-            self.assertIn(geometry["fill"], geometry["veil"])
+            page.mouse.move(0, 0)
+            at_rest = self._geometry(page)
+            self.assertEqual(at_rest["chipOpacity"], "1")
+            page.mouse.move(at_rest["title"]["x"] + 4,
+                            at_rest["title"]["y"] + at_rest["title"]["height"] / 2)
+            page.wait_for_timeout(200)
+            hovered = self._geometry(page)
+            self.assertEqual(hovered["chipOpacity"], "1")
+            self.assertEqual(hovered["chip"], at_rest["chip"])
+            self.assertEqual(hovered["title"], at_rest["title"])
         finally:
             page.close()
 

@@ -1,8 +1,9 @@
 <!DOCTYPE html>
 <html>
 <head>
-    {% from '_rule_block.html' import pin_block, pin_new, pins_above_stated, rule_mark with context %}
-    {% from '_own_lines.html' import own_lines with context %}
+    {% from '_node_head.html' import frame_head, ok_mark with context %}
+    {% from '_status_cue.html' import cue_sprite %}
+    {% from '_rule_block.html' import icon_sprite %}
     {# the node, not the section: three leaf tabs open at once should be
        tellable apart #}
     {% set page_title = node.name %}
@@ -16,122 +17,58 @@
         {% include '_page_band.html' %}
         {% include '_said.html' %}
 
-        <div class="card mb-3">
-            <div class="card-body">
-                <h2 class="h5 mb-1">{{ node.name }}</h2>
-                {% if node.description %}
-                    <p class="text-muted mb-2">{{ node.description | markdown_inline }}</p>
-                {% endif %}
-                {#- What the node is lives in the band, folded, as on every view of
-                    it; this card says how it is. -#}
-                <div class="alert {{ node.code | status_alert }} mb-0">
-                    {#- What an admin's pin on this node would cover, as its
-                        editor's first sentence says it (ADR-0104 decision 3).
-                        A node whose lines can be pinned one by one counts them,
-                        because that is the choice the admin is making; prose is
-                        one condition in several sentences. -#}
-                    {%- set pin = node.maintenance_entry %}
-                    {#- A pin above this node silences it with everything else
-                        beneath that node (ADR-0041), so a pin of its own is for
-                        the day that one ends. -#}
-                    {%- set above = pins_above | length %}
-                    {%- set node_covers %}
-                        {%- if above -%}
-                            It stays silenced when the {{ 'pin' if above == 1 else 'pins' }} above it {{ 'ends' if above == 1 else 'end' }}; the check keeps running and counts again when every pin on it has cleared.
-                        {%- elif node.members and node.reasons | length > 1 -%}
-                            Silences all {{ node.reasons | length }} lines and any that appear; the check keeps running and counts again when the pin clears.
-                        {%- elif node.members and node.reasons -%}
-                            Silences its one line and any that appear; the check keeps running and counts again when the pin clears.
-                        {%- else -%}
-                            It will not alarm before the pin expires; the check keeps running and counts again when the pin clears.
-                        {%- endif -%}
-                    {%- endset %}
-                    {#- The status line: how the node is, and what is about the
-                        node rather than about one finding. The `node.actions`
-                        slot (ADR-0034, second slot) is the same action as the
-                        card head's, on the page where the node is the subject;
-                        it sits with the status rather than with the reason
-                        lines, because that is precisely the distinction it
-                        exists for (ADR-0036). An admin's *Set maintenance* is
-                        the one control that sets the node's pin, and it opens
-                        its editor here, where the pin's block will stand
-                        (ADR-0104 decision 3); a pinned node has *Edit* and
-                        *Clear* in that block instead. -#}
-                    <div class="status-line">
-                        {#- "maintenance · error" rather than a bare "maintenance":
-                            naming what is being silenced is the transform being
-                            made visible (ADR-0032 rule 5), and before the keystone
-                            the reading it names was not merely hidden but
-                            overwritten. -#}
-                        <span class="status-line__what">Status: <strong>{{ node.code.name.lower() }}</strong>{% if node.own_code.name == 'MAINTENANCE' and node.reported_code.name not in ('MAINTENANCE', 'UNDEFINED') %} <span class="status-reported">· {{ node.reported_code.name.lower() }}</span>{% endif %}</span>
-                        <span class="node-actions">{{ slot('node.actions', node=node, surface='check') }}</span>
-                        {%- if is_admin and not pin %}
-                        <details class="maintenance-editor-disclosure rule-setter">
-                            <summary class="rule-button rule-setter__toggle">{{ rule_mark('maintenance') }}Set maintenance</summary>
-                            {{ pin_new('node', node_covers, branch, '', 'node-maintenance') }}
-                        </details>
-                        {%- endif %}
-                    </div>
-                    {#- The node's pin (ADR-0104 decisions 1, 2 and 8): one block
-                        at the top of the card, heading a frame that runs round
-                        every line the pin covers. The head is a **list** — the
-                        rules acting on this node, of which maintenance is the
-                        first kind — so a second rule is a second row here and
-                        not a second place to look. A pin set on a node above
-                        this one is such a row too, outermost first and without
-                        buttons, since it is edited where it stands; the node's
-                        own pin, under one, is *also silenced on its own*, as a
-                        line's is under its node's (ADR-0104 decision 2). -#}
-                    {%- if pin or above %}
-                    <div class="rule-frame">
-                        <ul class="rule-list">
-                            {{ pins_above_stated(pins_above, 'above-maintenance-', tag='li') }}
-                            {%- if pin %}
-                            {{ pin_block(pin, 'node', branch, '', 'node-maintenance', is_admin, tag='li', also=above > 0) }}
-                            {%- endif %}
-                        </ul>
-                    {%- endif %}
-                    {#- Its lines, in full, with the record under each and for an
-                        admin the pin control at its end (`_own_lines.html`) — the
-                        one block a branch's own page lists its lines with too. -#}
-                    {{ own_lines(node, branch, is_admin, focus, focus_orphan, covered=above) }}
-                    {%- if pin or above %}
-                    </div>
-                    {%- endif %}
-                    {%- if node.damping %}
-                        {#- The counter, in words rather than as a number nobody can
-                            place: what this node shows, how far the count has got,
-                            and what its parent is counting meanwhile. The leaf is
-                            honest from the first failure (backlog #38 B) — what
-                            waits is only the claim that everything above is broken. -#}
-                        <div class="damping-note"><small>Showing
-                            <strong>{{ node.damping.pending.name.lower() }}</strong> —
-                            {{ node.damping.seen }} of {{ node.damping.needed }} consecutive
-                            readings before this escalates{% if node.contribution and node.contribution.code %}, so the level above still counts
-                            <strong>{{ node.contribution.code.name.lower() }}</strong>{% endif %}.</small></div>
-                    {%- endif %}
-                    {#- Observed, the Time card's word (ADR-0099 decision 3): a node the
-                        instance re-asserts on its own tick goes stale too, and
-                        nothing checks it. -#}
-                    {% if node.stale %}
-                        <div><small>Stale — last observed {{ node.age_seconds | elapsed }} ago.</small></div>
-                    {% endif %}
-                </div>
+        {#- The shapes of the cues and of the head's icons, drawn once for the page,
+            as the wall's page draws them: the frame's head refers to them. -#}
+        {{ cue_sprite() }}{{ icon_sprite() }}
+        {#- **A leaf's page is framed as a branch's is** (backlog #91 §3.5): the page
+            is the same tree, rooted at the leaf, and the leaf is always open. The
+            frame's head is the one a branch's page draws (`frame_head`, the same
+            macro, so the two cannot drift): the leaf's row as its box draws it, its
+            fill the leaf's own — vivid where it fails, a leaf's status being its own
+            — with the funnel where it has healthy lines, since ✓ ok is a leaf page's
+            fold (§3.3) and `tree.js` keeps its entry in the tab's map, the same entry
+            the leaf's box carries on the wall; then the description, the rules acting
+            on the leaf as the rows heading the frame, which is the border running
+            round every line a pin covers (ADR-0104 decision 8), the lines in the
+            check's order and the damping counter in words. Its status was a line of
+            its own, *Status: warn* on Bootstrap's alert, and *Stale — last observed
+            …* beneath the lines said a third time what the head's state and the
+            Time card say. Not polled, as before: `tree.js` finds the frame, there
+            being no grid to swap.
+
+            Time, report and configuration — the shared node-facts block
+            (_node_facts.html), which the branch page renders too, so a container and
+            a leaf say the same things in the same shapes (ADR-0044 decision 8) —
+            stand last in the frame, after the lines. The node's document is its Copy
+            view's, a tab in the band above, and this page carries none (ADR-0115
+            decision 7). -#}
+        {%- set pinning = namespace(count=0, may=is_admin, back='') %}
+        {%- set fold = healthy_counts(node) %}
+        {#- its fold as its files say (ADR-0128), drawn from the first paint -#}
+        {%- set folds = node.path in drawn.folded %}
+        {#- `.node-page` is what `tree.js` binds to here, as it binds to the grid
+            on a page the refresh swaps. -#}
+        <div class="node-page">
+        <div class="node-frame tree-node s-{{ node.code | status_slug }}" data-node="{{ node.path }}" data-state="open" data-order="0" data-page-root{% if folds %} data-ok="true"{% endif %}{% if failing(node) %} data-failing{% endif %}>
+        <div class="tree-hold">
+        <div class="tree-box node-frame__box">
+            {{ frame_head(node, pinning, branch, [], fold, surface='check', folds=folds) }}
+            {{- ok_mark(fold, folds) }}
+            <div class="node-facts">
+                {% include '_node_facts.html' %}
             </div>
         </div>
-
-        {#- Time, report and configuration — the shared node-facts block
-            (_node_facts.html), which the branch page now renders too, so a
-            container and a leaf say the same things in the same shapes
-            (ADR-0044 decision 8). Directly under the status and the reasons:
-            the node's document is its Copy view's, a tab in the band above, and
-            this page carries none (ADR-0115 decision 7). -#}
-        {% include '_node_facts.html' %}
+        </div>
+        </div>
+        </div>
     </div>
 {% include '_page_end.html' %}
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     <script src="{{ url_for('static', filename='js/rail.js') }}"></script>
+    {# The frame's head (backlog #91 §3.5): its funnel's fold kept in the tab's map,
+       its row measured and its toolbar walked as every head's is. #}
+    <script src="{{ url_for('static', filename='js/tree.js') }}"></script>
     <script src="{{ url_for('static', filename='js/maintenance-edit.js') }}"></script>
 </body>
 </html>

@@ -24,7 +24,13 @@
 #
 # `icon` is optional and names an icon the links registry already knows
 # (config/links/icons/, a registered pack, or the built-in one); an unknown name
-# simply renders no icon. `under` is optional and limits the action to one subtree,
+# simply renders no icon. It also decides how a node action is drawn in a head's
+# row: with an icon the action is a square like the head's own buttons, the image
+# alone inside it and the label as its tooltip and accessible name; without one it
+# is a small chip wearing its label. A line's action keeps the icon beside its label
+# either way. Actions a head's row has no room for fold behind a ⋯ button, which
+# lists them by their labels — never one alone where the state's own line beneath
+# keeps it in the row. `under` is optional and limits the action to one subtree,
 # compared segment-wise, so /system/alpha covers /system/alpha/disk and never
 # /system/alphaville. Omit it and the action is offered everywhere.
 

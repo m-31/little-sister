@@ -1,6 +1,9 @@
 {#- The settings menu: the user's name opens it, and it
-    holds everything that is about *this browser's* view of the surface — the
-    theme, the layout, and the way out.
+    holds everything that is about *this browser's* view of the surface — each look
+    of `looks.py`, the theme leading them, the layout after the theme, and the way
+    out. A look's group is the roster's entry, its heading and its values' words, and
+    its value checked is the one in force: this browser's choice, or the deployment's
+    default where it has made none (ADR-0029).
 
     Radio circles rather than check marks, because these are exclusive choices,
     and each one submits immediately — `data-ls-submit`, the same marker the
@@ -12,14 +15,16 @@
     Logout lives in here now — the bar has no room for a red button once it is
     only brand and user, and a logout is a thing you do to a session, not a
     piece of navigation. -#}
-{%- set theme_labels = {
-        'auto': 'auto (follow the OS)',
-        'default': 'default',
-        'vivid': 'vivid',
-        'pastel': 'pastel',
-        'dark': 'dark',
-        'cyberpunk': 'cyberpunk',
-    } -%}
+{%- macro look_group(look) %}
+            <div class="ls-menu__heading">{{ look.heading }}</div>
+            {% for value in look.values %}
+            <label class="ls-menu__item">
+                <input class="ls-menu__radio" type="radio" name="{{ look.key }}" value="{{ value }}"
+                       {% if look_values[look.key] == value %}checked{% endif %} data-ls-submit>
+                <span>{{ look.label(value) }}</span>
+            </label>
+            {% endfor %}
+{%- endmacro -%}
 {%- set layout_labels = {
         'rail': 'left rail',
         'topbar': 'top bar',
@@ -45,14 +50,8 @@
             {# come back to the page this was opened from, filters and all #}
             <input type="hidden" name="next" value="{{ request.full_path.rstrip('?') }}">
 
-            <div class="ls-menu__heading">Theme</div>
-            {% for value in themes %}
-            <label class="ls-menu__item">
-                <input class="ls-menu__radio" type="radio" name="theme" value="{{ value }}"
-                       {% if theme == value %}checked{% endif %} data-ls-submit>
-                <span>{{ theme_labels[value] }}</span>
-            </label>
-            {% endfor %}
+            {#- the theme leads, and the other looks follow the layout -#}
+            {{ look_group(looks | selectattr('key', 'equalto', 'theme') | first) }}
 
             <div class="dropdown-divider"></div>
             <div class="ls-menu__heading">Layout</div>
@@ -62,6 +61,11 @@
                        {% if layout == value %}checked{% endif %} data-ls-submit>
                 <span>{{ layout_labels[value] }}</span>
             </label>
+            {% endfor %}
+
+            {% for look in looks if look.key != 'theme' %}
+            <div class="dropdown-divider"></div>
+            {{ look_group(look) }}
             {% endfor %}
 
             <div class="dropdown-divider"></div>

@@ -29,6 +29,8 @@ from little_sister import app as app_module
 from little_sister.checks import Entry
 from little_sister.status import StatusCode
 from little_sister.tree import StatusTree
+from tests.browser_looks import looks
+from tests.browser_server import PageServer
 
 try:  # pragma: no cover - environment probe
     from playwright.sync_api import sync_playwright
@@ -62,6 +64,10 @@ _LONG_NOTE = "\n".join(f"Step {number}: wait for the runner to drain."
 
 _FOCUS_IN_NOTE = ("document.activeElement !== null"
                   " && document.activeElement.name === 'reason'")
+
+#: The page's editor, cloned into a node's box by ‖, has gone again — a close is
+#: the browser's `toggle`, which comes a task after Cancel or Escape.
+_NO_CLONE = "document.querySelector('#status-grid details.pin-setter') === null"
 
 #: The wall's refresh, as a request: the page's own address with `fragment=1`.
 _FRAGMENT = re.compile(r"[?&]fragment=1")
@@ -162,7 +168,8 @@ class _BrowserCase(unittest.TestCase):
                 cls.playwright.stop()
             raise unittest.SkipTest(f"no chromium available: {error}") from error
         cls.saved = app_module.status_tree
-        cls.server = make_server("127.0.0.1", 0, app_module.app, handler_class=_Quiet)
+        cls.server = make_server("127.0.0.1", 0, app_module.app,
+                                 server_class=PageServer, handler_class=_Quiet)
         threading.Thread(target=cls.server.serve_forever, daemon=True).start()
         cls.base = f"http://127.0.0.1:{cls.server.server_port}"
 
@@ -335,7 +342,9 @@ class PinWriteBrowserTests(_BrowserCase):
 
 class WallEditorBrowserTests(_BrowserCase):
     """An editor in a card or in a branch's head, and the refresh that waits for it
-    (ADR-0104 decisions 3 and 7) — in Chromium."""
+    (ADR-0104 decisions 3 and 7) — in Chromium. On the wall the editor is the page's
+    one, which ‖ among a head's icons clones into the node's box (ADR-0127 decision
+    3); a branch's head keeps its own."""
 
     estate = staticmethod(_wall)
 
@@ -378,11 +387,15 @@ class WallEditorBrowserTests(_BrowserCase):
     def _stamp(self) -> str:
         return " ".join(self.page.locator("#status-updated").inner_text().split())
 
+    @staticmethod
+    def _mark_of(card: Any) -> Any:
+        """‖ among the card's head's icons."""
+        return card.locator('.status-card__head [data-control="pin"]')
+
     def _open(self, name: str) -> Any:
-        """Open a card's editor by its pause mark; the note takes the cursor."""
+        """Open a card's editor by its ‖; the note takes the cursor."""
         card = self._card(name)
-        card.hover()
-        card.locator("summary.pin-control").click()
+        self._mark_of(card).click()
         self.page.wait_for_function(_FOCUS_IN_NOTE)
         return card
 
@@ -417,31 +430,41 @@ class WallEditorBrowserTests(_BrowserCase):
 
     # --- decision 3: the editor opens in the card ------------------------------------
 
-    def test_a_cards_mark_opens_its_editor_in_the_card(self):
+    def test_a_cards_mark_opens_the_pages_editor_in_the_card(self):
         self._wall_at()
         page = self.page
         card = self._card("hemulen")
         closed = card.bounding_box()
+        # the page holds one editor of a pin still to be set, in a template outside
+        # the grid, and no card carries one until ‖ is clicked (a pinned card's
+        # block carries its own, of the pin that stands)
+        self.assertEqual(page.locator("template#pin-editor").count(), 1)
+        self.assertEqual(page.locator("#status-grid details.pin-setter").count(), 0)
         self._open("hemulen")
         # the cursor stands in this card's note
         self.assertEqual(
             page.evaluate("document.activeElement.closest('.status-card')"
                           ".querySelector('.status-card__head').dataset.path"),
             "/hemulen")
+        self.assertEqual(page.locator("#status-grid details.pin-setter").count(), 1)
         opened = card.bounding_box()
-        head = card.locator(".status-card__head").bounding_box()
+        panel = card.locator(".status-panel").bounding_box()
         editor = card.locator(".rule-block--new").bounding_box()
-        # the editor stands in the card, which grew to hold it and got no wider
+        # the editor stands in the card's panel, where the pin's block will stand —
+        # first in it, above the children — which grew to hold it and got no wider
         self.assertGreater(opened["height"], closed["height"] + 150)
         self.assertAlmostEqual(opened["width"], closed["width"], delta=0.5)
-        # a row of the head's own: as wide as the head and inside it
-        self.assertAlmostEqual(editor["x"], head["x"], delta=3)
+        self.assertAlmostEqual(editor["x"], panel["x"], delta=3)
         self.assertAlmostEqual(editor["x"] + editor["width"],
-                               head["x"] + head["width"], delta=3)
-        self.assertLessEqual(editor["y"] + editor["height"],
-                             opened["y"] + opened["height"])
-        # Cancel and Escape close it now, so the mark has given way to them
-        self.assertFalse(card.locator("summary.pin-control").is_visible())
+                               panel["x"] + panel["width"], delta=3)
+        self.assertAlmostEqual(editor["y"], panel["y"], delta=3)
+        self.assertLess(editor["y"] + editor["height"],
+                        card.locator(".node-children").bounding_box()["y"])
+        # the clone says what the pin covers and whose it is
+        self.assertEqual(card.locator(".rule-block__scope").inner_text().strip(),
+                         "Maintenance for hemulen and everything beneath it.")
+        self.assertEqual(card.locator("input[name=path]").input_value(), "/hemulen")
+        self.assertEqual(self._mark_of(card).get_attribute("aria-expanded"), "true")
 
         page.keyboard.type("New fans, back on Monday.")
         card.locator("input[name=duration]").fill("2h")
@@ -454,43 +477,78 @@ class WallEditorBrowserTests(_BrowserCase):
             card.locator(".status-panel > .rule-block .rule-block__note")
             .inner_text().strip(),
             "New fans, back on Monday.")
-        self.assertEqual(card.locator(".pin-control").count(), 0)
+        self.assertEqual(self._mark_of(card).count(), 0)
 
-    def test_the_mark_is_quiet_until_its_card_is_hovered_or_the_keyboard_is_on_it(self):
-        # a wall of cards must not grow a wall of buttons
+    def test_a_boxs_mark_opens_the_editor_in_the_box_after_its_row(self):
+        # every open head of a node with no pin of its own carries ‖, a box's as
+        # well as a card's (ADR-0127 decision 3); one editor at a time
+        tree = app_module.status_tree
+        tree.upsert("/hemulen/raid/disk1", StatusCode.WARN, "rebuilding")   # a box
+        self._wall_at()
+        page = self.page
+        row = page.locator('.status-node__self[data-path="/hemulen/raid"]')
+        mark = row.locator('[data-control="pin"]')
+        self.assertEqual(mark.get_attribute("href"), "/status/hemulen/raid")
+        mark.click()
+        page.wait_for_function(_FOCUS_IN_NOTE)
+        box = row.locator("xpath=..")
+        clone = box.locator(":scope > details.pin-setter")
+        self.assertEqual(clone.count(), 1)
+        self.assertTrue(row.evaluate(
+            "row => row.nextElementSibling.classList.contains('pin-setter')"))
+        self.assertEqual(clone.locator(".rule-block__scope").inner_text().strip(),
+                         "Maintenance for raid and everything beneath it.")
+        self.assertEqual(clone.locator("input[name=path]").input_value(),
+                         "/hemulen/raid")
+        # a leaf's says the node alone; and the one editor moves to the mark clicked
+        leaf = page.locator('.status-node__self[data-path="/hemulen/raid/disk1"]')
+        leaf.locator('[data-control="pin"]').click()
+        page.wait_for_function(_FOCUS_IN_NOTE)
+        self.assertEqual(page.locator("#status-grid details.pin-setter").count(), 1)
+        self.assertEqual(page.locator("#status-grid .rule-block__scope")
+                         .inner_text().strip(), "Maintenance for disk1.")
+        self.assertEqual(mark.get_attribute("aria-expanded"), "false")
+
+    def test_the_mark_shows_always_and_the_keyboard_walks_to_it(self):
+        # the head's icons are shown always, ‖ among them: a wall of marks is what
+        # an admin's wall is; the keyboard comes to the toolbar from the card's name
+        # and walks to its end
         self._wall_at()
         page = self.page
         card = self._card("hemulen")
-        mark = card.locator("summary.pin-control")
+        mark = self._mark_of(card)
         page.mouse.move(2, 2)
-        self.assertEqual(self._opacity(mark), 0.0)
-        card.hover()
-        self.assertEqual(self._opacity(mark), 0.75)
-        page.mouse.move(2, 2)
-        self.assertEqual(self._opacity(mark), 0.0)
-        # the keyboard comes to it from the card's name
+        self.assertEqual(self._opacity(mark), 1.0)
+        # a link in the markup, a control that says it opens the editor once the
+        # script has the toolbar
+        self.assertEqual(mark.get_attribute("aria-expanded"), "false")
         card.locator(".status-card__name").focus()
         page.keyboard.press("Tab")
+        page.keyboard.press("End")
         self.assertTrue(mark.evaluate("mark => mark === document.activeElement"))
-        self.assertEqual(self._opacity(mark), 1.0)
 
     def test_escape_closes_the_editor_and_gives_the_mark_back(self):
         self._wall_at()
         card = self._open("hemulen")
         self.page.keyboard.type("not after all")
         self.page.keyboard.press("Escape")
-        mark = card.locator("summary.pin-control")
-        self.assertFalse(card.locator("form.maintenance-editor-form").is_visible())
+        self.page.wait_for_function(_NO_CLONE, timeout=3000)
+        mark = self._mark_of(card)
+        self.assertEqual(card.locator("form.maintenance-editor-form").count(), 0)
         self.assertTrue(mark.is_visible())
-        # the cursor is back on what opened it, and what was typed is gone
+        # the cursor is back on what opened it, which says so, and what was typed
+        # is gone with the clone: the next ‖ clones the editor afresh
         self.assertTrue(mark.evaluate("mark => mark === document.activeElement"))
+        self.assertEqual(mark.get_attribute("aria-expanded"), "false")
+        self._open("hemulen")
         self.assertEqual(
             card.locator("textarea[name=reason]").input_value(), "")
 
-    def test_the_mark_keeps_its_seat_at_the_end_of_the_state(self):
-        # The head wraps, and a mark on a line by itself would be a row of nothing:
-        # at a desk and on a phone, with the state beside the name and with the
-        # standing second line (`card_status_line: below`).
+    def test_the_mark_ends_the_row_after_the_state(self):
+        # ‖ is the last of the head's icons, which end the head's first row, after
+        # the state: at a desk and on a phone, with the state in the row and with
+        # the standing second line (`card_status_line: below`), where the state
+        # alone is beneath
         page = self.page
         for width in (1000, 360):
             for below in (False, True):
@@ -511,65 +569,77 @@ class WallEditorBrowserTests(_BrowserCase):
                                         top: rect.top, bottom: rect.bottom};
                               };
                               return {head: box('.status-card__head'),
+                                      name: box('.status-card__name'),
                                       state: box('.status-card__state'),
-                                      chevron: box('.reason-chevron'),
-                                      mark: box('summary.pin-control')};
+                                      icons: box('.node-icons'),
+                                      mark: box('[data-control="pin"]')};
                             }
                             """)
-                        mark, state = seat["mark"], seat["state"]
-                        # on the state's own line, at its end and inside the card
-                        self.assertGreaterEqual(mark["top"], state["top"] - 0.5, seat)
-                        self.assertLessEqual(mark["bottom"], state["bottom"] + 0.5,
-                                             seat)
-                        self.assertLessEqual(mark["right"], state["right"] + 0.5,
-                                             seat)
+                        mark, state, icons = seat["mark"], seat["state"], seat["icons"]
+                        # the last icon, on the name's line, inside the head
+                        self.assertAlmostEqual(mark["right"], icons["right"], delta=0.5)
                         self.assertLessEqual(mark["right"],
                                              seat["head"]["right"] + 0.5, seat)
-                        # and clear of what the state says: the seat is its own
-                        self.assertGreaterEqual(mark["left"],
-                                                seat["chevron"]["right"] - 0.5, seat)
+                        self.assertLess(mark["top"], seat["name"]["bottom"], seat)
+                        self.assertGreater(mark["bottom"], seat["name"]["top"], seat)
+                        if below:
+                            # the state alone beneath, right-aligned under the icons
+                            self.assertGreaterEqual(state["top"], icons["bottom"] - 0.5,
+                                                    seat)
+                            self.assertAlmostEqual(state["right"], icons["right"],
+                                                   delta=1)
+                        else:
+                            self.assertLessEqual(state["right"], mark["left"], seat)
+                            self.assertLess(state["top"], mark["bottom"], seat)
 
-    def test_without_script_the_mark_opens_and_closes_the_editor(self):
+    def test_without_script_the_mark_is_a_link_to_the_nodes_page(self):
         page = self._signed_in(java_script_enabled=False, **self.drawn_in)
         page.goto(f"{self.base}/status")
         card = self._card_on(page, "hemulen")
-        mark = card.locator("summary.pin-control")
-        form = card.locator("form.maintenance-editor-form")
+        mark = self._mark_of(card)
+        self.assertEqual(card.locator("form.maintenance-editor-form").count(), 0)
+        with page.expect_navigation():
+            mark.click()
+        # whose head keeps *Set maintenance*, with an editor of its own
+        self.assertEqual(urlsplit(page.url).path, "/status/hemulen")
+        head = page.locator(".viewed-head")
+        form = head.locator("form.maintenance-editor-form")
         self.assertFalse(form.is_visible())
-        card.hover()
-        mark.click()
+        head.locator("details.rule-setter > summary").click()
         self.assertTrue(form.is_visible())
-        # no Cancel that works and no Escape: the mark stays, above the editor,
-        # and closes what it opened
-        self.assertTrue(mark.is_visible())
-        self.assertLessEqual(mark.bounding_box()["y"], form.bounding_box()["y"])
-        mark.click()
-        self.assertFalse(form.is_visible())
 
     def test_a_tap_on_the_mark_opens_the_editor_and_not_the_nodes_card(self):
-        # A card's head is what the inspection card answers to, and on a touch
-        # screen a first tap inside it opens that card instead of what was tapped.
+        # A card's head is where the inspection card answers, on its name, and on
+        # a touch screen a first tap inside it opened that card instead of what was
+        # tapped — where the card opens on a pause, a viewer's choice.
         page = self._signed_in(has_touch=True, **self.drawn_in)
+        page.context.add_cookies([looks(self.base, inspection_card="pause")])
         page.goto(f"{self.base}/status")
-        page.wait_for_selector(
-            '.status-card__head.inspect-trigger[data-path="/hemulen"]')
+        page.wait_for_selector('.status-card__head[data-path="/hemulen"] '
+                               '.status-card__name.inspect-trigger')
         card = self._card_on(page, "hemulen")
-        card.locator("summary.pin-control").tap()
+        self._mark_of(card).tap()
         page.wait_for_function(_FOCUS_IN_NOTE, timeout=3000)
         self.assertTrue(card.locator("form.maintenance-editor-form").is_visible())
         self.assertTrue(page.locator("#inspect-card").is_hidden())
 
-    #: Longer than the inspection card takes to come up, which is a quarter of a
-    #: second after the pointer arrives.
-    _CARD_IS_DUE = 700
+    #: Longer than the inspection card takes to come up, which is two thirds of a
+    #: second after the pointer comes to rest on a name.
+    _CARD_IS_DUE = 1000
 
-    def _left_on(self, row: Any, spot: dict[str, float]) -> None:
+    #: Longer than the moment after a click in which a movement on a name starts no
+    #: pause (`inspect.js`), so that what the hand does then is the test's.
+    _CLICK_IS_PAST = 700
+
+    def _left_on(self, row: Any, spot: dict[str, float], *,
+                 control: bool = False) -> None:
         """The pointer stays where it clicked, as a hand's does that has gone to the
         keyboard, and the browser says what now stands under it: the control it
         clicked has given way, so a `mouseover` goes to the node's own row. A window
         on a screen sends that once the layout has settled, after the note took the
         focus; this one sends it sooner, where the focus moving on would still
-        cancel what it started, so the test sends it when a screen would."""
+        cancel what it started, so the test sends it when a screen would — and the
+        `mousemove` of a hand that rests on the mouse beside it."""
         at = [spot["x"] + spot["width"] / 2, spot["y"] + spot["height"] / 2]
         under = row.evaluate(
             """
@@ -578,31 +648,38 @@ class WallEditorBrowserTests(_BrowserCase):
               const seen = {
                 row: row.contains(under),
                 control: under.closest(
-                    '.maintenance-pip, .pin-setter, .rule-setter, .rule-block')
+                    '.maintenance-pip, .pin-setter, .rule-setter, .rule-block,'
+                    + ' .node-icons')
                     !== null,
               };
               under.dispatchEvent(new MouseEvent('mouseover', {
                   bubbles: true, clientX: at[0], clientY: at[1]}));
+              under.dispatchEvent(new MouseEvent('mousemove', {
+                  bubbles: true, clientX: at[0], clientY: at[1]}));
               return seen;
             }
             """, at)
-        # on the row, and on no control of the pin's: those the inspection card
-        # leaves alone anyway
-        self.assertEqual(under, {"row": True, "control": False})
+        # on the row, and on no control of the pin's unless said: those the
+        # inspection card leaves alone anyway
+        self.assertEqual(under, {"row": True, "control": control})
 
     def test_a_clicked_mark_leaves_no_inspection_card_over_the_wall(self):
-        # #89's B12. The mark opens its editor in a row of its own and gives way to
-        # Cancel, so the pointer that clicked it is left on the card's head — which
-        # the inspection card answers to. It came up over the card above and stood
-        # there while the note was typed.
+        # #89's B12. The pointer that clicked ‖ is left on the card's head — whose
+        # name the inspection card answers to — and a hand that goes on to the
+        # keyboard may leave it anywhere on the row: the card came up over the card
+        # above and stood there while the note was typed. ‖ is a control of the
+        # head's own, which asks for no card; the name beside it answers while the
+        # editor is open as a head whose pin is being written: not at all.
         self._wall_at()
         page = self.page
         card = self._card("hemulen")
-        card.hover()
-        mark = card.locator("summary.pin-control")
-        spot = mark.bounding_box()
+        mark = self._mark_of(card)
         mark.click()
         page.wait_for_function(_FOCUS_IN_NOTE)
+        page.wait_for_timeout(self._CLICK_IS_PAST)
+        self._left_on(card.locator(".status-card__head"), mark.bounding_box(),
+                      control=True)
+        spot = card.locator(".status-card__name").bounding_box()
         self._left_on(card.locator(".status-card__head"), spot)
         page.keyboard.type("New fans, back on Monday.")
         page.wait_for_timeout(self._CARD_IS_DUE)
@@ -611,23 +688,73 @@ class WallEditorBrowserTests(_BrowserCase):
                          "New fans, back on Monday.")
 
     def test_nor_does_set_maintenance_in_a_branchs_head(self):
+        # the page's head opens the editor it keeps with its own ‖, a control of
+        # the row's, which asks for no card — and the page's own head, whose
+        # `about` is open in the band, has none; where the card opens on a pause,
+        # and in the plain theme's face, where the spot ‖ was is the row's still once
+        # the editor stands beneath it
+        self.page.context.add_cookies([looks(self.base, inspection_card="pause",
+                                             theme="plain")])
+        self._wall_at("/status/hemulen")
         page = self.page
-        page.goto(f"{self.base}/status/hemulen")
-        page.wait_for_selector(".viewed-head .status-node__self.inspect-trigger")
         head = page.locator(".viewed-head")
-        button = head.locator("details.rule-setter > summary")
+        button = head.locator('.node-icons > [data-control="pin"]')
         spot = button.bounding_box()
         button.click()
         page.wait_for_function(_FOCUS_IN_NOTE)
-        self._left_on(head.locator(".status-node__self"), spot)
+        page.wait_for_timeout(self._CLICK_IS_PAST)
+        self._left_on(head.locator(".status-node__self"), spot, control=True)
+        self._left_on(head.locator(".status-node__self"),
+                      head.locator(".status-node__name").bounding_box())
         page.keyboard.type("New fans, back on Monday.")
         page.wait_for_timeout(self._CARD_IS_DUE)
         self.assertTrue(page.locator("#inspect-card").is_hidden())
 
+    #: The page's own ‖ says whether the editor its head keeps is open.
+    _HEAD_MARK_SAYS = ("document.querySelector('.viewed-head [data-control=\"pin\"]')"
+                       ".getAttribute('aria-expanded') === '{}'")
+
+    def test_a_pages_mark_opens_the_editor_its_head_keeps(self):
+        # A node's page keeps the editor for the node's pin beneath its head's row:
+        # the browser's *Set maintenance* where there is no script (above). With
+        # script ‖ opens it, as ‖ opens one on every head, and until then it stands
+        # out of sight, so the row's mark is the one control that says it — on a
+        # branch's page, and on a leaf's, whose head is the same.
+        page = self.page
+        for name in ("hemulen", "uplink"):
+            with self.subTest(page=name):
+                page.goto(f"{self.base}/status/{name}")
+                head = page.locator(".viewed-head")
+                mark = head.locator('.node-icons > [data-control="pin"]')
+                setter = head.locator(":scope > details.rule-setter")
+                mark.wait_for(state="visible")
+                self.assertTrue(setter.is_hidden())
+                self.assertEqual(mark.get_attribute("aria-expanded"), "false")
+                mark.click()
+                page.wait_for_function(_FOCUS_IN_NOTE)
+                self.assertTrue(setter.is_visible())
+                self.assertEqual(mark.get_attribute("aria-expanded"), "true")
+                # Escape closes it and gives the mark back, which says so
+                page.keyboard.press("Escape")
+                page.wait_for_function(self._HEAD_MARK_SAYS.format("false"),
+                                       timeout=3000)
+                self.assertTrue(setter.is_hidden())
+                self.assertTrue(
+                    mark.evaluate("mark => mark === document.activeElement"))
+                # and the mark closes what it opened
+                mark.click()
+                page.wait_for_function(self._HEAD_MARK_SAYS.format("true"),
+                                       timeout=3000)
+                mark.click()
+                page.wait_for_function(self._HEAD_MARK_SAYS.format("false"),
+                                       timeout=3000)
+                self.assertTrue(setter.is_hidden())
+
     def test_a_node_whose_pin_is_being_written_raises_no_inspection_card(self):
         # The editor stands inside the head the inspection card answers to. While
         # it is open the head says nothing else about its node, wherever in it the
-        # pointer is; closed, it answers as it did.
+        # pointer is; closed, it answers as it did — where the card opens on a pause.
+        self.page.context.add_cookies([looks(self.base, inspection_card="pause")])
         app_module.status_tree.set_title("/uplink", "The line out")
         self._wall_at()
         page = self.page
@@ -635,38 +762,46 @@ class WallEditorBrowserTests(_BrowserCase):
         name = self._card("hemulen").locator(".status-card__name")
         name.hover()
         page.wait_for_selector("#inspect-card", state="visible")
-        self.assertEqual(shown.inner_text().strip(), "The build host")
+        self.assertEqual(shown.inner_text().strip(), "hemulen The build host")
         self._open("hemulen")
         page.wait_for_selector("#inspect-card", state="hidden")
+        page.wait_for_timeout(self._CLICK_IS_PAST)
         name.hover()
         page.wait_for_timeout(self._CARD_IS_DUE)
         self.assertTrue(shown.is_hidden())
         # one editor is one node's: another head answers as it did
         self._card("uplink").locator(".status-card__name").hover()
         page.wait_for_selector("#inspect-card", state="visible")
-        self.assertEqual(shown.inner_text().strip(), "The line out")
+        self.assertEqual(shown.inner_text().strip(), "uplink The line out")
         page.keyboard.press("Escape")
         page.mouse.move(2, 2)
         page.wait_for_selector("#inspect-card", state="hidden")
         name.hover()
         page.wait_for_selector("#inspect-card", state="visible")
-        self.assertEqual(shown.inner_text().strip(), "The build host")
+        self.assertEqual(shown.inner_text().strip(), "hemulen The build host")
 
     def test_the_editor_does_not_wear_the_cursor_of_the_nodes_card(self):
+        # where a name hints at its card, which opens on a pause, a viewer's choice
+        self.page.context.add_cookies([looks(self.base, inspection_card="pause")])
+        app_module.status_tree.set_title("/uplink", "The line out")
         self._wall_at()
         page = self.page
         card = self._open("hemulen")
-        # nor does the editor wear the cursor that hints at that card
+        # nor does the editor wear the cursor of the head it stands under: the
+        # row's is the toggle's, and its name, which hints at the card elsewhere,
+        # wears the same while the node's pin is being written and it has none
         cursor = "element => getComputedStyle(element).cursor"
-        self.assertEqual(card.locator(".status-card__head").evaluate(cursor), "help")
+        self.assertEqual(card.locator(".status-card__head").evaluate(cursor), "pointer")
+        self.assertEqual(card.locator(".status-card__name").evaluate(cursor), "pointer")
+        self.assertEqual(self._card("uplink").locator(".status-card__name")
+                         .evaluate(cursor), "help")
         self.assertEqual(card.locator(".rule-block--new").evaluate(cursor), "auto")
-        # and neither does one in a branch's head
-        page.goto(f"{self.base}/status/hemulen")
+        # and neither does one in a branch's head, whose row is no toggle
+        self._wall_at("/status/hemulen")
         head = page.locator(".viewed-head")
-        page.wait_for_selector(".viewed-head .status-node__self.inspect-trigger")
-        head.locator("details.rule-setter > summary").click()
+        head.locator('.node-icons > [data-control="pin"]').click()
         page.wait_for_function(_FOCUS_IN_NOTE)
-        self.assertEqual(head.locator(".status-node__self").evaluate(cursor), "help")
+        self.assertEqual(head.locator(".status-node__self").evaluate(cursor), "default")
         self.assertEqual(head.locator(".rule-block--new").evaluate(cursor), "auto")
 
     #: How many lines the date of a block's expiry stands on, and how many the
@@ -725,8 +860,8 @@ class WallEditorBrowserTests(_BrowserCase):
              self._opacity(pinned.locator(".rule-block__clear > button"))],
             [1.0, 1.0])
         card = self._card_on(page, "hemulen")
-        mark = card.locator("summary.pin-control")
-        self.assertEqual(self._opacity(mark), 0.55)
+        mark = self._mark_of(card)
+        self.assertEqual(self._opacity(mark), 1.0)
         # and the editor a tap opens is no wider than the phone, with the table of
         # formats open in it too, whose examples have nowhere to break
         mark.tap()
@@ -745,7 +880,7 @@ class WallEditorBrowserTests(_BrowserCase):
         page.set_viewport_size({"width": 360, "height": 800})
         page.goto(f"{self.base}/status/hemulen")
         head = page.locator(".viewed-head")
-        head.locator("details.rule-setter > summary").tap()
+        head.locator('.node-icons > [data-control="pin"]').tap()
         page.wait_for_function(_FOCUS_IN_NOTE, timeout=3000)
         head.locator(".maintenance-expiry-help > summary").tap()
         head.locator(".maintenance-expiry-help__table").wait_for(state="visible")
@@ -787,12 +922,13 @@ class WallEditorBrowserTests(_BrowserCase):
         # Closing it: the stamp drops the words at once, and that is all. A swap
         # would take the cursor from the mark that Escape has just put it back on.
         page.keyboard.press("Escape")
+        page.wait_for_function(_NO_CLONE, timeout=3000)
         page.wait_for_function(f"!({_PAUSED})", timeout=3000)
         self.assertEqual(self._stamp(), fresh)
         page.wait_for_timeout(300)          # room for a request that must not come
         self.assertEqual(len(self.fragments), 1)
         self.assertTrue(self._grid_kept())
-        self.assertTrue(self._card("hemulen").locator("summary.pin-control").evaluate(
+        self.assertTrue(self._mark_of(self._card("hemulen")).evaluate(
             "mark => mark === document.activeElement"))
         # the next tick brings the page up to date, as every tick did before
         page.clock.run_for(10_000)
@@ -802,6 +938,45 @@ class WallEditorBrowserTests(_BrowserCase):
         # and an editor opened after that makes the page wait again
         self._open("uplink")
         page.wait_for_function(_PAUSED, timeout=3000)
+
+    def test_an_editor_opened_from_a_nested_boxs_block_makes_the_refresh_wait(self):
+        # A pinned branch beneath a card is a box with its block, whose *Edit* opens
+        # an editor in the box — the one editor a nested box has today (decision 3),
+        # and the refresh waits for it as for a card's (decision 7). Held through the
+        # stages of the interactive wall (backlog #91), which narrow the shape the
+        # refresh looks for.
+        tree = app_module.status_tree
+        for disk in ("disk1", "disk2"):
+            tree.upsert(f"/hemulen/raid/{disk}", StatusCode.OK, "healthy")
+        tree.set_maintenance("/hemulen/raid", "Rebuilding after a swap.", set_by="lex",
+                             expires_at=datetime.now(UTC) + timedelta(days=2))
+        self._wall_at(clock=True)
+        page = self.page
+        self._mark_grid()
+        page.clock.run_for(10_000)
+        page.wait_for_function(_SWAPPED)
+        self.assertEqual(len(self.fragments), 1)
+        fresh = self._stamp()
+        box = page.locator(".status-node").filter(
+            has=page.locator('.status-node__self[data-path="/hemulen/raid"]'))
+        box.hover()
+        box.locator(".rule-block__edit > summary").click()
+        page.wait_for_function(_FOCUS_IN_NOTE)
+        page.wait_for_function(_PAUSED, timeout=3000)
+        page.keyboard.type(" Back on Monday.")
+        self._mark_grid()
+        page.clock.run_for(35_000)
+        page.wait_for_timeout(300)          # room for a request that must not come
+        self.assertEqual(len(self.fragments), 1)
+        self.assertTrue(self._grid_kept())
+        self.assertEqual(page.evaluate("document.activeElement.value"),
+                         "Rebuilding after a swap. Back on Monday.")
+        self.assertEqual(self._stamp(), f"{fresh} — paused while editing")
+        page.keyboard.press("Escape")
+        page.wait_for_function(f"!({_PAUSED})", timeout=3000)
+        page.clock.run_for(10_000)
+        page.wait_for_function(_SWAPPED)
+        self.assertEqual(len(self.fragments), 2)
 
     def test_an_answer_that_was_on_its_way_is_dropped(self):
         # The editor opens between a tick's request and its answer. The grid that
@@ -889,7 +1064,7 @@ class WallEditorBrowserTests(_BrowserCase):
         self._wall_at("/status/hemulen", clock=True)
         page = self.page
         head = page.locator(".viewed-head")
-        head.locator("details.rule-setter > summary").click()
+        head.locator('.node-icons > [data-control="pin"]').click()
         page.wait_for_function(_FOCUS_IN_NOTE)
         page.wait_for_function(_PAUSED, timeout=3000)
         # the editor is a row of the head's own all the same: under the name, and
@@ -912,9 +1087,11 @@ class WallEditorBrowserTests(_BrowserCase):
             "getComputedStyle(document.querySelector('#status-grid .status-card'))"
             ".opacity === '0.45'")
         self.assertEqual(self._opacity(head), 1.0)
-        # the cards dim, not the grid they stand in: that would dim them twice
-        self.assertEqual(self._opacity(page.locator("#status-grid > .status-grid")),
-                         1.0)
+        # the cards dim, not the grid they stand in, nor the frame the grid stands
+        # in: that would dim them twice
+        self.assertEqual(self._opacity(page.locator("#status-grid .node-frame__box > "
+                                                    ".status-grid")), 1.0)
+        self.assertEqual(self._opacity(page.locator("#status-grid > .node-frame")), 1.0)
         with page.expect_response(_FRAGMENT):
             page.keyboard.press("Escape")
         page.wait_for_function(_SWAPPED)
@@ -1014,7 +1191,8 @@ class BranchLineBrowserTests(_BrowserCase):
         self.assertGreaterEqual(seen["top"], seen["bar"], seen)
         self.assertLessEqual(seen["bottom"], seen["window"], seen)
         # the node's own part says its other line, and the pipeline beneath it red
-        self.assertIn("error", page.locator(".viewed-head__state").inner_text())
+        self.assertIn("error", page.locator(
+            ".viewed-head > .status-node__self .status-node__state").inner_text())
 
     def test_a_lines_editor_in_the_head_makes_the_refresh_wait(self):
         page = self.page
@@ -1041,11 +1219,13 @@ class BranchLineBrowserTests(_BrowserCase):
                          "half a sentence")
 
     def test_a_tap_on_a_lines_mark_opens_its_editor_and_not_the_nodes_card(self):
-        # the head's row is what the inspection card answers to, and on a touch
-        # screen a first tap inside it would open that card instead
+        # a first tap on a line's ‖ opens its editor: a touch screen once gave it to
+        # the inspection card the head's row answered to, and the page's own head
+        # has no card now
         page = self._signed_in(has_touch=True, **self.drawn_in)
         page.goto(f"{self.base}/status{_ASPECT}")
-        page.wait_for_selector(".viewed-head .status-node__self.inspect-trigger")
+        page.wait_for_function("document.documentElement.classList"
+                               ".contains('maintenance-edit-enhanced')")
         line = self._line(page, "3 pipelines in scope")
         line.locator(".reason-pin > summary").tap()
         page.wait_for_function(_FOCUS_IN_NOTE, timeout=3000)

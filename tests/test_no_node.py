@@ -139,6 +139,52 @@ class RefreshTests(_Estate):
         self.assertIn("ls-no-node", response.get_data(as_text=True))
 
 
+class LostChildrenTests(_Estate):
+    """A branch that loses its children while its page polls gets a fragment, not
+    a leaf's page (ADR-0127 decision 10): the page's script reads a page without
+    `X-Rendered-At` as a lost session. The next load of the address is the leaf's
+    page, as it was."""
+
+    def _lose_them(self) -> None:
+        self.check.jobs = {}
+        assert app_module.engine is not None
+        app_module.engine.run_once()
+
+    def test_the_refresh_of_a_branch_whose_children_left_is_a_fragment(self) -> None:
+        page = self.client.get("/status/batch")
+        self.assertEqual(page.status_code, 200)
+        self.assertIn('id="status-grid"', page.get_data(as_text=True))
+        self._lose_them()
+        self.assertEqual(len(self.tree.snapshot("/batch").children), 0)
+        response = self.client.get("/status/batch", query_string={"fragment": "1"})
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.headers.get("X-Rendered-At"))
+        body = response.get_data(as_text=True)
+        self.assertNotIn("<html", body)
+        self.assertNotIn("maintenance-edit.js", body)
+        # it says what stands where the children stood, and not that nothing has
+        # reported yet
+        self.assertIn("Nothing stands beneath batch now.", body)
+        self.assertNotIn("No checks reporting yet.", body)
+
+    def test_a_load_of_the_address_is_the_leafs_page_as_it_was(self) -> None:
+        self._lose_them()
+        page = self.client.get("/status/batch")
+        self.assertEqual(page.status_code, 200)
+        body = page.get_data(as_text=True)
+        self.assertNotIn('id="status-grid"', body)
+        self.assertIn("maintenance-edit.js", body)
+        self.assertNotIn("Nothing stands beneath", body)
+
+    def test_the_wall_and_a_branch_with_children_say_nothing_of_it(self) -> None:
+        for url in ("/status", "/status/batch"):
+            with self.subTest(url=url):
+                body = self.client.get(url, query_string={"fragment": "1"}
+                                       ).get_data(as_text=True)
+                self.assertNotIn("Nothing stands beneath", body)
+                self.assertNotIn("No checks reporting yet.", body)
+
+
 class WhatIsKnownTests(_Estate):
     """Decision 3: what the log and the pins know, and the nearest node above."""
 

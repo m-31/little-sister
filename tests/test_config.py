@@ -56,6 +56,34 @@ class ConfigTests(TestCase):
             path.write_text("timezone: Not/AZone\n")
             self.assertEqual(load_config(path).timezone, DEFAULT_TIMEZONE)
 
+    # How the wall first looks where nobody else speaks (ADR-0128): two
+    # tri-state switches, unset unless the file says.
+
+    def test_reads_the_first_looks_switches_and_leaves_them_unset_by_default(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.yaml"
+            path.write_text("chips: true\nfold_ok: false\n")
+            cfg = load_config(path)
+            self.assertIs(cfg.chips, True)
+            self.assertIs(cfg.fold_ok, False)
+            path.write_text("timezone: UTC\n")
+            cfg = load_config(path)
+            self.assertIsNone(cfg.chips)
+            self.assertIsNone(cfg.fold_ok)
+
+    def test_a_switch_that_is_not_true_or_false_is_named_and_left_unset(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.yaml"
+            path.write_text('chips: "false"\nfold_ok: 1\n')
+            with self.assertLogs("little_sister.logger", "WARNING") as logged:
+                cfg = load_config(path)
+            self.assertIsNone(cfg.chips)
+            self.assertIsNone(cfg.fold_ok)
+            said = " ".join(record.getMessage() for record in logged.records)
+            self.assertIn("chips 'false' is not true or false", said)
+            self.assertIn("fold_ok 1 is not true or false", said)
+            self.assertNotIn("unknown key", said)
+
     def test_reads_branch_cap(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "settings.yaml"
@@ -162,6 +190,79 @@ class ConfigTests(TestCase):
                 cfg = load_config(path)
         self.assertEqual(cfg.card_status_line, "beside")
         self.assertTrue(any("card_status_line" in line for line in logs.output))
+
+    def test_the_looks_default_to_the_librarys_own(self):
+        # since 2026-10-18 cyberpunk, the hover card off and the wash (Lex's word)
+        cfg = load_config(Path(tempfile.gettempdir()) / "ls-no-such-config.yaml")
+        self.assertEqual(dict(cfg.looks), {"theme": "cyberpunk",
+                                           "chip_runs": "aligned",
+                                           "inspection_card": "off",
+                                           "toggle_hover": "wash"})
+
+    def test_a_look_reads_the_deployments_default(self):
+        # `off` unquoted is YAML 1.1's false, and is read back as the word it was
+        for written in ("off", "OFF", '"off"', "Off"):
+            with self.subTest(written=written), \
+                    tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "settings.yaml"
+                path.write_text(f"theme: plain\nchip_runs: wrapped\n"
+                                f"inspection_card: {written}\ntoggle_hover: outline\n")
+                with self.assertNoLogs("little_sister", level="WARNING"):
+                    looks = dict(load_config(path).looks)
+                self.assertEqual(looks, {"theme": "plain",
+                                         "chip_runs": "wrapped",
+                                         "inspection_card": "off",
+                                         "toggle_hover": "outline"})
+        # and a word as the look spells it, its case and the spaces round it folded,
+        # as `card_status_line`'s are
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.yaml"
+            path.write_text('toggle_hover: " Wash"\n')
+            with self.assertNoLogs("little_sister", level="WARNING"):
+                self.assertEqual(load_config(path).looks["toggle_hover"], "wash")
+
+    def test_a_look_it_does_not_have_falls_back_on_its_own_with_a_warning(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.yaml"
+            path.write_text("theme: default\nchip_runs: columns\n"
+                            "inspection_card: sometimes\ntoggle_hover: outline\n")
+            with self.assertLogs("little_sister", level="WARNING") as logs:
+                cfg = load_config(path)
+        self.assertEqual(dict(cfg.looks), {"theme": "cyberpunk",
+                                           "chip_runs": "aligned",
+                                           "inspection_card": "off",
+                                           "toggle_hover": "outline"})
+        self.assertTrue(any("inspection_card 'sometimes' is not one of pause/off; "
+                            "using 'off'" in line for line in logs.output))
+        self.assertTrue(any("chip_runs 'columns' is not one of aligned/wrapped; "
+                            "using 'aligned'" in line for line in logs.output))
+        # the plain theme's name until 2026-10-18 is no theme now
+        self.assertTrue(any("theme 'default' is not one of auto/plain/vivid/pastel/"
+                            "dark/cyberpunk; using 'cyberpunk'" in line
+                            for line in logs.output))
+
+    def test_a_key_nothing_reads_is_named_with_its_file(self):
+        # A misspelt key did nothing and said nothing (backlog #91 §7.10).
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.yaml"
+            path.write_text("reason_cap: 4\nchip: aligned\ninspection-card: off\n")
+            with self.assertLogs("little_sister", level="WARNING") as logs:
+                cfg = load_config(path)
+        self.assertEqual(cfg.reason_cap, 4)
+        named = [line for line in logs.output if "unknown key(s)" in line]
+        self.assertEqual(len(named), 1)
+        self.assertIn(f"{path}: unknown key(s) chip, inspection-card (known: ",
+                      named[0])
+        self.assertIn("inspection_card", named[0].split("known: ", 1)[1])
+
+    def test_every_key_the_shipped_settings_write_is_one_that_is_read(self):
+        # the library's own file, which documents every key, and the demo's
+        root = Path(__file__).resolve().parent.parent
+        for path in (root / "config" / "settings.yaml",
+                     root / "tests" / "demo_config" / "settings.yaml"):
+            with self.subTest(path=path.name):
+                with self.assertNoLogs("little_sister", level="WARNING"):
+                    load_config(path)
 
     def test_dashboard_columns_defaults_flow(self):
         cfg = load_config(Path(tempfile.gettempdir()) / "ls-no-such-config.yaml")

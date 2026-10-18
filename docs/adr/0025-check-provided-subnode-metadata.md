@@ -1,7 +1,7 @@
 # ADR-0025 — Check-provided subnode metadata (`about` / `title` on `CheckResult`)
 
 - **Status:** Accepted
-- **Date:** 2026-10-04 (accepted 2026-07-25)
+- **Date:** 2026-10-18 (accepted 2026-07-25)
 - **Related:** [ADR-0007](0007-check-result-branches.md) (recursive `CheckResult` —
   the branch shape this extends), [ADR-0012](0012-node-metadata.md) (`about`, its
   sources and precedence), [ADR-0017](0017-node-title.md) (`title`, same sources),
@@ -9,7 +9,9 @@
   sibling, but write-through), [ADR-0019](0019-inspection-popover.md) (the popover that
   already renders these), [ADR-0008](0008-json-output-api.md) (JSON envelope, unchanged
   here), [ADR-0118](0118-a-child-a-run-names-takes-nothing-declared-for-its-name.md)
-  (a child that says a run names it takes its labels from its own result alone).
+  (a child that says a run names it takes its labels from its own result alone),
+  [ADR-0128](0128-where-a-nodes-first-look-comes-from.md) (the first look's keys, which
+  ride the same block and the same declaration).
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -100,6 +102,15 @@ engine or tree learning where a value came from.
    empty; seed-once / fill-empty is the mechanism; labels freeze at the first fill —
    which pins tokens to construction-time facts structurally.
 
+   The same block and the same declaration carry the keys of a node's first look —
+   `chips`, `fold_ok` and `reason_cap` — and `children:`, under a subnode's name or at
+   the file's top level, and a type declares its own node's with a constructor keyword
+   of its own, `node_defaults`
+   ([ADR-0128](0128-where-a-nodes-first-look-comes-from.md)). They are the web page's
+   settings, resolved when the page renders and never stored on a node, so the tree
+   stays provenance-free: the paths a run named are kept for the page's resolver in a
+   table beside the tree.
+
 ## Consequences
 - A reusable branch check ships its subnode legend **once, in code**, and every
   deployment's hover cards explain those leaves out of the box; a deployment still
@@ -114,7 +125,10 @@ engine or tree learning where a value came from.
   seed-time metadata.
 - The tree and engine stay **provenance-free**: the fill-empty rule is the whole
   mechanism, two lines under the existing status-write lock. No `Status` grows a
-  "source" field; no resolved-metadata map is plumbed into the engine.
+  "source" field; no resolved-metadata map is plumbed into the engine. One statement of
+  `nodes.yaml` is handed to the engine when the files load: `show_when_quiet` said under
+  a path's `children:`, which the engine applies as it writes each child, since a child
+  no path names cannot be seeded at startup.
 - `parse_subnodes`, `resolve_text` and `expand_tokens` lose their external callers and
   retire from the authoring facade, ADR-0049's surface gate moving with them — a
   **breaking** change to the surface, taken deliberately while every consumer is
@@ -133,7 +147,9 @@ engine or tree learning where a value came from.
   a startup-only, web-side concern) and buys **live** label updates — a running check
   overriding a label the instant its declaration is removed — that nothing needs, since
   labels are seed-time identity. Seed-once gets the same precedence with none of the
-  wiring.
+  wiring. The coupling is accepted for one statement only, `show_when_quiet` under a
+  path's `children:` in `nodes.yaml`: for a child no path names there is nothing to
+  seed.
 - **Per-field provenance on `Status`** — tag each label with its source (yaml / check /
   empty) and resolve on read. Cleanest *live* semantics (a source could change
   precedence at runtime), but the **most state**: every metadata field doubles, every

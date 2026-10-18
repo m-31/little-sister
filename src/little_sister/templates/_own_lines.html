@@ -30,10 +30,10 @@
     (``at_line``) — a branch's page as it was asked for, its depth and its filters
     kept; a leaf's page leaves it empty, and the write's own answer is the node's page
     at the line. ``path`` is the node's, ``prefix`` keeps the editors' field ids
-    apart from the others on the page. ``muted`` lets a record and a refusal take
-    Bootstrap's muted ink, which a leaf's alert has the pale fills for; a branch's
-    lines stand on a status fill, vivid where the node fails of its own, and take
-    their line's ink there (`_record_list.html`). ``covered`` counts the pins above
+    apart from the others on the page. The lines stand on a status fill — a page's
+    head, the one card of `depth=0` — vivid where the node fails of its own, so a
+    record and a refusal take their line's ink, never Bootstrap's muted gray
+    (`_record_list.html`). ``covered`` counts the pins above
     the node, which silence it and every line with it: a line's pin is then, as under
     the node's own, for the day those end (ADR-0104 decision 2). -#}
 {% from '_rule_block.html' import pin_block, pin_new, rule_mark with context %}
@@ -41,7 +41,7 @@
 {% from '_record_list.html' import record_list %}
 {% macro own_lines(node, path, may, focus='', focus_orphan=none, beneath=false,
                    back='', surface='check', prefix='reason-maintenance-',
-                   muted=true, covered=0) -%}
+                   covered=0, folded=false) -%}
 {%- set pin = node.maintenance_entry %}
 {#- What a line's pin leaves alarming beside it. A line that is silenced already is
     not one that keeps alarming, and under the node's pin nothing alarms at all —
@@ -84,8 +84,12 @@
     {#- A coded line carries its own claim (ADR-0042): state class, its state's own
         tint, and a labeled cue as its accessible name; quiet keeps the maintenance
         tint over any code, and is-running is display only — the words still say
-        it. -#}
-    <div {% if focused %}id="pinned-reason" {% endif %}class="small check-reason{% if line.code %} is-coded s-{{ line.code | status_slug }}{% endif %}{% if line.running %} is-running{% endif %}{% if line.quiet %} is-quiet{% endif %}{% if focused %} is-focused{% endif %}">
+        it. `data-healthy` marks what the healthy fold folds (ADR-0127 decision 4):
+        on a node's own page the head's funnel folds its healthy lines, which are
+        never clamped and keep the check's order (backlog #91 §3.3) — and
+        `data-fold-drawn` beside it what the node's configured fold folds from the
+        first paint (`folded`, ADR-0128), until `tree.js` folds it itself. -#}
+    <div {% if focused %}id="pinned-reason" {% endif %}class="small check-reason{% if line.code %} is-coded s-{{ line.code | status_slug }}{% endif %}{% if line.running %} is-running{% endif %}{% if line.quiet %} is-quiet{% endif %}{% if focused %} is-focused{% endif %}"{% if line_healthy(node, line) %} data-healthy{% if folded %} data-fold-drawn{% endif %}{% endif %}>
         {#- The box the pause mark is placed in: the line's own paddings differ with
             its state, and the mark has to sit where the rail does. -#}
         <div class="check-reason__box">
@@ -93,18 +97,31 @@
             <span class="reason-actions">{{ slot('reason.actions', node=node, reason=line.text, line=line, index=loop.index0, surface=surface) }}</span>
         </div>
         <div class="md-body check-reason__body">{% if line.code %}{{ status_cue(line.code, labeled=true) }}{% endif %}{{ line.text | markdown }}</div>
+        {#- The form the line was written from (ADR-0126), where its grading named
+            one: the key a check's `display:` block re-words this line under, so the
+            reader who wants the line to say more learns here what to write — and the
+            grading that decided its code (ADR-0131), where one did: the name whose
+            keys the check's configuration writes to grade the line differently. One
+            paragraph, beside the line and above its record, on the node's own page
+            only. -#}
+        {%- if line.form or line.grading %}
+            <p class="reason-form small">
+                {%- if line.form %}Written from the form <code>{{ line.form }}</code>{% endif %}
+                {%- if line.grading %}{{ ' · graded by ' if line.form else 'Graded by ' }}<code>{{ line.grading }}</code>{% endif -%}
+            </p>
+        {%- endif %}
         {#- The record (backlog #32): what the check read about this line's subject,
             beside the sentence it wrote. A list of dotted names and values — its
             times in the configured timezone, everything else as stored — on the
             node's own page only: a card shows the line, and this is the surface a
             reader comes to when the line is not enough. -#}
         {%- if line.data %}
-            {{ record_list(line.data, muted=muted) }}
+            {{ record_list(line.data, muted=false) }}
         {#- Where the seam refused the record (ADR-0093), the line stands as its
             grading wrote it and this says why, in the record's place — escaped like
             any other data, since a why may quote the value it refused. -#}
         {%- elif line.refused %}
-            <p class="reason-refused small{% if muted %} text-muted{% endif %}">Record refused: {{ line.refused }}</p>
+            <p class="reason-refused small">Record refused: {{ line.refused }}</p>
         {%- endif %}
         {%- if settable %}
             {#- After the line's text in the document, so the editor opens beneath it

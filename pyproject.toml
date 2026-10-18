@@ -1,6 +1,6 @@
 [project]
 name = "little-sister"
-version = "0.3.20"
+version = "0.3.21"
 description = "Self-hosted status monitoring — checks are plain Python, from a homelab to a team"
 authors = [
     { name = "Michael Meyling" }
@@ -60,7 +60,11 @@ dev = [
 # without one. Install and run them explicitly — see docs/testing-the-gui.md:
 #     uv sync --group browser && uv run playwright install chromium
 #     uv run pytest tests/test_dashboard_browser.py
+# `axe-playwright-python` (MIT, needing only Playwright) carries axe-core (MPL-2.0,
+# no dependencies of its own) for the accessibility scan, tests/test_a11y_browser.py:
+# through the lock rather than a copied script, so the lock says what runs.
 browser = [
+    "axe-playwright-python>=0.1.8",
     "playwright>=1.49",
 ]
 
@@ -105,25 +109,13 @@ files = ["src", "wsgi.py"]
 strict = true
 
 [tool.pytest.ini_options]
-# Every browser test that installs Playwright's clock is left out of every run until
-# they are fixed: on one Mac one or two of them time out a run, a different one each
-# time, before the page they wait for is ready, and they pass elsewhere; 0.3.20 is
-# cut without them. Left out rather than skipped, because a release refuses a
-# skipped browser test. The fix takes the --deselect lines out.
-addopts = [
-    "--cov=little_sister", "--cov-report=term-missing",
-    "--deselect=tests/test_assets_browser.py::StaleAssetsBrowserTests",
-    "--deselect=tests/test_curve_frame_browser.py::CurveFrameBrowserTests::test_a_refresh_leaves_a_frame_where_a_reader_scrolled_it",
-    "--deselect=tests/test_pin_browser.py::WallEditorBrowserTests::test_the_refresh_waits_while_an_editor_is_open",
-    "--deselect=tests/test_pin_browser.py::WallEditorBrowserTests::test_an_answer_that_was_on_its_way_is_dropped",
-    "--deselect=tests/test_pin_browser.py::WallEditorBrowserTests::test_a_miss_that_lands_while_an_editor_is_open_is_said_when_it_closes",
-    "--deselect=tests/test_pin_browser.py::WallEditorBrowserTests::test_an_editor_closed_within_the_minute_leaves_no_dim_behind",
-    "--deselect=tests/test_pin_browser.py::WallEditorBrowserTests::test_a_wall_left_with_an_editor_open_dims_after_a_minute",
-    "--deselect=tests/test_pin_browser.py::WallEditorBrowserTests::test_a_branchs_head_makes_the_refresh_wait_and_stays_lit",
-    "--deselect=tests/test_pin_browser.py::BranchLineBrowserTests::test_a_lines_editor_in_the_head_makes_the_refresh_wait",
-    "--deselect=tests/test_pin_browser.py::WallEditorBrowserTests::test_a_cards_edit_and_clear_show_on_hover_or_keyboard_focus",
-    "--deselect=tests/test_pin_browser.py::BranchLineBrowserTests::test_a_tap_on_a_lines_mark_opens_its_editor_and_not_the_nodes_card",
-]
+addopts = "--cov=little_sister --cov-report=term-missing"
+# pytest-testpaths:begin
+# The suite and nothing else. Without this pytest collects from the project's root,
+# `var/` included, so a `test_*.py` that a copy or a review leaves there runs with
+# the gate, and what the gate counts is no longer the suite.
+# pytest-testpaths:end
+testpaths = ["tests"]
 
 [build-system]
 # The upper bound is one **major** line rather than one minor: uv generates

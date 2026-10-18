@@ -169,7 +169,7 @@ class HostEstate(_Read):
              "series_keep": 480}, base)
         beat = FileFreshnessCheck.from_config(
             {"type": "file", "path": f"{HOST}/beat", "file": "/tmp/beat",
-             "max_age": "5m", "frequency": "3m", "series_keep": 480}, base)
+             "max_age_error": "5m", "frequency": "3m", "series_keep": 480}, base)
         checks = [metrics, memory, site, beat]
         if memory_first:
             # the order the configuration happens to load the two checks in

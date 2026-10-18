@@ -4,10 +4,13 @@ import unittest
 from pathlib import Path
 from unittest import TestCase
 
+from little_sister import self_report
 from little_sister.checks.http import HttpCheck
-from little_sister.checks.ssh.host_metrics import DEFAULT_THRESHOLDS, HostMetricsCheck
+from little_sister.checks.metadata import Stated
+from little_sister.checks.ssh.host_metrics import HostMetricsCheck
 from little_sister.errors import CheckError, ConfigError
 from little_sister.nodes import (
+    ABOUT_NOTED_PAST,
     NodeMeta,
     load_nodes,
     resolve_metadata,
@@ -152,6 +155,84 @@ class LoadNodesTests(TestCase):
         with tempfile.TemporaryDirectory() as directory:
             self.assertEqual(load_nodes(Path(directory)), {})
 
+    # How a node first looks (ADR-0128): the same keys and `children:` per path,
+    # read the same way, never seeded onto the tree.
+
+    def test_the_first_looks_keys_and_children_are_read_per_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / "nodes.yaml").write_text(
+                "/network: {chips: true}\n"
+                "/aws:\n"
+                "  fold_ok: false\n"
+                "  reason_cap: 3\n"
+                "  children: {chips: true, show_when_quiet: true}\n")
+            meta = load_nodes(Path(directory))
+            self.assertEqual(meta["/network"], NodeMeta(look=Stated(chips=True)))
+            self.assertEqual(meta["/aws"].look, Stated(
+                fold_ok=False, reason_cap=3,
+                children=Stated(chips=True, show_when_quiet=True)))
+
+    def test_an_entry_that_says_only_how_it_looks_is_kept(self):
+        # an entry with none of the keys is dropped as a stray; these are keys
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / "nodes.yaml").write_text(
+                "/a: {children: {fold_ok: false}}\n/b: {reason_cap: 0}\n")
+            self.assertEqual(set(load_nodes(Path(directory))), {"/a", "/b"})
+
+    def test_a_value_of_the_wrong_kind_refuses_the_file(self):
+        for line, named in (("/a: {chips: 'yes'}", "/a.chips"),
+                            ("/a: {fold_ok: 1}", "/a.fold_ok"),
+                            ("/a: {reason_cap: -1}", "reason_cap must be >= 0"),
+                            ("/a: {reason_cap: lots}", "/a.reason_cap"),
+                            ("/a: {children: [chips]}", "/a.children must be"),
+                            ("/a: {children: {show_when_quiet: 'no'}}",
+                             "/a.children.show_when_quiet")):
+            with self.subTest(line), tempfile.TemporaryDirectory() as directory:
+                (Path(directory) / "nodes.yaml").write_text(line + "\n")
+                with self.assertRaises(CheckError) as caught:
+                    load_nodes(Path(directory))
+                self.assertIn(named, str(caught.exception))
+                self.assertIn("nodes.yaml", str(caught.exception))
+
+    def test_a_later_root_layers_the_look_per_key_children_too(self):
+        with tempfile.TemporaryDirectory() as d1, tempfile.TemporaryDirectory() as d2:
+            (Path(d1) / "nodes.yaml").write_text(
+                "/a: {chips: true, children: {chips: true, fold_ok: true}}\n")
+            (Path(d2) / "nodes.yaml").write_text(
+                "/a: {fold_ok: true, children: {chips: false}}\n")
+            meta = load_nodes(f"{d1}{os.pathsep}{d2}")
+            self.assertEqual(meta["/a"].look, Stated(
+                chips=True, fold_ok=True,
+                children=Stated(chips=False, fold_ok=True)))
+
+    def test_keys_no_entry_knows_are_named_in_one_line_for_the_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / "nodes.yaml").write_text(
+                "/a: {chip: true, about: kept}\n"
+                "/b: {children: {flod_ok: true, children: {chips: true}}}\n"
+                "/c: {title: quiet}\n")
+            with self.assertLogs("little_sister.logger", "WARNING") as logged:
+                meta = load_nodes(Path(directory))
+            self.assertEqual(len(logged.records), 1)
+            line = logged.records[0].getMessage()
+            self.assertIn("nodes.yaml", line)
+            self.assertIn("/a.chip, /b.children.flod_ok, /b.children.children",
+                          line)
+            # what the entries say that is known still loads, and an entry that
+            # said only what nothing reads says nothing
+            self.assertEqual(meta["/a"], NodeMeta(about="kept"))
+            self.assertNotIn("/b", meta)
+
+    def test_a_file_whose_keys_are_all_known_says_nothing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / "nodes.yaml").write_text(
+                "/a: {about: x, title: y, order: 1, show_when_quiet: true, "
+                "chips: true, fold_ok: false, reason_cap: 2, "
+                "children: {chips: true, fold_ok: true, reason_cap: 1, "
+                "show_when_quiet: false}}\n")
+            with self.assertNoLogs("little_sister.logger", "WARNING"):
+                load_nodes(Path(directory))
+
 
 class ResolveMetadataTests(TestCase):
     def _http(self, **config):
@@ -249,11 +330,59 @@ class ConsistencyPassTests(TestCase):
         self.assertIn("system", "\n".join(logs.output))
 
     def test_branch_root_counts_as_a_container(self):
-        host = HostMetricsCheck(path="/nexus", host="h",
-                                script_path="x", thresholds=DEFAULT_THRESHOLDS)
+        host = HostMetricsCheck(path="/nexus", host="h", script_path="x")
         with self.assertLogs(level="INFO") as logs:
             run_consistency_pass([host], {})
         self.assertIn("nexus", "\n".join(logs.output))
+
+    def test_an_about_past_400_characters_is_noted(self):
+        # The band shows a node's about open on every view of it (backlog #91
+        # §3.5): a short account, a sentence or a few. One past about 400
+        # characters, some four lines at a desk's width, is named at startup as an
+        # orphan is — the node and its length, and where the rest can go.
+        self_report.startup.forget()
+        self.addCleanup(self_report.startup.forget)
+        about = "word " * 80 + "w"                    # 401 characters
+        self.assertEqual(len(about), 401)
+        with self.assertLogs(level="WARNING") as logs:
+            run_consistency_pass([self._http(path="/web")],
+                                 {"/web": NodeMeta(about=about)})
+        (line,) = self_report.startup.lines()
+        self.assertEqual(line.slug, "nodes-long-about-web")
+        for said in ("'/web'", "401 characters", "behind a link", "handbook"):
+            self.assertIn(said, line.text)
+        self.assertIn("'/web'", "\n".join(logs.output))
+
+    def test_an_about_of_400_characters_is_not(self):
+        self_report.startup.forget()
+        self.addCleanup(self_report.startup.forget)
+        self.assertEqual(ABOUT_NOTED_PAST, 400)
+        with self.assertNoLogs(level="WARNING"):
+            run_consistency_pass([self._http(path="/web")],
+                                 {"/web": NodeMeta(about="w" * 400)})
+        self.assertEqual(self_report.startup.lines(), ())
+
+    def test_a_long_about_on_a_container_no_check_owns_is_noted_too(self):
+        # nodes.yaml reaches the containers no check owns, which is where a
+        # team's page stands: its about is said there as on any node
+        self_report.startup.forget()
+        self.addCleanup(self_report.startup.forget)
+        with self.assertLogs(level="WARNING"):
+            run_consistency_pass([self._http(path="/team/web")],
+                                 {"/team": NodeMeta(about="x" * 612)})
+        (line,) = self_report.startup.lines()
+        self.assertIn("'/team'", line.text)
+        self.assertIn("612 characters", line.text)
+
+    def test_an_orphans_long_about_is_said_by_its_orphan_line_alone(self):
+        # shown nowhere, it is no account of a node to keep short
+        self_report.startup.forget()
+        self.addCleanup(self_report.startup.forget)
+        with self.assertLogs(level="WARNING"):
+            run_consistency_pass([self._http(path="/web")],
+                                 {"/ghost": NodeMeta(about="x" * 612)})
+        self.assertEqual([line.slug for line in self_report.startup.lines()],
+                         ["nodes-orphan-ghost"])
 
     def test_heartbeat_declaration_is_not_an_orphan(self):
         # Titling the engine's heartbeat is legitimate (it feeds the status

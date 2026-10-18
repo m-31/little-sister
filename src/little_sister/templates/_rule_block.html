@@ -31,7 +31,37 @@
 <svg class="rule-mark" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" focusable="false"><rect x="4" y="3.5" width="2.7" height="9" rx="0.7" fill="currentColor"/><rect x="9.3" y="3.5" width="2.7" height="9" rx="0.7" fill="currentColor"/></svg>
 {%- endif -%}
 {%- endmacro %}
-
+{#- The marks of a head's own buttons (ADR-0127 decision 3), drawn from
+    `currentColor` as the rule mark is, so they hold on every surface in every
+    theme: ↗ for the node's page, the healthy fold's funnel, ▤ for the children
+    as chips, ‖ for an admin's pin still to be set, and ⋯ for the node's actions
+    that did not fit the head's row. Decorative; each button's `aria-label` says
+    what it does. A page draws the shapes once, `icon_sprite`, outside the grid the
+    refresh swaps, and each mark refers to its shape — three buttons on every open
+    head would otherwise carry a kilobyte of paths each in every fragment. -#}
+{% macro icon_sprite() -%}
+<svg class="icon-sprite" width="0" height="0" aria-hidden="true" focusable="false" style="position:absolute"><symbol id="ls-icon-page" viewBox="0 0 16 16"><path d="M6 3H3v10h10v-3M9 3h4v4M13 3 7.5 8.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol><symbol id="ls-icon-funnel" viewBox="0 0 16 16"><path d="M2 3h12l-4.6 5.4v4.1L6.6 14V8.4Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></symbol><symbol id="ls-icon-chips" viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="3.2" rx="1.6" fill="currentColor"/><rect x="2" y="9.8" width="5.2" height="3.2" rx="1.6" fill="currentColor"/><rect x="8.8" y="9.8" width="5.2" height="3.2" rx="1.6" fill="currentColor"/></symbol><symbol id="ls-icon-pin" viewBox="0 0 16 16"><rect x="4" y="3.5" width="2.7" height="9" rx="0.7" fill="none" stroke="currentColor" stroke-width="1.5"/><rect x="9.3" y="3.5" width="2.7" height="9" rx="0.7" fill="none" stroke="currentColor" stroke-width="1.5"/></symbol><symbol id="ls-icon-more" viewBox="0 0 16 16"><circle cx="3.5" cy="8" r="1.6" fill="currentColor"/><circle cx="8" cy="8" r="1.6" fill="currentColor"/><circle cx="12.5" cy="8" r="1.6" fill="currentColor"/></symbol></svg>
+{%- endmacro %}
+{% macro icon_mark(kind) -%}
+<svg class="icon-mark" aria-hidden="true"><use href="#ls-icon-{{ kind }}"/></svg>
+{%- endmacro %}
+{#- The page's one editor of a pin still to be set (ADR-0104 decision 3, ADR-0127
+    decision 3): an admin's ‖ in a head's icons clones it into the node's box, where
+    the block will stand — `tree.js` fills in the node's path and what the pin would
+    cover, and opens it — so that no fragment carries an editor, where one in every
+    head would be some 850 KB in every swap of an admin's tab. It is the pause mark's
+    disclosure as it was, so the open clone is what `poll.js` waits for and what
+    `maintenance-edit.js` closes with Cancel and Escape; its summary, which only a
+    page without script would show, never shows, since without script there is no
+    clone and ‖ is a link to the node's page. Drawn by `status.html` **outside**
+    `#status-grid`, once, where the refresh never reaches it, and only for an admin
+    off the kiosk. A pinned node has no ‖, its block carrying *Edit* and *Clear*.
+    The sentence names what the pin covers: a node with others beneath it says so,
+    whether or not the page shows them, which `data-beneath` on its ‖ says from the
+    unfiltered tree; `next` is the page's own address, where the write comes back. -#}
+{% macro pin_editor(next) -%}
+<template id="pin-editor"><details class="maintenance-editor-disclosure pin-setter"><summary class="pin-control visually-hidden">Set maintenance</summary>{{ pin_new('node', '', '', '', 'pin-editor', what=('<span class="pin-editor__what">this node</span>' | safe), next=next) }}</details></template>
+{%- endmacro %}
 {#- An instant in the block's words, each word of it kept whole: the date and the
     time of day, or whatever the deployment's `time_format` writes between spaces. A
     block's sentence wraps where it must — a card on the wall is narrow — and a

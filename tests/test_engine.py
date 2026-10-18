@@ -14,8 +14,10 @@ from unittest import TestCase
 from unittest.mock import patch
 
 from little_sister import engine as engine_module
+from little_sister import self_report
 from little_sister.checks import Measurement
 from little_sister.checks.base import Check, CheckError, CheckResult
+from little_sister.checks.metadata import Stated
 from little_sister.config import config
 from little_sister.engine import (
     FAILURE_RECORD_BYTES,
@@ -23,6 +25,7 @@ from little_sister.engine import (
     _failure_measurement,
 )
 from little_sister.limits import Limits
+from little_sister.nodes import NodeMeta
 from little_sister.reasons import Entry
 from little_sister.status import HEARTBEAT_PATH, StatusCode
 from little_sister.tree import StatusTree
@@ -676,6 +679,58 @@ class EngineTests(TestCase):
         self.assertEqual(disk.about, "Declared in nodes.yaml.")   # yaml wins
         self.assertEqual(disk.title, "Disk")                      # yaml left it empty
 
+    def _long_about_notes(self, engine, runs=1):
+        """The startup record's notes of a long about across ``runs`` runs, and
+        every call that made one."""
+        with patch.object(self_report.startup, "note",
+                          wraps=self_report.startup.note) as noted:
+            for _ in range(runs):
+                engine.run_once()
+        calls = [call for call in noted.call_args_list
+                 if call.args[0].startswith("nodes-long-about")]
+        lines = [line for line in self_report.startup.lines()
+                 if line.slug.startswith("nodes-long-about")]
+        return calls, lines
+
+    def test_a_childs_about_past_400_is_noted_when_it_first_fills_its_node(self):
+        # A run hands a child its about (ADR-0025), and one past about 400
+        # characters is named as the startup pass names a declared one (backlog
+        # #91 §3.5): once, when it first fills its node, which a later run's never
+        # does again.
+        self_report.startup.forget()
+        self.addCleanup(self_report.startup.forget)
+        result = CheckResult(StatusCode.OK, children=(
+            CheckResult(StatusCode.OK, name="disk", about="d" * 450),))
+        engine = Engine([_FakeCheck(path="/host", result=result)], StatusTree())
+        calls, lines = self._long_about_notes(engine, runs=3)
+        self.assertEqual(len(calls), 1)
+        (line,) = lines
+        self.assertEqual(line.slug, "nodes-long-about-host-disk")
+        self.assertIn("'/host/disk'", line.text)
+        self.assertIn("450 characters", line.text)
+
+    def test_a_long_about_that_fills_nothing_is_not_noted(self):
+        # nodes.yaml's about, seeded before the first tick, keeps the field: the
+        # run's long one never reaches the band, and nothing is said of it
+        self_report.startup.forget()
+        self.addCleanup(self_report.startup.forget)
+        tree = StatusTree()
+        tree.set_about("/host/disk", "Declared in nodes.yaml.")
+        result = CheckResult(StatusCode.OK, children=(
+            CheckResult(StatusCode.OK, name="disk", about="d" * 450),))
+        calls, lines = self._long_about_notes(
+            Engine([_FakeCheck(path="/host", result=result)], tree))
+        self.assertEqual((calls, lines), ([], []))
+
+    def test_a_childs_about_of_400_is_not_noted(self):
+        self_report.startup.forget()
+        self.addCleanup(self_report.startup.forget)
+        result = CheckResult(StatusCode.OK, children=(
+            CheckResult(StatusCode.OK, name="disk", about="d" * 400),))
+        calls, lines = self._long_about_notes(
+            Engine([_FakeCheck(path="/host", result=result)], StatusTree()))
+        self.assertEqual((calls, lines), ([], []))
+
     def test_child_order_ranks_the_subnodes_a_branch_check_emits(self):
         # ADR-0055's motivating case, end to end through the engine.
         tree = StatusTree()
@@ -992,6 +1047,129 @@ class EngineTests(TestCase):
                            subnode_show_when_quiet={"aws": True})],
                tree).run_once()
         self.assertIsNone(tree.snapshot("/aws").show_when_quiet)
+
+    # The claim under `children:` (ADR-0128): the same addresses the first look's
+    # keys ride, so a type or a file says it once for a level a run names, where
+    # each run had to stamp it.
+
+    def test_the_files_children_claim_every_child_of_the_checks_node(self):
+        tree = StatusTree()
+        result = CheckResult(StatusCode.OK, children=(
+            CheckResult(StatusCode.OK, name="ec2"),
+            CheckResult(StatusCode.OK, name="i-042", dynamic=True),))
+        Engine([_FakeCheck(path="/aws", result=result,
+                           look=Stated(children=Stated(show_when_quiet=True)))],
+               tree).run_once()
+        self.assertIs(tree.snapshot("/aws/ec2").show_when_quiet, True)
+        self.assertIs(tree.snapshot("/aws/i-042").show_when_quiet, True)
+        self.assertIsNone(tree.snapshot("/aws").show_when_quiet)
+
+    def test_a_names_children_claim_the_children_of_that_name(self):
+        tree = StatusTree()
+        result = CheckResult(StatusCode.OK, children=(
+            CheckResult(StatusCode.OK, name="queues", children=(
+                CheckResult(StatusCode.OK, name="q-1", dynamic=True),
+                CheckResult(StatusCode.OK, name="q-2", dynamic=True),)),
+            CheckResult(StatusCode.OK, name="other", children=(
+                CheckResult(StatusCode.OK, name="q-3", dynamic=True),)),))
+        Engine([_FakeCheck(path="/aws", result=result, subnode_looks={
+            "queues": Stated(children=Stated(show_when_quiet=True))})],
+               tree).run_once()
+        self.assertIs(tree.snapshot("/aws/queues/q-1").show_when_quiet, True)
+        self.assertIs(tree.snapshot("/aws/queues/q-2").show_when_quiet, True)
+        self.assertIsNone(tree.snapshot("/aws/other/q-3").show_when_quiet)
+        self.assertIsNone(tree.snapshot("/aws/queues").show_when_quiet)
+
+    def test_a_childs_own_name_first_and_the_files_children_before_the_type(self):
+        tree = StatusTree()
+        result = CheckResult(StatusCode.OK, children=(
+            CheckResult(StatusCode.OK, name="ec2"),
+            CheckResult(StatusCode.OK, name="batch"),))
+        Engine([_FakeCheck(path="/aws", result=result,
+                           look=Stated(children=Stated(show_when_quiet=False)),
+                           subnode_show_when_quiet={"ec2": True},
+                           subnode_defaults={"batch": {"show_when_quiet": True}})],
+               tree).run_once()
+        self.assertIs(tree.snapshot("/aws/ec2").show_when_quiet, True)
+        self.assertIs(tree.snapshot("/aws/batch").show_when_quiet, False)
+
+    def test_a_parents_children_claim_beats_what_a_run_stamps(self):
+        tree = StatusTree()
+        result = CheckResult(StatusCode.OK, children=(
+            CheckResult(StatusCode.OK, name="i-042", dynamic=True,
+                        show_when_quiet=True),))
+        Engine([_FakeCheck(path="/aws", result=result,
+                           look=Stated(children=Stated(show_when_quiet=False)))],
+               tree).run_once()
+        self.assertIs(tree.snapshot("/aws/i-042").show_when_quiet, False)
+
+    def test_the_types_node_defaults_claim_the_children_of_its_own_node(self):
+        tree = StatusTree()
+        result = CheckResult(StatusCode.OK, children=(
+            CheckResult(StatusCode.OK, name="i-042", dynamic=True),))
+        Engine([_FakeCheck(path="/aws", result=result,
+                           node_defaults={"children": {"show_when_quiet": True}})],
+               tree).run_once()
+        self.assertIs(tree.snapshot("/aws/i-042").show_when_quiet, True)
+
+    def test_nodes_yaml_childrens_claim_beats_the_file_and_its_own_path_all(self):
+        tree = StatusTree()
+        tree.set_show_when_quiet("/aws/lambda", True)
+        result = CheckResult(StatusCode.OK, children=(
+            CheckResult(StatusCode.OK, name="ec2"),
+            CheckResult(StatusCode.OK, name="lambda"),))
+        engine = Engine([_FakeCheck(path="/aws", result=result,
+                                    subnode_show_when_quiet={"ec2": True,
+                                                             "lambda": False})],
+                        tree)
+        engine.declare_nodes({"/aws": NodeMeta(
+            look=Stated(children=Stated(show_when_quiet=False)))})
+        engine.run_once()
+        self.assertIs(tree.snapshot("/aws/ec2").show_when_quiet, False)
+        self.assertIs(tree.snapshot("/aws/lambda").show_when_quiet, True)  # seeded
+
+    def test_a_named_nodes_name_entry_does_not_reach_its_children(self):
+        tree = StatusTree()
+        result = CheckResult(StatusCode.OK, children=(
+            CheckResult(StatusCode.OK, name="batch", dynamic=True, children=(
+                CheckResult(StatusCode.OK, name="q"),)),))
+        Engine([_FakeCheck(path="/aws", result=result, subnode_looks={
+            "batch": Stated(children=Stated(show_when_quiet=True))})],
+               tree).run_once()
+        self.assertIsNone(tree.snapshot("/aws/batch/q").show_when_quiet)
+
+    def test_the_tree_keeps_which_nodes_a_run_named_while_it_names_them(self):
+        tree = StatusTree()
+        named = CheckResult(StatusCode.OK, children_complete=True, children=(
+            CheckResult(StatusCode.OK, name="ec2"),
+            CheckResult(StatusCode.OK, name="i-042", dynamic=True, children=(
+                CheckResult(StatusCode.OK, name="disk"),)),))
+        check = _FakeCheck(path="/aws", result=named)
+        engine = Engine([check], tree)
+        engine.run_once()
+        self.assertTrue(tree.named_by_run("/aws/i-042"))
+        self.assertFalse(tree.named_by_run("/aws/ec2"))
+        self.assertFalse(tree.named_by_run("/aws/i-042/disk"))
+        self.assertFalse(tree.named_by_run("/aws"))
+        # a later run that names it no more, and one that no longer returns it
+        check._result = CheckResult(StatusCode.OK, children_complete=True, children=(
+            CheckResult(StatusCode.OK, name="i-042"),))
+        engine.run_once()
+        self.assertFalse(tree.named_by_run("/aws/i-042"))
+        check._result = named
+        engine.run_once()
+        self.assertTrue(tree.named_by_run("/aws/i-042"))
+        check._result = CheckResult(StatusCode.OK, children_complete=True)
+        engine.run_once()
+        self.assertFalse(tree.named_by_run("/aws/i-042"))
+
+    def test_a_root_that_says_a_run_named_it_is_not_kept_as_named(self):
+        # a root ignores the word, as it ignores what a result says of its name
+        tree = StatusTree()
+        Engine([_FakeCheck(path="/aws", result=CheckResult(StatusCode.OK,
+                                                           dynamic=True))],
+               tree).run_once()
+        self.assertFalse(tree.named_by_run("/aws"))
 
     def test_elapsed_none_before_first_run(self):
         engine = Engine([_FakeCheck(path="/a")], StatusTree())

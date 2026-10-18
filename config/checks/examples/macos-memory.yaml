@@ -49,16 +49,21 @@ host: mymac-ssh-alias        # SSH target — ~/.ssh/config alias or hostname/FQ
 # processes:
 #   - name: findmy           # leaf name
 #     pattern: FindMy.app    # command-line substring
-#     warn_mb: 1024          # per-process override (default: thresholds.process)
-#     error_mb: 2048
+#     max_rss_warn: 1 GiB    # its resident memory, summed (default: 1 GiB / 2 GiB)
+#     max_rss_error: 2 GiB
 
 # --- grading -----------------------------------------------------------------
-# At/above `warn` → WARN, at/above `error` → ERROR (defaults shown). `pressure`
-# has no thresholds — it is graded by the kernel's own level.
-# thresholds:
-#   swap:       {warn: 4096, error: 8192}   # MB in use
-#   compressor: {warn: 35, error: 50}       # percent of physical RAM
-#   process:    {warn: 1024, error: 2048}   # default RSS MB for watched processes
+# Each is a pair (ADR-0131): above `_warn` → WARN, above `_error` → ERROR, each
+# level the last value that passes (defaults shown). The pressure is the kernel's
+# own level — 1 normal, 2 warning, 4 critical — so its defaults pass a normal one,
+# warn at a warning and err at a critical one; a watched process's levels stand in
+# its own entry, above.
+# max_pressure_warn: 1
+# max_pressure_error: 2
+# max_swap_warn: 4 GiB       # swap in use
+# max_swap_error: 8 GiB
+# max_compressor_warn: 35%   # of physical RAM
+# max_compressor_error: 50%
 
 # --- presentation ------------------------------------------------------------
 # descriptions:              # per-leaf description (Markdown), keyed by leaf name

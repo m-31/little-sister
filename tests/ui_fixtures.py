@@ -38,6 +38,7 @@ from little_sister.reasons import Entry
 from little_sister.series import MemoryStore, SeriesKey, SeriesRecord
 from little_sister.status import StatusCode
 from little_sister.tree import StatusSnapshot, StatusTree
+from tests import anonymized_tree
 
 # A host whose name (and its child's) is deliberately far too long, to stress the
 # card head, the header title and the breadcrumb. Kept as a constant so the
@@ -1037,6 +1038,15 @@ def _unbreakable_tokens() -> StatusSnapshot:
     return _snapshot(tree)
 
 
+def _anonymized_tree() -> StatusSnapshot:
+    """The deployment's tree backlog #91 measured its design on, its names replaced
+    (``anonymized_tree.py``): 265 nodes under two teams, the wall as it stands today
+    with the deployment's ``reason_cap``. The page the wall's cost is read on, by eye
+    here and in numbers in ``test_wall_cost.py`` and ``test_wall_cost_browser.py``.
+    The checks' next slot is pinned like every stamp, so the page stays diffable."""
+    return _snapshot(anonymized_tree.build(next_run_at=_PINNED_NEXT_RUN))
+
+
 FIXTURES: tuple[Fixture, ...] = (
     Fixture("hosts_ok_02", "2 hosts, all OK", lambda: _hosts_ok(2)),
     Fixture("hosts_ok_10", "10 hosts, all OK", lambda: _hosts_ok(10)),
@@ -1170,6 +1180,10 @@ FIXTURES: tuple[Fixture, ...] = (
     Fixture("unbreakable_tokens",
             "single-token reasons: ~300-char URL, image digest, 500-char "
             "code() line (width overflow)", _unbreakable_tokens),
+    Fixture("anonymized_tree",
+            "a deployment's own tree of 265 nodes under two teams, its names "
+            "replaced — the wall backlog #91 measures its cost on, reason_cap 30",
+            _anonymized_tree, reason_cap=anonymized_tree.REASON_CAP),
 )
 
 FIXTURES_BY_NAME: dict[str, Fixture] = {f.name: f for f in FIXTURES}

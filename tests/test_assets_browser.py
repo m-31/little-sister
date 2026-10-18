@@ -125,8 +125,7 @@ class StaleAssetsBrowserTests(_BrowserCase):
     def test_it_waits_for_an_open_editor(self) -> None:
         card = self.page.locator(".status-card").filter(
             has=self.page.locator('.status-card__head[data-path="/hemulen"]'))
-        card.hover()
-        card.locator("summary.pin-control").click()
+        card.locator('.status-card__head [data-control="pin"]').click()
         self.page.wait_for_function(
             "document.activeElement !== null"
             " && document.activeElement.name === 'reason'")

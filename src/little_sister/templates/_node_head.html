@@ -1,0 +1,227 @@
+{#- A node's head, the parts every head shares — the state a head says, its time, its
+    controls and its own icons — and the head of a node's page, the top of the frame
+    that page draws its node in (backlog #91 §3.5). One partial for the wall's grid
+    (`_status_grid.html`) and a leaf's own page (`check.html`), so that the two pages
+    draw the node they are about from one macro and cannot drift apart; and a
+    partial of macros alone, since importing a template runs its body (the
+    `_status_cue.html` lesson). Imported `with context`, for the reader's rights, the
+    pins above the node and the line a page was asked for. -#}
+{% from '_status_cue.html' import status_cue %}
+{% from '_next_update.html' import next_update %}
+{% from '_rule_block.html' import pin_block, pin_new, pins_above_stated, rule_mark, icon_mark with context %}
+{% from '_own_lines.html' import own_lines with context %}
+{#- What is being silenced (ADR-0032 rule 5: a transformed contribution is visible
+    and attributable). A card that says only "maintenance" hides the transform —
+    *we are silencing an error* is the thing worth knowing, and before the keystone
+    it was not merely hidden but destroyed. Shown wherever a node's own status has
+    been derived away from a countable reading, by a node pin or by every member
+    being pinned; a check that reported ``MAINTENANCE`` itself has nothing to add.
+    And only where the node **shows** *maintenance*: one whose lines are all
+    silenced shows what the nodes beneath it roll up to, and has no *maintenance*
+    for the reading to stand under (ADR-0124) — its silenced lines and their count
+    say it there. ``word`` includes the status word for surfaces that do not
+    already print it.
+
+    **A damping counter is the same kind of fact and takes the same slot**: the node
+    shows what it read and its parent is still counting the quieter value, so the
+    card says how many readings are in and how many the deployment asked for. A red
+    leaf under a green parent is what a broken roll-up looks like, and this is the
+    sentence that tells the two apart. Same ink as the maintenance suffix — the
+    transform is one idea and it should not look like two. -#}
+{% macro reported_suffix(node, word=False) -%}
+{%- if node.code.name == 'MAINTENANCE' and node.own_code.name == 'MAINTENANCE' and node.reported_code.name not in ('MAINTENANCE', 'UNDEFINED') %} <span class="status-reported">{% if word %}maintenance {% endif %}· {{ node.reported_code.name.lower() }}</span>{% endif -%}
+{%- if node.damping %} <span class="status-reported">· {{ node.damping.seen }} of {{ node.damping.needed }} to escalate</span>{% endif -%}
+{%- endmacro %}
+{#- Observation time (ADR-0027): *when* beside *what*. Shown only when the node has
+    an unambiguous answer to "when did the check behind this node run?" — its own
+    last write, or the run time of the single check below it — and rendered as a
+    time of day at **minute precision** — seconds saved no information worth the row
+    width — so a wall of cards stays scannable. A
+    container above two or more checks has no single answer, so it shows **nothing**
+    rather than a placeholder: absence is the signal. The time shows on the
+    **topmost node visible in the current view** and is suppressed below, where it
+    would be identical (ADR-0044) — safe because an ancestor carries a stamp only
+    where a single check owns everything beneath it, so an identical value below can
+    only be the same run; ``shown`` is the ancestor's displayed rendering, compared
+    at display precision. It sits inside the poll fragment, so it refreshes with
+    the grid; the freshness *alarm* stays the stale badge (ADR-0005), normalized
+    per node against the tolerance the server applied rather than against an absolute
+    age — a check's period implies one, and a node with no period may state one
+    (ADR-0081). -#}
+{% macro card_time(node, shown="") -%}
+{%- if node.timestamp -%}
+{%- set moment = node.timestamp | localtime("%H:%M") -%}
+{%- if moment != shown %}<span class="status-card__time">{{ moment }}{{ next_update(node.run.next_run_at if node.run else none, moment) }}</span>{% endif -%}
+{%- endif -%}
+{%- endmacro %}
+{#- The head's own buttons (ADR-0127 decision 3), in its upper right corner: ↗ to
+    the node's page, the healthy fold's funnel where the node has a healthy child or
+    line, ▤ where it has children, and for an admin ‖ where the node has no pin of
+    its own — a link to the node's page, whose head sets a pin without script, and
+    with it the control that clones the page's one editor into this box
+    (`pin_editor`, `tree.js`); `data-beneath` says the pin would cover others, read
+    from the unfiltered tree. The server draws each as the first look has it — the
+    funnel pressed where the node's configured fold is on (`folds`, ADR-0128) — and
+    hands the counts a press would fold (`data-n`, the configured fold's, and
+    `data-n-pressed`, a press's, which takes the `show_when_quiet` claims too);
+    `tree.js` draws the one in force, the pressed state, `mixed` and `.is-changed`.
+    A page's own node has no ↗, being that page; and the frame's head, which keeps an
+    editor of its own beneath its row (`frame_head`, `own_setter`), has a ‖ that opens
+    that one rather than a clone of the page's: a button shown where the page has its
+    scripts, from the first paint (`ls-script`, `overview.css`), since without them the
+    head's own *Set maintenance* stands there to be pressed. None on
+    the kiosk, which has nobody to set them (decision 7). -#}
+{% macro chips_drawn(kid_faces) -%}
+{%- if kid_faces | select | list | length == kid_faces | length %}true{% elif not kid_faces | select | list %}false{% else %}mixed{% endif -%}
+{%- endmacro %}
+{% macro node_icons(node, kid_faces, fold, pin=false, beneath=false, page_root=false, own_setter=false, folds=false) -%}
+{%- if layout != 'kiosk' -%}
+<span class="node-icons">
+{%- if not page_root %}<a class="node-icon" data-control="page" href="{{ url_for('status', branch=node.path | url_branch) }}" title="open its page" aria-label="open the page of {{ node.name }}">{{ icon_mark('page') }}</a>{% endif -%}
+{%- if fold[1] %}{% set words = 'Show the %d healthy ones' % fold[0] if folds else 'Fold the %d healthy ones' % fold[1] %}<button type="button" class="node-icon" data-control="ok" aria-pressed="{{ 'true' if folds else 'false' }}" data-n="{{ fold[0] }}" data-n-pressed="{{ fold[1] }}" title="{{ words }}" aria-label="{{ words }}">{{ icon_mark('funnel') }}</button>{% endif -%}
+{%- if kid_faces %}{% set drawn = chips_drawn(kid_faces) %}{% set words = 'Open the children' if drawn == 'true' else 'Fold the children to chips' %}<button type="button" class="node-icon" data-control="chips" aria-pressed="{{ drawn }}" title="{{ words }}" aria-label="{{ words }}">{{ icon_mark('chips') }}</button>{% endif -%}
+{%- if pin and own_setter %}<button type="button" class="node-icon" data-control="pin" title="Set maintenance" aria-label="set maintenance for {{ node.path }}" aria-expanded="false" aria-controls="head-setter" hidden>{{ icon_mark('pin') }}</button>
+{%- elif pin %}<a class="node-icon" data-control="pin" href="{{ url_for('status', branch=node.path | url_branch) }}" title="Set maintenance" aria-label="set maintenance for {{ node.path }}"{% if beneath %} data-beneath{% endif %}>{{ icon_mark('pin') }}</a>{% endif -%}
+</span>
+{%- endif -%}
+{%- endmacro %}
+{#- The healthy fold's count (ADR-0127 decision 4), after a node's children and
+    lines: *✓ +N ok*, where the node has a healthy child or line, as the funnel is.
+    `tree.js` shows it while the fold is in force, N the fold's; where the node's
+    configured fold is on (ADR-0128) the server writes it as `tree.js` will, and
+    `data-fold-drawn` shows it from the first paint where the page has its scripts
+    (`overview.css`) — without them it does nothing and stays hidden. -#}
+{% macro ok_mark(fold, folds=false) -%}
+{%- if fold[1] -%}
+{%- if folds and fold[0] %}<button type="button" class="tree-ok" data-control="ok-fold" data-fold-drawn aria-pressed="true" aria-label="show the {{ fold[0] }} healthy ones" hidden>&#x2713; +{{ fold[0] }} ok</button>
+{%- else %}<button type="button" class="tree-ok" data-control="ok-fold" hidden></button>{% endif -%}
+{%- endif -%}
+{%- endmacro %}
+{#- The head's controls, one toolbar (decision 3): the node's actions, the
+    `node.actions` slot (ADR-0034) in `.node-actions` — an action that names an icon
+    a square like the head's own, one that names none a labelled chip
+    (`_config_action.html`) — then ⋯, `hidden` until `tree.js` folds behind it the
+    actions the row has no room for, then the state cluster the caller draws, and
+    the head's own icons at the end, the row's upper right corner. The slot is
+    offered on every node's box, open or closed, with `place` beside `surface` so
+    a filler can tell a card's head from a nested box's and from a page's frame, and
+    the kiosk gets no control at all (decision 7): there the toolbar is the state
+    alone and has no role. One control of the toolbar is its tab stop, `tree.js`
+    moving it with the arrow keys and keeping it by node through a swap;
+    `aria-label` names the node. -#}
+{% macro node_controls(node, kid_faces, fold, place, pin=false, beneath=false, page_root=false, surface='grid', own_setter=false, folds=false) -%}
+{%- set actions = slot('node.actions', node=node, surface=surface, place=place) -%}
+<span class="node-controls"{% if layout != 'kiosk' %} role="toolbar" aria-label="{{ node.name }} controls"{% endif %}><span class="node-actions">{{ actions }}</span>
+{%- if actions | trim %}<button type="button" class="node-icon node-more" data-control="actions-more" aria-haspopup="menu" aria-expanded="false" title="More actions" aria-label="more actions of {{ node.name }}" hidden>{{ icon_mark('more') }}</button>{% endif -%}
+{{- caller() }}
+{{- node_icons(node, kid_faces, fold, pin=pin, beneath=beneath, page_root=page_root, own_setter=own_setter, folds=folds) }}</span>
+{%- endmacro %}
+{#- **The head of a node's page** (backlog #91 §3.5): the top of the frame the page
+    draws its node in, on a branch's page and a leaf's alike. The page is the same
+    tree as the wall, rooted at this node, and the node itself is always open.
+
+    **Its row is the row a box draws** (ADR-0127 decision 3): the cue and the name —
+    the page's heading for the node, and no toggle, since nothing closes the node
+    its page is about — the title in the middle, and at the end the controls: the
+    node's actions (`place` `frame`), ⋯, the state cluster and the head's icons, the
+    funnel where the node has a healthy child or line and ▤ where it has children,
+    and for an admin ‖ where the node has no pin of its own. No ↗, this being its
+    page.
+
+    **It says what the node rolls up to** (ADR-0123 decision 1): the status its card
+    says on the page above, so a node is one status wherever it is read; and **whose
+    the status is, the fill says**, as a card's does (decision 2) — pale where it
+    comes from beneath the node, `derived`, vivid where the node counts it for
+    itself: a failure of its own, its own reading gone stale, a leaf's every status.
+    A node that declares nothing is the plain case of the first. The head is the
+    topmost visible node of the page, so its observation time shows here and the
+    cards beneath suppress an identical one (ADR-0044).
+
+    Beneath the row, what the head says about the node before its lines: the
+    **description**, its check's account of what it does, muted — said on a node's
+    page alone, the hover card leaving it out; then **the rules acting on the node**,
+    a list whose rows are its blocks (ADR-0104 decisions 2 and 8): a pin set on a
+    node above it first, outermost first and without buttons, since it is edited
+    where it stands, then the node's own, *also silenced on its own* under one. The
+    page's frame is the border decision 8 runs round every line a pin covers, so the
+    rows head the frame and the lines stand inside it with no border of their own.
+    For an admin, a node without a pin of its own gets **Set maintenance** where its
+    block will stand, the browser's disclosure with an editor of its own, so a pin is
+    set on its page without script — ‖ elsewhere is a link here. With script the
+    head's ‖ opens it, as ‖ on every other head opens an editor (ADR-0104 decision
+    3), and the disclosure stands out of sight while it is closed, from the
+    first paint (`ls-script`) and then by `tree.js`.
+    `beneath` says the node has nodes beneath it, read before a filter drops one,
+    which is what the pin would cover.
+
+    **Its lines, as the node's own page lists them** (`own_lines`, ADR-0036 decision
+    12): in full rather than clamped to `reason_cap` — this is where a reader comes
+    when the card is not enough — in the check's order, each with its record, and
+    for an admin with the pin control at its end. Its healthy ones carry
+    `data-healthy`, which the funnel folds.
+
+    And **the damping counter in words**, where the node holds a worse reading back:
+    what it shows meanwhile and what the level above still counts — which the state's
+    *2 of 3 to escalate* does not say. The leaf page's *Stale — last observed …*
+    went: the state says *stale · 3 min ago*, as on every box, and the Time card when
+    the node was last observed. -#}
+{% macro frame_head(node, pinning, path, kid_faces, fold, surface='grid', beneath=false, folds=false) -%}
+{%- set above = pins_above | length %}
+<div class="status-node viewed-head s-{{ node.code | status_slug }}{% if node.derived %} dim{% endif %}">
+    <div class="status-node__self" data-path="{{ node.path }}">
+        {{ status_cue(node.code, use=true) }}<h2 class="status-node__name">{{ node.name | breakable }}</h2>
+        <span class="status-head__middle">{% set shown = node | node_title %}{% if shown %}<span class="node-title">{{ shown | markdown_inline }}</span>{% endif %}</span>
+        {%- call node_controls(node, kid_faces, fold, 'frame', pin=pinning.may and not node.maintenance_entry, page_root=true, surface=surface, own_setter=true, folds=folds) %}
+        <span class="status-node__state">{% if node.stale %}<span class="status-stale">stale{% if not node.children %} · {{ node.age_seconds | elapsed }} ago{% endif %}</span> {% endif %}{{ card_time(node) }}{{ node.code.name.lower() }}{{ reported_suffix(node) }}</span>
+        {%- endcall %}
+    </div>
+    {%- if node.description %}
+    <p class="viewed-head__description">{{ node.description | markdown_inline }}</p>
+    {%- endif %}
+    {%- if above or node.maintenance_entry %}
+    <ul class="rule-list">
+        {{- pins_above_stated(pins_above, 'head-above-maintenance-', tag='li') }}
+        {%- if node.maintenance_entry %}
+        {{ pin_block(node.maintenance_entry, 'node', path, '', 'head-maintenance', pinning.may, next=pinning.back, also=above > 0, tag='li') }}
+        {%- endif %}
+    </ul>
+    {%- endif %}
+    {%- if pinning.may and not node.maintenance_entry %}
+    {#- What the pin would cover, as its editor's first sentence says it: the node
+        whose page this is, and with it every node beneath — which a pin above it
+        silences already, until that one ends; or, on a node with no others beneath
+        it, its lines. -#}
+    {%- set covers %}
+        {%- if beneath -%}
+            {%- if above -%}
+                It keeps everything beneath it silenced when the {{ 'pin' if above == 1 else 'pins' }} above it {{ 'ends' if above == 1 else 'end' }}: nothing under here will alarm before this pin expires. Its checks keep running, their colors stay visible here, and they count again when every pin on them has cleared.
+            {%- else -%}
+                It silences everything beneath it: nothing under here will alarm before the pin expires. Its checks keep running, their colors stay visible here, and they count again when the pin clears.
+            {%- endif -%}
+        {%- elif above -%}
+            It stays silenced when the {{ 'pin' if above == 1 else 'pins' }} above it {{ 'ends' if above == 1 else 'end' }}; the check keeps running and counts again when every pin on it has cleared.
+        {%- elif node.members and node.reasons | length > 1 -%}
+            Silences all {{ node.reasons | length }} lines and any that appear; the check keeps running and counts again when the pin clears.
+        {%- elif node.members and node.reasons -%}
+            Silences its one line and any that appear; the check keeps running and counts again when the pin clears.
+        {%- else -%}
+            It will not alarm before the pin expires; the check keeps running and counts again when the pin clears.
+        {%- endif -%}
+    {%- endset %}
+    <details class="maintenance-editor-disclosure rule-setter" id="head-setter">
+        <summary class="rule-button rule-setter__toggle">{{ rule_mark('maintenance') }}Set maintenance</summary>
+        {{ pin_new('node', covers, path, '', 'head-maintenance', next=pinning.back) }}
+    </details>
+    {%- endif %}
+    {{ own_lines(node, path, pinning.may, focus, focus_orphan, beneath=beneath,
+                 back=pinning.back, surface=surface, prefix='head-line-maintenance-',
+                 covered=above, folded=folds and not node.show_when_quiet) }}
+    {%- if node.damping %}
+    {#- The counter, in words rather than as a number nobody can place: what this
+        node shows, how far the count has got, and what its parent is counting
+        meanwhile. The leaf is honest from the first failure (backlog #38 B) — what
+        waits is only the claim that everything above is broken. -#}
+    <p class="damping-note"><small>Showing <strong>{{ node.damping.pending.name.lower() }}</strong> — {{ node.damping.seen }} of {{ node.damping.needed }} consecutive readings before this escalates{% if node.contribution and node.contribution.code %}, so the level above still counts <strong>{{ node.contribution.code.name.lower() }}</strong>{% endif %}.</small></p>
+    {%- endif %}
+</div>
+{%- endmacro %}

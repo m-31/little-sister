@@ -101,7 +101,7 @@ class SeriesViewTests(TestCase):
              "series_keep": 480}, base)
         beat = FileFreshnessCheck.from_config(
             {"type": "file", "path": f"{HOST}/beat", "file": "/tmp/beat",
-             "max_age": "5m", "frequency": "3m", "series_keep": 480}, base)
+             "max_age_error": "5m", "frequency": "3m", "series_keep": 480}, base)
         self.checks = (host, mac, site, beat)
         store = MemoryStore()
         for step in range(20):

@@ -1,7 +1,7 @@
 # ADR-0104 — A pin is one block on what it silences, and it is edited there
 
 - **Status:** Accepted
-- **Date:** 2026-10-10 (accepted 2026-10-03)
+- **Date:** 2026-10-18 (accepted 2026-10-03)
 - **Related:** [ADR-0014](0014-maintenance-persistence.md) (the pin, its expiry, its
   compare-and-set token and its editor — decisions 6, 7, 9, 13 and 16 to 18, which
   this amends), [ADR-0036](0036-addressable-reasons.md) (a pin on one line, and how
@@ -17,7 +17,9 @@
   [ADR-0109](0109-a-node-says-its-children-are-complete.md) (decision 4: a pin whose
   node is not reported),
   [ADR-0124](0124-a-node-whose-lines-are-all-silenced-still-counts-the-nodes-beneath-it.md)
-  (a pin on a line of a node above silences that line alone)
+  (a pin on a line of a node above silences that line alone),
+  [ADR-0127](0127-the-wall-is-a-tree-and-a-click-opens-or-closes-a-node.md) (the wall as
+  a tree: an open node's head and its icons, a chip, and a node's page framed)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -47,55 +49,61 @@ page: *Status: error* and *Set maintenance*, on a node that would not alarm.
 
 Who silenced it, until when and how long is left, and its note in full; for an admin,
 *Edit* and *Clear*. The same block stands on a node's page, under a line, on the
-Maintenance page and in a card. The expiry reads one way in all of them, the instant and
-what is left: *until 2026-10-03 20:44:28 · 1d 23h left*. Where the sentence wraps, as it
-does in a narrow card, no line ends inside a word of an instant: the date and the time
-of day each stay whole. A viewer sees the block without its buttons, and with the note
-whole, which the strip cut off.
+Maintenance page and in a box on the wall. The expiry reads one way in all of them, the
+instant and what is left: *until 2026-10-03 20:44:28 · 1d 23h left*. Where the sentence
+wraps, as it does in a narrow card, no line ends inside a word of an instant: the date
+and the time of day each stay whole. A viewer sees the block without its buttons, and
+with the note whole, which the strip cut off.
 
 ### 2. Where the block stands says what it covers
 
-A node's block stands at the top of its status card and frames every line beneath it.
-A line's block hangs beneath that line; where the node is pinned too, it says *also
-silenced on its own*, because the line stays quiet when the node's pin ends. On a
-branch's page the block stands in the node's head, above the children it covers, and
-on the wall in the card: under the card's head and above its lines and the boxes it
-covers, its sentence opening *Silenced by*, since the card's head names the node. A
-box inside a card states its own pin the same way.
+A node's page is framed, a leaf's as a branch's
+([ADR-0127](0127-the-wall-is-a-tree-and-a-click-opens-or-closes-a-node.md) decision 8),
+and a node's block stands at the head of the frame, beneath the head's row, above the
+lines and the children it covers. A line's block hangs beneath that line; where the
+node is pinned too, it says *also silenced on its own*, because the line stays quiet
+when the node's pin ends. On the wall the block stands in its node's open box: under a
+card's head and above its lines and the boxes it covers, its sentence opening
+*Silenced by*, since the head names the node, and a box inside a card states its own pin
+the same way. A closed node shows no block; a ‖ on its chip says that a rule stands
+beneath it.
 
 A pin set on a node above this one silences it with everything else beneath that node
 ([ADR-0041](0041-maintenance-is-a-contribution-rule.md)), so this node's page states it
 where it acts as well as where it was set: the same block, its note whole and **without
 buttons**, since a pin is edited where it stands, its sentence naming the node it stands
 on, linked to that node's page — *This node is silenced from /nexus/qnap by anna until
-…*. Each such pin is a row of decision 8's list, outermost first. On a branch's page
-they stand in the head, which is drawn for them where nothing else would draw it, and at
-depth 0 in the node's card. The node's own pin under one says *also silenced on its
-own*, as a line's does under its node's, and a line's pin says the same under a pin
-above; the editors that set either say that it is for the day the pin above ends. A pin
-on a **line** of a node above silences that line alone
+…*. Each such pin is a row of decision 8's list at the head of the page's frame,
+outermost first. The node's own pin under one says *also silenced on its own*, as a
+line's does under its node's, and a line's pin says the same under a pin above; the
+editors that set either say that it is for the day the pin above ends. A pin on a
+**line** of a node above silences that line alone
 ([ADR-0124](0124-a-node-whose-lines-are-all-silenced-still-counts-the-nodes-beneath-it.md))
 and is stated on its own node's page only.
 
 ### 3. A pin is set where its block will stand
 
-A node's control is one labeled button on its status line, *Set maintenance*. A line's
-is a pause mark at the line's end, in the rail it shares with the line's other actions.
+A node's control is an admin's pause mark, ‖, in the icon row of its head. A line's is
+a pause mark at the line's end, in the rail it shares with the line's other actions.
 Each opens its editor where the block will stand, and the editor's first sentence says
 what it covers: *this node, all 6 lines and any that appear*, or *this line only, the
 other 5 keep alarming*.
 
-On the wall an unpinned card's head carries an admin's pause mark, which opens the
-editor in the card: *Maintenance for hemulen and everything beneath it*, said of the
-tree as it is and not of what a filter left on the page. A pinned card has no mark,
-and a box inside a card has none either: it is pinned from its own page. On a branch's
-page the control is *Set maintenance* in the head, so an admin's page of a branch has
-a head even where the node has nothing of its own to say. The overview's own card
-sets no pin, because silencing everything is not done from a form; a pin that stands
-there is stated and changed like any other. The card at the foot of a node's page
-goes.
+On the wall the mark stands, always shown, on every open head of a node with no pin of
+its own — a card's and a box's — and opens the editor in that box: *Maintenance for
+hemulen and everything beneath it*, said of the tree as it is and not of what a filter
+left on the page. The editor is the page's one, kept outside the grid the refresh swaps
+and cloned into the box that asks for it, so no fragment carries an editor, and an
+open one holds the refresh (decision 7); without script the mark is a link to the
+node's page. On a node's page the mark stands in the frame head's row and opens the
+editor the head keeps beneath it, whose own *Set maintenance* sets the pin where there
+is no script; that head is drawn on every node's page and for every reader. A pinned
+node has no mark, its block standing, and a closed one carries no control. The
+overview's own card sets no pin, because silencing everything is not done from a form;
+a pin that stands there is stated and changed like any other. The card at the foot of a
+node's page goes.
 
-A node's row on the wall and a branch's head also answer to the inspection card
+A node's row on the wall and a page's head also answer to the inspection card
 (ADR-0019), and a pin's own controls in them are not that card's to answer: the mark,
 the block and an editor. A row with an editor open in it raises no card at all. The
 control that opened the editor has given way to it, so the pointer that clicked is left
@@ -125,7 +133,7 @@ floor a typed expiry is held to (ADR-0014 decision 13) and the hour a clock chan
 repeats cannot refuse an edit that left the window alone. A field emptied means the
 configured default from now, as on a new pin. Where script runs, the field's text is
 selected when the field takes focus while it is untouched, so one keystroke replaces
-it. This holds for every editor of a pin: a node's, a line's and a card's.
+it. This holds for every editor of a pin: a node's, a line's and a box's.
 
 A save that changes neither the note nor the expiry writes nothing. The pin keeps its
 token and its authors: nobody is recorded as having changed it, and another editor of
@@ -154,29 +162,31 @@ neither makes a node.
 
 ### 7. A page that refreshes itself waits for an open editor
 
-On the wall and on a branch's page the editor opens in the card or in the head, and
-the ten-second refresh skips while one is open: nothing is asked for, and an answer
-that was on its way is dropped. The stamp says *paused while editing* at once, and
-after a minute the page dims as one that lost its server does, all of it but the card
-or the head being edited, so a wall left with an editor open never reads as live.
+On the wall and on a node's page the editor opens in the box or in the head, and the
+ten-second refresh skips while one is open: nothing is asked for, and an answer that
+was on its way is dropped. The stamp says *paused while editing* at once, and after a
+minute the page dims as one that lost its server does, all of it but the box or the
+head being edited, so a wall left with an editor open never reads as live.
 
 When the editor closes, the stamp drops the words and the next refresh, at most ten
 seconds on, brings the page up to date; a page that had dimmed is refreshed at once.
 A close does not refresh the page by itself: a refresh takes the keyboard's focus with
 it, and Cancel has just put that back on what opened the editor.
 
-On a card, *Edit* and *Clear* show on hover or keyboard focus, as the pause mark
-does; a branch's head shows them always. A write from either comes back to the page
-as it was asked for, with its filters and its depth. The pin dialog goes.
+On the wall a block's *Edit* and *Clear* show on hover or keyboard focus; the head of a
+node's page shows them always. A write from either comes back to the page as it was
+asked for, with its filters and its depth. The pin dialog goes.
 
 ### 8. The block is a rule's, and maintenance is its first kind
 
 Every rule at the contribution boundary (ADR-0032) owes the same thing a pin does: to
 be visible where it acts and to name who or what set it. So the block's kind is data —
 its mark, its tint and its buttons — and the head of a node's frame is a list, in which
-a second rule on the same node is a second row. A rule an admin set carries its
-buttons; one the configuration declares carries none. The block paints its own tint and
-the frame is a border, so both stand on a node of any color. The editor's text is
+a second rule on the same node is a second row: the rules stand as its rows beneath the
+head's row, the pins above first, and the node's lines stand inside the frame with no
+second border round them. A rule an admin set carries its buttons; one the
+configuration declares carries none. The block paints its own tint and the frame is a
+border, so both stand on a node of any color. The editor's text is
 called the pin's *note* (ADR-0047 decision 1), which a check's reason lines are not.
 
 ## Consequences

@@ -1,0 +1,8 @@
+# Live-demo check (Mode 2) — see tests/demo_check.py and docs/testing-the-gui.md.
+type: demo
+path: /hosts/fleet
+title: Compute fleet
+about: Five hosts of two leaves each — more quiet boxes than the branch cap shows, so the level folds two behind "+N more", the fold the tab's map keeps.
+scenario: fleet
+frequency: 5s
+period: 60s

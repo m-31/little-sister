@@ -619,11 +619,36 @@ time.sleep(300)
 
 
 def _alive(pid: int) -> bool:
+    """Whether *pid* is a running process -- a zombie is not one.
+
+    `kill -0` answers for a zombie as for a running process: it has exited and waits
+    for its parent to reap it, and until then its PID stands. It holds no port and runs
+    nothing, so to a test asking whether a script left a process **running** it is
+    gone (F8). Where it shows is where the parent is slow: a worker whose master is
+    gone is PID 1's orphan, and the cloud container's PID 1 reaps one after about a
+    second (measured 2026-10-15: a zombie 0.2 s after the KILL, gone at 1.2 s), where
+    the device VM's and a Mac's init reap at once -- so a worker `stop.sh` had killed
+    and named read as *left running* there, twice in a row. `ps -o stat=` says `Z`
+    first for a zombie on Linux and on macOS alike; an empty answer keeps the process
+    alive, which is the conservative side for a test about something left behind.
+    """
     try:
         os.kill(pid, 0)
     except (ProcessLookupError, PermissionError):
         return False
-    return True
+    state = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)],
+                           capture_output=True, text=True, timeout=10).stdout.strip()
+    return not state.startswith("Z")
+
+
+def _kill(pid: int) -> None:
+    """KILL *pid* if it is still there. A cleanup that asks first and kills after
+    races the process it asks about: a test listener's worker leaves as soon as its
+    master is gone, which is the first thing a cleanup kills, and a gate run met it
+    gone between the question and the signal (2026-10-17). Gone is what a cleanup
+    wants, so it is no error."""
+    with contextlib.suppress(ProcessLookupError):
+        os.kill(pid, 9)
 
 
 def _free_ports(count: int) -> list[int]:
@@ -707,8 +732,7 @@ def _listening(*, checkout: Path | None = None, ours: bool = True,
         yield (port, pid, numbers[2]) if len(numbers) > 2 else (port, pid)
     finally:
         for started in numbers[1:]:
-            if _alive(started):
-                os.kill(started, 9)
+            _kill(started)
 
 
 class OtherPortTests(TestCase):
@@ -846,6 +870,171 @@ class OurInstanceTests(TestCase):
                               LITTLE_SISTER_PORT=str(plain))
             self.assertEqual(completed.returncode, 0, completed.stderr)
             self.assertEqual(completed.stdout.strip(), "")
+
+
+#: An `lsof` that answers as the real one does, with one PID more on a listing of a
+#: port's listeners — the PID `GONE_PID` names, a process that is no longer there. What
+#: the scripts met on 2026-10-15: `lsof` lists what held the socket a moment ago, and a
+#: worker of an instance whose worker keeps crashing is gone by the time `ps` looks.
+_LSOF_WITH_A_GONE_LISTENER = """#!/bin/bash
+real="{real}"
+if [ "$1" = "-ti" ]; then
+  "$real" "$@"
+  echo "$GONE_PID"
+  exit 0
+fi
+exec "$real" "$@"
+"""
+
+#: A `uv` that stops `start.sh` where the pre-flight ends: `uv sync` is the first
+#: command after it, so a start that gets this far has decided what to do about the
+#: port, and said so.
+_UV_THAT_STOPS = """#!/bin/bash
+echo "uv: stopped by the test"
+exit 7
+"""
+
+
+def _gone_pid() -> int:
+    """The PID of a process that has run and been reaped: what a listener that exited
+    between `lsof`'s listing and `ps`'s look is to `ps`."""
+    child = subprocess.Popen([sys.executable, "-c", "pass"])
+    child.wait()
+    return child.pid
+
+
+@skipUnless(shutil.which("lsof"), "the run scripts find an instance with lsof")
+class GoneListenerTests(TestCase):
+    """A listener that is gone by the time it is looked at holds nothing.
+
+    `lsof` lists the processes that held a port's socket a moment ago; `ps` is asked
+    about each of them a moment later. A gunicorn whose worker keeps crashing — after a
+    start on incompatible versions, say — has a worker exiting every few seconds, and
+    `./start.sh` on a deployment met one on 2026-10-15: the master was this checkout's,
+    its dying worker had no command line to read (`PID 86962: `), so it read as a
+    stranger on the port, and the start refused over a process that did not exist.
+    Three things hold it off: a port's listeners are the ones that still exist, a
+    stranger is judged alive at the moment of the verdict, and the master of a set is
+    never a PID that is gone.
+    """
+
+    def setUp(self):
+        self.scratch = tempfile.TemporaryDirectory()
+        self.addCleanup(self.scratch.cleanup)
+        self.bin = Path(self.scratch.name) / "bin"
+        self.bin.mkdir()
+        real = shutil.which("lsof")
+        assert real is not None
+        (self.bin / "lsof").write_text(
+            _LSOF_WITH_A_GONE_LISTENER.format(real=real), encoding="utf-8")
+        (self.bin / "lsof").chmod(0o755)
+        self.gone = _gone_pid()
+
+    def _lib(self, script: str) -> subprocess.CompletedProcess[str]:
+        return _bash(f'PATH="{self.bin}:$PATH"; {script}', GONE_PID=str(self.gone))
+
+    def test_a_listener_that_is_gone_is_not_among_a_port_s_listeners(self):
+        with _listening() as (port, pid):
+            completed = self._lib(f"listeners_on {port}")
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(completed.stdout.split(), [str(pid)])
+
+    def test_a_port_with_nothing_left_on_it_has_no_listeners(self):
+        # Answered with nothing and a zero return, as before: the callers assign this
+        # under `set -e`.
+        (port,) = _free_ports(1)
+        completed = self._lib(f"listeners_on {port}")
+        self.assertEqual((completed.returncode, completed.stdout), (0, ""))
+
+    def test_a_stranger_is_a_listener_that_is_not_ours_and_is_there(self):
+        with _listening(ours=False) as (_, stranger), _listening() as (_, ours):
+            self.assertEqual(_bash(f"is_a_stranger {stranger}").returncode, 0)
+            self.assertEqual(_bash(f"is_a_stranger {ours}").returncode, 1)
+        self.assertEqual(_bash(f"is_a_stranger {self.gone}").returncode, 1)
+
+    def test_the_master_of_a_set_is_never_a_pid_that_is_gone(self):
+        with _listening(worker=True) as (_, master, worker):
+            # The gone PID first, where the old reading took the first PID whose
+            # parent it could not find for the master.
+            completed = _bash(f'master_of "{self.gone} {worker} {master}"')
+        self.assertEqual(completed.stdout.strip(), str(master))
+
+    def test_a_refusal_names_a_process_gone_meanwhile_as_gone(self):
+        completed = _bash(f"named_pid {self.gone}")
+        self.assertEqual(completed.stdout.strip(), f"PID {self.gone}: (gone)")
+        with _listening(ours=False) as (_, stranger):
+            completed = _bash(f"named_pid {stranger}")
+        self.assertTrue(completed.stdout.startswith(f"PID {stranger}: "))
+        self.assertIn("something-else", completed.stdout)
+
+
+@skipUnless(shutil.which("lsof") and shutil.which("curl"),
+            "start.sh requires lsof and curl")
+class StartPreflightTests(TestCase):
+    """`./start.sh`'s pre-flight, run whole out of a directory of the test's own, up
+    to the `uv sync` that follows it — which a `uv` of the test's stops."""
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        # Resolved, because the instance is known by its working directory as `lsof`
+        # reports it, and macOS keeps its temporary directories behind a symlink.
+        root = Path(self.directory.name).resolve()
+        for script in ("start.sh", "lib.sh"):
+            shutil.copy(_REPO / script, root / script)
+        (root / "start.sh").chmod(0o755)
+        (root / "bin").mkdir()
+        real = shutil.which("lsof")
+        assert real is not None
+        (root / "bin" / "lsof").write_text(
+            _LSOF_WITH_A_GONE_LISTENER.format(real=real), encoding="utf-8")
+        (root / "bin" / "uv").write_text(_UV_THAT_STOPS, encoding="utf-8")
+        for fake in ("lsof", "uv"):
+            (root / "bin" / fake).chmod(0o755)
+        (root / ".env").write_text('SECRET_KEY="not-a-secret"\n', encoding="utf-8")
+        self.root = root
+        self.gone = _gone_pid()
+
+    def _start(self, port: int) -> subprocess.CompletedProcess[str]:
+        (tls,) = _free_ports(1)
+        (self.root / "instance.sh").write_text(
+            'NAME="little-sister"\n'
+            f"PORT={port}\n"
+            f"TLS_PORT={tls}\n"
+            'APP="little_sister.app:app"\n'
+            "REQUIRE_USERS_ASPECT=0\n",
+            encoding="utf-8")
+        env = os.environ.copy()
+        for name in _TLS_ENVIRONMENT:
+            env.pop(name, None)
+        env["PATH"] = f"{self.root / 'bin'}{os.pathsep}{env['PATH']}"
+        env["GONE_PID"] = str(self.gone)
+        return subprocess.run(["./start.sh"], cwd=self.root, env=env,
+                              capture_output=True, text=True, timeout=60)
+
+    def test_a_start_goes_on_to_restart_its_instance_past_a_listener_that_is_gone(
+            self):
+        # The run of 2026-10-15: this checkout's master on the port, and beside it a
+        # PID `lsof` listed that `ps` no longer knows.
+        with _listening(checkout=self.root) as (port, master):
+            completed = self._start(port)
+        self.assertEqual(completed.returncode, 7, completed.stderr)
+        self.assertNotIn("Refusing to start", completed.stderr)
+        self.assertIn(f"already running on :{port} (PID {master}); will restart it.",
+                      completed.stdout)
+        self.assertIn("uv: stopped by the test", completed.stdout)
+
+    def test_a_start_still_refuses_a_stranger_that_is_there(self):
+        with _listening(ours=False, checkout=self.root) as (port, stranger):
+            completed = self._start(port)
+        self.assertEqual(completed.returncode, 1, completed.stdout)
+        self.assertIn(f"port {port} is already in use by another process:",
+                      completed.stderr)
+        self.assertIn(f"PID {stranger}: ", completed.stderr)
+        self.assertIn("something-else", completed.stderr)
+        self.assertIn("Refusing to start", completed.stderr)
+        self.assertNotIn(f"PID {self.gone}", completed.stderr)
+        self.assertNotIn("uv:", completed.stdout)
 
 
 @skipUnless(shutil.which("lsof"), "stop.sh finds an instance with lsof")
@@ -1266,8 +1455,8 @@ class MemoryScriptTests(TestCase):
         """A sampler a failed assertion left behind would measure all night."""
         def stop() -> None:
             pid = self._sampler_pid()
-            if pid is not None and _alive(pid):
-                os.kill(pid, 9)
+            if pid is not None:
+                _kill(pid)
         self.addCleanup(stop)
 
     def test_in_the_background_it_adds_a_row_every_period_until_stopped(self):

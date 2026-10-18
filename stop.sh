@@ -40,7 +40,7 @@ if [ -z "$target" ]; then
     echo "ERROR: port ${PORT} is held by another process; refusing to stop it:" >&2
     hint=0
     for pid in $strangers; do
-      echo "  PID ${pid}: $(cmd_of "$pid")" >&2
+      echo "  $(named_pid "$pid")" >&2
       if is_an_instance "$pid"; then hint=1; fi
     done
     if [ "$hint" = 1 ]; then any_instance_hint; fi
@@ -60,13 +60,13 @@ existing="$(listeners_on "$target")"
 # Never stop something that isn't ours, even if it shares the port with us.
 foreign=""
 for pid in $existing; do
-  is_ours "$pid" || foreign="${foreign} ${pid}"
+  if is_a_stranger "$pid"; then foreign="${foreign} ${pid}"; fi
 done
 if [ -n "$foreign" ]; then
   echo "ERROR: port ${target} is held by another process; refusing to stop it:" >&2
   hint=0
   for pid in $foreign; do
-    echo "  PID ${pid}: $(cmd_of "$pid")" >&2
+    echo "  $(named_pid "$pid")" >&2
     if is_an_instance "$pid"; then hint=1; fi
   done
   if [ "$hint" = 1 ]; then any_instance_hint; fi

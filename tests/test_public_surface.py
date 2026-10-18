@@ -23,6 +23,9 @@ Two directions, and the second is the one that needs a mechanism:
   built against and a same-commit edit does not touch it. Removing a name means
   bumping ``API_VERSION`` and writing the next snapshot — which is exactly the
   decision ADR-0051 wants somebody to make deliberately.
+* **doc → epoch** — and the snapshot holds every name the block promises: a name
+  joins it in the change that adds the name to the surface, or the direction above
+  could not see that name leave.
 """
 from __future__ import annotations
 
@@ -82,8 +85,10 @@ def test_the_promise_block_parses_into_modules_and_names() -> None:
     assert set(SURFACE) == {
         "little_sister.checks",
         "little_sister.fetch",
+        "little_sister.grading",
         "little_sister.process",
         "little_sister.reasons",
+        "little_sister.rules",
         "little_sister.series",
         "little_sister.spans",
         "little_sister.status",
@@ -150,6 +155,26 @@ def test_the_epoch_snapshot_is_still_promised() -> None:
         f"check API v{API_VERSION} promised these and the surface no longer has "
         f"them: {', '.join(missing)}. Restore them, or bump API_VERSION and write "
         f"the snapshot for the new epoch (ADR-0051).")
+
+
+def test_every_promised_name_is_in_the_epoch_snapshot() -> None:
+    """A name that joins the surface joins the epoch's snapshot in the same change.
+
+    Without its line, the check above cannot see the name leave: a rename of the code
+    and the doc in one commit would pass for it, and the plugin that imports it would
+    learn at the call (ADR-0051).
+    """
+    snapshot = SNAPSHOTS / f"check_api_v{API_VERSION}.txt"
+    recorded = {line.strip()
+                for line in snapshot.read_text(encoding="utf-8").splitlines()
+                if line.strip() and not line.startswith("#")}
+    promised = sorted(f"{module} {name}"
+                      for module, names in SURFACE.items() for name in names)
+    missing = [line for line in promised if line not in recorded]
+    assert not missing, (
+        f"{snapshot.name} lacks what architecture.md §11 promises: "
+        f"{', '.join(missing)}. Append each line to it in the change that adds the "
+        f"name to the surface (ADR-0051).")
 
 
 def test_the_doc_states_the_epoch_the_code_speaks() -> None:

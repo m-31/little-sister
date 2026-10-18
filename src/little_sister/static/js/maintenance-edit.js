@@ -37,8 +37,11 @@
 
     document.addEventListener("keydown", function (event) {
         if (event.key !== "Escape") { return; }
+        // the editor's own disclosure, so that no other the page may hold closes
         var disclosure = event.target.closest
-            ? event.target.closest("details[open]") : null;
+            ? event.target.closest(
+                "details.maintenance-editor-disclosure[open], details.reason-pin[open]")
+            : null;
         if (!disclosure) { return; }
         event.preventDefault();
         close(disclosure, true);

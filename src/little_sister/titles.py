@@ -20,10 +20,11 @@ nothing may make it stop being true:
 
 What *is* a surface, and therefore folds: the grid's leaf chips, box and card
 head lines and the heartbeat strip, the page band beside the breadcrumb (so the
-detail page too), the inspection popover (ADR-0019) and the Maintenance
-page's headings — plus the ``/copy`` hand-off, which is read somewhere with no chips
-and no styling, where ``critical`` alone is a fine name and the title adds
-nothing either. They all call :func:`shown_title`; none of them re-implements it.
+detail page too), and the Maintenance page's headings — plus the ``/copy``
+hand-off, which is read somewhere with no chips and no styling, where ``critical``
+alone is a fine name and the title adds nothing either. They all call
+:func:`shown_title`; none of them re-implements it. The inspection popover
+(ADR-0019) heads with what the node's own head draws, so it folds with the head.
 
 **What "the same thing" folds.** Case, ``_`` versus ``-`` versus a space, and
 runs of whitespace — so ``pull_requests`` and *Pull requests* are one string, and
@@ -45,10 +46,10 @@ comparison — to buy the suppression of a title nobody writes. The asymmetry is
 also in the safe direction: the failure it can produce is *keeping* a redundant
 title, never dropping one that said something.
 
-**A second question, for the two surfaces that draw the title instead of the name**
-(ADR-0061). Most of the list above draws both — the chip, the card head, the strip,
-the band and the Maintenance page all put the name down and the title beside it — and
-for those the only question is the one above. ``/copy`` and the inspection popover carry
+**A second question, for the one surface that draws the title instead of the name**
+(ADR-0061). The rest of the list above draws both — the chip, the card head, the
+strip, the band, the Maintenance page and the popover all put the name down and the
+title beside it — and for those the only question is the one above. ``/copy`` carries
 the title *alone*, which is right while a title is a **word**: a node titled
 *Cluster A* is better named that way in a document pasted into a ticket.
 
@@ -114,7 +115,7 @@ def label_parts(name: str, title: str | None) -> tuple[str, str]:
     in that order with a space between them:
 
     * *(empty, title)* — the title is a word and stands in for the name, which is
-      what ``/copy`` and the popover have always done;
+      what ``/copy`` has always done;
     * *(name, title)* — the title is decoration, so it comes **with** the name
       (ADR-0061): ``critical 🔴``, in the chip's own order, name first;
     * *(name, empty)* — there is no title, or it only repeated the name.

@@ -7,13 +7,13 @@ the host node**, beside the host metrics:
 - ``pressure`` — the kernel's VM memory-pressure level (1 normal → OK,
   2 warning → WARN, 4 critical → ERROR), with the system-wide free percentage
   in the reason.
-- ``swap`` — swap space in use (MB), graded by ``thresholds.swap``.
+- ``swap`` — swap space in use, graded by ``max_swap``.
 - ``compressor`` — memory occupied by the compressor as a percentage of
-  physical RAM, graded by ``thresholds.compressor``. Compressor exhaustion is
+  physical RAM, graded by ``max_compressor``. Compressor exhaustion is
   the kernel-panic signature on a small-RAM machine; ``host-metrics`` folds
   these pages into its single "used" number but can't see them specifically.
 - ``processes`` (when configured) — one leaf per watched process pattern:
-  RSS in MB summed over matching processes (graded per process) plus the
+  RSS summed over matching processes (graded per process, ``max_rss``) plus the
   oldest match's uptime. A slow leak shows as monotonic RSS growth here long
   before ``pressure`` moves, and a scheduled app restart shows as the uptime
   resetting. A process that isn't running reports **OK** — liveness belongs
@@ -50,14 +50,15 @@ from little_sister.checks.ssh.base import (
     parse_descriptions,
 )
 from little_sister.checks.ssh.metrics import (
-    grade,
     human_duration,
     human_kb,
     parse_metrics,
     reading,
     readings,
+    refuse_thresholds,
     unavailable,
 )
+from little_sister.grading import Graded
 from little_sister.limits import format_weight
 from little_sister.reasons import clip
 from little_sister.status import StatusCode, join_path
@@ -86,16 +87,37 @@ MEASURES: dict[str, dict[str, object]] = {
                            "node": "processes/*"},
 }
 
-# (warn, error) — a value at or above the bound takes that status.
-DEFAULT_THRESHOLDS: dict[str, tuple[float, float]] = {
-    "swap": (4096.0, 8192.0),        # MB in use
-    "compressor": (35.0, 50.0),      # percent of physical RAM
-    "process": (1024.0, 2048.0),     # MB RSS per watched process
+#: What this type grades (ADR-0131), each a maximum and each level the last value
+#: that passes: the kernel's memory-pressure level — 1 normal, 2 warning, 4
+#: critical, so the defaults pass a normal level, warn at a warning and err at a
+#: critical one — swap in use, the compressor's share of the RAM, and, in each
+#: watched process's own entry, the resident memory of what matches it.
+GRADINGS: dict[str, object] = {
+    "max_pressure": {
+        "sentence": "The kernel's memory-pressure level: 1 normal, 2 warning, 4 "
+                    "critical.",
+        "kind": "pair", "field": "pressure_level", "unit": "count",
+        "warn": 1, "error": 2},
+    "max_swap": {
+        "sentence": "How much swap may be in use.",
+        "kind": "pair", "field": "swap_used_mb", "unit": "size",
+        "warn": "4 GiB", "error": "8 GiB"},
+    "max_compressor": {
+        "sentence": "How much of the RAM the compressor may occupy.",
+        "kind": "pair", "field": "compressor_pct", "unit": "share",
+        "warn": "35%", "error": "50%"},
+    "processes.max_rss": {
+        "sentence": "How much resident memory what a watched process's pattern "
+                    "matches may hold, summed.",
+        "kind": "pair", "field": "processes.*.rss_kb", "unit": "size",
+        "warn": "1 GiB", "error": "2 GiB"},
 }
 
-# The kernel's memorystatus levels; `grade(level, 2, 4)` maps them directly.
-PRESSURE_WARN_LEVEL = 2.0
-PRESSURE_ERROR_LEVEL = 4.0
+#: What replaced each aspect of the retired `thresholds:` block, and the unit its
+#: level is written with; a process's levels moved into its own entry.
+RETIRED_THRESHOLDS = {"swap": ("max_swap", " MiB"),
+                      "compressor": ("max_compressor", "%")}
+
 PRESSURE_LABELS = {1: "normal", 2: "warning", 4: "critical"}
 
 PRESSURE_DESCRIPTION = "Kernel VM memory-pressure level"
@@ -105,13 +127,12 @@ PROCESSES_DESCRIPTION = "Resident memory of watched processes"
 
 
 class ProcessSpec(NamedTuple):
-    """One watched process: a leaf name, the command-line substring to match,
-    and its RSS thresholds in MB."""
+    """One watched process: a leaf name, the command-line substring to match, and
+    what its own entry grades its resident memory with (ADR-0131)."""
 
     name: str
     pattern: str
-    warn_mb: float
-    error_mb: float
+    graded: Graded
 
 
 @register("macos-memory")
@@ -119,24 +140,30 @@ class MacosMemoryCheck(SshScriptCheck):
     """macOS memory pressure / swap / compressor / process RSS, reported beside
     the host metrics."""
 
-    def __init__(self, *, thresholds: dict[str, tuple[float, float]],
-                 processes: tuple[ProcessSpec, ...] = (),
+    def __init__(self, *,
+                 processes: tuple[tuple[str, str, Mapping[str, Any]], ...] = (),
                  descriptions: dict[str, str] | None = None,
                  **kwargs: Any) -> None:
-        super().__init__(measure_defaults=MEASURES, **kwargs)
-        self.thresholds = thresholds
-        self.processes = processes
+        super().__init__(measure_defaults=MEASURES, gradings=GRADINGS, **kwargs)
+        # Each watched process's levels stand in its own entry, the block its
+        # resident memory is graded in, read here so that a level that does not fit
+        # stops the start naming the entry.
+        block = self.grading_block("processes")
+        self.processes = tuple(
+            ProcessSpec(name, pattern, block.read(entry, f"processes[{index}]"))
+            for index, (name, pattern, entry) in enumerate(processes, 1))
         self.descriptions = descriptions or {}
 
     @classmethod
     def _extra_from_config(cls, config: dict[str, Any],
                            base_dir: Path) -> dict[str, Any]:
-        thresholds = _parse_thresholds(config.get("thresholds"))
+        refuse_thresholds(
+            config.get("thresholds"), RETIRED_THRESHOLDS,
+            also="— and a watched process's levels, thresholds.process, are "
+                 "max_rss_warn and max_rss_error in its own entry")
         return {
             **cls._connection_from_config(config, base_dir, DEFAULT_SCRIPT),
-            "thresholds": thresholds,
-            "processes": _parse_processes(config.get("processes"),
-                                          thresholds["process"]),
+            "processes": _parse_processes(config.get("processes")),
             "descriptions": parse_descriptions(config.get("descriptions")),
         }
 
@@ -154,11 +181,11 @@ class MacosMemoryCheck(SshScriptCheck):
         default (ADR-0012)."""
         return self.descriptions.get(leaf, default)
 
-    def _threshold_md(self, aspect: str, unit: str) -> str:
-        """Config Markdown for a graded leaf — its thresholds (ADR-0013)."""
-        warn, error = self.thresholds[aspect]
-        return config_markdown({"warn at": f"{warn:g}{unit}",
-                                "error at": f"{error:g}{unit}"})
+    def _threshold_md(self, aspect: str) -> str:
+        """Config Markdown for a graded leaf — the levels it was graded by
+        (ADR-0013)."""
+        return config_markdown({
+            "graded": self.grading_summary(f"max_{aspect}") or "not graded"})
 
     def _script_args(self) -> list[str]:
         # $1 = the watch patterns, newline-separated (empty → none; the
@@ -276,10 +303,11 @@ class MacosMemoryCheck(SshScriptCheck):
         if free is not None:
             reason += f" — {_number(free)}% of memory free system-wide"
         config = config_markdown({
-            "levels": "1 normal → OK, 2 warning → WARN, 4 critical → ERROR"})
-        return CheckResult(
-            grade(float(level), PRESSURE_WARN_LEVEL, PRESSURE_ERROR_LEVEL),
-            [reason], name="pressure", description=description, config=config)
+            "levels": "1 normal, 2 warning, 4 critical",
+            "graded": self.grading_summary("max_pressure") or "not graded"})
+        verdict = self.verdict("max_pressure", value=level)
+        return CheckResult(verdict.code, [verdict.entry(reason)], name="pressure",
+                           description=description, config=config)
 
     def _swap(self, record: Mapping[str, Any]) -> CheckResult:
         description = self._describe("swap", SWAP_DESCRIPTION)
@@ -287,16 +315,16 @@ class MacosMemoryCheck(SshScriptCheck):
         if value is None:
             return unavailable("swap", description)
         used = float(value)
-        warn, error = self.thresholds["swap"]
         # In the units the swap curve is written in, so the node and its curve
-        # write one figure one way (ADR-0096 decision 6); graded in MiB as before.
+        # write one figure one way (ADR-0096 decision 6), and graded as a size.
+        verdict = self.verdict("max_swap", value=used * 1024 ** 2)
         reason = f"{_mib(used)} used"
         total = record.get("swap_total_mb")
         if isinstance(total, (int, float)):
             reason += f" of {_mib(float(total))} allocated"
-        return CheckResult(grade(used, warn, error), [reason], name="swap",
+        return CheckResult(verdict.code, [verdict.entry(reason)], name="swap",
                            description=description,
-                           config=self._threshold_md("swap", " MB"))
+                           config=self._threshold_md("swap"))
 
     def _compressor(self, record: Mapping[str, Any]) -> CheckResult:
         description = self._describe("compressor", COMPRESSOR_DESCRIPTION)
@@ -304,14 +332,14 @@ class MacosMemoryCheck(SshScriptCheck):
         if value is None:
             return unavailable("compressor", description)
         pct = float(value)
-        warn, error = self.thresholds["compressor"]
+        verdict = self.verdict("max_compressor", value=pct)
         compressed = human_kb(record.get("compressor_kb"))
         total = human_kb(record.get("mem_total_kb"))
         detail = f" — {compressed} of {total} RAM" if compressed and total else ""
-        return CheckResult(grade(pct, warn, error),
-                           [f"{pct:.0f}% compressed{detail}"],
+        return CheckResult(verdict.code,
+                           [verdict.entry(f"{pct:.0f}% compressed{detail}")],
                            name="compressor", description=description,
-                           config=self._threshold_md("compressor", "%"))
+                           config=self._threshold_md("compressor"))
 
     def _processes(self, record: Mapping[str, Any]) -> CheckResult:
         description = self._describe("processes", PROCESSES_DESCRIPTION)
@@ -323,9 +351,10 @@ class MacosMemoryCheck(SshScriptCheck):
     def _process_leaf(self, spec: ProcessSpec,
                       record: Mapping[str, Any]) -> CheckResult:
         description = f"Resident memory of processes matching `{spec.pattern}`"
-        config = config_markdown({"pattern": spec.pattern,
-                                  "warn at": f"{spec.warn_mb:g} MB",
-                                  "error at": f"{spec.error_mb:g} MB"})
+        config = config_markdown({
+            "pattern": spec.pattern,
+            "graded": self.grading_summary("processes.max_rss", spec.graded)
+            or "not graded"})
         watched = record.get("processes")
         sub = watched.get(spec.name) if isinstance(watched, Mapping) else None
         if not isinstance(sub, Mapping):
@@ -343,6 +372,8 @@ class MacosMemoryCheck(SshScriptCheck):
         if rss_kb is None:
             return unavailable(spec.name, description)
         rss_mb = float(rss_kb) / 1024.0
+        verdict = self.verdict("processes.max_rss", value=float(rss_kb) * 1024,
+                               graded=spec.graded)
         noun = "process" if count == 1 else "processes"
         reason = f"{_mib(rss_mb)} RSS over {count} {noun}"
         # Uptime of the oldest match — informative even when OK: a scheduled
@@ -350,9 +381,8 @@ class MacosMemoryCheck(SshScriptCheck):
         up = sub.get("elapsed_seconds")
         if up is not None:
             reason += f", oldest up {human_duration(float(up))}"
-        return CheckResult(grade(rss_mb, spec.warn_mb, spec.error_mb),
-                           [reason], name=spec.name, description=description,
-                           config=config)
+        return CheckResult(verdict.code, [verdict.entry(reason)], name=spec.name,
+                           description=description, config=config)
 
 
 def _mib(size: float) -> str:
@@ -371,37 +401,17 @@ def _number(value: object) -> str:
     return plain(str(value))
 
 
-def _parse_thresholds(raw: Any) -> dict[str, tuple[float, float]]:
-    """Merge per-aspect ``{warn, error}`` overrides over the defaults
-    (``swap`` in MB, ``compressor`` in %, ``process`` = the default RSS MB
-    bounds for watched processes without their own)."""
-    if raw is None:
-        return dict(DEFAULT_THRESHOLDS)
-    if not isinstance(raw, dict):
-        raise CheckError("'thresholds' must be a mapping")
-    parsed: dict[str, tuple[float, float]] = {}
-    for aspect, (default_warn, default_error) in DEFAULT_THRESHOLDS.items():
-        spec = raw.get(aspect) or {}
-        if not isinstance(spec, dict):
-            raise CheckError(f"thresholds.{aspect} must be a mapping")
-        where = f"thresholds.{aspect}"
-        parsed[aspect] = (
-            values.real(spec, "warn", default=default_warn, where=where),
-            values.real(spec, "error", default=default_error, where=where))
-    return parsed
-
-
-def _parse_processes(raw: Any,
-                     default: tuple[float, float]) -> tuple[ProcessSpec, ...]:
-    """Parse ``processes:`` — a list of ``{name, pattern, warn_mb, error_mb}``
-    entries. ``name`` (the leaf) and ``pattern`` (the command-line substring)
-    are required; the MB thresholds default to ``thresholds.process``."""
+def _parse_processes(
+        raw: Any) -> tuple[tuple[str, str, Mapping[str, Any]], ...]:
+    """Parse ``processes:`` — a list of ``{name, pattern}`` entries, each with its
+    own ``max_rss_warn`` and ``max_rss_error`` where it re-sets them. ``name`` (the
+    leaf) and ``pattern`` (the command-line substring) are required, and the entry is
+    handed on whole, for the library to read its levels in (ADR-0131)."""
     if raw is None:
         return ()
     if not isinstance(raw, list):
         raise CheckError("'processes' must be a list of mappings")
-    default_warn, default_error = default
-    specs: list[ProcessSpec] = []
+    specs: list[tuple[str, str, Mapping[str, Any]]] = []
     names: set[str] = set()
     for i, item in enumerate(raw, 1):
         if not isinstance(item, dict):
@@ -415,11 +425,14 @@ def _parse_processes(raw: Any,
         if name in names:
             raise CheckError(f"processes[{i}]: duplicate name {name!r}")
         names.add(name)
-        try:
-            warn = float(item.get("warn_mb", default_warn))
-            error = float(item.get("error_mb", default_error))
-        except (TypeError, ValueError) as exc:
+        retired = [key for key in ("warn_mb", "error_mb") if key in item]
+        if retired:
+            write = ", ".join(
+                f"max_rss_{key[:-3]}: {item[key]} MiB" for key in retired)
             raise CheckError(
-                f"processes[{i}]: warn_mb/error_mb must be numbers") from exc
-        specs.append(ProcessSpec(name, pattern, warn, error))
+                f"processes[{i}] {' and '.join(repr(key) for key in retired)} "
+                f"{'is' if len(retired) == 1 else 'are'} retired: a process's "
+                f"levels are a pair in its entry now, its level the last value that "
+                f"passes — write {write} (ADR-0131)")
+        specs.append((name, pattern, item))
     return tuple(specs)

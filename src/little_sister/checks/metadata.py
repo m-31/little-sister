@@ -24,13 +24,158 @@ carry the same paragraphs in every instance's file. :func:`expand_tokens` lets t
 text reuse a value the type declared (an ``org``, a severity legend) via ``{token}``
 placeholders — a plain :func:`str.replace`, never ``str.format``, so backticks, braces
 and other Markdown in the text stay intact.
+
+**How a node first looks** rides the same block (ADR-0128): ``chips``, ``fold_ok`` and
+``reason_cap`` per name, and under ``children:`` the same and the claim for each child
+of the node, whatever its name — and so do a check's file's top level, a ``nodes.yaml``
+entry and a type's declarations. :func:`read_stated` reads them out of any of those
+mappings into a :class:`Stated`, :func:`parse_subnode_looks` out of the block, and
+:func:`unknown_keys` names what one of them says that nothing reads, for the one line
+each loader writes about it. Which statement wins is :mod:`little_sister.first_look`'s.
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
+from dataclasses import dataclass, field, fields
 from typing import Any
 
 from little_sister import values
 from little_sister.errors import CheckError
+
+#: The first look's three keys (ADR-0128): whether a node's children start as chips,
+#: whether its healthy lines and children start folded behind *✓ +N ok*, and its box's
+#: line budget. ``true`` is the more compact look for both switches.
+LOOK_KEYS = ("chips", "fold_ok", "reason_cap")
+#: What a ``children:`` block says for each child of the node it stands under,
+#: whatever the child's name: the first look's keys and the claim (ADR-0063).
+CHILDREN_KEYS = (*LOOK_KEYS, "show_when_quiet")
+#: What a ``subnodes:`` entry, and a type's ``subnode_defaults`` entry, may say: the
+#: labels (ADR-0025), the claim, the first look's keys and ``children:``.
+SUBNODE_KEYS = ("title", "about", "show_when_quiet", *LOOK_KEYS, "children")
+#: What a type's ``node_defaults`` may say of its own node: the first look's keys and
+#: ``children:``, since its labels and its claim are the check's file's.
+NODE_DEFAULTS_KEYS = (*LOOK_KEYS, "children")
+
+
+@dataclass(frozen=True)
+class Stated:
+    """What one place says of a node's **first look** (ADR-0128) — a check's file, its
+    type, a ``nodes.yaml`` entry — each key ``None`` where the place says nothing, so
+    the next place is free to speak and a stated ``false`` is a statement.
+
+    ``chips`` is whether the node's children start as chips, ``fold_ok`` whether its
+    healthy lines and children start folded behind *✓ +N ok*, ``reason_cap`` its
+    box's line budget, and ``show_when_quiet`` the claim (ADR-0063) where the place
+    says it here — a ``children:`` block, a subnode entry. ``children`` is the same
+    for each child of the node whatever its name, which is how a look reaches a level
+    a run names and that takes nothing declared for its names (ADR-0118); it holds no
+    ``children`` of its own."""
+    chips: bool | None = None
+    fold_ok: bool | None = None
+    reason_cap: int | None = None
+    show_when_quiet: bool | None = None
+    children: Stated | None = None
+
+    def get(self, key: str) -> bool | int | None:
+        """What this statement says of one of :data:`CHILDREN_KEYS`, or ``None``."""
+        if key not in CHILDREN_KEYS:
+            raise KeyError(key)
+        said: bool | int | None = getattr(self, key)
+        return said
+
+    @property
+    def says_anything(self) -> bool:
+        """Whether any key is stated, here or in ``children``."""
+        return (any(self.get(key) is not None for key in CHILDREN_KEYS)
+                or (self.children is not None and self.children.says_anything))
+
+    def over(self, base: Stated) -> Stated:
+        """This statement per key, falling back to ``base`` where it is silent — a
+        later configuration root's entry over an earlier one's (ADR-0031), its
+        ``children`` merged the same way."""
+        said = {item.name: (getattr(base, item.name) if getattr(self, item.name) is None
+                            else getattr(self, item.name))
+                for item in fields(self) if item.name != "children"}
+        if self.children is None or base.children is None:
+            kids = self.children if self.children is not None else base.children
+        else:
+            kids = self.children.over(base.children)
+        return Stated(**said, children=kids)
+
+
+
+@dataclass(frozen=True)
+class Statements:
+    """What one place — a check's file, or its type — says of the first look of the
+    nodes the check writes: ``own`` for the check's own node, its ``children`` for
+    each child of it, and ``by_name`` for every subnode of a name, at any depth
+    (ADR-0128). The two places are kept apart because the file's ``children:``
+    stands between the file's names and the type's (§3.4 of the interactive wall's
+    note): the resolver asks them in that order."""
+    own: Stated = field(default_factory=Stated)
+    by_name: Mapping[str, Stated] = field(default_factory=dict)
+
+def read_stated(bag: Mapping[str, Any], where: str, *, quiet: bool = False,
+                children: bool = True) -> Stated:
+    """The first look's keys out of one mapping — a check's file, a ``subnodes:``
+    entry, a ``nodes.yaml`` entry, a type's declaration — read where they are stated
+    and left ``None`` where they are not. ``quiet`` reads ``show_when_quiet`` too,
+    for a place whose claim no other reader takes; ``children`` reads the
+    ``children:`` block, which holds the same keys and the claim for each child.
+
+    A switch must be a real boolean (:func:`~little_sister.values.strict_flag`) and
+    ``reason_cap`` a whole number, 0 or more, or :class:`CheckError` names the key —
+    ``bool("false")`` is ``True``, and a quoted ``"false"`` would close a level the
+    file says to open."""
+    kids: Stated | None = None
+    if children and bag.get("children") is not None:
+        raw = bag["children"]
+        if not isinstance(raw, Mapping):
+            raise CheckError(f"{where}.children must be a mapping of "
+                             f"{' / '.join(CHILDREN_KEYS)}")
+        kids = read_stated(raw, f"{where}.children", quiet=True, children=False)
+    claim = _switch(bag, "show_when_quiet", where) if quiet else None
+    return Stated(chips=_switch(bag, "chips", where),
+                  fold_ok=_switch(bag, "fold_ok", where),
+                  reason_cap=read_reason_cap(bag.get("reason_cap"), where),
+                  show_when_quiet=claim, children=kids)
+
+
+def read_reason_cap(value: object, where: str) -> int | None:
+    """A box's line budget as a place states it: ``None`` where it is absent, else a
+    whole number, 0 or more — ``reading_cap``'s shape beside it, so junk, a negative
+    number and a boolean refuse the load."""
+    if value is None:
+        return None
+    try:
+        cap = int(str(value).strip())
+    except ValueError as exc:
+        raise CheckError(
+            f"{where}.reason_cap: expected a whole number, got {value!r}") from exc
+    if cap < 0:
+        raise CheckError(f"{where}.reason_cap must be >= 0, got {value!r}")
+    return cap
+
+
+def _switch(bag: Mapping[str, Any], key: str, where: str) -> bool | None:
+    """A tri-state switch: ``None`` where the key is absent, else a real boolean."""
+    if bag.get(key) is None:
+        return None
+    return values.strict_flag(bag, key, where=where)
+
+
+def unknown_keys(bag: Mapping[str, Any], known: tuple[str, ...],
+                 where: str) -> list[str]:
+    """The dotted names of the keys in ``bag`` that are not ``known`` — and of the
+    keys of its ``children:`` block that are not :data:`CHILDREN_KEYS`, where
+    ``known`` takes one — for the one startup line each loader writes about them."""
+    found = [f"{where}.{key}" if where else str(key)
+             for key in bag if str(key) not in known]
+    raw = bag.get("children")
+    if "children" in known and isinstance(raw, Mapping):
+        found.extend(unknown_keys(raw, CHILDREN_KEYS,
+                                  f"{where}.children" if where else "children"))
+    return found
 
 
 def parse_subnodes(config: dict[str, Any]) -> dict[str, dict[str, str]]:
@@ -108,6 +253,50 @@ def parse_show_when_quiet(config: dict[str, Any]) -> dict[str, bool]:
             meta, "show_when_quiet", where=f"subnodes.{name}")
     return declared
 
+
+
+def parse_subnode_looks(config: dict[str, Any]) -> dict[str, Stated]:
+    """The first look's keys out of the same ``subnodes:`` block — ``{name: Stated}``,
+    and **only for the names that state one** (ADR-0128). The claim beside them is
+    :func:`parse_show_when_quiet`'s, so a :class:`Stated` here carries none of its
+    own, but its ``children:`` block carries the claim for each child.
+
+    The library is the caller, as for the two readers above: ``Check._parse_common``
+    runs this for every type, and ``Check.__init__`` sets what it returns beside what
+    the type declares, for the resolver (:mod:`little_sister.first_look`) and the
+    engine to read in their order."""
+    raw = config.get("subnodes") or {}
+    if not isinstance(raw, dict):
+        raise CheckError(
+            "'subnodes' must be a mapping of leaf name -> "
+            "{title, about, show_when_quiet}")
+    looks: dict[str, Stated] = {}
+    for name, meta in raw.items():
+        if not isinstance(meta, dict):
+            raise CheckError(
+                f"subnodes.{name} must be a mapping with "
+                f"'title' / 'about' / 'show_when_quiet'")
+        said = read_stated(meta, f"subnodes.{name}")
+        if said.says_anything:
+            looks[str(name)] = said
+    return looks
+
+
+def unknown_check_keys(config: Mapping[str, Any]) -> list[str]:
+    """What a check's file says the library does not read, of the keys the library
+    owns: in a ``subnodes:`` entry, in a ``children:`` block under one, and in the
+    top level's ``children:`` block. The rest of the top level is the type's, which
+    the library cannot judge."""
+    found: list[str] = []
+    raw = config.get("children")
+    if isinstance(raw, Mapping):
+        found.extend(unknown_keys(raw, CHILDREN_KEYS, "children"))
+    subnodes = config.get("subnodes")
+    if isinstance(subnodes, Mapping):
+        for name, meta in subnodes.items():
+            if isinstance(meta, Mapping):
+                found.extend(unknown_keys(meta, SUBNODE_KEYS, f"subnodes.{name}"))
+    return found
 
 def resolve_text(configured: str, default: str,
                  tokens: dict[str, str] | None = None) -> str:

@@ -1,7 +1,7 @@
 # ADR-0034 — Template slots for dependent packages
 
 - **Status:** Accepted
-- **Date:** 2026-10-04 (accepted 2026-08-01)
+- **Date:** 2026-10-18 (accepted 2026-08-01)
 - **Related:** [ADR-0001](0001-in-process-threaded-engine.md) (the import-before-app
   registration slot this reuses), [ADR-0018](0018-markdown-rendering.md) (what a
   reason is made of, and why raw HTML is escaped there),
@@ -12,7 +12,9 @@
   goes — the sibling seam taken in the same pass),
   [ADR-0008](0008-json-output-api.md) (untouched: a slot is presentation only),
   [ADR-0100](0100-system-is-two-views.md) (the *Installed* view of `/system`, which
-  lists what registered)
+  lists what registered),
+  [ADR-0127](0127-the-wall-is-a-tree-and-a-click-opens-or-closes-a-node.md) (the tree,
+  whose head's row holds a node's actions, and the frame a node's page stands in)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -139,19 +141,24 @@ dependent package fills a slot with **a template of its own** plus an optional
     a Content-Security-Policy answer, so it is a *separate* decision — see Consequences
     for what it costs today.
 
-11. **The second slot is `node.actions`** — context `(node, surface)`, on the dashboard
-    grid and beside the status on a leaf's own page. It is offered on **every box the
-    grid draws**, not only on card heads — each nested box under a card carries it too.
-    A card is the *top* of a subtree and is usually a container with no reading of its
-    own, so a filler that declines a node with nothing to say declines exactly the
-    nodes that have card heads, while the failing **leaf** — the node an action is
-    nearly always about — sits in a nested box that carried no slot at all. The two
-    rules were individually defensible and together they put the chip nowhere the eye
-    already was, leaving it reachable only by drilling into the leaf's own page. A
-    **quiet leaf** is drawn as a chip rather than a box and carries no slot, which is
-    the right line: nothing quiet is worth acting on. A slot's `where` is part of the
-    version contract (§11 of `architecture.md`), so it is recorded here rather than
-    left to the template.
+11. **The second slot is `node.actions`** — context `(node, surface, place)`, in the
+    head of **every node's box** the tree draws
+    ([ADR-0127](0127-the-wall-is-a-tree-and-a-click-opens-or-closes-a-node.md)), not
+    only a card's — each nested box under a card carries it too — and in the frame head
+    of a node's page, a leaf's framed as a branch's is. A card is the *top* of a subtree
+    and is usually a container with no reading of its own, so a filler that declines a
+    node with nothing to say declines exactly the nodes that have card heads, while the
+    failing **leaf** — the node an action is nearly always about — sits in a nested box.
+    Offered on card heads alone, the two rules, each defensible, put the chip nowhere
+    the eye already was, leaving it reachable only by drilling into the leaf's own page.
+    `place` — `card`, `box` or `frame` — tells a card's head from a nested box's and
+    from a page's frame, and `surface` (`check` on a leaf's page, `grid` on a branch's)
+    the two pages apart. The slot is rendered into every node's box, open or closed, and
+    shown while it is open, so a filler is called for each node at every render; a
+    **closed node** is a chip and carries none, which is the right line for a quiet
+    leaf: nothing quiet is worth acting on. A slot's `where` is part of the version
+    contract (§11 of `architecture.md`), so it is recorded here rather than left to the
+    template.
 
     [ADR-0036](0036-addressable-reasons.md) split a node's reasons into **members**
     and **prose**, and that split decides where a deployment's action belongs. On
@@ -169,25 +176,19 @@ dependent package fills a slot with **a template of its own** plus an optional
     extension seam leaking into the design. The rail collapses when nobody fills it —
     a deployment with no extension pays one empty `<span>` per box.
 
-    The `node.actions` rail in a card head **veils what it overlays**. It is
-    positioned over the title's space deliberately — a chip is something to click, a
-    title is a nicety — and a chip is deliberately transparent, inking in
-    `currentColor` so it reads on every status fill. Two right decisions drew both
-    sets of glyphs into the same pixels: a deployment's `+ Jira` landed in the middle
-    of the word *analysis* and neither could be read. So every card and node box
-    declares its fill as `--ls-surface` and paints from that token, and the rail
-    repaints that exact fill beneath its chips — the title dissolving into it across a
-    short gradient rather than being sliced mid-letter. Only while the chips are
-    showing, by the same conditions that show them: a card at rest offers nothing to
-    click and keeps every pixel of its title.
-
-    Presentation only: the `reason.actions` rail — which floats beside its line and
-    overlaps nothing — is untouched. Because the fill under a chip is the fill the chip
-    was already sitting on, no ink meets a new background: every pair
-    `test_contrast.py` measures is unchanged. The claim is about paint, so it is
-    checked in paint (`tests/test_dashboard_browser.py`): the pixels inside a shown
-    chip are the same image with the title there and with it hidden, and — the
-    counterpart that keeps the first honest — a *different* image on a card at rest.
+    The actions stand **in the head's own row**: before the head's own icons, which hold
+    its upper right corner, and before its state word where the state shares the row.
+    Nothing is laid over the title, so on a phone nothing covers a name, and they are
+    shown always, as the icons are. An action that names an icon
+    ([ADR-0038](0038-declarative-action-list.md)) is a square of the icons' shape, the
+    icon alone, its label its tooltip and accessible name; one that names none keeps its
+    label as a small chip, as the self-report buttons do
+    ([ADR-0076](0076-the-instance-node-is-a-branch.md)); the stylesheet offers the
+    square beside the chip, for a package's filler to use. The title gives way to them,
+    and what does not fit even then folds behind a ⋯ just before the icons, so that no
+    action cuts the name and none moves to a line beneath it. With ⋯ and the head's own
+    icons they are one toolbar, a single tab stop the arrow keys walk, so the script,
+    not a filler, sets their `tabindex`.
 
 ## Consequences
 
@@ -217,6 +218,11 @@ dependent package fills a slot with **a template of its own** plus an optional
 
 ## Alternatives considered
 
+- **The rail laid over the title, veiling what it covered.** As first built: the chips
+  sat in the title's space on purpose, a chip being something to click and a title a
+  nicety, and the rail repainted the box's fill beneath them, quiet until the card was
+  hovered — after a deployment's `+ Jira` had landed in the middle of the word
+  *analysis*. In the tree's head the row has a place for them, and nothing is covered.
 - **A Python callable returning `Markup`.** The obvious seam, and rejected on the one
   point that matters here: it hands the deployment the job of escaping a reason line
   assembled from captured command output. That is precisely the job ADR-0018 decided

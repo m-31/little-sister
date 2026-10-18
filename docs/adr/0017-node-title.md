@@ -1,12 +1,15 @@
 # ADR-0017 — Node title: a short display label
 
 - **Status:** Accepted
-- **Date:** 2026-09-05 (accepted 2026-06-27)
+- **Date:** 2026-10-18 (accepted 2026-06-27)
 - **Related:** [ADR-0012](0012-node-metadata.md) (node metadata — `about`; `title`
   shares its sources and `nodes.yaml` shape), [ADR-0016](0016-node-addressing.md)
   (`name` is the derived last path segment `title` sits beside),
-  [ADR-0008](0008-json-output-api.md) (JSON envelope, unchanged here). The
-  Markdown-rendering item renders `title` too.
+  [ADR-0008](0008-json-output-api.md) (JSON envelope, unchanged here),
+  [ADR-0127](0127-the-wall-is-a-tree-and-a-click-opens-or-closes-a-node.md) (the tree,
+  whose chips draw no title), [ADR-0019](0019-inspection-popover.md) (the inspection
+  card, headed with the name and the title). The Markdown-rendering item renders
+  `title` too.
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -33,10 +36,15 @@ Add an optional **`title`** — a short display label for the node.
    warns for any declared `nodes.yaml` path no check covers, `title`-only entries
    included.
 3. **Display.** The title **follows** the node name (or breadcrumb), ellipsed, never
-   replacing it: on a **dashboard card** (and nested grid nodes) after the node name,
-   and in the **page header** beside the `status / …` breadcrumb — on both a branch
-   view and a **leaf's** detail page. The leaf's body still shows its `name` heading
-   and `description`. The name/path identity is unchanged underneath.
+   replacing it: on an **open node's head**, a card's or a box's, after the node name;
+   in the **page header** beside the `status / …` breadcrumb — on both a branch view and
+   a **leaf's** detail page; and in the **inspection card**, which heads with the name
+   and the title ([ADR-0019](0019-inspection-popover.md)). A closed node is a chip in
+   the tree of
+   [ADR-0127](0127-the-wall-is-a-tree-and-a-click-opens-or-closes-a-node.md), and **a
+   chip draws no title** — of the chips in one deployment's runs, 162 of 255 had a title
+   and 70 said something the name does not. The leaf's body still shows its `name`
+   heading and `description`. The name/path identity is unchanged underneath.
 
    **A title that only repeats the node's name is not drawn at all.** Where a check
    has nothing better to say it hands the name back with a capital letter, and a row

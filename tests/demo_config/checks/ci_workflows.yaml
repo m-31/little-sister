@@ -15,3 +15,6 @@ scenario: workflows
 frequency: 5s
 period: 120s
 series_keep: 40
+# The type folds its passing lines behind *✓ +N ok* (ADR-0128): this deployment shows
+# them, three repositories being few enough to read.
+fold_ok: false

@@ -1,3 +1,4 @@
+import gzip
 import html
 import json
 import os
@@ -9,6 +10,7 @@ from collections.abc import Sequence
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
+from typing import ClassVar
 from unittest import TestCase, mock
 from urllib.parse import urlsplit
 
@@ -20,6 +22,7 @@ from little_sister import (
     __version__,
     csp,
     icons,
+    instants,
     link_probe,
     links,
     local_login,
@@ -32,14 +35,18 @@ from little_sister import (
 from little_sister import app as app_module
 from little_sister.checks import Check, code
 from little_sister.checks.base import CheckResult, registered_types
+from little_sister.checks.metadata import Stated
 from little_sister.config_dir import aspect_owner, forget_aspects, register_aspect
 from little_sister.copy_action import copy_context
+from little_sister.dashboard_layout import CHIP_FACE, chip_face, chip_width
+from little_sister.first_look import Drawn, FirstLooks
+from little_sister.nodes import NodeMeta
 from little_sister.origins import package_origin
 from little_sister.reasons import RECORD_TIMESTAMP_KEYS, Entry
 from little_sister.status import HEARTBEAT_PATH, StatusCode
 from little_sister.tree import StatusTree
 from little_sister.users import AvatarFile
-from tests.page_tree import parse
+from tests.page_tree import css_rule, css_rules_naming, parse
 
 
 class WebTests(TestCase):
@@ -172,14 +179,23 @@ class WebTests(TestCase):
         body = self.client.get("/status").get_data(as_text=True)
         self.assertIn('id="node-meta">{}<', body)          # empty map
 
-    def test_fragment_omits_popover_assets(self):
-        # the metadata map and scripts ship with the page, not the polled fragment
+    def test_the_cards_map_rides_in_the_fragment_and_its_script_with_the_page(self):
+        # ADR-0019 decision 2: what each `about` opens with is read again after every
+        # swap, so it is inside the grid, in the fragment the refresh fetches; the
+        # script and the card's own element are the page's, outside the grid
         self._login()
-        self.tree.upsert("/svc/api", StatusCode.OK, description="x")
+        self.tree.upsert("/svc/api", StatusCode.OK)
+        self.tree.set_about("/svc/api", "the billing box")
         body = self.client.get("/status?fragment=1").get_data(as_text=True)
         self.assertIn('data-path="/svc/api"', body)        # grid still tagged
-        self.assertNotIn("node-meta", body)
+        self.assertEqual(body.count('id="node-meta"'), 1)
+        self.assertIn("the billing box", body)
         self.assertNotIn("inspect.js", body)
+        self.assertNotIn('id="inspect-card"', body)
+        page = parse(self.client.get("/status").get_data(as_text=True))
+        grid = page.with_id("status-grid")
+        self.assertTrue(page.with_id("node-meta").within(grid))
+        self.assertFalse(page.with_id("inspect-card").within(grid))
 
     def test_node_meta_json_escapes_script_close(self):
         self._login()
@@ -195,6 +211,21 @@ class WebTests(TestCase):
             [("system", "system"), ("alpha", "system/alpha"),
              ("disk", "system/alpha/disk")])
         self.assertEqual(app_module._breadcrumbs(""), [])
+
+    def test_breakable_marks_a_break_after_each_underscore_dot_and_hyphen(self):
+        # where a name wider than its line may break: after `_`, `.` and `-`, not
+        # inside a word, and never after the last character; `<wbr>` is no
+        # character, and the rest of the name is escaped
+        for name, drawn in (("code_scanning_security",
+                             "code_<wbr>scanning_<wbr>security"),
+                            ("pipeline.yml", "pipeline.<wbr>yml"),
+                            ("collect-queue", "collect-<wbr>queue"),
+                            ("a__b", "a_<wbr>_<wbr>b"),
+                            ("trailing_", "trailing_"),
+                            ("db", "db"),
+                            ("<b>&x_y", "&lt;b&gt;&amp;x_<wbr>y")):
+            with self.subTest(name=name):
+                self.assertEqual(str(app_module._breakable(name)), drawn)
 
     def test_breadcrumb_links_ancestors_not_current(self):
         self._login()
@@ -384,9 +415,9 @@ class WebTests(TestCase):
         for path in ("/svc/api", "/svc/worker"):
             self.tree.set_check_mount(path)
             self.tree.upsert(path, StatusCode.OK)
-        body = self.client.get("/status").get_data(as_text=True)
-        self.assertIn("worker", body)                       # the card did render
-        self.assertNotIn('class="status-card__time"', body)
+        page = parse(self.client.get("/status").get_data(as_text=True))
+        card = self._node(page, "/svc")                      # the card did render
+        self.assertEqual(card.one("status-card__head").all("status-card__time"), [])
 
     def test_card_without_any_mount_stays_bare(self):
         # An unwritten container with no registered mount below it (the engine-less
@@ -481,15 +512,24 @@ class WebTests(TestCase):
             self.assertIn('data-reason-total="8"', body)
             self.assertNotIn("--reason-lines: 6", body)   # not the default
 
-    def test_reasons_script_ships_with_page_not_fragment(self):
+    def test_the_tree_script_ships_with_page_not_fragment(self):
         # like the popover assets: the behavior loads once with the page, not on
-        # every ~10s poll fragment
+        # every ~10s poll fragment — the one script that owns the tab's map
+        # (ADR-0127 decision 10), with the reason chevron's and the "+N more"'s
+        # handlers in it, and before it, in the head, the script that holds the
+        # grid back until the map is applied
         self._login()
         self.tree.upsert("/db", StatusCode.ERROR, "down")
         page = self.client.get("/status").get_data(as_text=True)
         frag = self.client.get("/status?fragment=1").get_data(as_text=True)
-        self.assertIn("js/reasons.js", page)
-        self.assertNotIn("js/reasons.js", frag)
+        self.assertIn("js/tree.js", page)
+        self.assertNotIn("js/tree.js", frag)
+        self.assertIn("js/tree-pending.js", page)
+        self.assertNotIn("js/tree-pending.js", frag)
+        self.assertLess(page.index("js/tree-pending.js"), page.index("<body"))
+        self.assertLess(page.index('id="status-grid"'), page.index("js/tree.js"))
+        for retired in ("js/reasons.js", "js/branches.js"):
+            self.assertNotIn(retired, page)
 
     # --- Dashboard layout (ADR-0024): the engine self-heartbeat moves out of the card
     # grid into a slim status strip, and a card's quiet (not warn/error) leaves
@@ -574,25 +614,77 @@ class WebTests(TestCase):
         self.assertIn("data-path=\"/little-sister/state\"", page)
         self.assertIn("behind", page)                       # nothing vanishes
 
-    def test_quiet_leaf_renders_as_a_chip(self):
-        # a card's OK leaf collapses to a compact chip (name + color); its reason,
-        # if any, is a click away on the leaf page (the hover card shows title/about)
-        self._login()
-        self.tree.upsert("/host/cpu", StatusCode.OK)
-        body = self.client.get("/status").get_data(as_text=True)
-        self.assertIn('class="leaf-chip s-ok"', body)
-        self.assertIn('class="leaf-chip__name"', body)        # name span can ellipse
-        self.assertIn('data-path="/host/cpu"', body)          # still links / inspects
-        self.assertNotIn("status-node s-ok", body)            # not a full box
+    # --- the tree (ADR-0127): every node closed or open, both faces drawn ---
 
-    def test_problem_leaf_keeps_its_box_and_reason(self):
-        # a warn/error leaf stays a full box, so its reason shows at the overview
+    @staticmethod
+    def _node(page, path):
+        """The one `.tree-node` of the node at ``path``."""
+        found = [node for node in page.all("tree-node")
+                 if node.attrs.get("data-node") == path]
+        assert len(found) == 1, f"{len(found)} nodes at {path}, wanted one"
+        return found[0]
+
+    @staticmethod
+    def _faces(node):
+        """A node's two faces: its chip (``None`` on a card) and its box's wrapper."""
+        chips = [child for child in node.children
+                 if not isinstance(child, str) and child.has("tree-chip")]
+        holds = [child for child in node.children
+                 if not isinstance(child, str) and child.has("tree-hold")]
+        assert len(holds) == 1, f"{len(holds)} wrappers on {node}, wanted one"
+        return (chips[0] if chips else None), holds[0]
+
+    def test_a_quiet_leaf_starts_closed_with_both_faces_drawn(self):
+        # A card's quiet leaf starts as a chip (today's density, until stage 4 of
+        # backlog #91): its chip shown and its box drawn beside it in a wrapper
+        # hidden until found, so a click opens it without a request and the
+        # browser's find reaches what is beneath the chip (decision 1).
+        self._login()
+        self.tree.upsert("/host/cpu", StatusCode.OK, ["load 0.2"])
+        page = parse(self.client.get("/status").get_data(as_text=True))
+        node = self._node(page, "/host/cpu")
+        self.assertEqual(node.attrs.get("data-state"), "closed")
+        chip, hold = self._faces(node)
+        assert chip is not None
+        self.assertEqual(chip.tag, "a")
+        self.assertEqual(chip.attrs.get("href"), "/status/host/cpu")
+        self.assertEqual(chip.attrs.get("data-path"), "/host/cpu")   # inspects
+        self.assertNotIn("hidden", chip.attrs)
+        self.assertTrue(chip.one("tree-chip__name"))             # the name can ellipse
+        self.assertTrue(chip.all("status-cue--ok"))              # its cue
+        self.assertEqual(hold.attrs.get("hidden"), "until-found")
+        box = hold.one("tree-box")
+        self.assertTrue(box.has("status-node") and box.has("s-ok"))
+        self.assertIn("load 0.2", box.text())                    # the lines, in the DOM
+        self.assertEqual(box.one("status-node__self").attrs.get("data-path"),
+                         "/host/cpu")
+
+    def test_problem_leaf_starts_open_with_its_chip_hidden(self):
+        # a warn/error leaf starts open, so its reason shows at the overview; its
+        # chip is drawn beside the box, plain `hidden`, so a name in view matches once
         self._login()
         self.tree.upsert("/host/disk", StatusCode.ERROR, "disk full")
-        body = self.client.get("/status").get_data(as_text=True)
-        self.assertIn("status-node s-error", body)            # a box, not a chip
-        self.assertIn("disk full", body)                      # reason still visible
-        self.assertNotIn("leaf-chip s-error", body)      # culprit isn't chipped
+        page = parse(self.client.get("/status").get_data(as_text=True))
+        node = self._node(page, "/host/disk")
+        self.assertEqual(node.attrs.get("data-state"), "open")
+        self.assertIn("data-failing", node.attrs)
+        chip, hold = self._faces(node)
+        assert chip is not None
+        self.assertEqual(chip.attrs.get("hidden"), "")
+        self.assertTrue(chip.has("s-error"))                 # a failing chip is vivid
+        self.assertNotIn("hidden", hold.attrs)
+        self.assertIn("disk full", hold.one("tree-box").text())
+
+    def test_the_faces_reach_the_fragment(self):
+        # the ~10s refresh draws the same faces as the page
+        self._login()
+        self.tree.upsert("/host/cpu", StatusCode.OK)
+        self.tree.upsert("/host/disk", StatusCode.ERROR, "disk full")
+        frag = parse(self.client.get("/status?fragment=1").get_data(as_text=True))
+        self.assertEqual(self._node(frag, "/host/cpu").attrs.get("data-state"),
+                         "closed")
+        self.assertEqual(self._node(frag, "/host/disk").attrs.get("data-state"), "open")
+        self.assertTrue(frag.one("status-grid").attrs.get("data-rendered-s"))
 
     def test_about_shown_on_branch_page(self):
         self._login()
@@ -637,7 +729,7 @@ class WebTests(TestCase):
         self.tree.upsert("/github/severity/critical", StatusCode.OK)
         self.tree.set_title("/github/severity/critical", "Critical")
         body = self.client.get("/status").get_data(as_text=True)
-        self.assertIn("leaf-chip__name", body)
+        self.assertIn("tree-chip__name", body)
         self.assertIn(">critical</span>", body)     # the name still shows
         self.assertNotIn("node-title", body)
         self.assertNotIn("Critical", body)
@@ -664,51 +756,71 @@ class WebTests(TestCase):
         self.assertNotIn("node-title--header", body)
         self.assertNotIn("Critical", body)
 
-    def test_redundant_title_leaves_a_node_out_of_the_inspection_map(self):
-        # A hover card whose entire content is the word the chip already shows is
-        # worse than no hover card (ADR-0019), so the node drops out of the map.
+    def _meta(self) -> dict[str, dict[str, object]]:
+        return app_module._node_meta_map(self.tree.snapshot(""))
+
+    def test_the_map_says_what_an_about_opens_with_and_how_much_more(self):
+        # The card says the first block of a node's `about`, a paragraph, a list or
+        # a code block, and how many follow, as *… 2 more paragraphs on its page*
+        # (ADR-0019 decision 1): a type's documentation stays a card
+        self._login()
+        self.tree.upsert("/svc/api", StatusCode.OK)
+        self.tree.set_about("/svc/api", "The **billing** box.\n\nIt is in rack 4."
+                                        "\n\n- one\n- two")
+        self.tree.upsert("/svc/db", StatusCode.OK)
+        self.tree.set_about("/svc/db", "- primary\n- replica")
+        self.tree.upsert("/svc/queue", StatusCode.OK)
+        self.tree.set_about("/svc/queue", "One sentence.")
+        meta = self._meta()
+        self.assertEqual(meta["/svc/api"], {
+            "about": "<p>The <strong>billing</strong> box.</p>\n", "more": 2})
+        self.assertEqual(meta["/svc/db"], {
+            "about": "<ul>\n<li>primary</li>\n<li>replica</li>\n</ul>\n", "more": 0})
+        self.assertEqual(meta["/svc/queue"]["more"], 0)
+
+    def test_the_map_carries_no_title_the_card_heads_with_the_nodes_own_head(self):
+        # The card's heading is the node's name and its title as its head draws
+        # them, which every node's box carries, open or closed (ADR-0019 decisions 1
+        # and 2, ADR-0061): the map carries the `about` alone, and a node with a title
+        # and no `about` is out of it — its head says the title
+        self._login()
+        self.tree.upsert("/github/severity/critical", StatusCode.OK)
+        self.tree.set_title("/github/severity/critical", "🔴")
+        self.tree.upsert("/services/api", StatusCode.OK)
+        self.tree.set_title("/services/api", "Order intake")
+        self.tree.set_about("/services/api", "takes the orders")
+        meta = self._meta()
+        self.assertNotIn("/github/severity/critical", meta)
+        self.assertEqual(list(meta["/services/api"]), ["about", "more"])
+        page = parse(self.client.get("/status").get_data(as_text=True))
+        for path, title in (("/github/severity/critical", "🔴"),
+                            ("/services/api", "Order intake")):
+            with self.subTest(path=path):
+                heads = [row for row in page.all("status-node__self")
+                         if row.attrs.get("data-path") == path]
+                self.assertEqual(len(heads), 1)
+                self.assertEqual(heads[0].one("node-title").text(), title)
+
+    def test_a_title_that_only_repeats_the_name_gives_the_card_nothing(self):
+        # A card whose entire content is the word the chip already shows is worse
+        # than no card (ADR-0019): its head draws no such title, so a node with no
+        # `about` either has none, and one with an `about` says the `about` alone.
         self._login()
         self.tree.upsert("/github/severity/critical", StatusCode.OK)
         self.tree.set_title("/github/severity/critical", "Critical")
         self.tree.upsert("/github/severity/low", StatusCode.OK)
         self.tree.set_title("/github/severity/low", "Low")
         self.tree.set_about("/github/severity/low", "nothing urgent")
-        meta = app_module._node_meta_map(self.tree.snapshot(""))
+        meta = self._meta()
         self.assertNotIn("/github/severity/critical", meta)
-        # `about` is untouched — only the title folded away.
-        self.assertEqual(list(meta["/github/severity/low"]), ["about"])
-
-    def test_a_glyph_title_heads_its_card_with_the_name(self):
-        # ADR-0061. The card carries no name of its own, so a band titled 🔴 would
-        # head a card with a bare circle — the same failure as `/copy`, in a place
-        # where the chip beneath happens to soften it. One rule, both surfaces.
-        self._login()
-        self.tree.upsert("/github/severity/critical", StatusCode.OK)
-        self.tree.set_title("/github/severity/critical", "🔴")
-        self.tree.set_about("/github/severity/critical", "fix immediately")
-        meta = app_module._node_meta_map(self.tree.snapshot(""))
-        self.assertIn("critical 🔴", meta["/github/severity/critical"]["title"])
-
-    def test_a_name_in_a_card_heading_is_not_read_as_markdown(self):
-        # The name half is structural data and this string is rendered as Markdown
-        # on its way into the card. Before this rule no name ever reached here.
-        self._login()
-        self.tree.upsert("/literal/*not-bold*", StatusCode.OK)
-        self.tree.set_title("/literal/*not-bold*", "🔴")
-        meta = app_module._node_meta_map(self.tree.snapshot(""))
-        title = meta["/literal/*not-bold*"]["title"]
-        self.assertIn("*not-bold*", title)
-        self.assertNotIn("<em>", title)
-
-    def test_a_word_still_heads_its_card_alone(self):
-        # Unchanged, and the reason the rule is narrow: a title that says something
-        # is a better heading than the name it replaces.
-        self._login()
-        self.tree.upsert("/services/api", StatusCode.OK)
-        self.tree.set_title("/services/api", "Order intake")
-        meta = app_module._node_meta_map(self.tree.snapshot(""))
-        self.assertIn("Order intake", meta["/services/api"]["title"])
-        self.assertNotIn("api Order intake", meta["/services/api"]["title"])
+        self.assertEqual(meta["/github/severity/low"]["about"],
+                         "<p>nothing urgent</p>\n")
+        page = parse(self.client.get("/status").get_data(as_text=True))
+        for path in ("/github/severity/critical", "/github/severity/low"):
+            with self.subTest(path=path):
+                head, = [row for row in page.all("status-node__self")
+                         if row.attrs.get("data-path") == path]
+                self.assertEqual(head.all("node-title"), [])
 
     def test_the_tree_still_carries_a_title_the_page_declines_to_draw(self):
         # The rule is display, never data (`titles.py`): the snapshot is the record
@@ -727,7 +839,7 @@ class WebTests(TestCase):
             self.tree.upsert(f"/wiz/{band}", StatusCode.OK,
                              order=1 if band == "informational" else 0)
         body = self.client.get("/status").get_data(as_text=True)
-        chips = re.findall(r'leaf-chip__name">([a-z]+)<', body)
+        chips = re.findall(r'tree-chip__name">([a-z]+)<', body)
         self.assertEqual(
             chips, ["critical", "high", "low", "medium", "informational"])
 
@@ -795,41 +907,77 @@ class WebTests(TestCase):
         self.assertNotIn("alpha", body)   # OK card hidden
         self.assertIn("omega", body)      # ERROR card shown
 
-    def test_depth_limits_tree_and_persists(self):
+    def test_depth_closes_a_level_for_one_load_and_no_cookie(self):
+        # `depth=N` closes every node N levels below the page's node, the wall's
+        # cards being level 1 (ADR-0127 decision 7): the whole tree is still drawn,
+        # the level closed to chips, and nothing is written to a cookie — and a
+        # failure past the level still opens its way, within its card's budget
+        # (ADR-0128).
         self._login()
+        self.tree.upsert("/sys/host/calm/leaf", StatusCode.OK, "all quiet")
         self.tree.upsert("/sys/host/svc/leaf", StatusCode.ERROR, "boom")
-        # the default renders the full depth
-        self.assertIn("boom", self.client.get("/status").get_data(as_text=True))
-        # depth counts levels below the root: depth=3 reaches svc but not the
-        # leaf beneath it, and the choice is saved in a cookie
+        page = parse(self.client.get("/status").get_data(as_text=True))
+        for path in ("/sys/host", "/sys/host/calm", "/sys/host/svc",
+                     "/sys/host/svc/leaf"):
+            self.assertEqual(self._node(page, path).attrs.get("data-state"), "open")
         response = self.client.get("/status?depth=3")
-        body = response.get_data(as_text=True)
-        self.assertIn("svc", body)
-        self.assertNotIn("boom", body)
-        self.assertIn("depth=3", response.headers.get("Set-Cookie", ""))
-        # the saved cookie is honored on a later plain request
-        self.assertNotIn(
-            "boom", self.client.get("/status").get_data(as_text=True))
+        page = parse(response.get_data(as_text=True))
+        self.assertEqual(self._node(page, "/sys/host").attrs.get("data-state"), "open")
+        calm = self._node(page, "/sys/host/calm")
+        self.assertEqual(calm.attrs.get("data-state"), "closed")
+        self.assertNotIn("data-budget", calm.attrs)
+        self.assertIn("all quiet", page.text())         # in the DOM, hidden until found
+        svc = self._node(page, "/sys/host/svc")
+        self.assertEqual(svc.attrs.get("data-state"), "open")
+        self.assertIn("data-budget", svc.attrs)
+        self.assertEqual(self._node(page, "/sys/host/svc/leaf").attrs.get("data-state"),
+                         "open")                        # beneath, as drawn on its own
+        self.assertNotIn("depth", response.headers.get("Set-Cookie", ""))
+        # a later plain request draws everything open again
+        page = parse(self.client.get("/status").get_data(as_text=True))
+        self.assertEqual(self._node(page, "/sys/host/calm").attrs.get("data-state"),
+                         "open")
 
-    def test_leaf_density_off_renders_boxes(self):
-        # the density switch off (a form submit — the `view` marker — with
-        # the chips box unchecked, so no `dense`) spells quiet leaves out as boxes
+    def test_depth_one_closes_the_cards_in_their_place(self):
+        self._login()
+        self.tree.upsert("/sys/host/svc", StatusCode.OK, "calm")
+        self.tree.upsert("/db", StatusCode.OK)
+        self.tree.upsert("/web/api", StatusCode.ERROR, "boom")
+        page = parse(self.client.get("/status?depth=1").get_data(as_text=True))
+        for path in ("/sys", "/db"):
+            card = self._node(page, path)
+            self.assertTrue(card.has("status-card") and card.has("is-closed"))
+            self.assertEqual(card.attrs.get("data-state"), "closed")
+            chip, hold = self._faces(card)
+            self.assertIsNone(chip)                     # a card has no chip: its head
+            self.assertEqual(hold.attrs.get("hidden"), "until-found")
+        # a card with a failure in it opens in its place, within its budget
+        card = self._node(page, "/web")
+        self.assertFalse(card.has("is-closed"))
+        self.assertEqual(card.attrs.get("data-state"), "open")
+        self.assertIn("data-budget", card.attrs)
+
+    def test_the_retired_view_cookies_are_expired_once(self):
+        # The `depth` and `dense` cookies the band wrote are no longer read: the
+        # first answer that finds one expires it, and a plain request writes none.
         self._login()
         self.tree.upsert("/host/cpu", StatusCode.OK)
-        body = self.client.get("/status?view=1").get_data(as_text=True)
-        self.assertNotIn("leaf-chip", body)              # no chip
-        self.assertIn("status-node s-ok", body)          # a full box instead
-        self.assertIn("cpu", body)
-
-    def test_leaf_density_reaches_the_fragment(self):
-        # the flag drives the ?fragment swap too, not just the full page
-        self._login()
-        self.tree.upsert("/host/cpu", StatusCode.OK)
-        self.assertIn(
-            "leaf-chip", self.client.get("/status?fragment=1").get_data(as_text=True))
-        self.assertNotIn(
-            "leaf-chip",
-            self.client.get("/status?view=1&fragment=1").get_data(as_text=True))
+        self.client.set_cookie("depth", "1")
+        self.client.set_cookie("dense", "0")
+        response = self.client.get("/status")
+        page = parse(response.get_data(as_text=True))
+        # neither is read: the leaf is a chip, and the card is not closed by depth
+        self.assertEqual(self._node(page, "/host/cpu").attrs.get("data-state"),
+                         "closed")
+        self.assertEqual(self._node(page, "/host").attrs.get("data-state"), "open")
+        expired = [header for header in response.headers.getlist("Set-Cookie")
+                   if "Max-Age=0" in header or "Expires=Thu, 01 Jan 1970" in header]
+        self.assertEqual(sorted(header.split("=", 1)[0] for header in expired),
+                         ["dense", "depth"])
+        # a request without them gets no Set-Cookie at all
+        self.client.delete_cookie("depth")
+        self.client.delete_cookie("dense")
+        self.assertEqual(self.client.get("/status").headers.getlist("Set-Cookie"), [])
 
     def _branchy_card(self):
         # a card ('nas') whose sub-branches are all-OK boxes (each holds an OK leaf) —
@@ -862,13 +1010,22 @@ class WebTests(TestCase):
         self.assertIn("zeta down", body)                 # the culprit's reason shows
         self.assertIn("+5 more", body)
 
-    def test_branch_density_off_spells_everything_out(self):
-        # density off (the `view` marker, chips unchecked) → no cap, no control
+    def test_the_cap_folds_open_nodes_and_leaves_a_closed_level_alone(self):
+        # Until stage 4 of backlog #91 the cap folds a level's quiet **open** nodes:
+        # `is-extra` stands on the node, never on a chip, so a level a `depth=`
+        # closes has nothing to fold and no "+N more".
         self._login()
         self._branchy_card()
-        body = self.client.get("/status?view=1").get_data(as_text=True)
-        self.assertNotIn("is-extra", body)
-        self.assertNotIn("branch-more", body)
+        with mock.patch.object(app_module, "config",
+                               replace(app_module.config, branch_cap=3)):
+            page = parse(self.client.get("/status").get_data(as_text=True))
+            closed = parse(self.client.get("/status?depth=2").get_data(as_text=True))
+        extra = [node.attrs.get("data-node") for node in page.all("is-extra")]
+        # by name: the fourth and fifth of the five quiet aspects
+        self.assertEqual(extra, ["/nas/epsilon", "/nas/gamma"])
+        self.assertTrue(all(page.all("is-extra")[i].has("tree-node") for i in range(2)))
+        self.assertEqual(closed.all("is-extra"), [])
+        self.assertEqual(closed.all("branch-more"), [])
 
     def test_branch_cap_reaches_the_fragment(self):
         # the cap drives the ~10s ?fragment swap too, not just the full page
@@ -911,16 +1068,26 @@ class WebTests(TestCase):
         body = self.client.get("/status").get_data(as_text=True)
         self.assertIn(self._INVENTORY, body)                    # its lines show
         self.assertIn("status-node s-ok", self._box_classes(body, "/aws/ec2"))
-        self.assertEqual(body.count('class="leaf-chip s-ok"'), 3)   # the siblings
+        page = parse(body)
+        declared = self._node(page, "/aws/ec2")
+        self.assertEqual(declared.attrs.get("data-state"), "open")
+        self.assertIn("data-swq", declared.attrs)               # the claim, marked
+        self.assertEqual(                                        # the siblings: chips
+            sorted(node.attrs["data-node"] for node in page.all("tree-node")
+                   if node.attrs.get("data-state") == "closed"),
+            ["/aws/batch", "/aws/cloudwatch", "/aws/iam"])
 
     def test_saying_nothing_paints_exactly_as_before(self):
         # The safety of the mechanism: an undeclared quiet leaf still chips, and
         # its reason is a click away as it always was.
         self._login()
         self.tree.upsert("/aws/ec2", StatusCode.OK, [self._INVENTORY])
-        body = self.client.get("/status").get_data(as_text=True)
-        self.assertIn('class="leaf-chip s-ok"', body)
-        self.assertNotIn(self._INVENTORY, body)
+        page = parse(self.client.get("/status").get_data(as_text=True))
+        node = self._node(page, "/aws/ec2")
+        self.assertEqual(node.attrs.get("data-state"), "closed")
+        self.assertNotIn("data-swq", node.attrs)
+        _, hold = self._faces(node)
+        self.assertEqual(hold.attrs.get("hidden"), "until-found")   # the lines, hidden
 
     def test_a_declared_false_paints_exactly_as_before(self):
         # The deployment's way of declining a claim the check type ships: `false`
@@ -928,31 +1095,32 @@ class WebTests(TestCase):
         self._login()
         self.tree.upsert("/aws/ec2", StatusCode.OK, [self._INVENTORY],
                          show_when_quiet=False)
-        body = self.client.get("/status").get_data(as_text=True)
-        self.assertIn('class="leaf-chip s-ok"', body)
-        self.assertNotIn(self._INVENTORY, body)
+        page = parse(self.client.get("/status").get_data(as_text=True))
+        node = self._node(page, "/aws/ec2")
+        self.assertEqual(node.attrs.get("data-state"), "closed")
+        self.assertNotIn("data-swq", node.attrs)
 
-    def test_the_declaration_closes_the_chip_run_around_itself(self):
-        # The chip-run wrapper has to agree with the chip condition about the
-        # neighbors, or a declared node between two chips leaves the run's <span>
-        # open and every chip after it lands inside the wrong wrapper.
+    def test_a_level_keeps_its_order_in_runs_around_an_open_node(self):
+        # A level's consecutive closed children form a run and an open child stands
+        # in its place between runs (ADR-0127 decision 1): a declared node between
+        # two chips splits the run, and each node carries its place, `data-order`.
         self._login()
         self.tree.upsert("/aws/alpha", StatusCode.OK)
         self.tree.upsert("/aws/mid", StatusCode.OK, show_when_quiet=True)
         self.tree.upsert("/aws/zulu", StatusCode.OK)
-        body = self.client.get("/status").get_data(as_text=True)
-        self.assertEqual(body.count('<span class="leaf-chip-run">'), 2)
-        self.assertEqual(body.count("</span>\n    \n"), 0)   # no stray open run
-        squashed = re.sub(r"\s+", "", body)
-        # run(alpha) closes, the declared box follows, then run(zulu) opens
-        self.assertRegex(
-            squashed,
-            r'<spanclass="leaf-chip-run"><aclass="leaf-chip[^>]*?'
-            r'data-path="/aws/alpha".*?</a></span><divclass="status-node')
-        self.assertRegex(
-            squashed,
-            r'</div></div><spanclass="leaf-chip-run"><aclass="leaf-chip[^>]*?'
-            r'data-path="/aws/zulu"')
+        page = parse(self.client.get("/status").get_data(as_text=True))
+        level = [item for item in self._node(page, "/aws").one("tree-kids").children
+                 if not isinstance(item, str)]
+        self.assertEqual([item.attrs.get("class") for item in level],
+                         ["tree-run", "tree-node", "tree-run"])
+        self.assertEqual([node.attrs.get("data-node")
+                          for node in level[0].all("tree-node")], ["/aws/alpha"])
+        self.assertEqual(level[1].attrs.get("data-node"), "/aws/mid")
+        self.assertEqual([node.attrs.get("data-node")
+                          for node in level[2].all("tree-node")], ["/aws/zulu"])
+        self.assertEqual([self._node(page, path).attrs.get("data-order")
+                          for path in ("/aws/alpha", "/aws/mid", "/aws/zulu")],
+                         ["0", "1", "2"])
 
     def test_a_declared_box_is_never_folded_behind_more(self):
         # Exemption from one compaction and not the other would hide *more* than
@@ -984,15 +1152,6 @@ class WebTests(TestCase):
         self.assertEqual(body.count("is-extra"), 5)
         self.assertIn("+5 more", body)
 
-    def test_density_off_is_untouched_by_the_declaration(self):
-        # With density off every node is a full box already, so the field does
-        # nothing — and nothing about the wall changes for declaring one.
-        self._login()
-        self._declared_inventory()
-        body = self.client.get("/status?view=1").get_data(as_text=True)
-        self.assertNotIn("leaf-chip", body)
-        self.assertIn(self._INVENTORY, body)
-
     def test_a_declared_node_is_still_hidden_when_the_viewer_hides_ok(self):
         # Not an exemption from the viewer's filters (ADR-0063): a declared node
         # is still OK, and "problems only" is the person at the screen speaking.
@@ -1021,15 +1180,22 @@ class WebTests(TestCase):
         frag = self.client.get("/status?fragment=1").get_data(as_text=True)
         self.assertIn(self._INVENTORY, frag)
 
-    def test_branches_script_ships_with_page_not_fragment(self):
-        # like reasons.js / the popover assets: the behavior loads once with the page,
-        # not on every ~10s poll fragment
+    def test_the_folds_controls_are_named_for_the_map(self):
+        # the map's script puts the keyboard's focus back by `data-control`: the
+        # "+N more" of a level and the *⌄ all N* after a card's and a box's lines
         self._login()
         self._branchy_card()
-        page = self.client.get("/status").get_data(as_text=True)
-        frag = self.client.get("/status?fragment=1").get_data(as_text=True)
-        self.assertIn("js/branches.js", page)
-        self.assertNotIn("js/branches.js", frag)
+        self.tree.upsert("/db", StatusCode.ERROR, [f"line {n}" for n in range(12)])
+        page = parse(self.client.get("/status").get_data(as_text=True))
+        more = page.one("branch-more")
+        self.assertEqual(more.attrs.get("data-control"), "more")
+        self.assertTrue(more.attrs.get("data-branch"))
+        buttons = page.all("reason-more")
+        self.assertTrue(buttons)
+        self.assertEqual({b.attrs.get("data-control") for b in buttons}, {"lines"})
+        self.assertEqual(page.all("reason-chevron"), [])
+        frag = parse(self.client.get("/status?fragment=1").get_data(as_text=True))
+        self.assertEqual(frag.one("branch-more").attrs.get("data-control"), "more")
 
     def test_dashboard_layout_script_ships_with_page_not_fragment(self):
         self._login()
@@ -1075,21 +1241,24 @@ class WebTests(TestCase):
         self.assertIn('aria-hidden="true"', body)
 
     def test_status_cue_on_a_problem_node_box(self):
-        # a warn/error leaf is a color-only box with no status word — it gets a cue
-        # too (the host card rolls up to WARN, so two warn cues: the card and the box)
+        # a warn/error leaf's box gets a cue too (the host card rolls up to WARN, so
+        # three warn cues: the card's, the box's, and the leaf's hidden chip's)
         self._login()
         self.tree.upsert("/host/disk", StatusCode.WARN, "SMART pending")
         body = self.client.get("/status").get_data(as_text=True)
-        self.assertEqual(body.count("status-cue--warn"), 2)
+        self.assertEqual(body.count("status-cue--warn"), 3)
 
-    def test_status_cue_not_on_quiet_chips(self):
-        # chips are only ever quiet leaves and stay uncued; the card still cues, so a
-        # lone OK leaf yields exactly one cue (the card's, not the chip's)
+    def test_status_cue_on_a_chip(self):
+        # a chip carries the cue of its state (ADR-0127 decision 2), decorative,
+        # beside the card's and the hidden box's
         self._login()
-        self.tree.upsert("/host/cpu", StatusCode.OK)   # dense → a chip
-        body = self.client.get("/status").get_data(as_text=True)
-        self.assertIn("leaf-chip", body)
-        self.assertEqual(body.count("status-cue--"), 1)
+        self.tree.upsert("/host/cpu", StatusCode.OK)   # a quiet leaf → a chip
+        page = parse(self.client.get("/status").get_data(as_text=True))
+        chip, _ = self._faces(self._node(page, "/host/cpu"))
+        assert chip is not None
+        cue = chip.one("status-cue")
+        self.assertTrue(cue.has("status-cue--ok"))
+        self.assertEqual(cue.attrs.get("aria-hidden"), "true")
 
     def test_status_cue_on_the_strip(self):
         # the self-monitor strip carries a state cue like the cards
@@ -1109,8 +1278,8 @@ class WebTests(TestCase):
         self._login()
         self.tree.upsert("/host/disk", StatusCode.ERROR, "disk full")
         body = self.client.get("/status").get_data(as_text=True)
-        clusters = re.findall(r'status-node__state">.*?</button></span>', body)
-        self.assertTrue(any("error<button" in c for c in clusters))  # the word speaks
+        self.assertRegex(
+            body, r'status-node__state">(?:<span[^<]*</span>)*error</span>')
         self.assertNotIn('role="img"', body)        # ...so no cue is named
 
     def test_quiet_node_box_cue_not_announced(self):
@@ -1278,10 +1447,11 @@ class WebTests(TestCase):
         self._login()
         self.tree.upsert("/sys/host/check", StatusCode.ERROR, "down")
         body = self.client.get("/status?depth=0").get_data(as_text=True)
-        # depth 0 collapses the whole tree to one rolled-up "overall" card
+        # depth 0 collapses the whole tree to one rolled-up "overall" card, closed
+        # to its head and counts (ADR-0127 decision 7)
         self.assertIn("overall", body)
         # it shows the rolled-up color and stays bold (it carries the status)
-        self.assertIn('status-card s-error"', body)
+        self.assertIn('status-card tree-node is-closed s-error"', body)
         # nothing below the root is rendered
         self.assertNotIn("status-node s-", body)
         self.assertNotIn("status-node__reason", body)
@@ -1294,9 +1464,9 @@ class WebTests(TestCase):
         self.tree.upsert("/sys/host/check", StatusCode.ERROR, "down")
         body = self.client.get("/status").get_data(as_text=True)
         # host is red only because of its child → dimmed
-        self.assertIn('status-node s-error dim"', body)
+        self.assertIn('status-node s-error dim tree-box"', body)
         # the leaf check reports the error itself → bold (not dimmed)
-        self.assertIn('status-node s-error"', body)
+        self.assertIn('status-node s-error tree-box"', body)
 
     def test_leaf_detail_page(self):
         self._login()
@@ -1304,7 +1474,8 @@ class WebTests(TestCase):
                          description="The API health check", frequency_seconds=300)
         body = self.client.get("/status/svc/api").get_data(as_text=True)
         self.assertIn("The API health check", body)
-        self.assertIn("Status:", body)
+        # its status in its frame's head, as a box says it (backlog #91 §3.5)
+        self.assertIn('<span class="status-node__state">', body)
         self.assertIn("History", body)
         self.assertIn("Set maintenance", body)   # pan is an admin
 
@@ -1349,6 +1520,59 @@ class WebTests(TestCase):
         body = self.client.get("/events").get_data(as_text=True)
         self.assertIn("jenkins/security", body)
         self.assertIn("CBP failed", body)
+
+    def test_an_events_status_word_stands_in_a_span_of_its_own(self):
+        # the word a theme lights — cyberpunk's logs do (ADR-0028) — apart from the
+        # chip beside it, on a page that is a log,
+        # which is what scopes that look to the logs
+        self._login()
+        self.tree.upsert("/db/replica", StatusCode.ERROR, "replication lag 41 s")
+        self.tree.set_maintenance("/db", "shelf swap", set_by="lex",
+                                  expires_at=datetime.now(UTC) + timedelta(days=2))
+        page = parse(self.client.get("/events").get_data(as_text=True))
+        log = page.one("ls-log")
+        self.assertEqual(log.one(tag="h1").text(), "Events")
+        rows = log.one(tag="tbody").all(tag="tr")
+        for row, word in zip(rows, ("maintenance", "error"), strict=True):
+            with self.subTest(word=word):
+                self.assertTrue(row.has(f"row-{word}"))
+                cell = row.all(tag="td")[1]
+                self.assertEqual(cell.one("ls-log__status").text(), word)
+                self.assertIs(cell.first(), cell.one("ls-log__status"))
+        # the pin's chip stands after the word, outside its span
+        chip = rows[0].one("event-cause")
+        self.assertEqual(chip.text(), "set")
+        self.assertFalse(chip.within(rows[0].one("ls-log__status")))
+
+    def test_a_history_status_word_stands_in_a_span_of_its_own(self):
+        # a node's History tab is a log as the Events page is (ADR-0028): each
+        # period's word in a span of its own, the first thing in
+        # its cell, on a page that is a log
+        self._login()
+        self.tree.upsert("/db/replica", StatusCode.OK, "lag 0.4 s")
+        self.tree.upsert("/db/replica", StatusCode.ERROR, "replication lag 41 s")
+        self.tree.upsert("/db/replica", StatusCode.WARN, "replication lag 6 s")
+        page = parse(self.client.get("/history/db/replica").get_data(as_text=True))
+        log = page.one("ls-log")
+        rows = log.one(tag="tbody").all(tag="tr")
+        for row, word in zip(rows, ("warn", "error", "ok"), strict=True):
+            with self.subTest(word=word):
+                self.assertTrue(row.has(f"row-{word}"))
+                cell = row.all(tag="td")[0]
+                self.assertEqual(cell.one("ls-log__status").text(), word)
+                self.assertIs(cell.first(), cell.one("ls-log__status"))
+                self.assertEqual(cell.text(), word)
+
+    def test_the_wall_and_a_nodes_status_tab_are_no_log(self):
+        # the look is the logs' alone: the wall and a node's Status tab keep the
+        # theme's own tints, so neither page is a log
+        self._login()
+        self.tree.upsert("/db/replica", StatusCode.ERROR, "replication lag 41 s")
+        for url in ("/status", "/status/db", "/status/db/replica"):
+            with self.subTest(url=url):
+                page = parse(self.client.get(url).get_data(as_text=True))
+                self.assertEqual(page.all("ls-log"), [])
+                self.assertEqual(page.all("ls-log__status"), [])
 
     def test_root_event_service_links_to_the_status_overview(self):
         self._login()
@@ -2273,9 +2497,11 @@ class WebTests(TestCase):
         self.client.set_cookie("ls_prefs", value)
 
     def test_no_cookie_means_the_defaults(self):
+        # the theme the deployment's settings.yaml names — this checkout's states the
+        # library's, cyberpunk — and the layout's constant
         self._login()
         body = self.client.get("/status").get_data(as_text=True)
-        self.assertIn('data-ls-theme="default"', body)
+        self.assertIn('data-ls-theme="cyberpunk"', body)
         self.assertIn('data-ls-layout="rail"', body)
 
     def test_a_saved_preference_is_rendered_by_the_server(self):
@@ -2291,13 +2517,16 @@ class WebTests(TestCase):
         # key may not take the other down with it
         self._login()
         for cookie, theme, layout in [
-                ("", "default", "rail"),
-                ("nonsense", "default", "rail"),
-                ("theme=&layout=", "default", "rail"),
-                ("theme=chartreuse&layout=topbar", "default", "topbar"),
+                ("", "cyberpunk", "rail"),
+                ("nonsense", "cyberpunk", "rail"),
+                ("theme=&layout=", "cyberpunk", "rail"),
+                ("theme=chartreuse&layout=topbar", "cyberpunk", "topbar"),
                 ("theme=dark&layout=hovercraft", "dark", "rail"),
                 ("theme=dark&theme=vivid", "dark", "rail"),
-                ("%%%=&&&", "default", "rail")]:
+                # the plain theme's name until 2026-10-18, which the menu wrote on
+                # every post: it follows the deployment's default
+                ("theme=default&layout=topbar", "cyberpunk", "topbar"),
+                ("%%%=&&&", "cyberpunk", "rail")]:
             with self.subTest(cookie=cookie):
                 self._prefs(cookie)
                 body = self.client.get("/status").get_data(as_text=True)
@@ -2358,7 +2587,7 @@ class WebTests(TestCase):
         # Bootstrap's own chrome only follows where data-bs-theme reaches
         self._login()
         for theme, expected in [("dark", True), ("cyberpunk", True),
-                                ("default", False), ("vivid", False),
+                                ("plain", False), ("vivid", False),
                                 ("pastel", False), ("auto", False)]:
             with self.subTest(theme=theme):
                 self._prefs(f"theme={theme}")
@@ -2376,12 +2605,16 @@ class WebTests(TestCase):
     def test_the_menu_offers_the_whole_roster(self):
         self._login()
         body = self.client.get("/status").get_data(as_text=True)
-        for theme in ("auto", "default", "vivid", "pastel", "dark", "cyberpunk"):
+        for theme in ("auto", "plain", "vivid", "pastel", "dark", "cyberpunk"):
             with self.subTest(theme=theme):
                 self.assertIn(f'name="theme" value="{theme}"', body)
+        self.assertNotIn('name="theme" value="default"', body)
         for layout in ("rail", "topbar", "kiosk"):
             with self.subTest(layout=layout):
                 self.assertIn(f'name="layout" value="{layout}"', body)
+        # the theme leads the menu, the layout after it, then the other looks
+        self.assertLess(body.index('name="theme"'), body.index('name="layout"'))
+        self.assertLess(body.index('name="layout"'), body.index('name="chip_runs"'))
 
     def test_the_menu_trigger_shows_the_configured_avatar_beside_the_user(self):
         self._login()
@@ -2752,6 +2985,232 @@ class WebTests(TestCase):
         motion = css.split(gate, 1)[1]
         for rule in (".ls-brand:hover .ls-eye-shut", ".ls-gaze .ls-eye-open"):
             self.assertIn(rule, motion)
+
+
+class ConfiguredLookTests(TestCase):
+    """The page draws the first look its files say (ADR-0128, backlog #91 §7.5): a
+    level closed where its node's `chips` says so, the failure budget's openings, a
+    node's configured fold standing from the first paint, and each box's own line
+    budget — and a level nobody spoke for drawn as today's density, *+N more*
+    included, so no deployment's wall changes until its files say something."""
+
+    def setUp(self):
+        app_module.app.config["TESTING"] = True
+        self.tree = StatusTree()
+        app_module.status_tree = self.tree
+        self.client = app_module.app.test_client()
+        self.client.post("/login", data={"username": "pan", "password": "12345678"})
+        self.addCleanup(setattr, app_module, "first_looks", None)
+
+    def _says(self, **looks: Stated) -> None:
+        """`nodes.yaml` as the start loaded it, each path's look — the layer the
+        page reads first, which needs no check to speak."""
+        app_module.first_looks = FirstLooks(
+            (), {path: NodeMeta(look=look) for path, look in looks.items()},
+            app_module.config, self.tree.named_by_run)
+
+    def _page(self, url="/status"):
+        return parse(self.client.get(url).get_data(as_text=True))
+
+    _node = staticmethod(WebTests._node)
+    _faces = staticmethod(WebTests._faces)
+
+    @staticmethod
+    def _icon(node, control):
+        found = [icon for icon in node.all("node-icon")
+                 if icon.attrs.get("data-control") == control]
+        return found[0] if found else None
+
+    def _level(self):
+        for leaf in ("a", "b", "c"):
+            self.tree.upsert(f"/host/svc/{leaf}", StatusCode.OK, ["in step"])
+
+    def test_a_level_its_node_says_chips_for_starts_as_chips(self):
+        self._level()
+        self._says(**{"/host/svc": Stated(chips=True)})
+        page = self._page()
+        svc = self._node(page, "/host/svc")
+        self.assertEqual(svc.attrs.get("data-chips"), "true")
+        for leaf in ("a", "b", "c"):
+            node = self._node(page, f"/host/svc/{leaf}")
+            self.assertEqual(node.attrs.get("data-state"), "closed")
+            chip, hold = self._faces(node)
+            self.assertNotIn("hidden", chip.attrs)
+            self.assertEqual(hold.attrs.get("hidden"), "until-found")
+
+    def test_a_level_its_node_says_no_chips_for_starts_open(self):
+        # where today's density would draw its quiet leaves as chips
+        self._level()
+        self._says(**{"/host/svc": Stated(chips=False)})
+        page = self._page()
+        self.assertEqual(self._node(page, "/host/svc").attrs.get("data-chips"), "false")
+        for leaf in ("a", "b", "c"):
+            self.assertEqual(self._node(page, f"/host/svc/{leaf}").attrs.get(
+                "data-state"), "open")
+        self.assertEqual(self._node(self._page(), "/host/svc").attrs.get("data-chips"),
+                         "false")
+
+    def test_a_level_nobody_speaks_for_keeps_todays_density_and_its_more(self):
+        for name in ("a1", "a2", "a3", "a4", "a5"):
+            self.tree.upsert(f"/nas/{name}/probe", StatusCode.OK)
+        page = self._page()
+        self.assertEqual(self._node(page, "/nas/a1/probe").attrs.get("data-state"),
+                         "closed")                          # a quiet leaf, a chip
+        self.assertEqual(len(page.all("is-extra")), 2)      # five quiet past three
+        self.assertEqual(len(page.all("branch-more")), 1)
+        # a level that says how it starts opens or closes what it says, all of it
+        self._says(**{"/nas": Stated(chips=False)})
+        page = self._page()
+        self.assertEqual(page.all("is-extra"), [])
+        self.assertEqual(page.all("branch-more"), [])
+
+    def test_a_failure_under_a_chip_opens_its_way(self):
+        self._level()
+        self.tree.upsert("/host/svc/b", StatusCode.ERROR, ["down"])
+        self._says(**{"/host": Stated(chips=True, children=Stated(chips=True))})
+        page = self._page()
+        for path in ("/host/svc", "/host/svc/b"):           # the way, and the failure
+            node = self._node(page, path)
+            self.assertEqual(node.attrs.get("data-state"), "open", path)
+            self.assertIn("data-budget", node.attrs, path)
+        for leaf in ("a", "c"):                             # its healthy siblings wait
+            node = self._node(page, f"/host/svc/{leaf}")
+            self.assertEqual(node.attrs.get("data-state"), "closed")
+            self.assertNotIn("data-budget", node.attrs)
+        svc = self._node(page, "/host/svc")
+        self.assertEqual(svc.attrs.get("data-chips"), "mixed")
+        self.assertEqual(self._icon(svc, "chips").attrs.get("aria-pressed"), "mixed")
+        self.assertIn("down", page.text())
+
+    def test_a_configured_fold_is_drawn_as_the_script_will_draw_it(self):
+        # what it folds stands folded from the first paint where the page has its
+        # scripts (`overview.css`, `data-fold-drawn`), its count written after them
+        self._level()
+        self.tree.upsert("/host/svc/c", StatusCode.WARN, ["lagging"])
+        self.tree.upsert("/host/db", StatusCode.OK, [
+            Entry("one", "in step", StatusCode.OK),
+            Entry("two", "in step", StatusCode.OK),
+            Entry("three", "lagging", StatusCode.WARN)], members=True)
+        self._says(**{"/host/svc": Stated(chips=False, fold_ok=True),
+                      "/host/db": Stated(fold_ok=True)})
+        page = self._page()
+        svc = self._node(page, "/host/svc")
+        self.assertEqual(svc.attrs.get("data-ok"), "true")
+        drawn = {leaf: "data-fold-drawn" in self._node(page, f"/host/svc/{leaf}").attrs
+                 for leaf in ("a", "b", "c")}
+        self.assertEqual(drawn, {"a": True, "b": True, "c": False})
+        funnel = self._icon(svc, "ok")
+        self.assertEqual(funnel.attrs.get("aria-pressed"), "true")
+        self.assertEqual(funnel.attrs.get("title"), "Show the 2 healthy ones")
+        _, hold = self._faces(svc)
+        marks = [mark for mark in hold.all("tree-ok")
+                 if mark.attrs.get("data-fold-drawn") is not None]
+        self.assertEqual(len(marks), 1)
+        self.assertEqual(marks[0].text().strip(), "\u2713 +2 ok")
+        self.assertIn("hidden", marks[0].attrs)     # nothing to press without script
+        # a leaf's lines: its healthy ones folded, the warning standing
+        db = self._node(page, "/host/db")
+        lines = db.all("status-node__reason")
+        self.assertEqual(["data-fold-drawn" in line.attrs for line in lines],
+                         [False, True, True])               # failing first
+        # where nothing is configured nothing is drawn folded
+        self._says()
+        page = self._page()
+        self.assertNotIn("data-ok", self._node(page, "/host/svc").attrs)
+        self.assertEqual(self._icon(self._node(page, "/host/svc"), "ok").attrs.get(
+            "aria-pressed"), "false")
+        self.assertNotIn("data-fold-drawn",
+                         self.client.get("/status").get_data(as_text=True))
+
+    def test_a_pages_cards_are_drawn_folded_by_its_nodes_fold(self):
+        self._level()
+        self.tree.upsert("/host/svc/c", StatusCode.WARN, ["lagging"])
+        self._says(**{"/host/svc": Stated(fold_ok=True)})
+        page = self._page("/status/host/svc")
+        frame = page.all("node-frame")[0]
+        self.assertEqual(frame.attrs.get("data-ok"), "true")
+        drawn = {leaf: "data-fold-drawn" in self._node(page, f"/host/svc/{leaf}").attrs
+                 for leaf in ("a", "b", "c")}
+        self.assertEqual(drawn, {"a": True, "b": True, "c": False})
+
+    def test_a_claim_stays_out_of_the_fold_the_configuration_sets(self):
+        self._level()
+        self.tree.set_show_when_quiet("/host/svc/a", True)
+        self.tree.upsert("/host/inventory", StatusCode.OK, ["12 instances"],
+                         show_when_quiet=True)
+        self._says(**{"/host/svc": Stated(chips=False, fold_ok=True),
+                      "/host/inventory": Stated(fold_ok=True)})
+        page = self._page()
+        self.assertNotIn("data-fold-drawn", self._node(page, "/host/svc/a").attrs)
+        self.assertIn("data-fold-drawn", self._node(page, "/host/svc/b").attrs)
+        inventory = self._node(page, "/host/inventory")
+        self.assertTrue(all("data-fold-drawn" not in line.attrs
+                            for line in inventory.all("status-node__reason")))
+
+    def test_each_box_takes_its_own_line_budget(self):
+        self.tree.upsert("/host/db", StatusCode.OK, ["one", "two", "three"])
+        self.tree.upsert("/host/web", StatusCode.OK, ["one", "two", "three"])
+        self._says(**{"/host": Stated(children=Stated(chips=False)),
+                      "/host/db": Stated(reason_cap=2)})
+        page = self._page()
+        db, web = self._node(page, "/host/db"), self._node(page, "/host/web")
+        self.assertIn("--reason-lines: 2", db.all("reason-block")[0].attrs["style"])
+        self.assertIn(f"--reason-lines: {app_module.config.reason_cap}",
+                      web.all("reason-block")[0].attrs["style"])
+        self.assertEqual(len(db.all("reason-more")), 1)      # three past its two
+        self.assertEqual(web.all("reason-more"), [])
+
+    def test_a_leafs_page_draws_its_configured_fold(self):
+        self.tree.upsert("/host/db", StatusCode.OK, [
+            Entry("one", "in step", StatusCode.OK),
+            Entry("two", "lagging", StatusCode.WARN)], members=True)
+        self._says(**{"/host/db": Stated(fold_ok=True)})
+        page = self._page("/status/host/db")
+        frame = page.all("node-frame")[0]
+        self.assertEqual(frame.attrs.get("data-ok"), "true")
+        lines = frame.all("check-reason")
+        self.assertEqual(["data-fold-drawn" in line.attrs for line in lines],
+                         [True, False])
+        self.assertEqual(len([mark for mark in frame.all("tree-ok")
+                              if mark.attrs.get("data-fold-drawn") is not None]), 1)
+
+    def test_the_planner_prices_the_configured_look(self):
+        # a level its node closes is a run of chips to the planner: the card's
+        # weight is its rows at one track, and no status enters it
+        for leaf in ("a", "b", "c", "d", "e", "f"):
+            self.tree.upsert(f"/host/svc/{leaf}", StatusCode.OK)
+
+        def weight():
+            card = self._node(self._page(), "/host")
+            return int(card.attrs["data-layout-weight"])
+
+        self._says(**{"/host/svc": Stated(chips=False)})
+        open_rows = weight()
+        self._says(**{"/host/svc": Stated(chips=True)})
+        closed_rows = weight()
+        # the card's row and svc's, and svc's six boxes in a column, where their run
+        # of chips five characters wide is one line
+        self.assertEqual((open_rows, closed_rows), (1 + 1 + 6, 1 + 1 + 1))
+        self.tree.upsert("/host/svc/b", StatusCode.ERROR, "down")  # the budget opens it
+        self.assertEqual(weight(), closed_rows)
+
+    def test_the_start_builds_the_first_look_from_the_checks_and_nodes_yaml(self):
+        declared = {"/host": NodeMeta(look=Stated(chips=True))}
+        engine = mock.Mock(checks=[])
+        with mock.patch.object(app_module, "load_nodes", return_value=declared):
+            app_module._seed_node_metadata(engine)
+        engine.declare_nodes.assert_called_once_with(declared)
+        self.assertIsNotNone(app_module.first_looks)
+        self.assertIs(app_module.first_looks.look("/host").chips, True)
+
+    def test_a_nodes_yaml_the_start_could_not_read_leaves_the_checks_to_speak(self):
+        engine = mock.Mock(checks=[])
+        with mock.patch.object(app_module, "load_nodes",
+                               side_effect=app_module.CheckError("bad entry")):
+            app_module._seed_node_metadata(engine)
+        engine.declare_nodes.assert_not_called()
+        self.assertIsNotNone(app_module.first_looks)
+        self.assertIsNone(app_module.first_looks.look("/host").chips)
 
 
 class LinksPageTests(TestCase):
@@ -3583,6 +4042,136 @@ class CodedReasonLineTests(TestCase):
 
 
 
+class FailingLinesFirstTests(TestCase):
+    """A box's lines under its budget, failing first (ADR-0127 decision 6): errors,
+    then warnings, then the rest, each group in the check's order and a pinned line
+    among the rest — wherever `reason_cap` clamps them, a card's and a box's on the
+    wall and the cards of a page's first level alike. Where nothing clips them — a
+    node's own lines on its page, and the Copy documents — the check's order stands."""
+
+    ROSTER = "/ci/roster"
+    #: Eight names in the check's order, the last the one that fails: in that order
+    #: it sat past the library's budget of six lines, the box yellow and every line
+    #: in view green.
+    NAMES = tuple(f"box-{number:02d}" for number in range(1, 9))
+
+    def setUp(self):
+        self.tree = StatusTree()
+        self._original = app_module.status_tree
+        app_module.status_tree = self.tree
+        self.client = app_module.app.test_client()
+        self.client.post("/login",
+                         data={"username": "pan", "password": "12345678"})
+        roster = [Entry(name, f"{name}: 1 (3d)", StatusCode.OK)
+                  for name in self.NAMES[:-1]]
+        roster.append(Entry(self.NAMES[-1], f"{self.NAMES[-1]}: 1 (41d)",
+                            StatusCode.WARN))
+        self.tree.upsert(self.ROSTER, StatusCode.WARN, roster, members=True)
+        # the branch's own lines, above the roster: its scope, and a region it
+        # could not read
+        self.tree.upsert("/ci", StatusCode.WARN, [
+            Entry("scope", "2 regions in scope", StatusCode.OK),
+            Entry("unread", "eu-west-1 cannot be read", StatusCode.WARN)],
+            members=True)
+        # a card whose lines mix every state, in the check's order
+        self.tree.upsert("/db", StatusCode.ERROR, [
+            Entry("ok-1", "replica one in step", StatusCode.OK),
+            Entry("warn-1", "replica two lagging", StatusCode.WARN),
+            Entry("ok-2", "replica three in step", StatusCode.OK),
+            Entry("error-1", "primary unreachable", StatusCode.ERROR),
+            Entry("warn-2", "replica four lagging", StatusCode.WARN),
+            Entry("error-2", "standby unreachable", StatusCode.ERROR),
+            Entry("ok-3", "replica five in step", StatusCode.OK)], members=True)
+
+    def tearDown(self):
+        app_module.status_tree = self._original
+
+    def _body(self, url):
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200, url)
+        return response.get_data(as_text=True)
+
+    def _block(self, url, node):
+        """The clamped block of ``node``'s lines on the page at ``url``, and its
+        lines' texts in the order they are drawn."""
+        blocks = [block for block in parse(self._body(url)).all("reason-block")
+                  if block.attrs.get("data-reason-node") == node]
+        self.assertEqual(len(blocks), 1, (url, node))
+        return blocks[0], [self._said(line) for line in
+                           blocks[0].all("status-node__reason")]
+
+    @staticmethod
+    def _said(line):
+        """A line's words, without the chips of its actions rail."""
+        parts = []
+        for child in line.children:
+            if isinstance(child, str):
+                parts.append(child)
+            elif not child.has("reason-actions"):
+                parts.append(child.text())
+        return " ".join("".join(parts).split())
+
+    def _own_lines(self, url):
+        """The texts of the viewed node's own lines on its page, in order."""
+        return [line.one("check-reason__body").text()
+                for line in parse(self._body(url)).all("check-reason")]
+
+    def test_a_boxs_failing_line_leads_however_late_its_check_wrote_it(self):
+        block, lines = self._block("/status", self.ROSTER)
+        self.assertEqual(lines[0], f"{self.NAMES[-1]}: 1 (41d)")
+        self.assertEqual(lines[1:], [f"{name}: 1 (3d)" for name in self.NAMES[:-1]])
+        # the block is still the whole roster, clamped to the budget by the sheet
+        self.assertEqual(block.attrs.get("data-reason-total"), "8")
+        self.assertIn("--reason-lines: 6", block.attrs.get("style", ""))
+
+    def test_errors_then_warnings_then_the_rest_each_in_the_checks_order(self):
+        _, lines = self._block("/status", "/db")
+        self.assertEqual(lines, ["primary unreachable", "standby unreachable",
+                                 "replica two lagging", "replica four lagging",
+                                 "replica one in step", "replica three in step",
+                                 "replica five in step"])
+
+    def test_a_pinned_line_stays_among_the_rest_and_the_count_stands(self):
+        self.tree.set_entry_maintenance(
+            "/db", "error-1", "being replaced",
+            expires_at=datetime.now(UTC) + timedelta(days=1), set_by="pan",
+            expected_set_at=None)
+        block, lines = self._block("/status", "/db")
+        self.assertEqual(lines, ["standby unreachable",
+                                 "replica two lagging", "replica four lagging",
+                                 "replica one in step", "replica three in step",
+                                 "primary unreachable", "replica five in step"])
+        quiet = [line for line in block.all("status-node__reason")
+                 if line.has("is-quiet")]
+        self.assertEqual([self._said(line) for line in quiet], ["primary unreachable"])
+        count = block.parent.one("reason-quiet-count")
+        self.assertEqual(count.text(), "1 of 7 in maintenance")
+
+    def test_a_pages_first_level_is_clamped_as_the_wall_is_and_leads_the_same(self):
+        _, lines = self._block(f"/status{self.ROSTER.rsplit('/', 1)[0]}", self.ROSTER)
+        self.assertEqual(lines[0], f"{self.NAMES[-1]}: 1 (41d)")
+
+    def test_the_refresh_draws_the_same_order(self):
+        _, lines = self._block("/status?fragment=1", "/db")
+        self.assertEqual(lines[:2], ["primary unreachable", "standby unreachable"])
+
+    def test_a_nodes_own_lines_on_its_page_keep_the_checks_order(self):
+        # a leaf's page lists every line uncapped, and so does a branch's head
+        self.assertEqual(self._own_lines(f"/status{self.ROSTER}"),
+                         [f"{name}: 1 (3d)" for name in self.NAMES[:-1]]
+                         + [f"{self.NAMES[-1]}: 1 (41d)"])
+        self.assertEqual(self._own_lines("/status/ci"),
+                         ["2 regions in scope", "eu-west-1 cannot be read"])
+        # where the same lines are clamped, on the wall, the failing one leads
+        _, lines = self._block("/status", "/ci")
+        self.assertEqual(lines, ["eu-west-1 cannot be read", "2 regions in scope"])
+
+    def test_the_copy_document_keeps_the_checks_order(self):
+        body = self._body(f"/copy{self.ROSTER}")
+        positions = [body.index(f"{name}: 1 (") for name in self.NAMES]
+        self.assertEqual(positions, sorted(positions))
+
+
 def _record_rows(body: str) -> list[tuple[str, str]]:
     """Every name and value the page's record lists show, as a reader reads them:
     the text of each ``<dt>`` and of the ``<dd>`` beside it, in page order, with
@@ -3955,12 +4544,12 @@ class RunArrowTests(TestCase):
         self.assertEqual(self._minutes(body) + self._seconds(body), [])
 
     def test_the_leaf_page_says_the_next_update(self):
-        # DELIBERATELY REWRITTEN with the node-facts block (ADR-0044 decision 8):
-        # the leaf page used to carry the grid's `→ 11:35` suffix inside its
-        # observation sentence; the Time card now states the next update on its
-        # own line, so the arrow is the *grid's* form and saying both would say
-        # it twice. The fact under test is unchanged — this page names the check,
-        # so this page carries its next update.
+        # The Time card states the next update on its own line (ADR-0044 decision
+        # 8), and since a leaf's page is framed as a branch's is (backlog #91 §3.5)
+        # its head carries the time and its arrow as every head does — the branch's
+        # page has both, its head's arrow and its Time card. The fact under test is
+        # unchanged: this page names the check, so this page carries its next
+        # update.
         self.tree.set_check_mount("/site/disk")
         self.tree.upsert("/site/disk", StatusCode.OK)
         self._stamp("/site/disk", datetime(2026, 8, 6, 11, 30, 1, tzinfo=UTC))
@@ -3971,7 +4560,10 @@ class RunArrowTests(TestCase):
         # observation sentence directly above uses it, and two times a reader is
         # meant to compare should not be printed two ways.
         self.assertRegex(body, r"Next update \d{4}-\d\d-\d\d \d\d:35:00")
-        self.assertEqual(self._minutes(body) + self._seconds(body), [])
+        # the head's one time span carries the arrow, minute-precision
+        self.assertEqual(body.count('class="status-card__time"'), 1)
+        self.assertEqual(len(self._minutes(body)), 1)
+        self.assertEqual(self._seconds(body), [])
 
     def test_a_leaf_below_a_branch_mount_stays_bare_on_its_page(self):
         # Its next update lives one level up, where the check is named.
@@ -4009,6 +4601,310 @@ class CardStatusLineStyleTests(TestCase):
             body = self.client.get("/status").get_data(as_text=True)
         self.assertIn('data-ls-card-state="below"', body)
         self.assertNotIn("Next update", body)
+
+
+class LookTests(TestCase):
+    """The looks a browser keeps and a deployment defaults (`looks.py`, ADR-0029's
+    updates): the theme, how a run of chips is drawn, whether a pause on a name
+    opens the hover card, and how a row and a chip answer the pointer. Each is on
+    `<body>` and in the settings menu, its default the deployment's — the library's
+    cyberpunk, `off` and `wash` since 2026-10-18 — and it is written into the
+    presentation cookie only once the browser has chosen it, so a browser that never
+    chose follows a changed default."""
+
+    def setUp(self):
+        app_module.app.config["TESTING"] = True
+        self.client = app_module.app.test_client()
+        self.client.post("/login",
+                         data={"username": "pan", "password": "12345678"})
+
+    def _body(self) -> str:
+        return self.client.get("/status").get_data(as_text=True)
+
+    def _defaults(self, **looks: str):
+        return mock.patch.object(app_module, "config", replace(
+            app_module.config, looks=dict(app_module.config.looks) | looks))
+
+    def _cookie(self) -> str:
+        cookie = self.client.get_cookie("ls_prefs")
+        return cookie.value if cookie is not None else ""
+
+    def _post(self, **form: str) -> None:
+        # the menu posts every group as it stands, as the browser draws it
+        page = parse(self._body())
+        sent = {"next": "/status"}
+        for radio in page.all("ls-menu__radio"):
+            if "checked" in radio.attrs:
+                sent[radio.attrs["name"]] = radio.attrs["value"]
+        sent.update(form)
+        self.client.post("/preferences", data=sent)
+
+    def test_each_look_is_on_the_body_as_the_deployment_defaults_it(self):
+        body = self._body()
+        self.assertIn('data-ls-theme="cyberpunk"', body)
+        self.assertIn('data-ls-chip-runs="aligned"', body)
+        self.assertIn('data-ls-inspection-card="off"', body)
+        self.assertIn('data-ls-toggle-hover="wash"', body)
+        self.assertEqual(body.count("data-ls-theme="), 1)
+        with self._defaults(theme="plain", chip_runs="wrapped",
+                            inspection_card="pause", toggle_hover="outline"):
+            body = self._body()
+        self.assertIn('data-ls-theme="plain"', body)
+        # a light theme's chrome stays light
+        self.assertNotIn('data-bs-theme="dark"', body)
+        self.assertIn('data-ls-chip-runs="wrapped"', body)
+        self.assertIn('data-ls-inspection-card="pause"', body)
+        self.assertIn('data-ls-toggle-hover="outline"', body)
+
+    def test_the_menu_offers_each_look_with_the_one_in_force_checked(self):
+        menu = parse(self._body())
+        headings = [head.text() for head in menu.all("ls-menu__heading")]
+        self.assertEqual(headings, ["Theme", "Layout", "Chips", "Hover card",
+                                    "Under the pointer"])
+        def offered(page, key):
+            return [(radio.attrs["value"], "checked" in radio.attrs,
+                     radio.parent.text()) for radio in page.all("ls-menu__radio")
+                    if radio.attrs.get("name") == key]
+        self.assertEqual(offered(menu, "theme"),
+                         [("auto", False, "auto (follow the OS)"),
+                          ("plain", False, "plain"), ("vivid", False, "vivid"),
+                          ("pastel", False, "pastel"), ("dark", False, "dark"),
+                          ("cyberpunk", True, "cyberpunk")])
+        self.assertEqual(offered(menu, "chip_runs"),
+                         [("aligned", True, "aligned"), ("wrapped", False, "wrapped")])
+        self.assertEqual(offered(menu, "inspection_card"),
+                         [("pause", False, "on a pause"), ("off", True, "off")])
+        self.assertEqual(offered(menu, "toggle_hover"),
+                         [("outline", False, "outline"), ("wash", True, "wash")])
+        with self._defaults(theme="dark", toggle_hover="outline"):
+            menu = parse(self._body())
+        self.assertEqual([value for value, checked, _ in offered(menu, "theme")
+                          if checked], ["dark"])
+        self.assertEqual(offered(menu, "toggle_hover"),
+                         [("outline", True, "outline"), ("wash", False, "wash")])
+
+    def test_a_look_in_the_cookie_wins_and_a_bad_one_falls_back_on_its_own(self):
+        self.client.set_cookie("ls_prefs", "chip_runs=wrapped&inspection_card=off")
+        self.assertIn('data-ls-chip-runs="wrapped"', self._body())
+        self.client.set_cookie("ls_prefs", "chip_runs=columns")
+        self.assertIn('data-ls-chip-runs="aligned"', self._body())
+        for cookie, card, hover in [
+                ("inspection_card=pause", "pause", "wash"),
+                ("toggle_hover=outline&theme=dark", "off", "outline"),
+                ("inspection_card=sometimes&toggle_hover=outline", "off", "outline"),
+                ("inspection_card=pause&toggle_hover=glow", "pause", "wash"),
+                ("inspection_card=", "off", "wash"),
+                ("%%%=&&&", "off", "wash")]:
+            with self.subTest(cookie=cookie):
+                self.client.set_cookie("ls_prefs", cookie)
+                body = self._body()
+                self.assertIn(f'data-ls-inspection-card="{card}"', body)
+                self.assertIn(f'data-ls-toggle-hover="{hover}"', body)
+
+    def test_a_browser_that_never_chose_follows_a_changed_default(self):
+        # the menu posts every group at once, each as it stands: a theme chosen
+        # sends the looks' defaults beside it, which are no choice of their own
+        self._post(theme="dark")
+        self.assertNotIn("chip_runs", self._cookie())
+        self.assertNotIn("inspection_card", self._cookie())
+        self.assertNotIn("toggle_hover", self._cookie())
+        with self._defaults(chip_runs="wrapped", inspection_card="pause",
+                            toggle_hover="outline"):
+            body = self._body()
+            self._post(theme="vivid")          # the defaults again, the new ones
+        self.assertIn('data-ls-chip-runs="wrapped"', body)
+        self.assertIn('data-ls-inspection-card="pause"', body)
+        self.assertIn('data-ls-toggle-hover="outline"', body)
+        self.assertNotIn("chip_runs", self._cookie())
+        self.assertNotIn("inspection_card", self._cookie())
+
+    def test_a_browser_that_never_chose_a_theme_follows_the_deployments(self):
+        # the theme is a look like the others: posted as it stands beside another
+        # group's choice, it is no choice of its own, and a changed default reaches
+        # the browser
+        self._post(chip_runs="wrapped")
+        self.assertNotIn("theme", self._cookie())
+        with self._defaults(theme="dark"):
+            self.assertIn('data-ls-theme="dark"', self._body())
+        # chosen, it is kept whatever the default becomes
+        self._post(theme="pastel")
+        self.assertIn("theme=pastel", self._cookie())
+        with self._defaults(theme="dark"):
+            self.assertIn('data-ls-theme="pastel"', self._body())
+
+    def test_a_chosen_look_is_written_and_kept_whatever_the_default_becomes(self):
+        self._post(inspection_card="pause")
+        self.assertIn("inspection_card=pause", self._cookie())
+        self._post(theme="dark")               # another group: the choice rides along
+        self.assertIn("inspection_card=pause", self._cookie())
+        self.assertIn('data-ls-inspection-card="pause"', self._body())
+        # back to what the deployment defaults to, and chosen: kept as chosen, so a
+        # changed default does not take it
+        self._post(inspection_card="off")
+        self.assertIn("inspection_card=off", self._cookie())
+        with self._defaults(inspection_card="pause"):
+            self.assertIn('data-ls-inspection-card="off"', self._body())
+        self.assertNotIn("toggle_hover", self._cookie())
+
+    def test_a_hand_edited_look_cannot_write_junk(self):
+        self._post(toggle_hover="outline")
+        self.client.post("/preferences",
+                         data={"toggle_hover": "../../etc", "next": "/status"})
+        self.assertIn("toggle_hover=outline", self._cookie())
+        self.assertIn('data-ls-toggle-hover="outline"', self._body())
+
+    def test_the_wash_takes_the_outlines_place_and_forced_colors_keep_the_outline(self):
+        css = self.client.get("/static/css/overview.css").get_data(as_text=True)
+        rules = css_rules_naming(css, 'body[data-ls-toggle-hover="wash"]')
+        self.assertEqual(len(rules), 2)
+        washed, forced = rules
+        self.assertIn("--ls-toggle-hover-line: 0%;", washed)
+        self.assertIn("--ls-toggle-hover-wash: 10%;", washed)
+        self.assertIn("--ls-toggle-hover-line: inherit;", forced)
+        self.assertIn("--ls-toggle-hover-wash: inherit;", forced)
+        forced_block = css[css.index("@media (forced-colors: active) {\n"
+                                     '    body[data-ls-toggle-hover="wash"]'):]
+        self.assertLess(forced_block.index("inherit"), forced_block.index("}"))
+
+
+class ChipRunWidthTests(TestCase):
+    """What a level's runs of chips are sized for under the look `chip_runs: aligned`
+    (ADR-0127 decision 12): the server's estimate of the column width its runs
+    share — the characters of the widest of its children's names, open or closed, at
+    most one and a half times their 90th percentile, and of the largest count of
+    leaves among its branches, each at 0.85 of a `0` of the chip's font, and the
+    chip's padding, border, cue and margins at their size (backlog #91's note, §2,
+    2026-10-17) — and that count, which `tree.js` keeps room for when it measures the
+    names. Taken from what never changes with status: a leaf brings no room for its
+    lines, and the leaves are counted on the unfiltered tree, as the chips count
+    them."""
+
+    def setUp(self):
+        self.tree = StatusTree()
+        self._original = app_module.status_tree
+        app_module.status_tree = self.tree
+        self.addCleanup(setattr, app_module, "status_tree", self._original)
+        self.client = app_module.app.test_client()
+        self.client.post("/login",
+                         data={"username": "pan", "password": "12345678"})
+
+    def _level(self, branch, url="/status"):
+        page = parse(self.client.get(url).get_data(as_text=True))
+        found = [level for level in page.all("tree-kids")
+                 if level.attrs.get("data-branch") == branch]
+        self.assertEqual(len(found), 1, branch)
+        return found[0]
+
+    def test_a_level_carries_its_runs_width_and_its_branches_largest_count(self):
+        self.tree.upsert("/team/api", StatusCode.OK)
+        self.tree.upsert("/team/web", StatusCode.WARN, "slow")
+        for number in range(12):
+            self.tree.upsert(f"/team/workers/w{number}", StatusCode.OK)
+        level = self._level("/team")
+        # `workers`, seven characters, the widest; twelve leaves, two digits; and the
+        # chrome of a chip that draws its count
+        self.assertEqual(level.attrs.get("style"),
+                         "--chip-w: calc(9 * var(--ls-chip-letter) * 1ch"
+                         " + 20px + 1.65em)")
+        self.assertEqual(level.attrs.get("data-leaves"), "12")
+        # the same in the refresh's fragment, whatever face each child shows
+        level = self._level("/team", "/status?fragment=1&depth=2")
+        self.assertEqual(level.attrs.get("style"),
+                         "--chip-w: calc(9 * var(--ls-chip-letter) * 1ch"
+                         " + 20px + 1.65em)")
+
+    def test_one_name_far_past_the_rest_sizes_the_level_at_its_bound(self):
+        for number in range(10):
+            self.tree.upsert(f"/team/repo_{number:05d}", StatusCode.OK)
+        self.tree.upsert("/team/a_repository_named_past_every_other", StatusCode.OK)
+        # ten names of ten characters and one of thirty-five: the 90th percentile is
+        # ten, so the widest that sizes the level is fifteen, and no branch counts
+        self.assertEqual(self._level("/team").attrs.get("style"),
+                         "--chip-w: calc(15 * var(--ls-chip-letter) * 1ch"
+                         " + 20px + 1.15em)")
+        self.assertEqual(self._level("/team").attrs.get("data-leaves"), "0")
+
+    def test_a_leaf_brings_no_room_for_its_lines(self):
+        self.tree.upsert("/team/queue", StatusCode.OK,
+                         [f"message {number}" for number in range(40)])
+        self.tree.upsert("/team/db", StatusCode.OK)
+        level = self._level("/team")
+        self.assertEqual(level.attrs.get("style"),
+                         "--chip-w: calc(5 * var(--ls-chip-letter) * 1ch"
+                         " + 20px + 1.15em)")
+        self.assertEqual(level.attrs.get("data-leaves"), "0")
+
+    def test_the_leaves_are_counted_as_the_chips_count_them_before_a_filter(self):
+        for number in range(10):
+            self.tree.upsert(f"/team/batch/job{number}", StatusCode.OK)
+        self.tree.upsert("/team/batch/failing", StatusCode.ERROR, "boom")
+        self.tree.upsert("/team/api", StatusCode.WARN, "slow")
+        level = self._level("/team", "/status?hide_ok=1")
+        self.assertEqual(level.attrs.get("data-leaves"), "11")
+        self.assertEqual(level.attrs.get("style"),
+                         "--chip-w: calc(7 * var(--ls-chip-letter) * 1ch"
+                         " + 20px + 1.65em)")
+
+    def test_the_planner_takes_each_chips_own_width_beside_its_levels(self):
+        # what a run that holds one column wraps by (backlog #91's note, §2,
+        # 2026-10-17): each closed child's name and the digits of its leaves where it
+        # is a branch, with the chrome of a chip that draws a count or none, in the
+        # planner's tenths of a pixel — from what never changes with status, as its
+        # level's estimate is; a level the look leaves open takes none
+        self.tree.upsert("/team/api", StatusCode.OK)
+        self.tree.upsert("/team/web", StatusCode.WARN, ["slow", "slower"])
+        for number in range(12):
+            self.tree.upsert(f"/team/workers/w{number}", StatusCode.OK)
+        self.tree.upsert("/plain/one", StatusCode.OK)
+        root = self.tree.snapshot("")
+        closed = frozenset({"/team/api", "/team/web", "/team/workers"})
+        priced = app_module._priced(root, Drawn(closed=closed, priced=closed),
+                                    app_module._leaves_map(root))
+        self.assertEqual(dict(priced.chip_w), {"/team": chip_width(9, counts=True)})
+        self.assertEqual(dict(priced.chip_own),
+                         {"/team/api": chip_width(3, counts=False),
+                          "/team/web": chip_width(3, counts=False),
+                          "/team/workers": chip_width(9, counts=True)})
+        # in a theme's own face, its characters at its own width (2026-10-18)
+        mono = chip_face("cyberpunk")
+        priced = app_module._priced(root, Drawn(closed=closed, priced=closed),
+                                    app_module._leaves_map(root), mono)
+        self.assertEqual(dict(priced.chip_w),
+                         {"/team": chip_width(9, counts=True, face=mono)})
+        self.assertEqual(priced.chip_own["/team/api"],
+                         chip_width(3, counts=False, face=mono))
+
+    def test_the_page_prices_the_chips_in_its_themes_face(self):
+        # the face the estimate's length reads in the browser — cyberpunk's
+        # monospace, or the system's — is the one the planner counts in, as the
+        # browser's theme says it
+        self.tree.upsert("/team/api", StatusCode.OK)
+        seen = []
+        real = app_module._priced
+
+        def spy(node, drawn, leaves, face=CHIP_FACE):
+            seen.append(face)
+            return real(node, drawn, leaves, face)
+
+        with mock.patch.object(app_module, "_priced", spy):
+            for cookie, face in [("", chip_face("cyberpunk")),
+                                 ("theme=plain", CHIP_FACE),
+                                 ("theme=auto", CHIP_FACE),
+                                 ("theme=cyberpunk", chip_face("cyberpunk"))]:
+                with self.subTest(cookie=cookie):
+                    seen.clear()
+                    self.client.set_cookie("ls_prefs", cookie)
+                    self.client.get("/status?fragment=1")
+                    self.assertEqual(seen, [face])
+        self.assertNotEqual(chip_face("cyberpunk"), CHIP_FACE)
+
+    def test_wrapped_runs_are_sized_for_nothing(self):
+        self.tree.upsert("/team/api", StatusCode.OK)
+        self.tree.upsert("/team/workers/w1", StatusCode.OK)
+        self.client.set_cookie("ls_prefs", "chip_runs=wrapped")
+        level = self._level("/team")
+        self.assertNotIn("style", level.attrs)
+        self.assertNotIn("data-leaves", level.attrs)
 
 
 class NodeFactsTests(TestCase):
@@ -4262,7 +5158,7 @@ class ContainerHeadTests(TestCase):
         """The head's classes, its cue's code and its status word."""
         head = self._page(branch).split('class="status-node viewed-head ', 1)[1]
         cue = re.search(r"status-cue--([a-z]+)", head)
-        word = re.search(r'viewed-head__state">'
+        word = re.search(r'status-node__state">'
                          r'(?:<span class="status-card__time">[^<]*</span>)?'
                          r"([a-z]+)", head)
         assert cue is not None and word is not None
@@ -4362,7 +5258,8 @@ class ContainerHeadTests(TestCase):
         body = self.client.get(
             "/status/cloud/aws?hide_ok=1&depth=0").get_data(as_text=True)
         self.assertNotIn("The only node beneath aws is ok.", body)
-        self.assertIn('<span class="status-card__name">aws</span>', body)
+        self.assertIn('class="status-card__name" data-control="toggle" '
+                      'href="/status/cloud/aws"', body)
         self.assertIn("Observed ", body)
 
     def test_the_root_with_nothing_shown_still_says_so(self):
@@ -4524,22 +5421,33 @@ class TimeCardTests(TestCase):
 
     def test_a_stale_node_says_when_it_was_last_observed(self):
         # Observed, as the card says it: a node the instance re-asserts on its own
-        # tick goes stale too, and nothing checks it.
+        # tick goes stale too, and nothing checks it. Said once in the page's head,
+        # as on every box, and the Time card says when: the sentence beneath the
+        # lines that said it a third time went with the framed page (backlog #91
+        # §3.5, on Lex's word of 2026-10-17).
         self.tree.upsert("/svc/api", StatusCode.OK, stale_after=0.01)
         time.sleep(0.05)
         body = self.client.get("/status/svc/api").get_data(as_text=True)
-        self.assertIn("Stale — last observed ", body)
+        page = parse(body)
+        stale = page.one("viewed-head").one("status-stale")
+        self.assertRegex(stale.text(), r"^stale · .+ ago$")
+        self.assertIn("Last observed ", body)
+        self.assertNotIn("Stale — last observed", body)
         self.assertNotIn("last checked", body)
 
 
-class AboutDisclosureTests(TestCase):
-    """What a node is, said once and folded, in the band every view of it shares.
+class AboutOpenTests(TestCase):
+    """What a node is, said once and open, in the band every view of it shares
+    (backlog #91 §3.5): its text at a reading measure beneath the trail and the
+    title, and nothing before it.
 
     A leaf's page said its `about` twice before its status — beneath the title, and
     again as *About:* in the status card — and the instance's own nodes, whose
     `about` is a paragraph, pushed their report down the page by twice its length.
-    It is said in the band alone now, where the node's Series and History say it too,
-    folded behind a line that names it and shows how it begins.
+    It is said in the band alone, where the node's History and Copy say it too. From
+    0.3.19 it stood folded behind a line that named it and showed how it began, a
+    click for what a node is; it is the short account of the node, and a note at
+    startup names one past about 400 characters (`nodes.py`), so it stands open.
     """
 
     ABOUT = "the *billing* API box, in the rack by the door"
@@ -4555,53 +5463,70 @@ class AboutDisclosureTests(TestCase):
     def tearDown(self):
         app_module.status_tree = self._original
 
-    def _disclosure(self, url):
+    def _about(self, url):
         body = self.client.get(url).get_data(as_text=True)
-        found = re.findall(
-            r'<details class="ls-band__about"[^>]*>.*?</details>', body, re.S)
-        return body, found
+        page = parse(body)
+        return body, page, page.all("ls-band__about")
 
-    def test_a_leaf_says_what_it_is_once_folded_in_its_band(self):
+    def test_a_leaf_says_what_it_is_once_open_in_its_band(self):
         self.tree.upsert("/svc/api", StatusCode.OK, description="The API health check")
         self.tree.set_about("/svc/api", self.ABOUT)
-        body, found = self._disclosure("/status/svc/api")
+        body, page, found = self._about("/status/svc/api")
         self.assertEqual(len(found), 1, body)
+        about = found[0]
+        # open: a block of the band, never a disclosure
+        self.assertEqual(about.tag, "div")
+        self.assertTrue(about.within(page.one("ls-band")))
+        self.assertNotRegex(body, r'<details[^>]*ls-band__about')
         self.assertNotIn("About:", body)
         self.assertEqual(body.count("<em>billing</em>"), 1)
-        self.assertIn("<em>billing</em> API box", found[0])
-        # folded until somebody opens it
-        self.assertNotRegex(found[0].split(">", 1)[0], r"\bopen\b")
+        self.assertEqual([em.text() for em in about.all(tag="em")], ["billing"])
         # the short description stays with the status it describes
         self.assertIn("The API health check", body)
 
-    def test_the_folded_line_names_it_and_shows_how_it_begins(self):
-        # The preview is for the eye: a screen reader hears "about" and, opened,
-        # the text itself, not the same words twice.
+    def test_nothing_stands_before_its_text(self):
+        # no label, no preview and no summary: what the node is, and only that
         self.tree.upsert("/svc/api", StatusCode.OK)
         self.tree.set_about("/svc/api", self.ABOUT)
-        _, found = self._disclosure("/status/svc/api")
-        summary = found[0].split("<summary", 1)[1].split("</summary>", 1)[0]
-        self.assertIn('class="ls-band__about-label">about<', summary)
-        preview = re.search(
-            r'<span class="ls-band__about-preview" aria-hidden="true">([^<]*)<',
-            summary)
-        assert preview is not None, summary
-        self.assertEqual(preview.group(1).strip(),
-                         "the billing API box, in the rack by the door")
+        _, _, found = self._about("/status/svc/api")
+        about = found[0]
+        inside = [child for child in about.children if not isinstance(child, str)]
+        self.assertEqual(len(inside), 1)
+        self.assertTrue(inside[0].has("ls-band__about-body"))
+        self.assertTrue(inside[0].has("md-body"))
+        for gone in ("ls-band__about-label", "ls-band__about-preview"):
+            self.assertEqual(about.all(gone), [])
+        self.assertEqual(about.all(tag="summary"), [])
+        self.assertEqual(about.text(), "the billing API box, in the rack by the door")
 
     def test_every_view_of_a_node_says_it_the_same_way(self):
         self.tree.upsert("/system/alpha/disk", StatusCode.OK)
         self.tree.set_about("/system/alpha", self.ABOUT)
-        for url in ("/status/system/alpha", "/history/system/alpha"):
+        for url in ("/status/system/alpha", "/history/system/alpha",
+                    "/copy/system/alpha"):
             with self.subTest(url=url):
-                _, found = self._disclosure(url)
+                _, _, found = self._about(url)
                 self.assertEqual(len(found), 1)
-                self.assertIn("<em>billing</em> API box", found[0])
+                self.assertEqual(found[0].tag, "div")
+                self.assertEqual(found[0].text(),
+                                 "the billing API box, in the rack by the door")
 
-    def test_a_node_with_nothing_to_say_has_no_disclosure(self):
+    def test_a_node_with_nothing_to_say_has_no_about(self):
         self.tree.upsert("/svc/api", StatusCode.OK)
-        _, found = self._disclosure("/status/svc/api")
+        _, _, found = self._about("/status/svc/api")
         self.assertEqual(found, [])
+
+    def test_the_stylesheet_draws_it_open(self):
+        # nothing of the fold is left to draw: no summary, no preview, no indent
+        # beneath a line that is gone
+        css = (Path(app_module.__file__).parent / "static" / "css"
+               / "overview.css").read_text(encoding="utf-8")
+        self.assertEqual(css_rules_naming(css, "ls-band__about > summary"), [])
+        self.assertEqual(css_rules_naming(css, "ls-band__about-preview"), [])
+        self.assertEqual(css_rules_naming(css, "ls-band__about-label"), [])
+        body = css_rule(css, ".ls-band__about-body")
+        self.assertIn("max-width: 72ch", body)
+        self.assertNotRegex(body, r"margin:[^;]*1rem;")
 
 
 class BoxStateTests(TestCase):
@@ -4632,11 +5557,13 @@ class BoxStateTests(TestCase):
         self.tree.upsert("/host/disk", StatusCode.ERROR, "disk full")
         self.tree.upsert("/host/net", StatusCode.OK)
         self.tree.upsert("/host/net/ping", StatusCode.OK)
-        body = self.client.get("/status").get_data(as_text=True)
-        clusters = re.findall(r'status-node__state">.*?</button></span>', body)
-        self.assertEqual(len(clusters), 2)
-        self.assertTrue(any("error<button" in c for c in clusters))
-        self.assertTrue(any("ok<button" in c for c in clusters))
+        page = parse(self.client.get("/status").get_data(as_text=True))
+        clusters = ["".join(part for part in cluster.children if isinstance(part, str))
+                    for cluster in page.all("status-node__state")]
+        # the error leaf's, the quiet branch's, and the quiet leaf's — whose box is
+        # drawn beside its chip, hidden until found (ADR-0127 decision 1)
+        self.assertEqual(len(clusters), 3)
+        self.assertEqual(sorted(clusters), ["error", "ok", "ok"])
 
     def test_a_pinned_box_says_maintenance_and_what_it_silences(self):
         # the cluster carries the same transform display a card does (ADR-0032
@@ -4745,8 +5672,10 @@ class ContentSecurityPolicyTests(TestCase):
     def test_the_switches_and_the_menu_radios_submit_through_the_script(self):
         self._login()
         body = self.client.get("/status").get_data(as_text=True)
-        # four filters, six themes, three layouts
-        self.assertEqual(body.count("data-ls-submit"), 13)
+        # two filters, six themes, three layouts and two values of each of the two
+        # looks — the chips switch and the depth control went with dense mode
+        # (ADR-0127 decision 7)
+        self.assertEqual(body.count("data-ls-submit"), 17)
         self.assertIn("js/prefs.js", body)
 
     def test_each_preference_form_keeps_a_noscript_submit(self):
@@ -5725,3 +6654,937 @@ class SubjectSeriesTests(TestCase):
                 body = self._page(f"/hosts/nas{query}")
                 self.assertEqual(_reading_rows(body), [])
                 self.assertEqual(len(_curves(body)), 1)
+
+
+class TreeMarkupTests(TestCase):
+    """The tree's markup (ADR-0127, backlog #91 §7.7): what rides on each node for
+    `tree.js` — the markers, the chip's counts in their words, the head's icons and
+    their pressed states, the band's three buttons — and what the server does not
+    draw: a pin editor in every head, icons on the kiosk."""
+
+    def setUp(self):
+        self.tree = StatusTree()
+        self._original = app_module.status_tree
+        app_module.status_tree = self.tree
+        self.client = app_module.app.test_client()
+        self.client.post("/login",
+                         data={"username": "pan", "password": "12345678"})
+        self.far = datetime.now(UTC) + timedelta(days=1)
+
+    def tearDown(self):
+        app_module.status_tree = self._original
+
+    def _page(self, url="/status"):
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200, url)
+        return parse(response.get_data(as_text=True))
+
+    @staticmethod
+    def _node(page, path):
+        found = [node for node in page.all("tree-node")
+                 if node.attrs.get("data-node") == path]
+        assert len(found) == 1, f"{len(found)} nodes at {path}, wanted one"
+        return found[0]
+
+    @staticmethod
+    def _own(element, name):
+        """The one direct child of ``element`` with the class ``name`` — a node's
+        own face or head, never a nested node's."""
+        found = [child for child in element.children
+                 if not isinstance(child, str) and child.has(name)]
+        assert len(found) == 1, f"{len(found)} own .{name} on {element}, wanted one"
+        return found[0]
+
+    def _chip(self, page, path):
+        return self._own(self._node(page, path), "tree-chip")
+
+    def _box(self, node):
+        """A card's panel, a nested node's box: where its block and its lines stand."""
+        hold = self._own(node, "tree-hold")
+        return self._own(
+            hold, "status-panel" if node.has("status-card") else "tree-box")
+
+    def _head(self, node):
+        if node.has("status-card"):
+            return self._own(node, "status-card__head")
+        return self._own(self._box(node), "status-node__self")
+
+    def _controls(self, node):
+        return self._own(self._head(node), "node-controls")
+
+    def _icons(self, node):
+        return self._own(self._controls(node), "node-icons")
+
+    @staticmethod
+    def _kinds(icons):
+        return [control.attrs.get("data-control") for control in icons.children
+                if not isinstance(control, str)]
+
+    def _icon(self, page, path, kind):
+        node = self._node(page, path)
+        found = [control for control in self._icons(node).children
+                 if not isinstance(control, str)
+                 and control.attrs.get("data-control") == kind]
+        assert len(found) == 1, f"{len(found)} {kind} icons on {path}"
+        return found[0]
+
+    # --- the chip's counts ---
+
+    def test_a_chips_counts_are_its_words_as_title_and_accessible_name(self):
+        self.tree.upsert("/team/x/error", StatusCode.ERROR, "x")
+        self.tree.upsert("/team/x/warn", StatusCode.WARN, "x")
+        self.tree.upsert("/team/y/one", StatusCode.OK)
+        self.tree.upsert("/team/y/two", StatusCode.OK)
+        chip = self._chip(self._page("/status?depth=2"), "/team/x")
+        self.assertEqual(chip.attrs.get("title"), "1 error, 1 warning")
+        self.assertEqual(chip.attrs.get("aria-label"), "x: 1 error, 1 warning")
+        counts = chip.one("tree-counts")
+        drawn = counts.all("tree-count")
+        self.assertEqual([count.attrs.get("class") for count in drawn],
+                         ["tree-count tree-count--error",
+                          "tree-count tree-count--warn"])
+        self.assertEqual([count.text() for count in drawn], ["1", "1"])
+        self.assertTrue(counts.all("tree-count")[0].all("status-cue--error"))
+        # one state: one total, no glyph
+        quiet = self._chip(self._page("/status?depth=2"), "/team/y")
+        self.assertEqual(quiet.attrs.get("title"), "2 ok")
+        totals = quiet.one("tree-counts").all("tree-count")
+        self.assertEqual([count.text() for count in totals], ["2"])
+        self.assertEqual(totals[0].all("status-cue"), [])
+
+    def test_one_line_draws_no_count_and_a_damped_or_running_line_speaks(self):
+        self.tree.upsert("/svc/api", StatusCode.OK, escalate_after=3)
+        self.tree.upsert("/svc/api", StatusCode.ERROR, "down")
+        self.tree.upsert("/svc/api", StatusCode.ERROR, "down")
+        self.tree.upsert("/ci/actions", StatusCode.OK, [
+            Entry("build", "running", StatusCode.OK, running=True),
+            Entry("test", "passed", StatusCode.OK)])
+        page = self._page()
+        api = self._chip(page, "/svc/api")
+        self.assertEqual(api.attrs.get("title"), "1 error, damped: 2 of 3 to escalate")
+        self.assertEqual(api.all("tree-counts"), [])              # one line: no count
+        actions = self._chip(page, "/ci/actions")
+        self.assertEqual(actions.attrs.get("title"), "2 ok, 1 running")
+        self.assertEqual([count.text() for count in actions.all("tree-count")], ["2"])
+
+    def test_a_stale_leafs_chip_is_drawn_as_the_warning_it_counts_as(self):
+        self.tree.upsert("/host/cpu", StatusCode.OK, frequency_seconds=60)
+        self.tree.snapshot("/host/cpu")
+        self.tree._ensure_node("/host/cpu").timestamp = (
+            datetime.now(UTC) - timedelta(hours=1))
+        page = self._page()
+        node = self._node(page, "/host/cpu")
+        self.assertEqual(node.attrs.get("data-state"), "open")     # a failing leaf
+        self.assertIn("data-failing", node.attrs)
+        self.assertNotIn("data-healthy", node.attrs)
+        chip = node.one("tree-chip")
+        self.assertTrue(chip.has("s-warn"))
+        self.assertTrue(chip.all("status-cue--warn"))
+        self.assertEqual(chip.attrs.get("title"), "1 warning")
+
+    def test_a_rule_beneath_is_marked_on_the_chip(self):
+        self.tree.upsert("/team/a/one", StatusCode.OK)
+        self.tree.upsert("/team/a/two", StatusCode.OK)
+        self.tree.set_maintenance("/team/a", "planned", expires_at=self.far,
+                                  set_by="pan")
+        chip = self._chip(self._page("/status?depth=2"), "/team/a")
+        mark = chip.one("tree-rule")
+        self.assertEqual(mark.attrs.get("title"), "a rule stands beneath")
+        self.assertEqual(chip.attrs.get("title"), "2 ok")
+        # where the counts say maintenance already, no second mark
+        self.tree.set_maintenance("/team/a/two", "planned", expires_at=self.far,
+                                  set_by="pan")
+        chip = self._chip(self._page("/status?depth=2"), "/team/a")
+        self.assertTrue(chip.all("tree-count--maintenance"))
+        self.assertEqual(chip.all("tree-rule"), [])
+
+    def test_the_counts_are_taken_before_the_filters_drop_nodes(self):
+        self.tree.upsert("/team/a/ok", StatusCode.OK)
+        self.tree.upsert("/team/a/bad", StatusCode.ERROR, "x")
+        self.tree.set_about("/team/a/idle", "declared, never reported")
+        page = self._page("/status?depth=2&hide_ok=1&hide_idle=1")
+        chip = self._chip(page, "/team/a")
+        self.assertEqual(chip.attrs.get("title"), "1 error, 1 ok, 1 idle")
+
+    # --- the markers ---
+
+    def test_healthy_rides_on_nodes_and_lines_as_the_fold_reads_them(self):
+        self.tree.upsert("/team/a", StatusCode.OK, [Entry("own", "the branch's line")])
+        self.tree.upsert("/team/a/one", StatusCode.OK, [
+            Entry("fine", "in step", StatusCode.OK),
+            Entry("bad", "lagging", StatusCode.WARN)], members=True)
+        self.tree.upsert("/team/b", StatusCode.OK)
+        self.tree.upsert("/team/c", StatusCode.OK, show_when_quiet=True)
+        page = self._page()
+        # a warning beneath withholds it
+        self.assertNotIn("data-healthy", self._node(page, "/team/a").attrs)
+        self.assertIn("data-healthy", self._node(page, "/team/b").attrs)
+        self.assertIn("data-healthy", self._node(page, "/team/c").attrs)     # the claim
+        self.assertIn("data-swq", self._node(page, "/team/c").attrs)         # is marked
+        lines = self._node(page, "/team/a/one").all("status-node__reason")
+        self.assertEqual([("data-healthy" in line.attrs) for line in lines],
+                         [False, True])                   # failing first: bad, fine
+        # the branch's own line is healthy only while the branch rolls up OK
+        own = self._own(self._box(self._node(page, "/team/a")), "reason-block") \
+            .all("status-node__reason")
+        self.assertEqual([("data-healthy" in line.attrs) for line in own], [False])
+        self.tree.upsert("/team/a/one", StatusCode.OK,
+                         [Entry("fine", "in step", StatusCode.OK)], members=True)
+        page = self._page()
+        own = self._own(self._box(self._node(page, "/team/a")), "reason-block") \
+            .all("status-node__reason")
+        self.assertEqual([("data-healthy" in line.attrs) for line in own], [True])
+
+    def test_the_grid_carries_the_renders_time_in_seconds(self):
+        self.tree.upsert("/db", StatusCode.OK)
+        before = int(datetime.now(UTC).timestamp())
+        page = self._page("/status?fragment=1")
+        stamp = int(page.one("status-grid").attrs["data-rendered-s"])
+        self.assertLessEqual(before, stamp)
+        self.assertLessEqual(stamp, int(datetime.now(UTC).timestamp()))
+        page = self._page("/status/db")                       # a leaf: its own page
+        self.assertEqual(page.all("status-grid"), [])
+        page = self._page("/status?depth=0")
+        self.assertTrue(page.one("status-grid").attrs.get("data-rendered-s"))
+
+    def test_a_page_marks_its_node_as_the_pages_root(self):
+        # the page's node is its frame, marked as the page's root (§7.7), and the
+        # grid is the frame's level; the wall has no frame and no root
+        self.tree.upsert("/team/a/one", StatusCode.OK)
+        page = self._page("/status/team")
+        frame = self._node(page, "/team")
+        self.assertIn("data-page-root", frame.attrs)
+        self.assertTrue(page.one("status-grid").within(frame))
+        self.assertNotIn("data-page-root", page.one("status-grid").attrs)
+        wall = self._page()
+        self.assertEqual([node for node in wall.all("tree-node")
+                          if "data-page-root" in node.attrs], [])
+
+    # --- the head's icons ---
+
+    def test_an_open_head_carries_its_page_the_funnel_and_chips_as_drawn(self):
+        self.tree.upsert("/team/a/one", StatusCode.OK)
+        self.tree.upsert("/team/a/two", StatusCode.OK)
+        self.tree.upsert("/team/b/bad", StatusCode.ERROR, "x")
+        self.tree.upsert("/team/b/ok", StatusCode.OK)
+        page = self._page()
+        icons = self._icons(self._node(page, "/team"))
+        # ‖ last, for an admin, on a node with no pin of its own
+        self.assertEqual(self._kinds(icons), ["page", "ok", "chips", "pin"])
+        link = self._icon(page, "/team", "page")
+        self.assertEqual((link.tag, link.attrs.get("href")), ("a", "/status/team"))
+        self.assertEqual(link.attrs.get("aria-label"), "open the page of team")
+        funnel = self._icon(page, "/team", "ok")
+        self.assertEqual(funnel.attrs.get("aria-pressed"), "false")
+        # /team/a is healthy, /team/b is not
+        self.assertEqual((funnel.attrs.get("data-n"),
+                          funnel.attrs.get("data-n-pressed")), ("1", "1"))
+        self.assertEqual(funnel.attrs.get("title"), "Fold the 1 healthy ones")
+        self.assertEqual(funnel.attrs.get("aria-label"), "Fold the 1 healthy ones")
+        self.assertTrue(funnel.one("icon-mark").one("", "use").attrs["href"]
+                        .endswith("#ls-icon-funnel"))
+        # ▤ pressed where every child is drawn closed, released where every one is
+        # open, mixed between
+        self.assertEqual(self._icon(page, "/team", "chips").attrs.get("aria-pressed"),
+                         "false")                           # a and b: boxes
+        self.assertEqual(self._icon(page, "/team/a", "chips").attrs.get("aria-pressed"),
+                         "true")                            # two quiet leaves: chips
+        self.assertEqual(self._icon(page, "/team/b", "chips").attrs.get("aria-pressed"),
+                         "mixed")                           # a box and a chip
+        self.assertEqual(self._node(page, "/team/b").attrs.get("data-chips"), "mixed")
+        # a leaf has no ▤, and a node with nothing healthy beneath it no funnel
+        self.assertEqual(self._kinds(self._icons(self._node(page, "/team/b/bad"))),
+                         ["page", "pin"])
+        # the shapes are drawn once for the page, outside the grid
+        self.assertEqual(len(page.all("icon-sprite")), 1)
+        self.assertEqual(self._page("/status?fragment=1").all("icon-sprite"), [])
+
+    def test_the_funnels_counts_leave_a_claim_to_a_press(self):
+        self.tree.upsert("/team/a", StatusCode.OK)
+        self.tree.upsert("/team/b", StatusCode.OK, ["12 instances"],
+                         show_when_quiet=True)
+        self.tree.upsert("/team/c", StatusCode.OK, ["fine"], show_when_quiet=True)
+        self.tree.upsert("/team/c/one", StatusCode.OK)
+        funnel = self._icon(self._page(), "/team", "ok")
+        # the configured fold leaves b and c alone; a press takes them too
+        self.assertEqual((funnel.attrs.get("data-n"),
+                          funnel.attrs.get("data-n-pressed")), ("1", "3"))
+        self.assertEqual(funnel.attrs.get("title"), "Fold the 3 healthy ones")
+        # a claiming node's own quiet lines count for a press alone
+        own = self._icon(self._page(), "/team/c", "ok")
+        self.assertEqual((own.attrs.get("data-n"), own.attrs.get("data-n-pressed")),
+                         ("1", "2"))
+
+    def test_the_pages_own_node_at_depth_zero_has_no_page_link(self):
+        self.tree.upsert("/team/a/one", StatusCode.OK)
+        page = self._page("/status/team?depth=0")
+        card = self._node(page, "/team")
+        self.assertTrue(card.has("is-closed"))
+        self.assertEqual(self._kinds(self._icons(card)), ["ok", "pin"])
+
+    def test_the_kiosk_draws_no_icons(self):
+        self.tree.upsert("/team/a/one", StatusCode.OK)
+        self.client.set_cookie("ls_prefs", "layout=kiosk")
+        page = self._page()
+        self.assertEqual(page.all("node-icons"), [])
+        self.assertTrue(page.all("tree-node"))
+        # the toolbar is the state alone there, and has no role
+        controls = page.all("node-controls")
+        self.assertTrue(controls)
+        for toolbar in controls:
+            self.assertNotIn("role", toolbar.attrs)
+            self.assertEqual(toolbar.all("node-more"), [])
+
+    # --- the head's row ---
+
+    def test_a_heads_controls_are_one_toolbar_in_the_rows_order(self):
+        # the node's actions, ⋯ where it has any, the state cluster and the icons,
+        # in a toolbar named for the node; the row holds the name and the title
+        # before it and nothing after it
+        from tests.demo_extension import node_action
+        slots.register("node.actions", "tests.demo_extension", "node_action.html",
+                       node_action)
+        self.addCleanup(slots.forget_fillers)
+        self.tree.upsert("/team/a/one", StatusCode.ERROR, "boom")
+        self.tree.set_title("/team/a/one", "The one")
+        page = self._page()
+        for path, state in (("/team", "status-card__state"),
+                            ("/team/a/one", "status-node__state")):
+            with self.subTest(path=path):
+                node = self._node(page, path)
+                head = self._head(node)
+                row = [child for child in head.children if not isinstance(child, str)]
+                # a card's cue stands in its state cluster, a box's before its name
+                self.assertEqual([part.attrs.get("class", "").split()[0]
+                                  for part in row],
+                                 ["status-card__name", "tree-counts",
+                                  "status-head__middle", "node-controls"]
+                                 if path == "/team" else
+                                 ["status-cue", "status-node__name",
+                                  "status-head__middle", "node-controls"])
+                toolbar = self._controls(node)
+                self.assertEqual(toolbar.attrs.get("role"), "toolbar")
+                name = node.attrs["data-node"].rsplit("/", 1)[-1]
+                self.assertEqual(toolbar.attrs.get("aria-label"), f"{name} controls")
+                parts = [part.attrs.get("class", "").split()[0]
+                         for part in toolbar.children if not isinstance(part, str)]
+                self.assertEqual(parts,
+                                 ["node-actions", "node-icon", state, "node-icons"]
+                                 if path == "/team/a/one"
+                                 else ["node-actions", state, "node-icons"])
+                # a box's block and its lines stand after the row, in the box
+                self.assertEqual(head.all("reason-block"), [])
+                if path == "/team/a/one":
+                    box = self._box(node)
+                    self.assertIs(self._own(box, "reason-block").parent, box)
+                    more = self._own(toolbar, "node-more")
+                    self.assertEqual((more.tag, more.attrs.get("data-control"),
+                                      more.attrs.get("aria-haspopup"),
+                                      more.attrs.get("aria-expanded"),
+                                      more.attrs.get("hidden")),
+                                     ("button", "actions-more", "menu", "false", ""))
+                    self.assertTrue(more.one("icon-mark").one("", "use").attrs["href"]
+                                    .endswith("#ls-icon-more"))
+                # no control carries a tab stop from the server: the script sets them
+                for control in toolbar.all("", "a") + toolbar.all("", "button"):
+                    self.assertNotIn("tabindex", control.attrs, control.source()[:80])
+        self.assertEqual(page.all("reason-chevron"), [])
+
+    @staticmethod
+    def _drawn(element):
+        """An element's own text as written, its void children by their tags:
+        `team_<wbr>a`."""
+        return "".join(child if isinstance(child, str) else f"<{child.tag}>"
+                       for child in element.children)
+
+    def test_a_name_may_break_after_an_underscore_a_dot_or_a_hyphen(self):
+        # a long name breaks where its words meet, not inside one (Lex's word of
+        # 2026-10-16): a card's name, a box's, a node page's head, a leaf page's
+        # heading and the trail carry `<wbr>` after each `_`, `.` and `-`, and so
+        # does a chip, whose name wraps inside its column in an aligned run; an
+        # attribute and the accessible name carry the name
+        self.tree.upsert("/team_a/code_scanning/pipeline.yml", StatusCode.ERROR, "boom")
+        self.tree.upsert("/team_a/collect-queue", StatusCode.OK)
+        for url in ("/status", "/status?fragment=1"):
+            with self.subTest(url=url):
+                page = self._page(url)
+                card = self._node(page, "/team_a")
+                name = self._own(self._head(card), "status-card__name")
+                self.assertEqual(self._drawn(name), "team_<wbr>a")
+                self.assertEqual(name.text(), "team_a")
+                box = self._node(page, "/team_a/code_scanning")
+                self.assertEqual(self._drawn(self._own(self._head(box),
+                                                       "status-node__name")),
+                                 "code_<wbr>scanning")
+                self.assertEqual(self._controls(box).attrs.get("aria-label"),
+                                 "code_scanning controls")
+                self.assertEqual(box.attrs.get("data-node"), "/team_a/code_scanning")
+                leaf = self._node(page, "/team_a/code_scanning/pipeline.yml")
+                self.assertEqual(self._drawn(self._own(self._head(leaf),
+                                                       "status-node__name")),
+                                 "pipeline.<wbr>yml")
+                chip = self._chip(page, "/team_a/collect-queue")
+                self.assertEqual(self._drawn(chip.one("tree-chip__name")),
+                                 "collect-<wbr>queue")
+                self.assertEqual(chip.one("tree-chip__name").text(), "collect-queue")
+                self.assertTrue(chip.attrs.get("aria-label", "")
+                                .startswith("collect-queue: "))
+        card = self._node(self._page("/status/team_a?depth=0"), "/team_a")
+        self.assertEqual(self._drawn(self._own(self._head(card), "status-card__name")),
+                         "team_<wbr>a")
+        page = self._page("/status/team_a/code_scanning")
+        self.assertEqual(self._drawn(page.one("viewed-head").one("status-node__name")),
+                         "code_<wbr>scanning")
+        trail = page.one("ls-crumbs")
+        crumbs = [self._drawn(crumb) for crumb in trail.walk()
+                  if any(not isinstance(child, str) and child.tag == "wbr"
+                         for child in crumb.children)]
+        self.assertEqual(crumbs, ["team_<wbr>a", "code_<wbr>scanning"])
+        leaf = self._page("/status/team_a/code_scanning/pipeline.yml")
+        heading = [h for h in leaf.all("", "h2") if h.text() == "pipeline.yml"]
+        self.assertEqual([self._drawn(h) for h in heading], ["pipeline.<wbr>yml"])
+
+    def test_no_head_draws_a_caret(self):
+        # the row says under the pointer that a press opens or closes it, and a
+        # closed card says by its counts that it is closed (Lex's word of
+        # 2026-10-16): no ▾ or ▸ before a cue — on an open card, a closed one, the
+        # one card of `depth=0`, a box, a node's page or the refresh's fragment
+        self.tree.upsert("/team/a/one", StatusCode.ERROR, "boom")
+        self.tree.upsert("/team/b/two", StatusCode.OK)
+        self.tree.upsert("/db", StatusCode.OK)
+        for url in ("/status", "/status?depth=0", "/status?depth=1", "/status?depth=3",
+                    "/status/team", "/status?fragment=1"):
+            with self.subTest(url=url):
+                body = self.client.get(url).get_data(as_text=True)
+                self.assertIn("data-control=\"toggle\"", body)
+                self.assertNotIn("tree-caret", body)
+                self.assertNotIn("▾", body)
+                self.assertNotIn("▸", body)
+
+    def test_a_box_draws_all_n_after_its_lines_naming_the_block(self):
+        self.tree.upsert("/team/a/one", StatusCode.ERROR,
+                         [f"line {n}" for n in range(12)])
+        page = self._page()
+        box = self._box(self._node(page, "/team/a/one"))
+        block = self._own(box, "reason-block")
+        button = self._own(box, "reason-more")
+        self.assertEqual(block.attrs.get("id"), "lines/team/a/one")
+        self.assertEqual((button.tag, button.attrs.get("data-control"),
+                          button.attrs.get("aria-controls"),
+                          button.attrs.get("aria-expanded"),
+                          button.attrs.get("hidden")),
+                         ("button", "lines", "lines/team/a/one", "false", ""))
+        self.assertEqual(button.text(), "⌄ all 12")
+        # right after the block, so the tab order reaches it after the lines
+        parts = [part for part in box.children if not isinstance(part, str)]
+        self.assertIs(parts[parts.index(block) + 1], button)
+        # a card's, in its panel, the same
+        self.tree.upsert("/db", StatusCode.ERROR, [f"line {n}" for n in range(12)])
+        page = self._page()
+        panel = self._box(self._node(page, "/db"))
+        self.assertEqual(self._own(panel, "reason-more").attrs.get("aria-controls"),
+                         "lines/db")
+
+    def test_an_admins_pin_mark_stands_on_every_open_head_without_a_pin(self):
+        # ‖ on a card's head and on a nested box's alike, a link to the node's page
+        # without script, saying whether the pin would cover others, its
+        # `aria-expanded` the script's once it is a control; none on a pinned node,
+        # whose block carries Edit and Clear
+        self.tree.upsert("/team/a/one", StatusCode.OK, "fine")
+        self.tree.upsert("/team/b", StatusCode.OK, show_when_quiet=True)
+        self.tree.set_maintenance("/team/b", "planned", expires_at=self.far,
+                                  set_by="pan")
+        page = self._page()
+        card = self._icon(page, "/team", "pin")
+        self.assertEqual((card.tag, card.attrs.get("href"), card.attrs.get("title"),
+                          card.attrs.get("aria-label"),
+                          card.attrs.get("aria-expanded")),
+                         ("a", "/status/team", "Set maintenance",
+                          "set maintenance for /team", None))
+        self.assertIn("data-beneath", card.attrs)
+        self.assertTrue(card.one("icon-mark").one("", "use").attrs["href"]
+                        .endswith("#ls-icon-pin"))
+        box = self._icon(page, "/team/a", "pin")
+        self.assertEqual(box.attrs.get("href"), "/status/team/a")
+        self.assertIn("data-beneath", box.attrs)
+        leaf = self._icon(page, "/team/a/one", "pin")
+        self.assertNotIn("data-beneath", leaf.attrs)          # a leaf covers itself
+        self.assertEqual(self._kinds(self._icons(self._node(page, "/team/b"))),
+                         ["page"])                            # pinned: no ‖
+        # a node the filter emptied still says the pin would cover what is beneath
+        self.tree.upsert("/team/a", StatusCode.WARN, "the fan is loud")
+        page = self._page("/status?hide_ok=1")
+        self.assertEqual(self._node(page, "/team/a").all("tree-kids"), [])
+        self.assertIn("data-beneath", self._icon(page, "/team/a", "pin").attrs)
+
+    def test_a_page_carries_one_pin_editor_outside_the_grid_and_the_fragment_none(self):
+        self.tree.upsert("/team/a/one", StatusCode.OK)
+        body = self.client.get("/status").get_data(as_text=True)
+        page = parse(body)
+        editors = page.all("", "template")
+        editors = [t for t in editors if t.attrs.get("id") == "pin-editor"]
+        self.assertEqual(len(editors), 1)
+        template = editors[0]
+        # outside #status-grid, where the refresh never reaches it
+        grid = body.index('<div id="status-grid">')
+        self.assertGreater(body.index('<template id="pin-editor">'), body.index(
+            "</div>", grid))
+        fragment = self._page("/status?fragment=1")
+        self.assertEqual([t for t in fragment.all("", "template")
+                          if t.attrs.get("id") == "pin-editor"], [])
+        self.assertNotIn("maintenance-editor-form", self.client.get(
+            "/status?fragment=1").get_data(as_text=True))
+        # the pause mark's disclosure as it was, with the path and the words the
+        # script fills in, and the page's own address to come back to
+        setter = template.one("pin-setter")
+        self.assertTrue(setter.has("maintenance-editor-disclosure"))
+        self.assertEqual(setter.one("pin-editor__what").text(), "this node")
+        form = setter.one(tag="form")
+        hidden = {field.attrs.get("name"): field.attrs.get("value")
+                  for field in form.all(tag="input")
+                  if field.attrs.get("type") == "hidden"}
+        self.assertEqual(hidden, {"path": "", "action": "set", "set_at": "",
+                                  "next": "/status"})
+        deeper = parse(self.client.get("/status?depth=2").get_data(as_text=True))
+        fields = deeper.one("pin-setter").one(tag="form").all(tag="input")
+        self.assertEqual([field.attrs.get("value") for field in fields
+                          if field.attrs.get("name") == "next"], ["/status?depth=2"])
+        # none for a viewer, and none on the kiosk, where no head carries ‖
+        with self.client.session_transaction() as session:
+            session["admin"] = False
+        body = self.client.get("/status").get_data(as_text=True)
+        self.assertNotIn("pin-editor", body)
+        self.assertNotIn('data-control="pin"', body)
+        with self.client.session_transaction() as session:
+            session["admin"] = True
+        self.client.set_cookie("ls_prefs", "layout=kiosk")
+        body = self.client.get("/status").get_data(as_text=True)
+        self.assertNotIn("pin-editor", body)
+        self.assertNotIn('data-control="pin"', body)
+
+    # --- the band ---
+
+    def test_the_band_has_the_three_buttons_hidden_until_the_script_and_no_depth(self):
+        self.tree.upsert("/team/a/one", StatusCode.OK)
+        page = self._page()
+        modes = page.one("ls-band__modes")
+        self.assertEqual(modes.attrs.get("hidden"), "")
+        buttons = modes.all("", "button")
+        self.assertEqual([button.attrs.get("data-mode") for button in buttons],
+                         ["closed", "configured", "open"])
+        self.assertEqual([button.attrs.get("aria-pressed") for button in buttons],
+                         ["false", "true", "false"])
+        self.assertEqual([button.text(shown=True) for button in buttons],
+                         ["Close all", "As configured", "Open all"])
+        form = page.one("status-filters")
+        self.assertEqual([field.attrs.get("name") for field in form.all("", "input")],
+                         ["view", "hide_ok", "hide_idle"])
+        self.assertFalse(modes.within(form))
+        self.assertEqual(page.all("status-filters__depth"), [])
+
+
+class NodeFrameTests(TestCase):
+    """A node's page draws its node in a frame (backlog #91 §3.5): the page is the
+    same tree as the wall, rooted at the node, which is always open — framed with
+    everything that is part of it. Its head is the frame's top, the rules acting on
+    the node stated at its head and its lines beneath; its children inside; and its
+    own facts last, after the children, every card open. A leaf's page is framed the
+    same way, from the same macro."""
+
+    def setUp(self):
+        self.tree = StatusTree()
+        self._original = app_module.status_tree
+        app_module.status_tree = self.tree
+        self.client = app_module.app.test_client()
+        self.client.post("/login",
+                         data={"username": "pan", "password": "12345678"})
+        self.far = datetime.now(UTC) + timedelta(days=1)
+
+    def tearDown(self):
+        app_module.status_tree = self._original
+
+    def _viewer(self):
+        with self.client.session_transaction() as session:
+            session["admin"] = False
+
+    def _page(self, url):
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200, url)
+        return parse(response.get_data(as_text=True))
+
+    @staticmethod
+    def _parts(element):
+        return [child for child in element.children if not isinstance(child, str)]
+
+    def _frame(self, page):
+        frame = page.one("node-frame")
+        hold, = self._parts(frame)
+        self.assertTrue(hold.has("tree-hold"))
+        box, = self._parts(hold)
+        self.assertTrue(box.has("tree-box"))
+        return frame, box
+
+    def _team(self):
+        """A team's page: a written sole-check container with its own line, its
+        facts, one failing child and two healthy ones."""
+        self.tree.set_check_mount("/team")
+        self.tree.upsert("/team", StatusCode.OK, ["20 repositories read"],
+                         frequency_seconds=300, config="- **scope:** org",
+                         report="Read 20 repositories.")
+        self.tree.upsert("/team/a", StatusCode.ERROR, "boom")
+        self.tree.upsert("/team/b", StatusCode.OK)
+        self.tree.upsert("/team/c", StatusCode.OK)
+
+    def test_a_branchs_page_frames_its_head_its_children_and_its_facts(self):
+        self._team()
+        page = self._page("/status/team")
+        frame, box = self._frame(page)
+        self.assertEqual((frame.attrs.get("data-node"), frame.attrs.get("data-state")),
+                         ("/team", "open"))
+        self.assertTrue(frame.has("tree-node"))
+        self.assertTrue(frame.has("s-error"))
+        parts = self._parts(box)
+        self.assertEqual([part.attrs.get("class", "").split()[0] for part in parts],
+                         ["status-node", "status-grid", "tree-ok", "node-facts"])
+        head, grid, _mark, facts = parts
+        self.assertTrue(head.has("viewed-head"))
+        # the children inside, the page's cards
+        self.assertEqual([card.attrs.get("data-node") for card in self._parts(grid)],
+                         ["/team/a", "/team/b", "/team/c"])
+        # the facts last, every card open: Time, Report, Configuration
+        self.assertEqual([h.text() for h in facts.all(tag="h3")],
+                         ["Time", "Report", "Configuration"])
+        self.assertEqual(facts.all(tag="details"), [])
+        # all of it inside what the refresh swaps
+        fragment = self._page("/status/team?fragment=1")
+        self.assertEqual(fragment.one("node-frame").attrs.get("data-node"), "/team")
+        self.assertEqual(len(fragment.one("node-frame").all("node-facts")), 1)
+
+    def test_the_head_is_drawn_on_every_page(self):
+        # a container with nothing of its own, read by a viewer, whose head said
+        # nothing before and was left out: a page's node is always its frame's top
+        self.tree.upsert("/team/a/one", StatusCode.OK)
+        self._viewer()
+        page = self._page("/status/team/a")
+        _frame, box = self._frame(page)
+        head = self._parts(box)[0]
+        self.assertTrue(head.has("viewed-head"))
+        name = head.one("status-node__name")
+        self.assertEqual((name.tag, name.text()), ("h2", "a"))
+
+    def test_the_frames_head_is_a_heads_row_and_no_toggle(self):
+        self._team()
+        page = self._page("/status/team")
+        _frame, box = self._frame(page)
+        head = self._parts(box)[0]
+        row = self._parts(head)[0]
+        self.assertTrue(row.has("status-node__self"))
+        self.assertEqual(row.attrs.get("data-path"), "/team")
+        # the row a box draws: cue, name, title, then the toolbar named for the node
+        toolbar = row.one("node-controls")
+        self.assertEqual((toolbar.attrs.get("role"), toolbar.attrs.get("aria-label")),
+                         ("toolbar", "team controls"))
+        self.assertTrue(row.one("status-node__state").text().endswith("error"))
+        # nothing closes the node its page is about
+        self.assertNotIn('data-control="toggle"', str(row.attrs))
+        self.assertEqual([el for el in row.walk()
+                          if el.attrs.get("data-control") == "toggle"], [])
+
+    def test_the_frames_head_carries_the_funnel_chips_and_pin_but_no_arrow(self):
+        self._team()
+        page = self._page("/status/team")            # an admin: ‖ on every card
+        _frame, box = self._frame(page)
+        icons = self._parts(box)[0].one("node-icons")
+        self.assertEqual(
+            [icon.attrs.get("data-control") for icon in self._parts(icons)],
+            ["ok", "chips", "pin"])
+        # ‖ opens the editor the head keeps, a button the script shows: without
+        # it the head's own *Set maintenance* stands beneath the row
+        pin = self._parts(icons)[2]
+        self.assertEqual((pin.tag, pin.attrs.get("aria-controls"),
+                          pin.attrs.get("aria-expanded"), pin.attrs.get("hidden")),
+                         ("button", "head-setter", "false", ""))
+        self.assertEqual(page.with_id("head-setter").tag, "details")
+        funnel = self._parts(icons)[0]
+        # two healthy children and the node's own line, which rolls up an error
+        self.assertEqual(
+            (funnel.attrs.get("data-n"), funnel.attrs.get("data-n-pressed")),
+            ("2", "2"))
+        self.assertEqual(self._parts(icons)[1].attrs.get("aria-pressed"), "false")
+        # the cards beneath keep theirs
+        cards = page.one("status-grid")
+        self.assertEqual(len([icon for icon in cards.all("node-icon")
+                              if icon.attrs.get("data-control") == "page"]), 3)
+
+    def test_its_chips_say_how_its_cards_are_drawn(self):
+        self._team()
+        frame, _box = self._frame(self._page("/status/team"))
+        self.assertEqual(frame.attrs.get("data-chips"), "false")
+
+        def drawn(url):
+            frame, box = self._frame(self._page(url))
+            chips = [icon for icon in self._parts(box)[0].all("node-icon")
+                     if icon.attrs.get("data-control") == "chips"]
+            return frame.attrs.get("data-chips"), [
+                icon.attrs.get("aria-pressed") for icon in chips]
+
+        # `a` fails, and the failure budget opens its card among the closed ones
+        self.assertEqual(drawn("/status/team?depth=1"), ("mixed", ["mixed"]))
+        self.tree.upsert("/team/a", StatusCode.OK)
+        self.assertEqual(drawn("/status/team?depth=1"), ("true", ["true"]))
+        # a page whose children the filters dropped has no level to fold
+        frame, box = self._frame(self._page("/status/team?hide_ok=1"))
+        self.assertNotIn("data-chips", frame.attrs)
+        self.assertEqual(box.all("status-grid"), [])
+        self.assertIn("All 3 nodes beneath team are ok.", box.text())
+
+    def test_the_frame_wears_the_nodes_state_and_its_head_whose_it_is(self):
+        self._team()
+        frame, box = self._frame(self._page("/status/team"))
+        head = self._parts(box)[0]
+        self.assertTrue(frame.has("s-error"))
+        self.assertTrue(head.has("s-error") and head.has("dim"))   # from beneath
+        self.tree.upsert("/solo/one", StatusCode.WARN, "slow")
+        frame, box = self._frame(self._page("/status/solo/one"))
+        head = self._parts(box)[0]
+        self.assertTrue(frame.has("s-warn"))
+        self.assertTrue(head.has("s-warn") and not head.has("dim"))  # its own
+
+    def test_the_rules_head_the_frame_and_the_lines_stand_inside_it(self):
+        # ADR-0104 decision 8: the page's frame is the border running round every
+        # line a pin covers — the rules a list at its head, the lines beneath, and
+        # no second border
+        self.tree.upsert("/team", StatusCode.OK)
+        self.tree.upsert("/team/svc", StatusCode.ERROR,
+                         {"one": "first finding", "two": "second finding"})
+        self.tree.set_maintenance("/team", "rack move", expires_at=self.far,
+                                  set_by="pan")
+        self.tree.set_maintenance("/team/svc", "own pin", expires_at=self.far,
+                                  set_by="pan")
+        for url in ("/status/team/svc",):
+            with self.subTest(url=url):
+                page = self._page(url)
+                _frame, box = self._frame(page)
+                head = self._parts(box)[0]
+                rules = head.one("rule-list")
+                self.assertEqual(rules.tag, "ul")
+                rows = self._parts(rules)
+                self.assertEqual(
+                    [(row.tag, row.attrs.get("data-rule")) for row in rows],
+                    [("li", "maintenance"), ("li", "maintenance")])
+                self.assertIn("/team", rows[0].one("rule-block__what").text())
+                self.assertIn("also silenced on its own",
+                              rows[1].one("rule-block__what").text())
+                lines = page.all("check-reason")
+                self.assertEqual(len(lines), 2)
+                for line in lines:
+                    self.assertTrue(line.within(head))
+                    self.assertGreater(line.order, rules.order)
+                self.assertEqual(page.all("rule-frame"), [])
+
+    def test_an_admin_sets_the_nodes_pin_in_its_head_without_script(self):
+        self._team()
+        page = self._page("/status/team")
+        head = self._parts(self._frame(page)[1])[0]
+        setter, = [part for part in self._parts(head) if part.has("rule-setter")]
+        self.assertEqual((setter.tag, setter.attrs.get("id")),
+                         ("details", "head-setter"))
+        self.assertIn("Set maintenance", self._parts(setter)[0].text())
+        self.assertIn("It silences everything beneath it",
+                      setter.one("rule-block__scope").text())
+        self.assertGreater(setter.order, head.one("status-node__self").order)
+        self._viewer()
+        head = self._parts(self._frame(self._page("/status/team"))[1])[0]
+        self.assertEqual(head.all("rule-setter"), [])
+        self.assertEqual([icon for icon in head.all("node-icon")
+                          if icon.attrs.get("data-control") == "pin"], [])
+
+    def test_its_own_lines_mark_the_healthy_ones_the_funnel_folds(self):
+        self.tree.upsert("/svc/api", StatusCode.WARN, [
+            Entry("p50", "p50 40 ms", StatusCode.OK),
+            Entry("p99", "p99 900 ms", StatusCode.WARN),
+            Entry("err", "errors 0.1 %", StatusCode.OK)])
+        page = self._page("/status/svc/api")
+        lines = page.all("check-reason")
+        self.assertEqual([("data-healthy" in line.attrs) for line in lines],
+                         [True, False, True])            # the check's order
+        head = self._parts(self._frame(page)[1])[0]
+        icons = head.one("node-icons")
+        self.assertEqual(                                # pan is an admin
+            [icon.attrs.get("data-control") for icon in self._parts(icons)],
+            ["ok", "pin"])
+        self.assertEqual(self._parts(icons)[0].attrs.get("data-n"), "2")
+        mark = page.one("tree-ok")
+        self.assertEqual(mark.attrs.get("hidden"), "")
+
+    def test_a_leafs_page_is_framed_from_the_same_head(self):
+        self.tree.upsert("/svc/api", StatusCode.WARN, "slow",
+                         description="The API health check")
+        self.tree.set_title("/svc/api", "Public API")
+        page = self._page("/status/svc/api")
+        frame, box = self._frame(page)
+        self.assertEqual(frame.attrs.get("data-node"), "/svc/api")
+        self.assertIn("data-page-root", frame.attrs)
+        head, facts = self._parts(box)
+        self.assertTrue(head.has("viewed-head"))
+        self.assertTrue(facts.has("node-facts"))
+        row = self._parts(head)[0]
+        self.assertEqual(row.one("node-title").text(), "Public API")
+        self.assertTrue(row.one("status-node__state").text().endswith("warn"))
+        # the check's account of what it does, under the row
+        self.assertEqual(head.one("viewed-head__description").text(),
+                         "The API health check")
+        # its status no line of its own, and no alert of Bootstrap's
+        body = self.client.get("/status/svc/api").get_data(as_text=True)
+        self.assertNotIn("Status: <strong>", body)
+        self.assertEqual(frame.all("alert"), [])
+        self.assertEqual(page.all("status-line"), [])
+        # and the script that keeps its fold, which the page did not load
+        self.assertIn("js/tree.", body)
+
+    def test_a_branchs_description_is_said_on_its_page_too(self):
+        # one head on both pages: a branch check's account of what it does stood
+        # nowhere before, its hover card leaving it out
+        self.tree.upsert("/system/host", StatusCode.OK, description="Host over SSH")
+        self.tree.upsert("/system/host/disk", StatusCode.OK)
+        head = self._parts(self._frame(self._page("/status/system/host"))[1])[0]
+        self.assertEqual(head.one("viewed-head__description").text(), "Host over SSH")
+
+    def test_the_damping_counter_is_said_in_words_and_staleness_once(self):
+        self.tree.upsert("/svc/flap", StatusCode.OK, "up", escalate_after=3)
+        self.tree.upsert("/svc/flap", StatusCode.ERROR, "down", escalate_after=3)
+        page = self._page("/status/svc/flap")
+        head = self._parts(self._frame(page)[1])[0]
+        note = head.one("damping-note")
+        self.assertIn("1 of 3 consecutive readings", note.text())
+        self.assertNotIn("Stale — last observed", self.client.get(
+            "/status/svc/flap").get_data(as_text=True))
+
+    def test_depth_0_keeps_its_one_card_unframed(self):
+        self._team()
+        page = self._page("/status/team?depth=0")
+        self.assertEqual(page.all("node-frame"), [])
+        self.assertEqual(page.all("viewed-head"), [])
+        card, = page.all("status-card")
+        self.assertEqual(card.attrs.get("data-node"), "/team")
+        # the facts after it, named for the outline it has no frame's head to give
+        facts = page.one("node-facts")
+        self.assertEqual([h.text() for h in facts.all(tag="h2")], ["team"])
+
+    def test_the_kiosk_frames_a_page_without_its_icons_or_its_facts(self):
+        self._team()
+        self.client.set_cookie("ls_prefs", "layout=kiosk")
+        page = self._page("/status/team")
+        frame, box = self._frame(page)
+        self.assertEqual(frame.all("node-icons"), [])
+        self.assertEqual(box.all("node-facts"), [])
+        toolbar = self._parts(box)[0].one("node-controls")
+        self.assertNotIn("role", toolbar.attrs)
+
+    def test_the_stylesheet_draws_the_frame(self):
+        css = (Path(app_module.__file__).parent / "static" / "css"
+               / "overview.css").read_text(encoding="utf-8")
+        frame = css_rule(css, ".node-frame")
+        self.assertIn("border: 1px solid", frame)
+        self.assertNotIn("background", frame)
+        for state in ("ok", "warn", "error", "maintenance", "undefined"):
+            with self.subTest(state=state):
+                self.assertIn(f"var(--ls-tint-{state}-ink) 50%",
+                              css_rule(css, f".node-frame.s-{state}"))
+        head = css_rule(css, ".node-frame__box > .viewed-head")
+        self.assertIn("margin: 0 -12px 12px", head)
+        self.assertIn("max-width: 820px", css_rule(css, ".node-facts"))
+        # the frame is the border round every line a pin covers: no second one
+        self.assertEqual(css_rule(css, ".rule-frame"), "")
+        # a leaf's page holds its frame back until the tab's map is on it, as the
+        # grid is held back
+        pending, = css_rules_naming(css, "html.ls-tree-pending")
+        self.assertIn("visibility: hidden", pending)
+        self.assertIn(":is(#status-grid, .node-page)", css)
+
+
+class CompressionTests(TestCase):
+    """A page, a fragment or an envelope goes gzipped where the request takes gzip
+    (ADR-0127): the tree put both faces of every node in the fragment, and what rides
+    every ten seconds to every open tab is sent at a twentieth of its weight."""
+
+    def setUp(self):
+        app_module.app.config["TESTING"] = True
+        self.tree = StatusTree()
+        self._original = app_module.status_tree
+        app_module.status_tree = self.tree
+        app_module.api_tokens = {"tester": "secret-token"}
+        self.client = app_module.app.test_client()
+        self.client.post("/login",
+                         data={"username": "pan", "password": "12345678"})
+        for number in range(40):
+            self.tree.upsert(f"/host/leaf-{number:02d}", StatusCode.OK,
+                             [f"reading {number}: within its limits"])
+        # the clock held, so two answers are one document
+        clock = mock.patch.object(instants, "now",
+                                  return_value=datetime(2026, 10, 16, 12, tzinfo=UTC))
+        clock.start()
+        self.addCleanup(clock.stop)
+
+    def tearDown(self):
+        app_module.status_tree = self._original
+
+    GZIP: ClassVar[dict[str, str]] = {"Accept-Encoding": "gzip, deflate, br"}
+
+    def test_a_page_and_a_fragment_go_gzipped_where_asked_and_plain_otherwise(self):
+        for url in ("/status", "/status?fragment=1", "/status/host"):
+            with self.subTest(url=url):
+                plain = self.client.get(url)
+                packed = self.client.get(url, headers=self.GZIP)
+                self.assertEqual(plain.status_code, 200)
+                self.assertNotIn("Content-Encoding", plain.headers)
+                self.assertEqual(packed.headers.get("Content-Encoding"), "gzip")
+                # the same document, a fraction of the bytes, the length its own
+                self.assertEqual(gzip.decompress(packed.data), plain.data)
+                self.assertLess(len(packed.data) * 5, len(plain.data))
+                self.assertEqual(int(packed.headers["Content-Length"]),
+                                 len(packed.data))
+                # a cache between here and a browser is told what the answer varies
+                # by, whether or not this one was compressed
+                for response in (plain, packed):
+                    self.assertIn("Accept-Encoding", response.headers.get("Vary", ""))
+                # and the headers the page's script reads stand
+                self.assertTrue(packed.headers.get("X-Rendered-At"))
+                self.assertTrue(packed.headers.get("X-Assets"))
+                self.assertTrue(packed.headers.get(app_module.CSP_HEADER))
+
+    def test_the_json_envelope_goes_gzipped_too(self):
+        headers = {"Accept": "application/json",
+                   "Authorization": "Bearer secret-token"}
+        plain = self.client.get("/status", headers=headers)
+        packed = self.client.get("/status", headers={**headers, **self.GZIP})
+        self.assertEqual(plain.status_code, 200)
+        self.assertEqual(plain.mimetype, "application/json")
+        self.assertNotIn("Content-Encoding", plain.headers)
+        self.assertEqual(packed.headers.get("Content-Encoding"), "gzip")
+        self.assertEqual(json.loads(gzip.decompress(packed.data)), plain.get_json())
+
+    def test_what_is_not_worth_it_or_not_ours_goes_as_it_is(self):
+        # a small answer: under a kilobyte, the header would be the saving
+        small = self.client.get("/health", headers=self.GZIP)
+        self.assertEqual(small.status_code, 200)
+        self.assertLess(len(small.data), app_module.GZIP_MIN_BYTES)
+        self.assertNotIn("Content-Encoding", small.headers)
+        self.assertIn("Accept-Encoding", small.headers.get("Vary", ""))
+        # a page that is not a 200: the error page goes plain
+        missing = self.client.get("/status/nope", headers=self.GZIP)
+        self.assertEqual(missing.status_code, 404)
+        self.assertNotIn("Content-Encoding", missing.headers)
+        # a static file: kept by its hash and streamed, never touched
+        asset = self.client.get("/static/css/overview.css", headers=self.GZIP)
+        self.assertEqual(asset.status_code, 200)
+        self.assertNotIn("Content-Encoding", asset.headers)
+        self.assertNotIn("Accept-Encoding", asset.headers.get("Vary", ""))
+
+    def test_a_request_that_takes_no_gzip_gets_none(self):
+        for header in ({}, {"Accept-Encoding": "identity"},
+                       {"Accept-Encoding": "br"}, {"Accept-Encoding": "gzip;q=0"}):
+            with self.subTest(header=header):
+                response = self.client.get("/status", headers=header)
+                self.assertNotIn("Content-Encoding", response.headers)
+                self.assertIn("<!DOCTYPE html>", response.get_data(as_text=True))

@@ -25,9 +25,10 @@ from little_sister.checks.base import CheckResult
 from little_sister.checks.command import CommandCheck
 from little_sister.checks.file import FileFreshnessCheck
 from little_sister.checks.http import HttpCheck
+from little_sister.checks.metadata import Stated
 from little_sister.checks.ssh.command import RemoteCommandCheck
 from little_sister.checks.ssh.connect import ConnectCheck
-from little_sister.checks.ssh.host_metrics import DEFAULT_THRESHOLDS, HostMetricsCheck
+from little_sister.checks.ssh.host_metrics import HostMetricsCheck
 from little_sister.checks.ssh.qnap_metrics import QnapMetricsCheck
 from little_sister.checks.ssh.script import ScriptCheck
 from little_sister.errors import ConfigError
@@ -343,7 +344,7 @@ class HttpCheckTests(TestCase):
         mutation proved it: flipping that default broke nothing at all.
         """
         with self.assertRaises(TypeError):
-            HttpCheck(url="http://x", expected_status={200}, path="/web")
+            HttpCheck(url="http://x", path="/web")
 
     def test_a_config_with_no_url_is_refused_at_load(self):
         """One of two branches this suite never reached. Refused at load, where
@@ -364,6 +365,23 @@ class HttpCheckTests(TestCase):
             result = run_check(self._check())
         self.assertEqual(result.code, StatusCode.ERROR)
         self.assertIn("request failed", result.reason_texts[0])
+
+    def test_an_unexpected_status_says_what_it_expected_and_why(self):
+        """The status is graded through the seam (ADR-0131): an answer outside the set
+        says the statuses it expected, as configured, and the sentence written for it,
+        on the line its slug has always named."""
+        with self._answering(503):
+            result = run_check(self._check(
+                expected_status=[200, "204"],
+                expected_status_reason="Only a 200 means the database answered."))
+        self.assertEqual(result.code, StatusCode.ERROR)
+        [line] = result.reason_entries
+        self.assertRegex(line.text, r"^HTTP 503 \(expected 200, 204\) in \d+ ms — "
+                                    r"Only a 200 means the database answered\.$")
+        self.assertEqual((line.slug, line.grading), ("response", "expected_status"))
+        with self._answering(204):
+            self.assertEqual(run_check(self._check(expected_status=[200, "204"])).code,
+                             StatusCode.OK)
 
     def test_expected_status_list(self):
         with self._answering(204):
@@ -388,14 +406,15 @@ class FileFreshnessTests(TestCase):
             heartbeat.write_text("x")
             check = FileFreshnessCheck.from_config(
                 {"type": "file", "path": "/hb", "file": str(heartbeat),
-                 "max_age": "20m"}, Path(directory))
-            self.assertEqual(run_check(check).code, StatusCode.OK)
+                 "max_age_error": "20m"}, Path(directory))
+            fresh = run_check(check)
+            self.assertEqual((fresh.code, fresh.reason_texts), (StatusCode.OK, []))
 
             stale = time.time() - 3600
             os.utime(heartbeat, (stale, stale))
             result = run_check(check)
             self.assertEqual(result.code, StatusCode.ERROR)
-            self.assertIn("stale", result.reason[0])
+            self.assertIn("stale", result.reason_texts[0])
 
             missing = FileFreshnessCheck.from_config(
                 {"type": "file", "path": "/x",
@@ -426,7 +445,7 @@ class FileFreshnessTests(TestCase):
             heartbeat.write_text("x")
             check = FileFreshnessCheck.from_config(
                 {"type": "file", "path": "/hb", "file": str(heartbeat),
-                 "max_age": "20m"}, Path(directory))
+                 "max_age_error": "20m"}, Path(directory))
             taken = measured(check)
             fresh = datetime.now(UTC)
             self.assertEqual(
@@ -522,7 +541,7 @@ class FileFreshnessTests(TestCase):
             os.utime(heartbeat, (changed, changed))
             check = FileFreshnessCheck.from_config(
                 {"type": "file", "path": "/hb", "file": str(heartbeat),
-                 "max_age": max_age}, Path(directory))
+                 "max_age_error": max_age}, Path(directory))
             now = datetime.fromtimestamp(changed, tz=UTC) + age
             result = check.grade(measured(check), now)
             return result.reason_texts[0], check.config_summary()
@@ -539,18 +558,45 @@ class FileFreshnessTests(TestCase):
         # A week configured read back as "168h00m" in the reason and on the page.
         reason, summary = self._stale_reason("1w", timedelta(days=8, hours=3))
         self.assertEqual(reason, "stale: last changed 8d 3h ago (max 1w)")
-        self.assertIn("**max age:** 1w", summary)
+        self.assertIn("**max age:** error above 1w", summary)
 
-    def test_custom_stale_code(self):
+    def _an_hour_old(self, **keys: object) -> StatusCode:
+        """The code a file last changed an hour ago takes under ``keys``."""
         with tempfile.TemporaryDirectory() as directory:
             heartbeat = Path(directory) / "hb.txt"
             heartbeat.write_text("x")
             old = time.time() - 3600
             os.utime(heartbeat, (old, old))
             check = FileFreshnessCheck.from_config(
-                {"type": "file", "path": "/hb", "file": str(heartbeat),
-                 "max_age": "1m", "stale_code": "WARN"}, Path(directory))
-            self.assertEqual(run_check(check).code, StatusCode.WARN)
+                {"type": "file", "path": "/hb", "file": str(heartbeat), **keys},
+                Path(directory))
+            return run_check(check).code
+
+    def test_the_age_is_a_pair_its_warning_level_warns_and_null_grades_nothing(self):
+        """The age is a pair (ADR-0131): a warning level warns beyond it, an error
+        level errs, and ``max_age: null`` switches the judgment off."""
+        self.assertEqual(self._an_hour_old(max_age_warn="1m"), StatusCode.WARN)
+        self.assertEqual(self._an_hour_old(max_age_warn="1m", max_age_error="30m"),
+                         StatusCode.ERROR)
+        self.assertEqual(self._an_hour_old(max_age_warn="2h"), StatusCode.OK)
+        self.assertEqual(self._an_hour_old(max_age=None), StatusCode.OK)
+        self.assertEqual(self._an_hour_old(), StatusCode.ERROR)
+
+    def test_the_retired_level_and_code_stop_the_start_naming_what_replaces_them(
+            self):
+        """``max_age`` with a level and ``stale_code`` were the age's one level and
+        its code; each now stops the start, naming the key a deployment writes."""
+        for keys, write in (({"max_age": "1m", "stale_code": "WARN"},
+                             "write max_age_warn: 1m,"),
+                            ({"max_age": "20m"}, "write max_age_error: 20m,"),
+                            ({"stale_code": "OK"}, "write max_age: null, which "
+                                                   "switches the judgment off,")):
+            with self.assertRaises(CheckError) as caught:
+                FileFreshnessCheck.from_config(
+                    {"type": "file", "path": "/hb", "file": "/tmp/beat", **keys},
+                    HERE)
+            self.assertIn(write, str(caught.exception))
+            self.assertIn("drop 'stale_code' (ADR-0131)", str(caught.exception))
 
 
 class CommandCheckTests(TestCase):
@@ -711,6 +757,86 @@ def _root(directory: str, **files: str) -> Path:
     for name, text in files.items():
         (checks / name.replace("__", ".")).write_text(text)
     return root
+
+
+class FirstLookStatementsTests(TestCase):
+    """What a check's file and its type say of the first look (ADR-0128), read at
+    construction and kept apart: the file's `children:` stands between the file's
+    names and the type's. What the resolver does with them is `test_first_look.py`,
+    and what the engine does with the claim `test_engine.py`."""
+
+    def test_the_file_states_its_own_node_its_children_and_each_name(self):
+        check = _declaring({}, chips=True, reason_cap=3, children={"fold_ok": True},
+                           subnodes={"disk": {"chips": False, "show_when_quiet": True},
+                                     "raid": {"show_when_quiet": False},
+                                     "cpu": {"about": "Load."}})
+        self.assertEqual(check.file_statements.own, Stated(
+            chips=True, reason_cap=3, children=Stated(fold_ok=True)))
+        self.assertEqual(dict(check.file_statements.by_name), {
+            "disk": Stated(chips=False, show_when_quiet=True),
+            "raid": Stated(show_when_quiet=False)})
+
+    def test_the_type_declares_by_name_and_for_its_own_node(self):
+        check = _declaring({"disk": {"title": "Disk", "chips": True,
+                                     "children": {"show_when_quiet": True}},
+                            "cpu": {"about": "Load."}},
+                           own={"fold_ok": True, "children": {"reason_cap": 2}})
+        self.assertEqual(dict(check.type_statements.by_name), {
+            "disk": Stated(chips=True, children=Stated(show_when_quiet=True))})
+        self.assertEqual(check.type_statements.own,
+                         Stated(fold_ok=True, children=Stated(reason_cap=2)))
+        self.assertEqual(check.file_statements.own, Stated())
+
+    def test_a_declaration_of_the_wrong_kind_refuses_the_load(self):
+        for defaults, own, named in (
+                ({"disk": {"chips": "yes"}}, None, "subnode_defaults.disk.chips"),
+                ({}, {"reason_cap": "lots"}, "node_defaults.reason_cap"),
+                ({}, {"children": {"fold_ok": 1}}, "node_defaults.children.fold_ok"),
+                ({}, ["chips"], "node_defaults must be a mapping")):
+            with self.subTest(named), self.assertRaises(CheckError) as caught:
+                _declaring(defaults, own)       # type: ignore[arg-type]
+            self.assertIn(named, str(caught.exception))
+
+    def test_keys_a_type_declares_that_nothing_reads_are_named_once(self):
+        with self.assertLogs("little_sister.checks.base", "WARNING") as logged:
+            _declaring({"disk": {"chip": True, "children": {"flod_ok": True}}},
+                       own={"title": "not the type's to say"})
+        self.assertEqual(len(logged.records), 1)
+        line = logged.records[0].getMessage()
+        self.assertIn("/host", line)
+        self.assertIn("declared-for-test", line)
+        self.assertIn("subnode_defaults.disk.chip, "
+                      "subnode_defaults.disk.children.flod_ok, node_defaults.title",
+                      line)
+
+    def test_a_file_value_of_the_wrong_kind_refuses_the_load_naming_the_file(self):
+        for line, named in (("chips: 'yes'\n", "check config.chips"),
+                            ("reason_cap: -1\n", "reason_cap must be >= 0"),
+                            ("children: {chips: 1}\n", "check config.children.chips"),
+                            ("subnodes:\n  disk: {fold_ok: 'no'}\n",
+                             "subnodes.disk.fold_ok")):
+            with self.subTest(line), tempfile.TemporaryDirectory() as directory:
+                root = _root(directory, a__yaml=(
+                    "type: command\npath: /c\ncommand: 'true'\n" + line))
+                with self.assertRaises(CheckError) as caught:
+                    load_checks(root)
+                self.assertIn("a.yaml", str(caught.exception))
+                self.assertIn(named, str(caught.exception))
+
+    def test_keys_a_file_says_that_the_library_does_not_read_are_named(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = _root(directory, a__yaml=(
+                "type: command\npath: /c\ncommand: 'true'\n"
+                "children: {flod_ok: true}\n"
+                "subnodes:\n  disk: {title: Disk, chip: true}\n"),
+                b__yaml="type: command\npath: /d\ncommand: 'true'\nchips: true\n")
+            with self.assertLogs("little_sister.checks.loader", "WARNING") as logged:
+                checks = load_checks(root)
+        self.assertEqual(len(checks), 2)
+        self.assertEqual(len(logged.records), 1)
+        line = logged.records[0].getMessage()
+        self.assertIn("a.yaml", line)
+        self.assertIn("children.flod_ok, subnodes.disk.chip", line)
 
 
 class LoaderTests(TestCase):
@@ -923,16 +1049,14 @@ class OwnedNodesTests(TestCase):
         self.assertEqual(check.owned_nodes(), {"/services/web"})
 
     def test_host_metrics_owns_its_metric_subtrees_not_the_container(self):
-        check = HostMetricsCheck(path="/system/alpha", host="h",
-                                 script_path="x", thresholds=DEFAULT_THRESHOLDS)
+        check = HostMetricsCheck(path="/system/alpha", host="h", script_path="x")
         self.assertEqual(check.owned_nodes(), {
             "/system/alpha/ssh", "/system/alpha/disk", "/system/alpha/memory",
             "/system/alpha/cpu", "/system/alpha/load"})
         self.assertNotIn("/system/alpha", check.owned_nodes())
 
     def test_qnap_metrics_owns_its_aspect_subtrees(self):
-        check = QnapMetricsCheck(path="/nexus", host="h",
-                                 script_path="x", temp_warn=50.0, temp_error=60.0)
+        check = QnapMetricsCheck(path="/nexus", host="h", script_path="x")
         self.assertEqual(check.owned_nodes(), {"/nexus/temperature", "/nexus/smart"})
 
 
@@ -959,7 +1083,8 @@ class ConfigSummaryTests(TestCase):
 
     def test_file_summary_lists_path(self):
         check = FileFreshnessCheck.from_config(
-            {"type": "file", "path": "/hb", "file": "/tmp/beat", "max_age": "20m"},
+            {"type": "file", "path": "/hb", "file": "/tmp/beat",
+             "max_age_error": "20m"},
             HERE)
         self.assertIn("/tmp/beat", check.config_summary())
 
@@ -984,10 +1109,8 @@ class ConfigSummaryTests(TestCase):
         self.assertIn("bash", script.config_summary())
 
     def test_branch_checks_leave_the_container_bare(self):
-        host = HostMetricsCheck(path="/system/alpha", host="h",
-                                script_path="x", thresholds=DEFAULT_THRESHOLDS)
-        qnap = QnapMetricsCheck(path="/nexus", host="h",
-                                script_path="x", temp_warn=50.0, temp_error=60.0)
+        host = HostMetricsCheck(path="/system/alpha", host="h", script_path="x")
+        qnap = QnapMetricsCheck(path="/nexus", host="h", script_path="x")
         self.assertEqual(host.config_summary(), "")
         self.assertEqual(qnap.config_summary(), "")
 
@@ -1187,16 +1310,20 @@ class _DeclaringCheck(Check):
         return CheckResult(StatusCode.OK)
 
 
-def _declaring(defaults: dict, **config: object) -> Check:
-    """A check type that declares `defaults`, built from `config` like any other.
+def _declaring(defaults: dict, own: dict | None = None, **config: object) -> Check:
+    """A check type that declares `defaults` — and `own`, its `node_defaults` —
+    built from `config` like any other.
 
     Written as a factory because what is under test is the *declaration* — a fact
     about a type, not a value a config can set — so each case needs a type of its
     own rather than a keyword.
     """
     class _Declared(Check):
+        type_name = "declared-for-test"
+
         def __init__(self, **kwargs: object) -> None:
             super().__init__(subnode_defaults=defaults,   # type: ignore[arg-type]
+                             node_defaults=own,
                              **kwargs)                    # type: ignore[arg-type]
 
         def measure(self) -> Measurement:

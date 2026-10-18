@@ -13,10 +13,14 @@ from unittest import TestCase
 
 from little_sister.checks.base import CheckError
 from little_sister.checks.metadata import (
+    Stated,
     expand_tokens,
     parse_show_when_quiet,
+    parse_subnode_looks,
     parse_subnodes,
+    read_stated,
     resolve_text,
+    unknown_check_keys,
 )
 
 
@@ -135,6 +139,108 @@ class ResolveTextTests(TestCase):
 
     def test_unknown_token_is_left_alone(self):
         self.assertEqual(resolve_text("{nope}", "d", {"team": "q"}), "{nope}")
+
+
+class ReadStatedTests(TestCase):
+    """The first look's keys out of one mapping (ADR-0128), the reader a check's
+    file, a `subnodes:` entry, a `nodes.yaml` entry and a type's declaration share."""
+
+    def test_reads_what_is_stated_and_leaves_the_rest_unsaid(self):
+        self.assertEqual(read_stated({"chips": True, "reason_cap": 0}, "x"),
+                         Stated(chips=True, reason_cap=0))
+        self.assertEqual(read_stated({}, "x"), Stated())
+        self.assertFalse(read_stated({"about": "a node"}, "x").says_anything)
+
+    def test_a_stated_false_is_a_statement(self):
+        said = read_stated({"chips": False, "fold_ok": False}, "x")
+        self.assertIs(said.chips, False)
+        self.assertTrue(said.says_anything)
+
+    def test_children_hold_the_keys_and_the_claim_for_each_child(self):
+        said = read_stated({"children": {"chips": True, "show_when_quiet": False,
+                                         "children": {"chips": True}}}, "x")
+        self.assertEqual(said.children, Stated(chips=True, show_when_quiet=False))
+        self.assertTrue(Stated(children=Stated(fold_ok=True)).says_anything)
+
+    def test_the_claim_is_read_only_where_asked(self):
+        self.assertIsNone(read_stated({"show_when_quiet": True}, "x").show_when_quiet)
+        self.assertIs(read_stated({"show_when_quiet": True}, "x",
+                                  quiet=True).show_when_quiet, True)
+
+    def test_a_value_of_the_wrong_kind_is_refused_naming_its_key(self):
+        for bag, named in (({"chips": "false"}, "x.chips"),
+                           ({"fold_ok": 0}, "x.fold_ok"),
+                           ({"reason_cap": "many"}, "x.reason_cap"),
+                           ({"reason_cap": True}, "x.reason_cap"),
+                           ({"reason_cap": -2}, "x.reason_cap must be >= 0"),
+                           ({"reason_cap": 2.5}, "x.reason_cap"),
+                           ({"children": "chips"}, "x.children must be a mapping"),
+                           ({"children": {"show_when_quiet": "yes"}},
+                            "x.children.show_when_quiet")):
+            with self.subTest(bag=bag), self.assertRaises(CheckError) as caught:
+                read_stated(bag, "x")
+            self.assertIn(named, str(caught.exception))
+
+    def test_a_later_statement_layers_over_an_earlier_one_per_key(self):
+        later = Stated(chips=False, children=Stated(reason_cap=2))
+        earlier = Stated(chips=True, fold_ok=True,
+                         children=Stated(chips=True, reason_cap=9))
+        self.assertEqual(later.over(earlier), Stated(
+            chips=False, fold_ok=True, children=Stated(chips=True, reason_cap=2)))
+        self.assertEqual(Stated().over(earlier), earlier)
+        self.assertEqual(earlier.over(Stated()), earlier)
+
+    def test_only_the_keys_a_statement_holds_are_asked(self):
+        with self.assertRaises(KeyError):
+            Stated().get("children")
+
+
+class ParseSubnodeLooksTests(TestCase):
+    def test_reads_each_name_that_states_a_look(self):
+        parsed = parse_subnode_looks({"subnodes": {
+            "disk": {"title": "Disk", "chips": True},
+            "raid": {"children": {"fold_ok": True, "show_when_quiet": True}},
+            "cpu": {"about": "Load.", "show_when_quiet": True}}})
+        self.assertEqual(parsed, {
+            "disk": Stated(chips=True),
+            "raid": Stated(children=Stated(fold_ok=True, show_when_quiet=True))})
+
+    def test_the_names_claim_is_the_other_readers(self):
+        parsed = parse_subnode_looks({"subnodes": {
+            "disk": {"chips": True, "show_when_quiet": True}}})
+        self.assertIsNone(parsed["disk"].show_when_quiet)
+
+    def test_refuses_what_the_other_readers_refuse_and_names_a_bad_key(self):
+        with self.assertRaises(CheckError):
+            parse_subnode_looks({"subnodes": ["disk"]})
+        with self.assertRaises(CheckError):
+            parse_subnode_looks({"subnodes": {"disk": "free space"}})
+        with self.assertRaises(CheckError) as caught:
+            parse_subnode_looks({"subnodes": {"disk": {"reason_cap": "two"}}})
+        self.assertIn("subnodes.disk.reason_cap", str(caught.exception))
+
+
+class UnknownCheckKeysTests(TestCase):
+    """What a check's file says that the library does not read, of the blocks the
+    library owns; the rest of the top level is the type's."""
+
+    def test_names_the_keys_of_subnode_entries_and_children_blocks(self):
+        self.assertEqual(unknown_check_keys({
+            "url": "the type's",
+            "chip": "the type's too, for all the library can tell",
+            "children": {"chips": True, "flod_ok": True},
+            "subnodes": {"disk": {"title": "Disk", "chip": True,
+                                  "children": {"show_when_quiet": True,
+                                               "order": 1}}}}),
+            ["children.flod_ok", "subnodes.disk.chip", "subnodes.disk.children.order"])
+
+    def test_a_file_with_none_says_nothing(self):
+        self.assertEqual(unknown_check_keys({"subnodes": {"disk": {
+            "title": "t", "about": "a", "show_when_quiet": True, "chips": True,
+            "fold_ok": True, "reason_cap": 1, "children": {
+                "chips": True, "fold_ok": True, "reason_cap": 1,
+                "show_when_quiet": True}}}}), [])
+        self.assertEqual(unknown_check_keys({"subnodes": "not a map"}), [])
 
 
 class RetiredFromTheFacadeTests(TestCase):

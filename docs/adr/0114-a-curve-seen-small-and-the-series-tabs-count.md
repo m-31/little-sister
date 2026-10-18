@@ -1,7 +1,7 @@
 # ADR-0114 — A curve is seen small beside its name, from zero, and the Series tab counts its curves
 
 - **Status:** Accepted
-- **Date:** 2026-10-10 (accepted 2026-10-03)
+- **Date:** 2026-10-18 (accepted 2026-10-03)
 - **Related:** [ADR-0097](0097-a-nodes-series-have-a-view-of-their-own.md) (decision 3,
   the tabs; decision 4, the index, which this draws on),
   [ADR-0103](0103-the-series-index-says-where-each-link-leads.md) (decision 2: a row
@@ -13,7 +13,8 @@
   more readings than a plot has columns is drawn column by column, and no spike is
   lost), [ADR-0111](0111-a-runs-mark-says-how-the-run-stood.md) (a run is a mark),
   [ADR-0105](0105-a-page-is-laid-out-at-its-screens-width.md) (a table wider than a
-  screen scrolls in its box)
+  screen scrolls in its box), [ADR-0028](0028-design-tokens-and-themes.md) (the themes,
+  cyberpunk's monospace face the library's)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -63,13 +64,20 @@ sparkline says nothing to a reader that hears the page; the words do.
 A row of the Series index still counts its curves, and the count still unfolds
 ([ADR-0103](0103-the-series-index-says-where-each-link-leads.md) decision 2): for each
 curve to its label, its sparkline and its three values, each on a line of its own, so
-the strips stand in a column. The three values keep one line on a window of 1400 pixels
-or more, where the table has the room for them, and wrap beneath the sparkline on a
-narrower one, so that opening a fold does not widen the table past its box. How much
-room the line takes is the typeface's to say: at 1200 pixels a wide face put the open
-table as much as a hundred pixels past its box, where a Mac's face fitted. The values of
-a deployment whose labels and units are longer than a host's can still do so from 1400;
-below it they wrap, and do not. The closed row is as it was.
+the strips stand in a column. The three values keep one line on a window of 1500 pixels
+or more, in every theme, where the table has the room for them, and wrap beneath the
+sparkline on a narrower one, so that opening a fold does not widen the table past its
+box. How much room the line takes is the typeface's to say: at 1200 pixels a wide face
+put the open table as much as a hundred pixels past its box, where a Mac's face fitted,
+and at 1400 the monospace face of the library's theme, cyberpunk
+([ADR-0028](0028-design-tokens-and-themes.md)), put it 43 pixels past. One width serves
+every theme, so a proportional face's values wrap below it too, where they had the
+room. The values of a deployment whose labels and units are longer than a host's can
+still do so from 1500; below it they wrap, and do not. At a laptop's window of 946
+pixels the monospace face stands the table a pixel past its box with every fold closed
+and 27 with every fold open, and the box scrolls it, as a table wider than its box does
+([ADR-0105](0105-a-page-is-laid-out-at-its-screens-width.md)). The closed row is as it
+was.
 
 On a phone the index is no table to the eye. Eight columns are wider than that screen
 whatever a fold does, and the column the folds stand in was out of sight; so below a

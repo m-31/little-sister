@@ -7,7 +7,22 @@ from unittest import TestCase
 from little_sister.maintenance import MaintenanceEntry
 from little_sister.reasons import Entry
 from little_sister.status import HEARTBEAT_PATH, StatusCode, effective_code
-from little_sister.tree import CHANGE_WINDOW_SECONDS, Event, StatusTree
+from little_sister.tree import (
+    CHANGE_WINDOW_SECONDS,
+    COUNTED_STATES,
+    ChipCounts,
+    Event,
+    StatusTree,
+    chip_counts,
+    counts_as,
+    failing,
+    failing_first,
+    healthy,
+    line_counts_as,
+    line_healthy,
+    own_failure,
+    pin_beneath,
+)
 
 
 class _RecordingStore:
@@ -2251,6 +2266,65 @@ class CodedEntryRollupTests(TestCase):
         self.assertEqual(snap.own_code, StatusCode.ERROR)
 
 
+class FailingFirstTests(TestCase):
+    """A box's lines in the order its budget shows them (ADR-0127 decision 6): the
+    errors, then the warnings, then the rest, each group in the order the check wrote
+    them, and a pinned line among the rest whatever its code."""
+
+    def setUp(self):
+        self.tree = StatusTree(maintenance_store=_RecordingStore())
+        self.far = datetime.now(UTC) + timedelta(days=1)
+
+    def _lines(self, path="/db"):
+        snap = self.tree.snapshot(path)
+        assert snap is not None
+        return snap.reasons
+
+    def test_errors_then_warnings_then_the_rest_each_in_the_checks_order(self):
+        self.tree.upsert("/db", StatusCode.ERROR, [
+            Entry("ok-1", "replica one in step", StatusCode.OK),
+            Entry("warn-1", "replica two lagging", StatusCode.WARN),
+            Entry("ok-2", "replica three in step", StatusCode.OK),
+            Entry("error-1", "primary unreachable", StatusCode.ERROR),
+            Entry("warn-2", "replica four lagging", StatusCode.WARN),
+            Entry("error-2", "standby unreachable", StatusCode.ERROR),
+            Entry("ok-3", "replica five in step", StatusCode.OK)], members=True)
+        self.assertEqual([line.slug for line in failing_first(self._lines())],
+                         ["error-1", "error-2", "warn-1", "warn-2",
+                          "ok-1", "ok-2", "ok-3"])
+
+    def test_a_pinned_line_counts_among_the_rest_whatever_its_code(self):
+        # what a pin silences is not the reason for the box's color (ADR-0041)
+        self.tree.upsert("/db", StatusCode.ERROR, [
+            Entry("ok-1", "replica one in step", StatusCode.OK),
+            Entry("error-1", "primary unreachable", StatusCode.ERROR),
+            Entry("error-2", "standby unreachable", StatusCode.ERROR),
+            Entry("ok-2", "replica two in step", StatusCode.OK)], members=True)
+        self.tree.set_entry_maintenance("/db", "error-1", "being replaced",
+                                        expires_at=self.far, set_by="ada",
+                                        expected_set_at=None)
+        self.assertEqual([line.slug for line in failing_first(self._lines())],
+                         ["error-2", "ok-1", "error-1", "ok-2"])
+
+    def test_a_line_with_no_code_of_its_own_is_the_rest(self):
+        # a sentence without a code says nothing for itself (ADR-0042), whatever the
+        # node reports, so it keeps its place among the rest
+        self.tree.upsert("/db", StatusCode.ERROR, [
+            Entry("note", "the failover is being rehearsed"),
+            Entry("error-1", "primary unreachable", StatusCode.ERROR),
+            Entry("unread", "replica three not polled", StatusCode.UNDEFINED)])
+        self.assertEqual([line.slug for line in failing_first(self._lines())],
+                         ["error-1", "note", "unread"])
+
+    def test_nothing_failing_leaves_the_checks_order(self):
+        self.tree.upsert("/db", StatusCode.OK, [
+            Entry("b", "replica two in step", StatusCode.OK),
+            Entry("a", "replica one in step", StatusCode.OK)])
+        self.assertEqual([line.slug for line in failing_first(self._lines())],
+                         ["b", "a"])
+        self.assertEqual(failing_first(()), [])
+
+
 class WhoseStatusTests(TestCase):
     """Whose a node's status is (ADR-0123): what the node counts for itself, whether
     what it shows comes from beneath it, and whether it counts what is beneath it
@@ -2515,3 +2589,277 @@ class EventLogAsAStateFileTests(TestCase):
                         {"events": [{"old": "OK", "new": "OK", "reason": "x"}]}):
             with self.subTest(payload=payload), self.assertRaises(ValueError):
                 events_from_payload(payload)
+
+
+class ContributionVocabularyTests(TestCase):
+    """What each node contributes to the wall's tree (ADR-0127, backlog #91 §7.9):
+    what a chip counts, what the healthy fold folds, and what a close's incident
+    reads — one vocabulary beside ``own_counted``, so that the round on maintenance
+    and aggregation changes them once."""
+
+    def setUp(self):
+        self.tree = StatusTree(maintenance_store=_RecordingStore())
+        self.far = datetime.now(UTC) + timedelta(days=1)
+
+    def _snap(self, path="", now=None):
+        snap = self.tree.snapshot(path, now=now)
+        assert snap is not None
+        return snap
+
+    def _aged(self, path, seconds=3600):
+        self.tree.snapshot(path)
+        self.tree._ensure_node(path).timestamp = (
+            datetime.now(UTC) - timedelta(seconds=seconds))
+
+    # --- what a node counts for itself ---
+
+    def test_each_state_counts_as_its_own_word(self):
+        self.tree.upsert("/a/error", StatusCode.ERROR, "x")
+        self.tree.upsert("/a/warn", StatusCode.WARN, "x")
+        self.tree.upsert("/a/ok", StatusCode.OK)
+        self.tree.set_about("/a/idle", "declared, never reported")
+        self.tree.upsert("/a/pinned", StatusCode.ERROR, "x")
+        self.tree.set_maintenance("/a/pinned", "planned", expires_at=self.far,
+                                  set_by="ada")
+        said = {child.name: counts_as(child) for child in self._snap("/a").children}
+        self.assertEqual(said, {"error": "error", "warn": "warn", "ok": "ok",
+                                "idle": "idle", "pinned": "maintenance"})
+
+    def test_a_stale_leaf_counts_as_the_warning_it_is_degraded_to(self):
+        self.tree.upsert("/a/leaf", StatusCode.OK, frequency_seconds=60)
+        self._aged("/a/leaf")
+        leaf = self._snap("/a/leaf")
+        self.assertTrue(leaf.stale)
+        self.assertEqual(counts_as(leaf), "warn")
+        self.assertTrue(failing(leaf))                    # drawn as that warning
+        self.assertFalse(healthy(leaf))
+
+    def test_a_line_counts_by_its_own_code_or_its_nodes_and_pinned_as_maintenance(self):
+        self.tree.upsert("/db", StatusCode.WARN, [
+            Entry("coded", "primary unreachable", StatusCode.ERROR),
+            Entry("plain", "a note"),
+            Entry("pinned", "standby unreachable", StatusCode.ERROR)], members=True)
+        self.tree.set_entry_maintenance("/db", "pinned", "being replaced",
+                                        expires_at=self.far, set_by="ada",
+                                        expected_set_at=None)
+        node = self._snap("/db")
+        said = {line.slug: line_counts_as(node, line) for line in node.reasons}
+        # the plain line takes the code its node rolls up to — error, by the coded
+        # line beside it, not the warning the check reported for the node
+        self.assertIs(node.code, StatusCode.ERROR)
+        self.assertEqual(said, {"coded": "error", "plain": "error",
+                                "pinned": "maintenance"})
+
+    # --- failing, and healthy ---
+
+    def test_failing_is_drawn_as_an_error_or_a_warning_whatever_the_pins_beneath(self):
+        self.tree.upsert("/a/red", StatusCode.ERROR, "x")
+        self.tree.upsert("/a/quiet", StatusCode.ERROR, "x")
+        self.tree.set_maintenance("/a/quiet", "planned", expires_at=self.far,
+                                  set_by="ada")
+        self.tree.upsert("/b/fine", StatusCode.OK)
+        self.assertTrue(failing(self._snap("/a")))         # red by /a/red
+        self.assertTrue(failing(self._snap("/a/red")))
+        self.assertFalse(failing(self._snap("/a/quiet")))  # blue, not red
+        self.assertFalse(failing(self._snap("/b")))
+
+    def test_healthy_is_ok_with_nothing_stale_and_no_pin_on_or_beneath(self):
+        self.tree.upsert("/a/one", StatusCode.OK)
+        self.tree.upsert("/a/two", StatusCode.OK)
+        self.assertTrue(healthy(self._snap("/a")))
+        self.assertTrue(healthy(self._snap("/a/one")))
+        # a pin beneath withholds it, though the node still reads OK
+        self.tree.upsert("/b/one", StatusCode.OK)
+        self.tree.upsert("/b/two", StatusCode.OK)
+        self.tree.set_maintenance("/b/two", "planned", expires_at=self.far,
+                                  set_by="ada")
+        branch = self._snap("/b")
+        self.assertIs(branch.code, StatusCode.OK)
+        self.assertTrue(pin_beneath(branch))
+        self.assertFalse(healthy(branch))
+        self.assertTrue(healthy(self._snap("/b/one")))
+        # a pinned line beneath, too
+        self.tree.upsert("/c/one", StatusCode.OK, [
+            Entry("a", "in step", StatusCode.OK), Entry("b", "in step", StatusCode.OK)],
+            members=True)
+        self.tree.set_entry_maintenance("/c/one", "b", "rehearsal", expires_at=self.far,
+                                        set_by="ada", expected_set_at=None)
+        self.assertTrue(pin_beneath(self._snap("/c")))
+        self.assertFalse(healthy(self._snap("/c")))
+        self.assertFalse(healthy(self._snap("/c/one")))
+
+    def test_a_stale_node_beneath_withholds_healthy_from_its_branch(self):
+        self.tree.upsert("/a/one", StatusCode.OK, frequency_seconds=60)
+        self.tree.upsert("/a/two", StatusCode.OK)
+        self._aged("/a/one")
+        self.assertFalse(healthy(self._snap("/a")))
+        self.assertTrue(healthy(self._snap("/a/two")))
+
+    def test_a_line_is_healthy_by_its_own_code_or_its_nodes_rolled_up_one(self):
+        self.tree.upsert("/a/one", StatusCode.OK, [
+            Entry("coded", "in step", StatusCode.OK),
+            Entry("plain", "a note"),
+            Entry("bad", "lagging", StatusCode.WARN)], members=True)
+        node = self._snap("/a/one")
+        said = {line.slug: line_healthy(node, line) for line in node.reasons}
+        self.assertEqual(said, {"coded": True, "plain": False, "bad": False})
+        # the plain line follows what its node rolls up to — `code`, never its
+        # own reading — so a branch's own line stays while anything beneath fails
+        self.tree.upsert("/b", StatusCode.OK, [Entry("own", "the branch's own line")])
+        self.tree.upsert("/b/child", StatusCode.ERROR, "x")
+        branch = self._snap("/b")
+        self.assertIs(branch.own_code, StatusCode.OK)
+        self.assertFalse(line_healthy(branch, branch.reasons[0]))
+        self.tree.upsert("/b/child", StatusCode.OK)
+        branch = self._snap("/b")
+        self.assertTrue(line_healthy(branch, branch.reasons[0]))
+
+    def test_a_pin_on_the_line_or_on_its_node_withholds_healthy(self):
+        self.tree.upsert("/a/one", StatusCode.OK, [
+            Entry("a", "in step", StatusCode.OK),
+            Entry("b", "in step", StatusCode.OK)], members=True)
+        self.tree.set_entry_maintenance("/a/one", "b", "rehearsal", expires_at=self.far,
+                                        set_by="ada", expected_set_at=None)
+        node = self._snap("/a/one")
+        self.assertEqual({line.slug: line_healthy(node, line) for line in node.reasons},
+                         {"a": True, "b": False})
+        self.tree.upsert("/c/one", StatusCode.OK,
+                         [Entry("a", "in step", StatusCode.OK)])
+        self.tree.set_maintenance("/c/one", "planned", expires_at=self.far,
+                                  set_by="ada")
+        node = self._snap("/c/one")
+        self.assertFalse(line_healthy(node, node.reasons[0]))
+
+    # --- what the failure budget opens ---
+
+    def test_a_failure_is_what_a_node_fails_with_for_itself(self):
+        # a leaf by its reading, a stale one as the warning it counts as; a branch
+        # by its own reading, whatever its children say
+        self.tree.upsert("/a/error", StatusCode.ERROR, "x")
+        self.tree.upsert("/a/warn", StatusCode.WARN, "x")
+        self.tree.upsert("/a/ok", StatusCode.OK)
+        self.tree.upsert("/a/late", StatusCode.OK, frequency_seconds=60)
+        self._aged("/a/late")
+        said = {child.name: own_failure(child) for child in self._snap("/a").children}
+        self.assertEqual(said, {"error": "error", "warn": "warn", "ok": None,
+                                "late": "warn"})
+        self.assertIsNone(own_failure(self._snap("/a")))     # red only by its leaves
+        self.tree.upsert("/repo", StatusCode.ERROR, "the webhook is gone")
+        self.tree.upsert("/repo/build", StatusCode.OK)
+        self.assertEqual(own_failure(self._snap("/repo")), "error")
+
+    def test_a_damped_or_a_pinned_failure_spends_no_budget(self):
+        self.tree.upsert("/svc/api", StatusCode.OK, escalate_after=3)
+        self.tree.upsert("/svc/api", StatusCode.ERROR, "down")
+        api = self._snap("/svc/api")
+        self.assertIs(api.code, StatusCode.ERROR)            # red, and held back
+        self.assertIsNotNone(api.damping)
+        self.assertIsNone(own_failure(api))
+        self.tree.upsert("/svc/api", StatusCode.ERROR, "down")
+        self.tree.upsert("/svc/api", StatusCode.ERROR, "down")  # it escalates
+        self.assertIsNone(self._snap("/svc/api").damping)
+        self.assertEqual(own_failure(self._snap("/svc/api")), "error")
+        self.tree.upsert("/b/quiet", StatusCode.ERROR, "x")
+        self.tree.set_maintenance("/b/quiet", "planned", expires_at=self.far,
+                                  set_by="ada")
+        self.assertIsNone(own_failure(self._snap("/b/quiet")))
+
+    # --- what a chip counts ---
+
+    def test_a_branch_counts_each_leaf_beneath_once_by_what_it_counts_for_itself(self):
+        self.tree.upsert("/a/x/error", StatusCode.ERROR, "x")
+        self.tree.upsert("/a/x/warn", StatusCode.WARN, "x")
+        self.tree.upsert("/a/y/ok1", StatusCode.OK)
+        self.tree.upsert("/a/y/ok2", StatusCode.OK)
+        self.tree.set_about("/a/y/idle", "declared, never reported")
+        self.tree.upsert("/a/z", StatusCode.OK, frequency_seconds=60)
+        self._aged("/a/z")                                 # a stale leaf: warn
+        counts = chip_counts(self._snap("/a"))
+        self.assertEqual(counts.counts, {"error": 1, "warn": 2, "maintenance": 0,
+                                         "ok": 2, "idle": 1})
+        self.assertEqual(counts.total, 6)
+        self.assertEqual(counts.states, ("error", "warn", "ok", "idle"))
+        self.assertTrue(counts.mixed)
+        self.assertFalse(counts.rule)
+        self.assertEqual(counts.words, "1 error, 2 warnings, 2 ok, 1 idle")
+
+    def test_a_branch_that_fails_for_itself_counts_once_the_chips_own_node_too(self):
+        # a repository whose own reading failed above healthy workflows reads
+        # ● 1 ✓ 2, where counting its leaves alone drew it red over nothing red
+        self.tree.upsert("/repo", StatusCode.ERROR, "the webhook is gone")
+        self.tree.upsert("/repo/build", StatusCode.OK)
+        self.tree.upsert("/repo/test", StatusCode.OK)
+        counts = chip_counts(self._snap("/repo"))
+        self.assertEqual((counts.counts["error"], counts.counts["ok"]), (1, 2))
+        self.assertEqual(counts.words, "1 error, 2 ok")
+        # and a failing branch beneath the chip's node counts once as well
+        self.tree.upsert("/team/repo", StatusCode.WARN, "rate limited")
+        self.tree.upsert("/team/repo/build", StatusCode.OK)
+        counts = chip_counts(self._snap("/team"))
+        self.assertEqual((counts.counts["warn"], counts.counts["ok"]), (1, 1))
+        # a healthy branch beneath counts nothing for itself
+        self.tree.upsert("/calm/repo/build", StatusCode.OK)
+        self.assertEqual(chip_counts(self._snap("/calm")).counts["ok"], 1)
+        self.assertEqual(chip_counts(self._snap("/calm")).total, 1)
+
+    def test_a_leafs_chip_counts_its_lines_and_a_line_of_one_shows_no_count(self):
+        self.tree.upsert("/db", StatusCode.ERROR, [
+            Entry("a", "primary unreachable", StatusCode.ERROR),
+            Entry("b", "replica in step", StatusCode.OK),
+            Entry("c", "replica in step", StatusCode.OK),
+            Entry("d", "pinned", StatusCode.ERROR)], members=True)
+        self.tree.set_entry_maintenance("/db", "d", "being replaced",
+                                        expires_at=self.far, set_by="ada",
+                                        expected_set_at=None)
+        counts = chip_counts(self._snap("/db"))
+        self.assertEqual(counts.counts, {"error": 1, "warn": 0, "maintenance": 1,
+                                         "ok": 2, "idle": 0})
+        self.assertTrue(counts.mixed)
+        self.assertTrue(counts.rule)
+        self.assertEqual(counts.words, "1 error, 1 in maintenance, 2 ok")
+        # one line: the chip is that line
+        self.tree.upsert("/one", StatusCode.WARN, "slow")
+        counts = chip_counts(self._snap("/one"))
+        self.assertEqual((counts.total, counts.mixed), (1, False))
+        self.assertEqual(counts.words, "1 warning")
+        # no lines at all: the leaf counts itself
+        self.tree.upsert("/bare", StatusCode.OK)
+        self.assertEqual(chip_counts(self._snap("/bare")).words, "1 ok")
+
+    def test_one_state_is_one_total_and_a_rule_beneath_is_marked(self):
+        self.tree.upsert("/a/one", StatusCode.OK)
+        self.tree.upsert("/a/two", StatusCode.OK)
+        self.tree.upsert("/a/three", StatusCode.OK)
+        counts = chip_counts(self._snap("/a"))
+        self.assertEqual((counts.total, counts.mixed, counts.rule), (3, False, False))
+        self.assertEqual(counts.words, "3 ok")
+        self.tree.set_maintenance("/a/two", "planned", expires_at=self.far,
+                                  set_by="ada")
+        counts = chip_counts(self._snap("/a"))
+        self.assertTrue(counts.rule)
+        self.assertEqual(counts.words, "1 in maintenance, 2 ok")
+        # a pin on the chip's own node: the leaves still count as themselves, and
+        # the words say a rule stands where the counts cannot
+        self.tree.set_maintenance("/a", "planned", expires_at=self.far, set_by="ada")
+        counts = chip_counts(self._snap("/a"))
+        self.assertTrue(counts.rule)
+        bare = ChipCounts(counts=dict.fromkeys(COUNTED_STATES, 0), rule=True)
+        self.assertEqual(bare.words, "a rule stands beneath")
+        self.assertEqual(bare.states, ())
+
+    def test_damping_and_running_stand_in_the_words(self):
+        self.tree.upsert("/svc/api", StatusCode.OK, escalate_after=3)
+        self.tree.upsert("/svc/api", StatusCode.ERROR, "down")
+        self.tree.upsert("/svc/api", StatusCode.ERROR, "down")
+        self.tree.upsert("/ci/actions", StatusCode.ERROR, [
+            Entry("build", "failed · #4216 running", StatusCode.ERROR, running=True),
+            Entry("test", "passed", StatusCode.OK)])
+        api = self._snap("/svc/api")
+        self.assertIsNotNone(api.damping)
+        self.assertEqual(chip_counts(api).words, "1 error, damped: 2 of 3 to escalate")
+        self.assertEqual(chip_counts(self._snap("/svc")).words,
+                         "1 error, damped: 2 of 3 to escalate")
+        self.assertEqual(chip_counts(self._snap("/ci/actions")).words,
+                         "1 error, 1 ok, 1 running")
+        self.assertEqual(chip_counts(self._snap("/ci")).words,
+                         "1 error, 1 running")        # the leaf, not its lines

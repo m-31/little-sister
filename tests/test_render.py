@@ -5,7 +5,7 @@ from unittest import TestCase
 from pytest import mark
 
 from little_sister.checks import code, plain
-from little_sister.render import render_markdown, render_markdown_inline
+from little_sister.render import first_block, render_markdown, render_markdown_inline
 
 
 class RenderInlineTests(TestCase):
@@ -68,6 +68,45 @@ class RenderBlockTests(TestCase):
         out = str(render_markdown("para\n\n- one\n- two"))
         self.assertIn("<p>para</p>", out)
         self.assertIn("<li>one</li>", out)
+
+
+class FirstBlockTests(TestCase):
+    """What the inspection card says of an `about` (ADR-0019 decision 1): its first
+    top-level block, rendered as the whole would be, and how many follow."""
+
+    def test_a_paragraph_and_how_many_blocks_follow_it(self):
+        self.assertEqual(first_block("First **one**.\n\nSecond.\n\n- a\n- b"),
+                         ("<p>First <strong>one</strong>.</p>\n", 2))
+
+    def test_a_paragraph_of_several_lines_is_one_block(self):
+        self.assertEqual(first_block("line one\nline two"),
+                         ("<p>line one\nline two</p>\n", 0))
+
+    def test_a_list_is_one_block_with_its_items(self):
+        self.assertEqual(
+            first_block("- a\n\n- b\n\nAfter."),
+            ("<ul>\n<li>\n<p>a</p>\n</li>\n<li>\n<p>b</p>\n</li>\n</ul>\n", 1))
+
+    def test_a_code_block_keeps_its_blank_lines(self):
+        self.assertEqual(first_block("```\nx = 1\n\ny = 2\n```\n\nText."),
+                         ("<pre><code>x = 1\n\ny = 2\n</code></pre>\n", 1))
+
+    def test_a_link_reference_defined_further_down_still_resolves(self):
+        block, more = first_block("See [the runbook][rb].\n\nMore.\n\n"
+                                  "[rb]: https://example.org/rb")
+        self.assertIn('<a href="https://example.org/rb" target="_blank" '
+                      'rel="noopener noreferrer">the runbook</a>', block)
+        self.assertEqual(more, 1)
+
+    def test_it_is_as_safe_as_the_whole(self):
+        block, _ = first_block("<script>x</script> [a](javascript:alert(1))")
+        self.assertNotIn("<script>", block)
+        self.assertNotIn("<a ", block)          # the scheme is refused, the text stays
+
+    def test_text_with_no_block_is_nothing(self):
+        for text in ("", "   ", "\n\n", "[rb]: https://example.org/rb"):
+            with self.subTest(text=text):
+                self.assertEqual(first_block(text), ("", 0))
 
 
 class PlainHelperTests(TestCase):

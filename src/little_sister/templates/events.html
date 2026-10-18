@@ -5,7 +5,7 @@
     {% set page_title = 'Events' %}
     {% include '_header.html' %}
 
-    <div class="container-fluid mt-3 px-4">
+    <div class="container-fluid mt-3 px-4 ls-log">
         <h1 class="h4 mb-3">Events</h1>
         {#- What the log shows is what the URL names (ADR-0101): a node and everything
             beneath it, words in the reason, a switch per status an event moved to,
@@ -115,11 +115,16 @@
                     and this one is when the level above began to count it: the
                     one row of a reading that changes nothing its node shows. No
                     pin wrote it either, so its chip wears the pair of the status
-                    the row shows. -#}
+                    the row shows.
+
+                    The status word stands in a span of its own, apart from the
+                    chips after it, and the page is a log (`.ls-log`), as a node's
+                    History tab is: cyberpunk restates the row tints on a log and
+                    lights each row's word in its state's ink (ADR-0028). -#}
                 {% for e in events %}
                     <tr class="row-{{ e.new | status_slug }}">
                         <td class="text-nowrap">{{ e.timestamp | localtime }}</td>
-                        <td>{{ e.new.name.lower() }}{% if cause_chips.get(e.cause) %} <span class="event-cause{% if e.cause == 'removed' %} event-cause--removed{% elif e.cause == 'reached' %} event-cause--reached{% endif %}">{{ cause_chips[e.cause] }}</span>{% endif %}{% if e.suppressed_by %} <span class="event-suppressed">{{ e.suppressed_by }}</span>{% endif %}</td>
+                        <td><span class="ls-log__status">{{ e.new.name.lower() }}</span>{% if cause_chips.get(e.cause) %} <span class="event-cause{% if e.cause == 'removed' %} event-cause--removed{% elif e.cause == 'reached' %} event-cause--reached{% endif %}">{{ cause_chips[e.cause] }}</span>{% endif %}{% if e.suppressed_by %} <span class="event-suppressed">{{ e.suppressed_by }}</span>{% endif %}</td>
                         <td class="text-muted">{% if e.path in existing_paths %}<a href="{{ url_for('status', branch=(e.path | url_branch) or none) }}">{{ e.path }}</a>{% else %}{{ e.path }}{% endif %}</td>
                         <td class="md-body">{{ e.reason | join('; ') | markdown_inline }}</td>
                     </tr>

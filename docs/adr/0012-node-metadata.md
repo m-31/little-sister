@@ -1,12 +1,16 @@
 # ADR-0012 — Node metadata: an `about` note, separate from check descriptions
 
 - **Status:** Accepted
-- **Date:** 2026-06-27
+- **Date:** 2026-10-18 (accepted 2026-06-27)
 - **Related:** [ADR-0007](0007-check-result-branches.md) (recursive `CheckResult` —
   descriptions on branch leaves), [ADR-0013](0013-check-config-on-node.md) (check
   config on the node), [ADR-0014](0014-maintenance-persistence.md) (the check-root
   coverage test the consistency pass shares), [ADR-0008](0008-json-output-api.md)
-  (JSON envelope, unchanged here).
+  (JSON envelope, unchanged here),
+  [ADR-0128](0128-where-a-nodes-first-look-comes-from.md) (the first look's keys, on
+  the same addresses),
+  [ADR-0127](0127-the-wall-is-a-tree-and-a-click-opens-or-closes-a-node.md)
+  (decision 8: a node's `about` shown open).
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -36,7 +40,13 @@ concerns.
 2. **Sources, in precedence order:** a **`nodes.yaml`** declaration keyed by path
    (reaches container nodes no check owns, and satellite graft-points) **>** inline
    on the owning check **>** empty. A grafted satellite branch brings its own nodes'
-   metadata in its JSON — the same node property, a third source.
+   metadata in its JSON — the same node property, a third source. The same two files
+   carry the keys of a node's first look on the same addresses — `chips`, `fold_ok` and
+   `reason_cap`, and `children:`, under a path in `nodes.yaml` and under a subnode's
+   name or at the top level of a check's file, which says them for each child of that
+   node ([ADR-0128](0128-where-a-nodes-first-look-comes-from.md)). They are the web
+   page's settings and never reach the node: the precedence above is `about`'s, and
+   theirs is that record's. `nodes.yaml` is kept for the process's life.
 3. **Per-leaf descriptions for branch checks.** A branch check declares each leaf's
    `description` through a `descriptions:` map keyed by leaf name (`disk`, `memory`,
    …); the shared host / container node's own `description` stays empty — which also
@@ -45,8 +55,11 @@ concerns.
    `about` path that no configured check **covers** (an orphan — by the same
    static **check-root coverage** test the maintenance reaper uses, segment-wise on
    the same root-to-leaf line, [ADR-0014](0014-maintenance-persistence.md)), and
-   info-log a host / container that has checks but no `about`. A config defect
-   surfaces visibly, not as silent emptiness.
+   info-log a host / container that has checks but no `about`. An entry that states
+   only the first look's keys is a declaration, weighed like any other. And since a
+   node's `about` stands open beneath its name and title on every view of the node
+   (ADR-0127 decision 8), the pass notes one past about 400 characters, some four lines
+   at a desk's width. A config defect surfaces visibly, not as silent emptiness.
 5. **Markdown, rendered later.** `about` and the leaf descriptions are Markdown; they
    show as plain text until the Markdown-rendering item adds a renderer.
 
@@ -67,13 +80,18 @@ concerns.
 - The JSON envelope ([ADR-0008](0008-json-output-api.md)) is unchanged here; whether
   `about` joins it is the API-envelope round's decision.
 
-- **Where each field surfaces** (with the later popover, [ADR-0019](0019-inspection-popover.md)):
-  a leaf's `description` shows on its **detail page**; `about` (and `title`) show on the
-  dashboard **inspection popover**, and a branch's `about` under its heading. A **branch
-  node's `description` is stored on the node but intentionally not displayed** — a
-  container's detail lives in its leaves, and its own `about` already answers "what is
-  this box"; so a branch `description` is simply latent (harmless), while a leaf's — and a
-  single-node check's — `description` is exactly the detail-page "what this check does".
+- **Where each field surfaces** (with the popover,
+  [ADR-0019](0019-inspection-popover.md)): a leaf's `description` shows on its **detail
+  page**; a node's `about` stands open beneath its name and title on every view of the
+  node, and the **inspection card** carries its first block beside the name on the wall.
+  A **branch node's `description` is stored on the node but intentionally not
+  displayed** — a container's detail lives in its leaves, and its own `about` already
+  answers "what is this box"; so a branch `description` is simply latent (harmless),
+  while a leaf's — and a single-node check's — `description` is exactly the detail-page
+  "what this check does".
+- **`about` is the short account of a node.** What a team writes at length about one —
+  where it stands, who answers for it, its runbook, its dashboards — stands behind a
+  link in it, as the startup pass's note on a long one says.
 
 ## Alternatives considered
 - **Per-check metadata only.** Lightest, but can't label container / system nodes

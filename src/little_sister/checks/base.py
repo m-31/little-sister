@@ -5,30 +5,71 @@ Subclasses register a ``type`` name; the loader instantiates them from YAML
 (see ``loader.py``). Config fields common to every check: ``path``, ``name``,
 ``description``, ``frequency``, ``timeout`` (project.md §2.5), plus the
 optional failure retry — ``retry_interval`` / ``retry_attempts`` (ADR-0033) —
-the series' retention, ``series_keep`` (ADR-0087), and what the series is drawn by
-and how much of it the node shows, ``measures`` / ``reading_cap`` (ADR-0092).
+the series' retention, ``series_keep`` (ADR-0087), what the series is drawn by
+and how much of it the node shows, ``measures`` / ``reading_cap`` (ADR-0092), and
+what the lines say, ``display`` (ADR-0126). A type that reads several things on
+tempos of their own declares them as units — :class:`Unit`, :meth:`Check.units`,
+:meth:`Check.measure_unit` (ADR-0130).
 """
 from __future__ import annotations
 
 import abc
 import inspect
+import logging
+import re
 import sys
-from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass, field, replace
 from datetime import datetime
+from fractions import Fraction
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from little_sister import secrets
 from little_sister.checks.metadata import (
+    NODE_DEFAULTS_KEYS,
+    SUBNODE_KEYS,
+    Stated,
+    Statements,
     parse_show_when_quiet,
+    parse_subnode_looks,
     parse_subnodes,
+    read_stated,
     resolve_text,
+    unknown_keys,
 )
 from little_sister.checks.output import failure_text
 from little_sister.errors import CheckError as CheckError
 from little_sister.errors import ConfigError
+from little_sister.grading import (
+    JUDGMENT,
+    MAP,
+    REASON_WORD,
+    SINCE,
+    SINCE_OK,
+    Graded,
+    Grading,
+    GradingBlock,
+    Levels,
+    Verdict,
+    Words,
+    held_against,
+    judge,
+    since_ok,
+)
+from little_sister.grading import (
+    declare as declare_gradings,
+)
 from little_sister.limits import RECORD_LIMIT
+from little_sister.line_template import (
+    Declarations,
+    TemplateError,
+    Wording,
+    declare,
+    read_display,
+    render,
+    resolve,
+)
 from little_sister.measures import (
     Measure,
     MeasureError,
@@ -51,14 +92,22 @@ from little_sister.reasons import (
 from little_sister.reasons import (
     plain as _plain,
 )
+from little_sister.rules import RULE_WORD, Rule
+from little_sister.spans import format_duration, format_span
 from little_sister.status import StatusCode, join_path, leaf_name, split_path
 from little_sister.values import number, strict_flag
 
 if TYPE_CHECKING:
     from little_sister.series import SeriesRecord
 
+logger = logging.getLogger(__name__)
+
 DEFAULT_FREQUENCY_SECONDS = 900   # 15 minutes — most checks run infrequently
 DEFAULT_TIMEOUT_SECONDS = 30.0
+
+#: What ``Check.verdict`` is handed where a type hands no value: the grading's field
+#: of the reading is read then. ``None`` is a value — a word the source did not send.
+_UNSET: Any = object()
 
 
 @dataclass(frozen=True)
@@ -426,6 +475,60 @@ class Measurement:
                 f"never both: identity {self.identity!r}, state {self.state!r}")
 
 
+@dataclass(frozen=True)
+class Unit:
+    """One thing a check reads on a slot of its own (ADR-0130): what
+    :meth:`Check.units` declares, and what the engine releases.
+
+    ``key`` is the unit's name — what :meth:`Check.measure_unit` is asked for, and a
+    **stored key** like a slug or a ``type:`` name (ADR-0078): a deployment's
+    configuration is written against it, so renaming one is a breaking change of the
+    type's release. Empty only for the one anonymous unit a check that declares none
+    is.
+
+    ``period_seconds`` is how often the unit is read — its own ``frequency:``, read
+    by the type out of the block that configures the unit with
+    :func:`parse_duration`, or a cadence the type declares for a source that has
+    one, or the check's own; the precedence is the type's to apply and ADR-0130
+    decision 2 to state. Always at least a second: a unit with no period is not a
+    unit, it is the paced kind, which this record does not build.
+
+    ``node`` is the node the unit **answers for**, relative to the check's mount —
+    ``"live/s3"`` — or ``""`` for the mount itself, which is the one-unit check's.
+    A unit's run writes the path from the mount down to this node and the subtree
+    beneath it, moves the observation stamp there and nowhere beside it, and the
+    node carries the unit's run facts and goes stale by the unit's own period
+    (ADR-0130 decisions 4 and 5). Two units of one check never answer for one node,
+    and none answers beneath another's: the engine refuses both at startup.
+
+    ``cost_seconds`` is what one run of the unit is expected to occupy a worker for,
+    or ``None`` where the type does not estimate — ADR-0075's ``expected_cost()``,
+    per unit, summed at startup over the unit's own period. A check that declares no
+    units keeps declaring its cost on the check.
+    """
+    key: str
+    period_seconds: int
+    node: str = ""
+    cost_seconds: float | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.period_seconds, int) or isinstance(
+                self.period_seconds, bool) or self.period_seconds < 1:
+            raise CheckError(
+                f"a unit's period is a whole number of seconds, at least 1: "
+                f"unit {self.key!r} declares {self.period_seconds!r}")
+        segments = split_path(str(self.node))
+        if any(segment in (".", "..") for segment in segments):
+            raise CheckError(
+                f"a unit's node is a path relative to the check's mount, with no "
+                f"'.' or '..' in it: unit {self.key!r} names {self.node!r}")
+        object.__setattr__(self, "node", "/".join(segments))
+        if self.cost_seconds is not None and not self.cost_seconds >= 0:
+            raise CheckError(
+                f"a unit's cost is a non-negative number of seconds, or None: "
+                f"unit {self.key!r} declares {self.cost_seconds!r}")
+
+
 CHECK_TYPES: dict[str, type[Check]] = {}
 
 #: The **check API epoch** (ADR-0051). It bumps only when the check-authoring
@@ -640,6 +743,9 @@ class Check(abc.ABC):
                  subnode_show_when_quiet: Mapping[str, bool] | None = None,
                  subnode_labels: Mapping[str, Mapping[str, str]] | None = None,
                  subnode_defaults: Mapping[str, Mapping[str, object]] | None = None,
+                 node_defaults: Mapping[str, object] | None = None,
+                 look: Stated | None = None,
+                 subnode_looks: Mapping[str, Stated] | None = None,
                  label_tokens: Mapping[str, str] | None = None,
                  frequency_seconds: int = DEFAULT_FREQUENCY_SECONDS,
                  timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
@@ -651,6 +757,12 @@ class Check(abc.ABC):
                  reading_cap: int | None = None,
                  measures: Mapping[str, object] | None = None,
                  measure_defaults: Mapping[str, object] | None = None,
+                 line_forms: Mapping[str, object] | None = None,
+                 line_words: Mapping[str, object] | None = None,
+                 line_fields: Mapping[str, object] | None = None,
+                 display: Mapping[str, str] | None = None,
+                 gradings: Mapping[str, object] | None = None,
+                 configured: Mapping[str, Any] | None = None,
                  subject: str = "") -> None:
         # The check's full, absolute node path (ADR-0016); `name` is the last segment.
         self.path = join_path(path)
@@ -682,6 +794,27 @@ class Check(abc.ABC):
         self.subnode_show_when_quiet: dict[str, bool] = {
             **_declared_show_when_quiet(subnode_defaults),
             **(subnode_show_when_quiet or {})}
+        # **The first look** (ADR-0128): what the deployment's file says of the
+        # check's own node and of each subnode name — `_parse_common` read both for
+        # every type, the claim per name among them — and what the type declares,
+        # `node_defaults` for its own node and the `subnode_defaults` entries beside
+        # each name's labels. Kept apart and not merged as the claim's map above is,
+        # because the file's `children:` stands between the file's names and the
+        # type's (§3.4): `first_look` and the engine ask them in that order.
+        file_quiet = dict(subnode_show_when_quiet or {})
+        file_looks = dict(subnode_looks or {})
+        self.file_statements = Statements(
+            own=look or Stated(),
+            by_name={name: replace(file_looks.get(name, Stated()),
+                                   show_when_quiet=file_quiet.get(name))
+                     for name in sorted({*file_looks, *file_quiet})})
+        self.type_statements = _declared_statements(subnode_defaults, node_defaults)
+        undeclared = _undeclared_keys(subnode_defaults, node_defaults)
+        if undeclared:
+            logger.warning(
+                "check %s: its type %s declares key(s) the library does not read: %s",
+                self.path, type(self).type_name or type(self).__name__,
+                ", ".join(undeclared))
         # The same block's **labels**, resolved here and once (ADR-0025). Three
         # inputs meet: `subnode_labels` is the deployment's `subnodes:` block as
         # `_parse_common` read it, `subnode_defaults` is
@@ -739,6 +872,51 @@ class Check(abc.ABC):
                 read_measures(measure_defaults, where="measure_defaults",
                               removals=False))
         except MeasureError as error:
+            raise CheckError(str(error)) from error
+        # **What it grades** (ADR-0131): the values this type declares it grades,
+        # read here so that a mistake in one fails its own tests, beside the window
+        # every check takes (`max_since_ok`) — and what the deployment wrote of them
+        # among the check's own keys, which `_parse_common` hands over as the file
+        # wrote them, read as the check is built so that a key that does not fit
+        # stops the start, naming the file. A block of them a type reads elsewhere —
+        # an aspect's — is read where the type hands it over (`grading_block`).
+        self.grading_declarations: tuple[Grading, ...] = declare_gradings(gradings)
+        self._gradings: dict[str, Grading] = _gradings_by_name(
+            (*self.grading_declarations, *LIBRARY_GRADINGS))
+        self._graded: Graded = self.grading_block().read(configured)
+        if _holds_a_level(self._graded.settings.get(SINCE_OK)) and series_keep < 1:
+            raise CheckError(
+                f"'{SINCE_OK}' grades what a check keeps of a subject, and this check "
+                f"keeps nothing: set series_keep to how many readings it keeps")
+        self._say_what_the_window_reaches()
+        # **What its lines say** (ADR-0126): the forms this type's grading names, and
+        # the words and the fields of its records a template may name — the type's
+        # three declarations, read here, so that a typo in one of its own defaults
+        # fails its own tests — with the deployment's `display:` block, which
+        # `_parse_common` read for every type, resolved over them once, like the
+        # measures above. A template naming what the type does not declare refuses
+        # the load, as every other configuration error does. A type that grades
+        # through the seam is handed the words the library gives a line its verdict
+        # decided (ADR-0131 decision 5): `reason`, and `rule` where a rule may write
+        # what it grades. The forms the library writes the window's line from on
+        # every check (decision 7) are re-worded in the same block, over what the
+        # library declares of them, and a type's form takes none of their names.
+        try:
+            self.line_declarations: Declarations = declare(
+                line_forms, _with_verdict_words(line_words, line_forms,
+                                                self.grading_declarations),
+                line_fields)
+            _refuse_the_librarys_forms(self.line_declarations)
+            written = read_display(display)
+            _refuse_a_form_it_has_not(written, self.line_declarations)
+            self._wordings: dict[str, Wording] = resolve(
+                self.line_declarations,
+                {name: text for name, text in written.items()
+                 if name not in WINDOW_FORMS})
+            self._window_wordings: dict[str, Wording] = resolve(
+                WINDOW_DECLARATIONS,
+                {name: text for name, text in written.items() if name in WINDOW_FORMS})
+        except TemplateError as error:
             raise CheckError(str(error)) from error
         # How many of a subject's readings the node that stands for it shows
         # (ADR-0092 decision 7): this check's own answer, or `None` to leave
@@ -929,6 +1107,275 @@ class Check(abc.ABC):
             return ()
         return reader(subject or self.subject)
 
+    def grading_block(self, name: str = "") -> GradingBlock:
+        """**The gradings this type declares in one block of its configuration**, and
+        what reads them (ADR-0131 decisions 1 and 6): ``read(value, where)`` answers
+        what one instance of the block grades with — an aspect's block, an account's
+        own one — each grading it does not write at its default, and refuses a key
+        that does not fit, naming it; a :class:`~little_sister.rules.RuleList` handed
+        the block reads the keys each rule writes. ``keys`` is every key its gradings
+        are written under, for a type that refuses a key a block does not take.
+
+        The check's own keys are the block ``""``, which the library read as this check
+        was built and :meth:`verdict` grades with unless it is handed another. Read a
+        block where the check is built, so that a mistake in it stops the start.
+        """
+        gradings = [grading for grading in self._gradings.values()
+                    if grading.block == name]
+        if not gradings:
+            named = type(self).type_name or type(self).__name__
+            blocks = sorted({grading.block for grading in self._gradings.values()
+                             if grading.block})
+            raise CheckError(
+                f"{named} declares no grading in the block {name!r}" + (
+                    f"; its blocks are {', '.join(blocks)}" if blocks else ""))
+        return GradingBlock(name, gradings, said_by=self.path)
+
+    def verdict(self, name: str,
+                reading: Measurement | Mapping[str, Any] | None = None, *,
+                value: object = _UNSET, code: StatusCode | None = None,
+                graded: Graded | None = None,
+                rule: Rule[Any] | None = None) -> Verdict:
+        """**What a grading says of a value** (ADR-0131 decision 1): the code the
+        grading ``name`` gives it under this check's configuration, the sentence the
+        deployment wrote for that grading where it fired, and the rule whose keys
+        judged it — the :class:`~little_sister.grading.Verdict` a line is written
+        under, by :meth:`line` or as a sentence of the type's own
+        (:meth:`~little_sister.grading.Verdict.entry`).
+
+        The value is the declared field of ``reading`` — a :class:`Measurement` or its
+        record — or ``value``, where the type derives it: an age from a time and the
+        clock it is handed, a count of what one name carries, one volume's share. A
+        judgment the type makes in its own code is handed its ``code`` instead.
+        ``graded`` is what the grading's block grades with, as
+        :meth:`grading_block` read it — the check's own keys where it is left out —
+        and ``rule`` the rule that decided the value's name, whose keys stand in for
+        the block's where it wrote them: a pair, a set or a sentence whole, a map word
+        by word (decision 6). A judgment with more than one input keeps its logic in
+        the type's code and asks for each comparison. Pure, as a grading is: the
+        configuration and what it is handed, nothing else.
+        """
+        named = type(self).type_name or type(self).__name__
+        grading = self._gradings.get(name)
+        if grading is None:
+            declared = ", ".join(grading.name for grading in self._gradings.values()
+                                 if grading.kind != SINCE)
+            raise CheckError(
+                f"{named} declares no grading {name!r}" + (
+                    f"; its gradings are {declared}" if declared
+                    else ": it declares none (gradings)"))
+        if grading.kind == SINCE:
+            raise CheckError(
+                f"{name!r} is graded over what the check keeps, by the library, once "
+                f"a run's readings are kept; a type asks no verdict of it")
+        if graded is None:
+            if grading.block:
+                raise CheckError(
+                    f"{name!r} is graded in the block {grading.block!r}: hand "
+                    f"verdict() what that block grades with, as grading_block("
+                    f"{grading.block!r}).read() answered it")
+            graded = self._graded
+        elif graded.block != grading.block:
+            ours = "the check's own keys"
+            wanted = repr(grading.block) if grading.block else ours
+            handed = repr(graded.block) if graded.block else ours
+            raise CheckError(
+                f"{name!r} is graded in {wanted}, and was handed what {handed} "
+                f"grade with")
+        if grading.kind == JUDGMENT:
+            if code is None:
+                raise CheckError(
+                    f"{name!r} is a judgment {named} makes in its own code, and is "
+                    f"handed its code")
+        elif code is not None:
+            raise CheckError(
+                f"{name!r} grades a value, and only a judgment is handed its code")
+        elif value is _UNSET:
+            if reading is None:
+                raise CheckError(
+                    f"{name!r} reads {grading.field}: hand verdict() the reading, or "
+                    f"the value it grades (value=)")
+            value = _field_of(reading, grading.field, name)
+        setting = graded.settings[name]
+        owner = ""
+        if rule is not None and rule.graded is not None:
+            own = rule.graded.settings.get(name)
+            if isinstance(own, Words) and isinstance(setting, Words):
+                if own.code_of(value) is not None:
+                    owner = rule.name
+                setting = own.over(setting)
+            elif own is not None:
+                setting, owner = own, rule.name
+        said = judge(grading, setting, value, code)
+        fired = said in (StatusCode.WARN, StatusCode.ERROR)
+        reason = "" if isinstance(setting, Words) or not fired else setting.reason
+        # A pair that holds no level — switched off, or never given one — compares
+        # nothing and decides nothing, so its verdict names no grading: the line it
+        # decides says no "graded by", as the check's card says "not graded".
+        named = ("" if isinstance(setting, Levels) and not _holds_a_level(setting)
+                 else name)
+        return Verdict(named, said, reason, owner,
+                       held_against(grading, setting, said))
+
+    @property
+    def grades_a_window(self) -> bool:
+        """Whether this check's configuration writes a level of the window,
+        ``max_since_ok`` (ADR-0131 decision 7): whoever runs the check reads what it
+        kept, and hands :meth:`window_line` the readings, only where it does."""
+        return _holds_a_level(self._graded.settings.get(SINCE_OK))
+
+    def window_line(self, at: datetime,
+                    kept: Iterable[tuple[datetime, StatusCode | None]], *,
+                    subject: str | None = None) -> ReasonEntry | None:
+        """**What the window says of a reading** (ADR-0131 decisions 7 and 8): the line
+        ``max_since_ok`` writes on its subject's node where it fired — ``None`` where
+        it passed, and where this check's configuration writes no level of it.
+
+        ``kept`` is the subject's readings up to and including the one taken at
+        ``at``, each at its own time with the code it landed with, which whoever runs
+        the check hands it once a run's readings are kept: the window is an input and
+        never a read of the store, so that a reading graded again sees the window it
+        had. The line is coded, under the slug ``since-ok``, names its grading, and is
+        written from one of the library's two forms — :data:`WINDOW_LAST` where a
+        reading kept stood OK, :data:`WINDOW_NONE` where none did — as this check's
+        ``display:`` block words it, over the words ``since``, ``level`` and, where the
+        deployment wrote one, ``reason``. ``subject`` is the line's: this check's own
+        where none is handed.
+        """
+        grading = self._gradings[SINCE_OK]
+        setting = self._graded.settings[SINCE_OK]
+        seconds, stood = since_ok(at, kept)
+        code = judge(grading, setting, seconds)
+        if code == StatusCode.OK:
+            return None
+        words: dict[str, object] = {"since": format_span(seconds),
+                                    "level": held_against(grading, setting, code)}
+        reason = setting.reason if isinstance(setting, Levels) else ""
+        if reason:
+            words[REASON_WORD] = reason
+        form = WINDOW_LAST if stood else WINDOW_NONE
+        wording = self._window_wordings[form]
+        return ReasonEntry(
+            "since-ok", render(wording.template, {}, words, beneath=wording.beneath),
+            code=code, subject=self.subject if subject is None else subject,
+            form=form, grading=SINCE_OK)
+
+    def _say_what_the_window_reaches(self) -> None:
+        """Say once, as the check is built, where ``max_since_ok`` asks of the window
+        more than it can hold (ADR-0131 decision 7), as a rule that matches nothing
+        is said (ADR-0129 decision 5): readings kept one period apart reach back one
+        period fewer than there are of them — and less where a retry came between
+        two — so that a level from there on is never gone past."""
+        setting = self._graded.settings.get(SINCE_OK)
+        if not isinstance(setting, Levels) or not _holds_a_level(setting):
+            return
+        level = max(value for value in (setting.warn, setting.error)
+                    if value is not None)
+        if self.series_keep == 1:
+            logger.info(
+                "%s: '%s' asks about %s, and the one reading this check keeps is the "
+                "one graded: no level of it is ever gone past", self.path, SINCE_OK,
+                format_duration(int(level)))
+            return
+        reach = (self.series_keep - 1) * self.frequency_seconds
+        if level >= reach:
+            logger.info(
+                "%s: '%s' asks about %s, and the %d readings this check keeps, one "
+                "every %s, reach back %s at most: that level is never gone past",
+                self.path, SINCE_OK, format_duration(int(level)), self.series_keep,
+                format_duration(self.frequency_seconds), format_duration(reach))
+
+    def grading_summary(self, name: str, graded: Graded | None = None) -> str | None:
+        """**What this check grades a value by**, as its configuration card writes it
+        (ADR-0013): *warn above 80%, error above 90%*, a map's words and their codes,
+        a set's accepted values — or ``None`` where the grading ``name`` grades
+        nothing, switched off. ``graded`` is what its block grades with, as for
+        :meth:`verdict`; the check's own keys where it is left out."""
+        grading = self._gradings.get(name)
+        if grading is None:
+            raise CheckError(f"{type(self).type_name or type(self).__name__} "
+                             f"declares no grading {name!r}")
+        if graded is None:
+            if grading.block:
+                raise CheckError(
+                    f"{name!r} is graded in the block {grading.block!r}: hand "
+                    f"grading_summary() what that block grades with")
+            graded = self._graded
+        return graded.summary(name, grading)
+
+    def line(self, form: str, reading: Measurement, *, slug: str,
+             code: StatusCode | None = None, running: bool = False,
+             words: Mapping[str, object] | None = None,
+             verdict: Verdict | None = None) -> ReasonEntry:
+        """**The line a grading says of one reading** (ADR-0126 decision 7): the
+        ``form`` the grading chose, written over ``reading``'s record and the
+        ``words`` handed over with it, as the line its node shows — or, with a
+        ``code``, keeps for the record alone (ADR-0111).
+
+        The text is the form's — the deployment's ``display:`` template where it
+        re-words the form, the type's default otherwise, as resolved when this check
+        was built — rendered here and once (:mod:`little_sister.line_template`): a
+        value escaped as :func:`plain` escapes one, a link's target written as a
+        URL, a time in the configured zone, and a value that is not there as ``—``.
+        The line carries the reading's record as its ``data``, the reading's subject
+        as its own and the form it was written from; ``slug``, ``code`` and
+        ``running`` are the line's, as on any :class:`Entry`.
+
+        A line a grading decided is handed its :class:`~little_sister.grading.Verdict`
+        (ADR-0131 decision 1): the line takes its code from it, names the grading it
+        came from, and is handed the words the library gives such a line — ``reason``,
+        the sentence the deployment wrote for the grading where it fired, and
+        ``rule``, the rule whose keys judged it — so that no type passes either along
+        on its own. A ``code``, or either word, beside a verdict is refused.
+
+        A **word** is what the grading adds from this check's configuration, from
+        the clock or as its own wording — a link wrapped in a configured template,
+        an age, a rule's own sentence — and it lives for this call alone: it is never
+        stored, so a series graded again says the same line. One the grading leaves
+        out is not there, which is how a part of a line is said only sometimes. A
+        word is text, a number or a flag; a form, or a word, this type does not
+        declare raises :class:`CheckError`, which its own tests meet first.
+        """
+        wording = self._wordings.get(form)
+        if wording is None:
+            named = type(self).type_name or type(self).__name__
+            forms = ", ".join(self._wordings)
+            raise CheckError(
+                f"{named} declares no form {form!r}" + (
+                    f"; its forms are {forms}" if forms
+                    else ": it declares no form at all (line_forms)"))
+        handed = dict(words or {})
+        if verdict is not None:
+            if code is not None:
+                raise CheckError(
+                    "a line takes its code from its verdict, or from code=, never both")
+            taken = sorted(set(handed) & {REASON_WORD, RULE_WORD})
+            if taken:
+                raise CheckError(
+                    f"the word {taken[0]!r} is the verdict's to hand a line it "
+                    f"decided, and the type's words may not say it")
+            code = verdict.code
+            if verdict.reason:
+                handed[REASON_WORD] = verdict.reason
+            if verdict.rule:
+                handed[RULE_WORD] = verdict.rule
+        declared = {word.name for word in self.line_declarations.words}
+        for name, value in handed.items():
+            if name not in declared:
+                raise CheckError(
+                    f"the word {name!r} is none this type declares (line_words): "
+                    f"{', '.join(sorted(declared)) or 'it declares none'}")
+            if value is not None and not isinstance(value, str | int | float):
+                raise CheckError(
+                    f"the word {name!r} is text, a number or a flag, not "
+                    f"{type(value).__name__}")
+        return ReasonEntry(
+            slug, render(wording.template, reading.record, handed,
+                         beneath=wording.beneath),
+            code=code, running=running, subject=reading.subject,
+            data=dict(reading.record), form=form,
+            grading="" if verdict is None else verdict.grading)
+
     @abc.abstractmethod
     def measure(self) -> Measurement | Sequence[Measurement]:
         """**Read the world.** One :class:`Measurement` per object this run read —
@@ -978,6 +1425,52 @@ class Check(abc.ABC):
         reason: a grading that called the clock itself could not be replayed.
         """
 
+    def units(self) -> Sequence[Unit]:
+        """**What this check reads on slots of its own** (ADR-0130 decision 1): one
+        :class:`Unit` for each — its key, its period, the node it answers for and
+        what a run of it costs. The engine releases each on its own period and
+        measures it alone through :meth:`measure_unit`; after each it grades the
+        whole check over the newest reading of every unit, and writes the unit's own
+        path.
+
+        A check that declares none is the **one-unit check**: this default answers
+        one anonymous unit with the check's ``frequency``, answering for the mount,
+        measured through :meth:`measure` — today's check, unchanged. A type that
+        overrides this gives every unit a key of its own, declares each node once and
+        none beneath another's, and reads each unit's ``frequency:`` out of the
+        block that configures it, defaulting to a cadence it declares or to the
+        check's; the engine refuses a declaration that breaks the first two at
+        startup, naming the check.
+        """
+        return (Unit("", self.frequency_seconds, ""),)
+
+    def measure_unit(self, key: str) -> Measurement | Sequence[Measurement]:
+        """**Read one unit** (ADR-0130 decision 1): the measurements of the unit
+        ``key`` names, as :meth:`measure` hands back the whole check's — one or a
+        sequence, each the reading of one object. The same rules hold here: it
+        touches the world and decides nothing, a failed read is recorded as one, and
+        :meth:`kept` answers inside it as it does inside :meth:`measure`.
+
+        The default serves the one-unit check: the anonymous key is :meth:`measure`,
+        and any other key is refused, since this check declares no unit of that name.
+        A type that declares units overrides this; its :meth:`measure` may stay what
+        it was — every unit at once — for its own tests, and the engine never calls
+        it on such a type.
+        """
+        units = tuple(self.units())
+        named = type(self).type_name or type(self).__name__
+        if any(unit.key == key for unit in units):
+            if key == "":
+                return self.measure()
+            raise CheckError(
+                f"{named} declares the unit {key!r} and no measure_unit() that "
+                f"reads it: a type that declares units overrides measure_unit()")
+        declared = ", ".join(repr(unit.key) for unit in units)
+        raise CheckError(
+            f"{named} declares no unit {key!r}" + (
+                f"; its units are {declared}" if declared
+                else ": it declares no unit at all"))
+
     # --- construction from config ---
 
     @classmethod
@@ -1005,6 +1498,171 @@ class Check(abc.ABC):
                            base_dir: Path) -> dict[str, Any]:
         """Subclass hook: parse type-specific config into constructor kwargs."""
         return {}
+
+
+#: The gradings the library declares on every check (ADR-0131 decision 8): the window
+#: ``since``, which reads codes and times and no field of a type's, so that any check
+#: that keeps a series can take it.
+LIBRARY_GRADINGS: tuple[Grading, ...] = declare_gradings({
+    SINCE_OK: {
+        "sentence": "How long before the reading graded the newest kept reading of "
+                    "its subject was taken that stood OK, the reading graded among "
+                    "them.",
+        "kind": SINCE,
+    },
+})
+
+#: What the words the library hands a line its verdict decided say (ADR-0131
+#: decision 5, ADR-0129 decision 6), as ``/system/installed`` lists them.
+_VERDICT_WORDS: dict[str, dict[str, str]] = {
+    REASON_WORD: {
+        "sentence": "The sentence the deployment wrote for the grading that decided "
+                    "the line, where it fired.",
+        "example": "A second box under this name is usually a deploy that did not "
+                   "clean up.",
+    },
+    RULE_WORD: {
+        "sentence": "The name of the rule whose keys judged the line, where one did.",
+        "example": "load tests",
+    },
+}
+
+#: The forms the library writes the window's line from where ``max_since_ok`` fired
+#: (ADR-0131 decision 7) — on every check, beside its type's own forms, and re-worded
+#: in the check's ``display:`` block as those are — with the words they name. The
+#: window reads no field of a record (decision 8), so that a template of it names
+#: none, and a type's form takes none of these names.
+WINDOW_LAST = "since_ok.last"
+WINDOW_NONE = "since_ok.none"
+WINDOW_FORMS: dict[str, dict[str, str]] = {
+    WINDOW_LAST: {
+        "sentence": "Said where the newest reading kept of the subject that stood OK "
+                    "was taken longer before the reading graded than max_since_ok "
+                    "allows.",
+        "text": "last stood OK {line.since} ago (max {line.level})"
+                "{? — {line.reason}}",
+    },
+    WINDOW_NONE: {
+        "sentence": "Said where no reading kept of the subject stood OK, and they "
+                    "reach back further than max_since_ok allows.",
+        "text": "no reading kept stood OK, over {line.since} (max {line.level})"
+                "{? — {line.reason}}",
+    },
+}
+_WINDOW_WORDS: dict[str, dict[str, str]] = {
+    "since": {
+        "sentence": "How long before the reading graded the subject last stood OK — "
+                    "or, where no reading kept did, how far back they reach.",
+        "example": "1d 3h",
+    },
+    "level": {
+        "sentence": "The level of max_since_ok that was gone past, as the "
+                    "configuration wrote it.",
+        "example": "26h",
+    },
+    REASON_WORD: _VERDICT_WORDS[REASON_WORD],
+}
+WINDOW_DECLARATIONS: Declarations = declare(WINDOW_FORMS, _WINDOW_WORDS, None)
+
+
+def _holds_a_level(setting: object) -> bool:
+    """Whether a pair's setting compares anything: a level written — which a pair
+    switched off holds none of."""
+    return isinstance(setting, Levels) and (setting.warn is not None
+                                            or setting.error is not None)
+
+
+def _refuse_a_form_it_has_not(display: Mapping[str, str],
+                              declarations: Declarations) -> None:
+    """Refuse a name in a check's ``display:`` block that is no form of the check —
+    its type's, or one the library writes a line from on every check (ADR-0131
+    decision 7) — naming both, since a deployment may have meant either: in the
+    words :func:`~little_sister.line_template.resolve` refuses a type's in, and the
+    library's forms after them."""
+    own = [form.name for form in declarations.forms]
+    for name in display:
+        if name in WINDOW_FORMS or name in own:
+            continue
+        said = (f"display re-words {name!r}, which is no form of this type; its forms "
+                f"are {', '.join(own)}" if own else
+                f"display re-words {name!r}, and this type declares no form for a "
+                f"template to re-word")
+        raise TemplateError(
+            f"{said}; the library's, on every check, are {', '.join(WINDOW_FORMS)}")
+
+
+def _refuse_the_librarys_forms(declarations: Declarations) -> None:
+    """Refuse a type's form under a name the library writes the window's line from on
+    every check (ADR-0131 decision 7): a ``display:`` block re-words one form under
+    one name."""
+    for form in declarations.forms:
+        if form.name in WINDOW_FORMS:
+            raise TemplateError(
+                f"line_forms declares {form.name!r}, which the library writes the "
+                f"window's line from on every check: a type's form takes another "
+                f"name")
+
+
+def _gradings_by_name(declared: Sequence[Grading]) -> dict[str, Grading]:
+    """A check's gradings by their full names — its type's and the library's — each
+    key a deployment writes claimed by one grading of its block alone."""
+    library = {grading.name for grading in LIBRARY_GRADINGS}
+    by_name: dict[str, Grading] = {}
+    claimed: dict[tuple[str, str], str] = {}
+    for grading in declared:
+        if grading.name in by_name:
+            raise CheckError(
+                f"gradings declares {grading.name!r}, which the library declares on "
+                f"every check" if grading.name in library
+                else f"gradings declares {grading.name!r} twice")
+        for key in grading.keys:
+            other = claimed.get((grading.block, key))
+            if other is not None:
+                place = f" in {grading.block!r}" if grading.block else ""
+                raise CheckError(
+                    f"gradings declares {other!r} and {grading.name!r}, and both are "
+                    f"written as {key!r}{place}")
+            claimed[(grading.block, key)] = grading.name
+        by_name[grading.name] = grading
+    return by_name
+
+
+def _with_verdict_words(words: Mapping[str, object] | None,
+                        forms: Mapping[str, object] | None,
+                        gradings: Sequence[Grading]) -> Mapping[str, object] | None:
+    """A type's words, with those the library hands a line its verdict decided: where
+    the type writes its lines from forms and grades through the seam, ``reason``
+    where a grading of it has a sentence and ``rule`` where a rule may write one. A
+    type that grades through the seam may not declare either word itself."""
+    if not gradings or not forms:
+        return words
+    own = dict(words or {})
+    handed = [REASON_WORD] if any(grading.kind != MAP for grading in gradings) else []
+    if any(grading.rules for grading in gradings):
+        handed.append(RULE_WORD)
+    taken = sorted(set(own) & set(_VERDICT_WORDS))
+    if taken:
+        raise CheckError(
+            f"line_words declares {taken[0]!r}, which the library hands a line its "
+            f"verdict decided: a type that grades through the seam leaves it out")
+    return {**own, **{word: _VERDICT_WORDS[word] for word in handed}}
+
+
+def _field_of(reading: Measurement | Mapping[str, Any], path: str,
+              name: str) -> object:
+    """The value of a grading's declared field in a reading's record, by its dotted
+    name — ``None`` where the record does not hold it. A field one of several values
+    stand under, ``volumes.*.pct``, is no one value: the type hands that one over."""
+    if "*" in path.split("."):
+        raise CheckError(
+            f"{name!r} reads {path}, one of several values: hand verdict() the one "
+            f"it grades (value=)")
+    value: object = reading.record if isinstance(reading, Measurement) else reading
+    for part in path.split("."):
+        if not isinstance(value, Mapping):
+            return None
+        value = value.get(part)
+    return value
 
 
 def _construction_refused(cls: type[Check], kwargs: dict[str, Any],
@@ -1121,6 +1779,41 @@ def _declared_show_when_quiet(
     return flags
 
 
+def _declared_statements(declared: Mapping[str, Mapping[str, object]] | None,
+                         own: Mapping[str, object] | None) -> Statements:
+    """What a check **type** declares of the first look (ADR-0128): ``own`` —
+    ``node_defaults`` — for its own node, which no name reaches, and the
+    ``subnode_defaults`` entries for each name, beside the labels and the claim the
+    same entries carry. Read at load like a configuration, though it comes from code:
+    a switch that is not a real boolean, or a ``reason_cap`` that is not a whole
+    number, refuses the start naming the entry."""
+    if own is not None and not isinstance(own, Mapping):
+        raise CheckError("node_defaults must be a mapping of "
+                         f"{' / '.join(NODE_DEFAULTS_KEYS)}")
+    by_name: dict[str, Stated] = {}
+    for name, entry in (declared or {}).items():
+        if not isinstance(entry, Mapping):
+            continue
+        said = read_stated(entry, f"subnode_defaults.{name}", quiet=True)
+        if said.says_anything:
+            by_name[str(name)] = said
+    return Statements(own=read_stated(own or {}, "node_defaults"), by_name=by_name)
+
+
+def _undeclared_keys(declared: Mapping[str, Mapping[str, object]] | None,
+                     own: Mapping[str, object] | None) -> list[str]:
+    """The keys a type's declarations carry that the library does not read, for one
+    line in the log: a misspelt key in a package would otherwise do nothing, in
+    silence, in every installation."""
+    found: list[str] = []
+    for name, entry in (declared or {}).items():
+        if isinstance(entry, Mapping):
+            found.extend(unknown_keys(entry, SUBNODE_KEYS, f"subnode_defaults.{name}"))
+    if isinstance(own, Mapping):
+        found.extend(unknown_keys(own, NODE_DEFAULTS_KEYS, "node_defaults"))
+    return found
+
+
 def _parse_common(config: dict[str, Any]) -> dict[str, Any]:
     """Parse the fields every check shares.
 
@@ -1167,6 +1860,13 @@ def _parse_common(config: dict[str, Any]) -> dict[str, Any]:
         # a `subnodes:` label written against a type that never read the block
         # stops being a silent no-op.
         "subnode_labels": parse_subnodes(config),
+        # **The first look** (ADR-0128) out of the same file, read by the library for
+        # every type like the claim and the labels: the check's own node's keys and
+        # its `children:` at the top level, and each name's under `subnodes:`. A
+        # switch that is not a real boolean and a `reason_cap` that is not a whole
+        # number refuse the load, naming the key, as `reading_cap` does.
+        "look": read_stated(config, "check config"),
+        "subnode_looks": parse_subnode_looks(config),
         "frequency_seconds": parse_duration(
             config.get("frequency"), DEFAULT_FREQUENCY_SECONDS),
         "timeout_seconds": float(parse_duration(
@@ -1189,6 +1889,15 @@ def _parse_common(config: dict[str, Any]) -> dict[str, Any]:
         # is not a whole number fail the load, as a bad count does.
         "measures": _parse_measures(config.get("measures")),
         "reading_cap": _parse_reading_cap(config.get("reading_cap")),
+        # What the lines say (ADR-0126), beside what the series is drawn by: a form's
+        # full name to the template that re-words it. Its shape is read here, for
+        # every type; which names are the type's forms, and what a template may name,
+        # the check decides over its type's declarations.
+        "display": _parse_display(config.get("display")),
+        # What it grades (ADR-0131): the file as it was written, which the check reads
+        # the keys its type's gradings are written under out of — the type declares
+        # which, so they are read where the declarations are, as the check is built.
+        "configured": config,
     }
 
 
@@ -1264,6 +1973,16 @@ def _parse_measures(value: object) -> dict[str, Measure | None]:
         raise CheckError(str(error)) from error
 
 
+def _parse_display(value: object) -> dict[str, str]:
+    """The check's ``display:`` block (ADR-0126): a form's full name to the template
+    that re-words it, empty where it is absent. Another shape fails the load, naming
+    the form where there is one."""
+    try:
+        return read_display(value)
+    except TemplateError as error:
+        raise CheckError(str(error)) from error
+
+
 def _parse_reading_cap(value: object) -> int | None:
     """How many of a subject's readings this check's node shows (ADR-0092
     decision 7): ``None`` (absent) leaves ``settings.yaml``'s ``reading_cap`` in
@@ -1318,6 +2037,73 @@ def parse_duration(value: object, default: int) -> int:
                 f"and a month has no fixed length, so write it in weeks or days "
                 f"(26w, 180d)") from exc
         raise CheckError(f"invalid duration: {value!r}") from exc
+
+
+#: The unit suffixes :func:`parse_size` reads, each a number of bytes. The decimal
+#: prefixes are powers of a thousand and the binary ones powers of 1024, spelled as
+#: the standards spell them — ``kB`` with the small k of the SI prefix, ``KB`` beside
+#: it because that is how it is written everywhere else. No other case is here:
+#: ``Mb`` is megabits to somebody, ``gb`` is a guess, and a size read case-blind
+#: would hand either one a number it did not mean.
+SIZE_UNITS = {
+    "B": 1,
+    "kB": 10 ** 3, "KB": 10 ** 3, "MB": 10 ** 6, "GB": 10 ** 9,
+    "TB": 10 ** 12, "PB": 10 ** 15,
+    "KiB": 1024, "MiB": 1024 ** 2, "GiB": 1024 ** 3,
+    "TiB": 1024 ** 4, "PiB": 1024 ** 5,
+}
+
+# A size as written: a whole or decimal number, an optional space, letters or
+# nothing. The letters are checked against SIZE_UNITS afterwards, so that the
+# refusal can say what was wrong with them.
+_SIZE = re.compile(r"(\d+(?:\.\d+)?)\s*([A-Za-z]*)")
+
+_SIZE_SPELLINGS = "B, kB/KB, MB, GB, TB, PB, KiB, MiB, GiB, TiB, PiB"
+
+
+def parse_size(value: object, default: int) -> int:
+    """Parse a size written with a unit into whole bytes.
+
+    Accepts a whole number (bytes) or a string of a number and an optional unit —
+    ``B``; the decimal prefixes ``kB``/``KB``, ``MB``, ``GB``, ``TB``, ``PB``, each
+    a power of a thousand; the binary ones ``KiB``, ``MiB``, ``GiB``, ``TiB``,
+    ``PiB``, each a power of 1024 — with or without a space between (``"500 GB"``,
+    ``"2TiB"``, ``"1.5 GB"``). A unit is read as written: ``500 gb`` is refused,
+    and ``500G`` is refused naming the two spellings it could have meant. A
+    missing value returns ``default``; anything else is refused by name.
+    """
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        raise CheckError(f"invalid size: {value!r}")
+    if isinstance(value, int):
+        if value < 0:
+            raise CheckError(f"invalid size: {value!r} — a size is not negative")
+        return value
+    if isinstance(value, float):
+        raise CheckError(
+            f"invalid size: {value!r} — bytes are a whole number; a fraction "
+            f"takes a unit (1.5 GB)")
+    text = str(value).strip()
+    if not text:
+        return default
+    found = _SIZE.fullmatch(text)
+    if found is None:
+        raise CheckError(
+            f"invalid size: {value!r} — a number and a unit (500 GB, 2 TiB, "
+            f"64 KiB) or a number of bytes")
+    number, unit = found.group(1), found.group(2)
+    if unit and unit not in SIZE_UNITS:
+        if len(unit) == 1 and unit in "kKMGTP":
+            letter = unit.upper()
+            decimal = "kB" if unit == "k" else f"{letter}B"
+            raise CheckError(
+                f"invalid size: {value!r} — {unit} alone is not a unit: "
+                f"{number} {decimal} is decimal, {number} {letter}iB is binary")
+        raise CheckError(
+            f"invalid size: {value!r} — a unit is read as written, and the units "
+            f"are {_SIZE_SPELLINGS}")
+    return int(Fraction(number) * SIZE_UNITS.get(unit, 1))
 
 
 def coerce_code(value: object, default: StatusCode = StatusCode.ERROR) -> StatusCode:

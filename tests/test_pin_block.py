@@ -1,11 +1,11 @@
 """A pin is one block on what it silences, and it is edited there (ADR-0104).
 
-The leaf page's half of that decision: the node's block at the top of the status
-card and framing its lines, a line's block beneath its line, the controls that set
-a pin where its block will stand, the editor that opens in the block, and the
-expiry an edit shows and keeps. A card on the wall and a branch's head are
-`tests/test_wall_pins.py`'s; what every editor of a pin shares is the expiry rule,
-and that is here.
+The leaf page's half of that decision: the node's block a row at the head of the
+frame the page draws the node in, which runs round its lines (decision 8, backlog
+#91 §3.5), a line's block beneath its line, the controls that set a pin where its
+block will stand, the editor that opens in the block, and the expiry an edit shows
+and keeps. A card on the wall and a branch's head are `tests/test_wall_pins.py`'s;
+what every editor of a pin shares is the expiry rule, and that is here.
 
 The page is read as a tree (`tests/page_tree.py`) wherever the claim is about
 *where* something stands.
@@ -21,6 +21,7 @@ from zoneinfo import ZoneInfo
 os.environ.setdefault("SECRET_KEY", "test-key")
 
 from little_sister import app as app_module
+from little_sister.checks import Unit
 from little_sister.maintenance import MaintenanceEntry
 from little_sister.status import StatusCode
 from little_sister.tree import StatusTree
@@ -57,11 +58,15 @@ def _noon_ahead(days: int = 40) -> datetime:
 
 
 class _Scheduled:
-    """What the floor reads off a configured check."""
+    """What the floor reads off a configured check: its path and, as its one
+    unit's, its frequency (ADR-0130)."""
 
     def __init__(self, path: str, frequency_seconds: int) -> None:
         self.path = path
         self.frequency_seconds = frequency_seconds
+
+    def units(self) -> tuple[Unit, ...]:
+        return (Unit("", self.frequency_seconds, ""),)
 
 
 class _LeafCase(TestCase):
@@ -116,10 +121,14 @@ class _LeafCase(TestCase):
 
     @staticmethod
     def _card(page: Element) -> Element:
-        """The status card's box: what says how the node is."""
-        card = page.one("status-line").parent
-        assert card is not None
-        return card
+        """The page's head: what says how the node is — its row, the rules acting
+        on it, its lines — atop the frame the page draws the node in."""
+        return page.one("viewed-head")
+
+    @staticmethod
+    def _row(page: Element) -> Element:
+        """The head's row: the node's name, its actions and its state."""
+        return page.one("viewed-head").one("status-node__self")
 
     @staticmethod
     def _stated(page: Element, scope: str = "") -> list[Element]:
@@ -169,7 +178,7 @@ class PinBlockTests(_LeafCase):
     """Decisions 1 and 2: one block states a pin, and where the block stands
     says what it covers."""
 
-    def test_a_nodes_pin_is_one_block_at_the_top_of_the_status_card(self):
+    def test_a_nodes_pin_is_one_block_at_the_head_of_its_page(self):
         self._workflows()
         entry = self._pin_node()
         raw = self._body()
@@ -184,8 +193,8 @@ class PinBlockTests(_LeafCase):
         self.assertEqual(
             block.one("rule-block__what").text(),
             f"This node is silenced by lex until {until} · 1d 23h left")
-        # at the top: under the status line and above the first line
-        self.assertLess(page.one("status-line").order, block.order)
+        # at the head: under the head's row and above the first line
+        self.assertLess(self._row(page).order, block.order)
         self.assertLess(block.order, card.all("check-reason")[0].order)
         # and stated once: neither the strip nor the card at the foot says it again
         self.assertNotIn("pin-banner", raw)
@@ -271,17 +280,20 @@ class PinBlockTests(_LeafCase):
             said.text(), f"This node is silenced by lex until {until} · 1d 23h left")
 
     def test_the_nodes_block_frames_every_line(self):
+        # the page's frame is the border running round every line the pin covers:
+        # the block heads it and the lines stand inside it, with no second border
         self._workflows()
         self._pin_node()
         page = self._page()
-        frame = page.one("rule-frame")
+        frame = page.one("node-frame")
+        self.assertEqual(page.all("rule-frame"), [])
         self.assertTrue(self._stated(page)[0].within(frame))
         lines = page.all("check-reason")
         self.assertEqual(len(lines), len(LINES))
         for line in lines:
             self.assertTrue(line.within(frame))
 
-    def test_a_node_without_a_pin_has_no_frame(self):
+    def test_a_node_without_a_pin_has_no_block_and_no_border_of_its_own(self):
         self._workflows()
         self._pin_line()
         page = self._page()
@@ -292,8 +304,8 @@ class PinBlockTests(_LeafCase):
         # decision 8: a second rule on the node is a second row of this list
         self._workflows()
         self._pin_node()
-        head = self._page().one("rule-frame").first()
-        self.assertEqual((head.tag, head.has("rule-list")), ("ul", True))
+        head = self._card(self._page()).one("rule-list")
+        self.assertEqual(head.tag, "ul")
         rows = [child for child in head.children
                 if isinstance(child, Element)]
         self.assertEqual(
@@ -348,7 +360,7 @@ class PinBlockTests(_LeafCase):
         block = css_rule(css, '.rule-block[data-rule="maintenance"]')
         self.assertIn("background: var(--ls-tint-maintenance)", block)
         self.assertIn("color: var(--ls-tint-maintenance-ink)", block)
-        frame = css_rule(css, ".rule-frame")
+        frame = css_rule(css, ".node-frame")
         self.assertIn("border:", frame)
         self.assertNotIn("background", frame)
 
@@ -391,13 +403,15 @@ class SetControlTests(_LeafCase):
         return [summary for summary in page.all(tag="summary")
                 if summary.text(shown=True) == "Set maintenance"]
 
-    def test_set_maintenance_is_one_button_on_the_status_line(self):
+    def test_set_maintenance_is_one_button_in_the_pages_head(self):
+        # beneath the head's row, where the node's block will stand
         self._workflows()
         page = self._page()
         buttons = self._setters(page)
         self.assertEqual(len(buttons), 1)
         button = buttons[0]
-        self.assertTrue(button.within(page.one("status-line")))
+        self.assertTrue(button.within(self._card(page)))
+        self.assertLess(self._row(page).order, button.order)
         setter = button.parent
         assert setter is not None
         # the browser's own disclosure, closed until asked
@@ -415,7 +429,7 @@ class SetControlTests(_LeafCase):
 
     def test_the_nodes_editor_says_first_what_it_covers(self):
         self._workflows()
-        block = self._page().one("status-line").one("rule-block")
+        block = self._page().one("rule-setter").one("rule-block")
         said = block.first()
         self.assertTrue(said.has("rule-block__scope"))
         self.assertEqual(
@@ -427,7 +441,7 @@ class SetControlTests(_LeafCase):
     def test_the_nodes_sentence_counts_the_lines_the_node_has(self):
         self._workflows({"only": "one finding"})
         self.assertEqual(
-            self._page().one("status-line").one("rule-block__scope").text(),
+            self._page().one("rule-setter").one("rule-block__scope").text(),
             "Maintenance for this node. Silences its one line and any that "
             "appear; the check keeps running and counts again when the pin "
             "clears.")
@@ -437,7 +451,7 @@ class SetControlTests(_LeafCase):
         self.tree.upsert("/db", StatusCode.ERROR,
                          ["check error: unreachable", "Traceback…"])
         self.assertEqual(
-            self._page("/db").one("status-line").one("rule-block__scope").text(),
+            self._page("/db").one("rule-setter").one("rule-block__scope").text(),
             "Maintenance for this node. It will not alarm before the pin "
             "expires; the check keeps running and counts again when the pin "
             "clears.")
@@ -567,7 +581,7 @@ class PinAboveTests(_LeafCase):
     @staticmethod
     def _rows(page: Element) -> list[Element]:
         """The rows of the list at the head of the node's frame."""
-        return [child for child in page.one("rule-frame").one("rule-list").children
+        return [child for child in page.one("viewed-head").one("rule-list").children
                 if isinstance(child, Element)]
 
     def _until(self, entry: MaintenanceEntry) -> str:
@@ -593,9 +607,10 @@ class PinAboveTests(_LeafCase):
         # and nothing to press: not even an admin edits it from here
         self.assertEqual(row.all(tag="form") + row.all(tag="details")
                          + row.all(tag="button"), [])
-        # it frames every line, since it silences every one
+        # it heads the frame round every line, since it silences every one
         for line in page.all("check-reason"):
-            self.assertTrue(line.within(page.one("rule-frame")))
+            self.assertTrue(line.within(page.one("node-frame")))
+            self.assertGreater(line.order, row.order)
 
     def test_each_pin_above_is_a_row_outermost_first(self):
         self.tree.upsert("/ci/fleet/runner7", StatusCode.ERROR, "disk is full")
@@ -643,7 +658,7 @@ class PinAboveTests(_LeafCase):
         self._workflows()
         self._pin_at("/ci")
         self.assertEqual(
-            self._page().one("status-line").one("rule-block__scope").text(),
+            self._page().one("rule-setter").one("rule-block__scope").text(),
             "Maintenance for this node. It stays silenced when the pin above it "
             "ends; the check keeps running and counts again when every pin on it "
             "has cleared.")
@@ -668,14 +683,14 @@ class PinAboveTests(_LeafCase):
             "/ci", "quota", "raised on Monday",
             expires_at=datetime.now(UTC) + timedelta(hours=5), set_by="anna")
         page = self._page()
-        self.assertEqual(page.all("rule-frame"), [])
+        self.assertEqual(page.one("viewed-head").all("rule-list"), [])
         self.assertNotIn("silenced from", self._body())
 
     def test_a_pin_beside_the_node_is_no_row_of_it(self):
         self._workflows()
         self.tree.upsert("/ci/runners", StatusCode.OK)
         self._pin_at("/ci/runners")
-        self.assertEqual(self._page().all("rule-frame"), [])
+        self.assertEqual(self._page().one("viewed-head").all("rule-list"), [])
 
     def test_a_pin_on_everything_links_to_the_overview(self):
         # the overview's own pin is not set from a form, and one that stands is
@@ -832,12 +847,12 @@ class EditorTests(_LeafCase):
                        "> .rule-block__clear"))
         # full width and no wider: a flex item keeps the width of its fields
         # unless told otherwise, and that widened a phone's page
-        for selector in (".rule-block__edit[open]",
-                         ".status-line > .rule-setter[open]"):
-            with self.subTest(rule=selector):
-                rule = css_rule(css, selector)
-                self.assertIn("flex-basis: 100%", rule)
-                self.assertIn("min-width: 0", rule)
+        rule = css_rule(css, ".rule-block__edit[open]")
+        self.assertIn("flex-basis: 100%", rule)
+        self.assertIn("min-width: 0", rule)
+        # the node's setter stands beneath the head's row, a block of its own and
+        # no flex item, and no wider than the head either
+        self.assertIn("min-width: 0", css_rule(css, ".viewed-head > .rule-setter"))
 
     def test_the_notes_field_shows_the_whole_note(self):
         # where the browser sizes a field by its content; a field sized that way
@@ -1184,11 +1199,11 @@ class EveryEditorTests(_LeafCase):
 
     def test_an_unpinned_card_carries_no_expiry(self):
         # a pin still to be set: the field is empty, which is the default, and
-        # there is no expiry to keep
+        # there is no expiry to keep — in the page's one editor, which an admin's
+        # ‖ clones into the card
         self.tree.upsert("/db/ping", StatusCode.OK)
-        card = parse(self.client.get("/status").get_data(as_text=True)).one(
-            "status-card")
-        form = card.one("pin-setter").one(tag="form")
+        page = parse(self.client.get("/status").get_data(as_text=True))
+        form = page.one("pin-setter").one(tag="form")
         self.assertEqual(self._expiry_field(form).attrs.get("value"), "")
         self.assertNotIn("expiry_was", self._hidden(form))
         self.assertNotIn("the pin keeps this expiry", form.text())

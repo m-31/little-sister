@@ -24,6 +24,7 @@ timeout: 10s                 # per-run timeout
 # --- request ---------------------------------------------------------------
 url: https://example.com     # the URL to GET (required)
 # expected_status: 200       # an int, or a list e.g. [200, 204] (default: 200)
+# expected_status_reason: "Only a 200 means the database answered."  # said on error
 
 # Whether a 3xx is followed or reported. Default `true`, which is what this check has
 # always done. Both readings are right somewhere, and they differ on the same URL:

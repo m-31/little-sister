@@ -259,6 +259,16 @@ class Entry:
     passed — and a field beside the record, rather than a key inside it, keeps the
     record the check's own vocabulary.
 
+    ``form`` is the form the line was written from, where its grading asked the
+    library for it (``Check.line``, ADR-0126): the key a deployment's ``display:``
+    block re-words that line under, which the node's page shows beside it. Empty on
+    every line a check wrote as a sentence of its own.
+
+    ``grading`` is the grading that decided the line's code, where a verdict did
+    (``Check.verdict``, ADR-0131): the name a deployment's keys grade that line
+    under, beside the form it re-words it under. Empty on every line no grading of
+    the seam decided.
+
     ``code`` is the entry's **own status** — the verdict of the workflow this line
     stands for, the severity of this finding. ``None`` (the default) means the
     entry carries its node's code, which is every entry that existed before
@@ -279,6 +289,8 @@ class Entry:
     subject: str = ""
     data: dict[str, Any] | None = None
     refused: str = ""
+    form: str = ""
+    grading: str = ""
 
     def __post_init__(self) -> None:
         check_subject(self.subject, "an entry's subject")

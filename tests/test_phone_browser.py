@@ -26,6 +26,8 @@ from little_sister import app as app_module
 from little_sister.reasons import Entry
 from little_sister.status import HEARTBEAT_PATH, StatusCode
 from little_sister.tree import StatusTree
+from tests.browser_looks import looks
+from tests.browser_server import PageServer
 from tests.test_links_guide import FILLED
 from tests.test_series_window import HOST, estate
 
@@ -161,7 +163,8 @@ class PhoneLayoutTests(unittest.TestCase):
             raise unittest.SkipTest(f"no chromium available: {error}") from error
         cls.saved = (app_module.status_tree, app_module.engine)
         app_module.status_tree, app_module.engine = _wide_estate()
-        cls.server = make_server("127.0.0.1", 0, app_module.app, handler_class=_Quiet)
+        cls.server = make_server("127.0.0.1", 0, app_module.app,
+                                 server_class=PageServer, handler_class=_Quiet)
         threading.Thread(target=cls.server.serve_forever, daemon=True).start()
         cls.base = f"http://127.0.0.1:{cls.server.server_port}"
 
@@ -265,7 +268,7 @@ class PhoneLayoutTests(unittest.TestCase):
         f"/status{_UNBROKEN}", f"/history{_UNBROKEN}", f"/copy{_UNBROKEN}",
         # a name with nowhere to break on the wall's cards, at every depth, and
         # a line with a word like it, on its node's page
-        "/status/storage", "/status?view=1&depth=8",
+        "/status/storage", "/status?depth=8",
         "/status/registry", "/status/registry/images")
 
     def test_every_page_fits_a_phone(self):
@@ -297,7 +300,7 @@ class PhoneLayoutTests(unittest.TestCase):
         for layout in ("topbar", "kiosk"):
             self.context.add_cookies([{"name": "ls_prefs", "url": self.base,
                                        "value": f"layout={layout}"}])
-            for route in ("/status", "/status?view=1&depth=8", f"/status{_DEEP}",
+            for route in ("/status", "/status?depth=8", f"/status{_DEEP}",
                           f"/status{_UNBROKEN}", "/events", "/system",
                           "/system/installed", "/history/db/replica",
                           "/maintenance", f"/copy{_DEEP}"):
@@ -312,22 +315,25 @@ class PhoneLayoutTests(unittest.TestCase):
     # --- what was wider ---------------------------------------------------------------
 
     def test_the_bands_filters_wrap_and_stay_in_reach(self):
+        # the two filters and the three buttons that set every node (ADR-0127
+        # decision 7) — the chips switch and the depth control went with dense mode
         self._sign_in()
         self.page.goto(f"{self.base}/status")
         self.page.wait_for_selector(".status-filters")
+        self.page.wait_for_selector(".ls-band__modes:not([hidden])")
         controls = self.page.evaluate(
             """
             () => [...document.querySelectorAll(
-                '.status-filters .form-check, .status-filters__depth')].map(el => {
+                '.status-filters .form-check, .ls-band__mode')].map(el => {
               const box = el.getBoundingClientRect();
               return {left: box.left, right: box.right, top: Math.round(box.top)};
             })
             """)
-        self.assertEqual(len(controls), 4)
+        self.assertEqual(len(controls), 5)
         for control in controls:
             self.assertGreaterEqual(control["left"], 0, controls)
             self.assertLessEqual(control["right"], _WIDTH, controls)
-        # four controls do not fit one line of a phone: they take a second
+        # five controls do not fit one line of a phone: they take a second
         self.assertGreater(len({control["top"] for control in controls}), 1,
                            controls)
         # beneath the stamp, which then has nothing beside it to be ruled off from
@@ -404,6 +410,10 @@ class PhoneLayoutTests(unittest.TestCase):
             gap: parseFloat(getComputedStyle(trail.parentElement).columnGap),
             names: [...trail.children].filter(el => el.textContent.trim() !== '/')
                                       .map(el => edge(el)),
+            // the lines the trail's parts stand on, a name that wraps counted on
+            // each of its lines
+            lines: new Set([...trail.children].flatMap(el => [...el.getClientRects()])
+                                              .map(r => Math.round(r.top))).size,
             kept,
           };
         }
@@ -497,10 +507,14 @@ class PhoneLayoutTests(unittest.TestCase):
         # page is depends on the face it is drawn in — History's band is 980 pixels
         # here, and the trail and the title need 890 of them on a Mac, 917 in
         # Liberation Sans and 1072 in DejaVu Sans — so the band says which it is;
-        # a short page and a leaf's narrow column are far from the edge in any face
+        # a short page and a leaf's narrow column are far from the edge in any of
+        # the plain theme's proportional faces. Cyberpunk's monospace one is wider
+        # still: there the deep trail is wider than the band, and wraps inside it
+        # as the test after this one holds
         desk = self.browser.new_context(viewport={"width": 1189, "height": 900},
                                         reduced_motion="reduce")
         self.addCleanup(desk.close)
+        desk.add_cookies([looks(self.base, theme="plain")])
         self.page = desk.new_page()
         self.page.route("https://cdn.jsdelivr.net/**", self._vendored)
         self._sign_in()
@@ -531,7 +545,8 @@ class PhoneLayoutTests(unittest.TestCase):
 
     def test_on_a_desk_a_trail_wider_than_its_band_wraps_inside_it(self):
         # a leaf's page is a column narrower than a desk's window, and a name can
-        # be wider than that: the trail stays inside the column, as on a phone
+        # be wider than that: the trail stays inside the column, as on a phone, the
+        # name breaking where its words meet
         desk = self.browser.new_context(viewport={"width": 1189, "height": 900},
                                         reduced_motion="reduce")
         self.addCleanup(desk.close)
@@ -545,7 +560,7 @@ class PhoneLayoutTests(unittest.TestCase):
         self.assertGreater(band["trailOwn"], band["band"]["width"], band)
         self.assertLessEqual(band["trail"]["right"], band["band"]["right"] + 0.5,
                              band)
-        self.assertGreater(len({name["top"] for name in band["names"]}), 1, band)
+        self.assertGreater(band["lines"], 1, band)
 
     def test_a_wide_table_scrolls_inside_its_box(self):
         self._sign_in()

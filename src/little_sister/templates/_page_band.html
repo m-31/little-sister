@@ -65,40 +65,41 @@
                            {% if hide_idle %}checked{% endif %} data-ls-submit>
                     <label class="form-check-label" for="hide_idle">hide idle</label>
                 </div>
-                <div class="form-check form-switch">
-                    <input class="form-check-input" type="checkbox" role="switch"
-                           id="dense" name="dense" value="1"
-                           {% if dense %}checked{% endif %} data-ls-submit>
-                    <label class="form-check-label" for="dense">chips</label>
-                </div>
-                <div class="status-filters__depth">
-                    <label class="form-check-label" for="depth">depth</label>
-                    <input class="form-control form-control-sm status-depth"
-                           type="number" id="depth" name="depth"
-                           min="0" max="{{ depth_limit }}" value="{{ max_depth }}"
-                           data-ls-submit>
-                </div>
                 <noscript>
                     <button class="btn btn-sm btn-primary" type="submit">Apply</button>
                 </noscript>
             </form>
+            {#- The three buttons that set every node at once (ADR-0127 decision 7):
+                *Close all*, *As configured* and *Open all*. They work the tab's map
+                (`tree.js`), which is the browser's, so they are hidden without script —
+                where the page has its scripts they stand from the first paint
+                (`ls-script`, `overview.css`) — and the one in force is drawn pressed
+                with the count of what the viewer set in the tab. Outside the filters'
+                form: they submit nothing. The chips switch and the depth control that
+                stood here went with dense mode — a closed node is the chip, and opening
+                a node is its depth. -#}
+            <div class="ls-band__modes" role="group" aria-label="Open or close every node" hidden>
+                <button type="button" class="ls-band__mode" data-mode="closed" aria-pressed="false">Close all<span class="ls-band__count" hidden></span></button>
+                <button type="button" class="ls-band__mode" data-mode="configured" aria-pressed="true">As configured<span class="ls-band__count" hidden></span></button>
+                <button type="button" class="ls-band__mode" data-mode="open" aria-pressed="false">Open all<span class="ls-band__count" hidden></span></button>
+            </div>
             {%- endif %}
         </div>
         {%- endif %}
     </div>
-    {#- What the node is, said once and folded, on every view of it: a line that
-        names it and shows how it begins, cut off where the width runs out, and
-        opened, the text at a reading measure beneath, the preview giving way to it.
-        It was said here in full and again as *About:* in a leaf's status card, so
-        the instance's own nodes, whose `about` is a paragraph, pushed their report
-        down by twice its length. The preview is for the eye alone: a screen reader
-        hears *about*, and opened, the text, never the same words twice. -#}
+    {#- What the node is, said once and open, on every view of it (backlog #91
+        §3.5): its text at a reading measure beneath the trail and the title, and
+        nothing before it. It was said here in full and again as *About:* in a leaf's
+        status card, so the instance's own nodes, whose `about` is a paragraph, pushed
+        their report down by twice its length; then, from 0.3.19, folded behind a line
+        that named it and showed how it began, a click for what the node is. It is the
+        short account of the node, a sentence or a few, and a note at startup names one
+        past about 400 characters (`nodes.py`); what a team writes at length about a
+        node is to be its handbook, a tab of its own (#113). -#}
     {%- if node and node.about %}
-    {%- set about_html = node.about | markdown %}
-    <details class="ls-band__about">
-        <summary><span class="ls-band__about-label">about</span> <span class="ls-band__about-preview" aria-hidden="true">{{ about_html | striptags }}</span></summary>
-        <div class="ls-band__about-body md-body">{{ about_html }}</div>
-    </details>
+    <div class="ls-band__about">
+        <div class="ls-band__about-body md-body">{{ node.about | markdown }}</div>
+    </div>
     {%- endif %}
     {#- A node's views (ADR-0097 decision 3): its status, its series, its history
         and its Copy document, each a route of its own addressed by the node's path.

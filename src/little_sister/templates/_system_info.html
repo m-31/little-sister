@@ -116,8 +116,14 @@
         <tbody>
             {% for c in info.checks %}
                 <tr>
-                    <td><a href="{{ url_for('status', branch=c.path | url_branch) }}">{{ c.path }}</a>
+                    {#- A row is a unit's (ADR-0130): the node it answers for — the
+                        mount, for a check that declares none — with its key on the
+                        muted line where the check declares units, so a check's units
+                        read beneath it in the order it declared them. -#}
+                    {%- set node = c.node or c.path %}
+                    <td><a href="{{ url_for('status', branch=node | url_branch) }}">{{ node }}</a>
                         <div class="text-muted small">{{ c.type_name }}
+                            {%- if c.unit %} · unit {{ c.unit }}{% endif %}
                             {%- if c.depends_on %} · through <a href="{{ url_for('status', branch=c.depends_on | url_branch) }}">{{ c.depends_on }}</a>{% endif %}</div></td>
                     <td>{{ c.frequency_seconds | duration }}</td>
                     <td class="ls-schedule__time">

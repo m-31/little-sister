@@ -17,12 +17,24 @@
         {% include '_said.html' %}
 
         {#- Everything the refresh swaps, and with it every pin the page states
-            and every editor of one (ADR-0104 decisions 2 and 3): a card's block
-            and its pause mark, and on a node's page the head's. The refresh
-            waits while one of those editors is open (decision 7, `poll.js`). -#}
+            and every editor of one that stands (ADR-0104 decisions 2 and 3): a
+            node's block with *Edit* and *Clear*, and on a node's page the head's
+            *Set maintenance*. The refresh waits while one of those editors is open
+            (decision 7, `poll.js`). -#}
+        {#- The shapes of the status cues and of the heads' icons, drawn once for
+            the page (ADR-0127 decisions 2 and 3); every cue and mark in the grid
+            refers to them, so the refresh carries none of the paths. -#}
+        {% from '_status_cue.html' import cue_sprite %}{{ cue_sprite() }}
+        {% from '_rule_block.html' import icon_sprite, pin_editor with context %}{{ icon_sprite() }}
         <div id="status-grid">
             {% include '_status_grid.html' %}
         </div>
+        {#- The one editor of a pin still to be set, for an admin: ‖ in a head's
+            icons clones it into the node's box (ADR-0127 decision 3). Outside the
+            grid, so the refresh carries no editor and never takes this one away. -#}
+        {%- if is_admin and layout != 'kiosk' %}
+        {{ pin_editor(here) }}
+        {%- endif %}
     </div>
 {% include '_page_end.html' %}
 
@@ -42,23 +54,21 @@
        matching one after initial render, a resize or the poll's fragment swap. #}
     <script src="{{ url_for('static', filename='js/dashboard-layout.js') }}"></script>
 
-    {# Reason overflow (ADR-0024): clamps each card's reason block to its line
-       budget with an in-place header chevron (▼/▲) that survives the ~10s fragment swap
-       (event-delegated on #status-grid, the ADR-0019 pattern). #}
-    <script src="{{ url_for('static', filename='js/reasons.js') }}"></script>
-
-    {# Branch density (ADR-0024): the "+N more" reveal for a level's capped quiet
-       boxes, toggled in place and re-applied across the ~10s fragment swap
-       (event-delegated on #status-grid, the ADR-0019 pattern). #}
-    <script src="{{ url_for('static', filename='js/branches.js') }}"></script>
+    {# The tab's map (ADR-0127 decisions 9 and 10): what a viewer opened stands
+       through the ~10s fragment swap and a reload of the tab — every node's face,
+       the folds, a level's "+N more" and a box's *⌄ all N* — which this one script
+       owns, event-delegated on #status-grid (the ADR-0019 pattern); poll.js calls
+       it around each swap, and tree-pending.js in the head holds the grid back
+       until it has run on a load. After the grid, without `defer`. #}
+    <script src="{{ url_for('static', filename='js/tree.js') }}"></script>
     {# Cancel and Escape for a pin's editor, in a card or in a node's head: the
        editor is the browser's own disclosure and works without this. #}
     <script src="{{ url_for('static', filename='js/maintenance-edit.js') }}"></script>
 
-    {# Inspection popover (ADR-0019): static node metadata preloaded with the page
-       (not the polled fragment), rendered into a hover card client-side. #}
+    {# Inspection popover (ADR-0019): what each node's `about` opens with rides in
+       the grid's fragment (#node-meta, `_status_grid.html`), its heading in the
+       node's own head; rendered into a hover card client-side. #}
     <div id="inspect-card" class="inspect-card" role="tooltip" hidden></div>
-    <script type="application/json" id="node-meta">{{ node_meta | tojson }}</script>
     <script src="https://cdn.jsdelivr.net/npm/@floating-ui/core@1.6.8/dist/floating-ui.core.umd.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@floating-ui/dom@1.6.12/dist/floating-ui.dom.umd.min.js"></script>
     <script src="{{ url_for('static', filename='js/inspect.js') }}"></script>

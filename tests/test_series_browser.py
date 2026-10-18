@@ -22,6 +22,7 @@ from urllib.parse import parse_qs, urlsplit
 from wsgiref.simple_server import WSGIRequestHandler, WSGIServer, make_server
 
 from little_sister import app as app_module
+from tests.browser_server import PageServer
 from tests.test_series_window import HOST, SETTINGS, T0, estate
 
 try:  # pragma: no cover - environment probe
@@ -99,7 +100,8 @@ class SeriesPointerTests(unittest.TestCase):
                               return_value=T0 + timedelta(minutes=60))]
         for patch in cls.patches:
             patch.start()
-        cls.server = make_server("127.0.0.1", 0, app_module.app, handler_class=_Quiet)
+        cls.server = make_server("127.0.0.1", 0, app_module.app,
+                                 server_class=PageServer, handler_class=_Quiet)
         threading.Thread(target=cls.server.serve_forever, daemon=True).start()
         cls.base = f"http://127.0.0.1:{cls.server.server_port}"
 

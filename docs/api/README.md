@@ -72,7 +72,9 @@ deployment to believe it. `entries` holds the node's reasons: `addressable` says
 stable slugs that can be pinned one by one, and each item carries its `text`, its own
 `code` where the check declared one, its own `maintenance`, the `subject` it is about
 and the `data` the check read — free-form JSON in the check's own vocabulary, of which
-only `at`, `started` and `ended` are typed, as RFC 3339 UTC date-times at any depth. `run` holds the timing
+only `at`, `started` and `ended` are typed, as RFC 3339 UTC date-times at any depth —
+and the `form` its text was written from, where the check's grading named one: the key
+a deployment re-words that line under, to show beside it and never to parse. `run` holds the timing
 — `observed_at`, `wall_seconds`, `next_at`, `frequency_seconds` where a check reads
 this node's subject on an interval, and `stale_after_seconds`, the tolerance the
 server measured freshness by, wherever it applied one — and is **absent entirely**
@@ -211,7 +213,9 @@ new `damping` rule reports what the parent counted. A client that showed
 **2.4.0 adds `shielded_by` to a node** — the failing dependency it is reached
 through, or null. Additive, and worth reading: while it is set, the node's `code`
 is still its own but nothing of it reaches its parent, so a client that sums
-children itself will otherwise disagree with the server about the tree.
+children itself will otherwise disagree with the server about the tree. Its
+`contribution` says the same — `by: dependency`, `code: null` — unless the node is
+pinned or has never reported, which are named first.
 
 **2.5.0 adds `subject` and `record` to a node** — the object its check measured and
 what that run read about it. Additive. This is where a measurement now lives: a check
@@ -228,6 +232,14 @@ rather than leaving a client to believe the check carried none.
 schemas, and the first `400` this API answers. Additive: nothing of the status read
 moves, and a client that reads no series is unaffected.
 
+**2.8.0 adds `form` and `grading` to an entry** — the form its line was written from,
+where its check's grading named one (little-sister ADR-0126), and the grading that
+decided its code, where one did (little-sister ADR-0131); each null on every other line.
+Additive: `text` is still the line, rendered on the server, and `code` still its code,
+so a client that reads neither is unaffected; one that shows them beside the line tells
+a reader what a deployment writes to make that line say more, and to grade it
+differently.
+
 Decode defensively all the same: tolerate unknown fields and any child order, and
 treat an absent `run` as *nothing answers for this node* rather than as an error.
 
@@ -235,17 +247,22 @@ treat an absent `run` as *nothing answers for this node* rather than as an error
 
 [`openapi.yaml`](openapi.yaml) says what the envelope *may* contain; `envelope-2.json`
 beside it is one envelope that contains all of it — a node with a `run` and one without,
-a run on a schedule carrying `frequency_seconds` and `stale_after_seconds` and one
-carrying neither, entries addressable and prose, an entry carrying `subject` and `data`,
-one carrying neither and one whose record was `refused`, a record carrying the typed
-`at` / `started` / `ended` keys at two depths, a `maintenance` pin and a null, and the
-`instance` block. It carries **both** shapes of `contribution`: the pin's, which
-*withholds* a node and reports `code: null`, and a damped node's, which *transforms* one
-— the node reads ERROR, the parent counted OK, and `contribution.code` is that OK. Those
-two are deliberately both here: before damping every rule withheld, so a fixture with
-only the null would quietly teach a client that `contribution` means *not counted*. It
-is **generated from the server's own API** and a test holds the server to it, so it
-cannot quietly stop being true.
+a run that has never written (present, with a null `observed_at`), a run on a schedule
+carrying `frequency_seconds` and `stale_after_seconds`, the `wall_seconds` it took and
+the `next_at` it is due, and one carrying none of them, entries addressable and prose,
+an entry carrying `subject` and `data`, one carrying neither and one whose record was
+`refused`, an entry written from a `form` beside entries that carry none, an entry whose
+work is `running` and one with a `maintenance` pin of its own,
+a record carrying the typed `at` / `started` / `ended` keys at two depths, a
+`maintenance` pin on a node and a null, `show_when_quiet` in all three of its states,
+and the `instance` block. It carries **both** shapes of `contribution`: the withheld
+one, which reports `code: null` and names its rule (a pin's `maintenance`, a shielded
+node's `dependency`, and `undefined` for a node that has never reported), and a damped
+node's, which *transforms* one — the node reads ERROR, the parent counted OK, and
+`contribution.code` is that OK. Those two are deliberately both here: before damping
+every rule withheld, so a fixture with only the null would quietly teach a client that
+`contribution` means *not counted*. It is **generated from the server's own API** and a
+test holds the server to it, so it cannot quietly stop being true.
 
 Which means it has an obligation attached. A field added to the served snapshot is added
 to this contract in the same change — and it makes this artifact stale in that same

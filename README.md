@@ -269,7 +269,13 @@ lists beneath its curves), whether a failing check keeps its `stacktrace`,
 the card-head placement (`card_status_line`: compact `beside` by default, or the
 standing second line `below`), how cards spend a wide grid's columns
 (`dashboard_columns`: `flow` by default, or `plain` for the fixed one-track
-grid), the failure-retry budget (`retry_interval`, `retry_attempts`), how often
+grid), the looks a browser draws until it chooses its own in the settings menu
+(`theme`: `cyberpunk` by default, or `plain`, `vivid`, `pastel`, `dark` or `auto`;
+`chip_runs`: `aligned` by default, or `wrapped` for runs of chips as they come;
+`inspection_card`: `off` by default, or `pause` for the hover card on a pause over a
+name; `toggle_hover`: `wash` by default, or `outline`, how a head's row and a chip
+answer the pointer), the
+failure-retry budget (`retry_interval`, `retry_attempts`), how often
 the kept state files are written (`state_interval`), how many consecutive worse
 readings a node needs before the level above counts it (`escalate_after`), and the
 engine's five sizing numbers — `max_workers`, `entry_limit`, `memory_share`,

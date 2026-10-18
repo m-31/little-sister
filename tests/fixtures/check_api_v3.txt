@@ -20,9 +20,11 @@
 # surface without API_VERSION moving — the one check a same-commit rename of both
 # the code and the doc cannot quietly satisfy.
 #
-# This file is APPEND-ONLY within an epoch: adding a name to the surface may add a
-# line, removing one is a new epoch and a new file (check_api_v4.txt). Never edit a
-# line out of it; a released plugin is still importing that name.
+# This file is APPEND-ONLY within an epoch: adding a name to the surface adds its
+# line here in the same change — tests/test_public_surface.py refuses a promised name
+# this file lacks — and removing one is a new epoch and a new file
+# (check_api_v4.txt). Never edit a line out of it; a released plugin is still
+# importing that name.
 #
 # One "<module> <name>" per line.
 little_sister.checks API_VERSION
@@ -74,3 +76,19 @@ little_sister.fetch fault_for
 little_sister.fetch fetch
 little_sister.fetch retry_after
 little_sister.series SeriesRecord
+little_sister.rules RULE_WORD
+little_sister.rules Axis
+little_sister.rules Matcher
+little_sister.rules Rule
+little_sister.rules RuleList
+little_sister.reasons plain
+little_sister.process Ended
+little_sister.process Finished
+little_sister.process NotStarted
+little_sister.process run
+little_sister.checks Unit
+little_sister.checks parse_size
+little_sister.grading Graded
+little_sister.grading GradingBlock
+little_sister.grading Verdict
+little_sister.grading worst

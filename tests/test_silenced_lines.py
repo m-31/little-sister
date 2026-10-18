@@ -141,15 +141,23 @@ class WhatItSaysTests(_Silenced):
 
     def test_its_box_on_the_pages_above_says_it(self) -> None:
         # pale where the nodes beneath it are drawn with it, as any card is
-        # (ADR-0123 decision 2)
-        for url, pale in ((f"/status/{_branch(ACCOUNT)}?depth=2", True),
-                          (f"/status/{_branch(ACCOUNT)}?depth=1", False),
-                          ("/status/cloud/aws?depth=2", False)):
+        # (ADR-0123 decision 2) — and the tree draws them with it at every depth,
+        # open or closed (ADR-0127 decision 1); a `depth=` closes the box, but the
+        # failure beneath it opens its way within its card's budget (ADR-0128), so
+        # the box stands open where the depth closed it
+        for url, closed in ((f"/status/{_branch(ACCOUNT)}?depth=2", False),
+                            (f"/status/{_branch(ACCOUNT)}?depth=1", True),
+                            ("/status/cloud/aws?depth=2", True)):
             with self.subTest(url=url):
-                box = _drawn(self._page(url), ASPECT)
+                page = self._page(url)
+                box = _drawn(page, ASPECT)
                 self.assertEqual((_color(box), _word(box)), ("error", "error"))
-                self.assertIs(box.has("dim"), pale)
+                self.assertTrue(box.has("dim"))
                 self.assertEqual(_beside(box), [])
+                node = next(node for node in page.all("tree-node")
+                            if node.attrs.get("data-node") == ASPECT)
+                self.assertEqual(node.attrs.get("data-state"), "open")
+                self.assertEqual("data-budget" in node.attrs, closed)
 
     def test_its_time_card_says_where_its_status_comes_from(self) -> None:
         # the node beneath it that makes it so, with that node's own *since*

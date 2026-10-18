@@ -157,6 +157,48 @@ class JsonApiTests(TestCase):
                          ("CI: failed (#41)", "ERROR", "1296269"))
         self.assertIsNone(lint["refused"])
 
+    def test_an_entry_names_the_form_it_was_written_from(self):
+        """2.8.0 (ADR-0126 decision 7): a line its grading asked the library for
+        names the form it was written from, the key a deployment re-words it under —
+        and a line its check wrote as a sentence of its own carries null, never an
+        absent field."""
+        self.tree.upsert("/ci", StatusCode.ERROR, [
+            Entry("build", "CI: failed (#41)", code=StatusCode.ERROR,
+                  subject="1296269", data={"workflow": "CI", "run_number": 41},
+                  form="actions.verdict"),
+            Entry("lint", "lint passed", code=StatusCode.OK),
+        ], members=True)
+        envelope = self.client.get("/status/ci", headers=JSON).get_json()
+        self.assertEqual(envelope["schema_version"], 2)
+        build, lint = envelope["status"]["entries"]["items"]
+        self.assertEqual(build["form"], "actions.verdict")
+        self.assertEqual((build["text"], build["code"], build["data"]["run_number"]),
+                         ("CI: failed (#41)", "ERROR", 41))
+        self.assertIn("form", lint)
+        self.assertIsNone(lint["form"])
+
+    def test_an_entry_names_the_grading_that_decided_its_code(self):
+        """2.8.0 (ADR-0131 decision 1): a line a grading decided names that grading,
+        the name a deployment writes the keys of to grade it differently, whether it
+        was written from a form or as a sentence of its own — and a line no grading
+        decided carries null, never an absent field."""
+        self.tree.upsert("/host", StatusCode.WARN, [
+            Entry("disk", "disk: 85% used — the backups land here",
+                  code=StatusCode.WARN, grading="max_disk"),
+            Entry("build", "CI: failed (#41)", code=StatusCode.ERROR,
+                  form="actions.verdict", grading="actions.conclusion_map"),
+            Entry("lint", "lint passed", code=StatusCode.OK),
+        ], members=True)
+        envelope = self.client.get("/status/host", headers=JSON).get_json()
+        self.assertEqual(envelope["schema_version"], 2)
+        disk, build, lint = envelope["status"]["entries"]["items"]
+        self.assertEqual((disk["grading"], disk["form"], disk["code"]),
+                         ("max_disk", None, "WARN"))
+        self.assertEqual((build["grading"], build["form"]),
+                         ("actions.conclusion_map", "actions.verdict"))
+        self.assertIn("grading", lint)
+        self.assertIsNone(lint["grading"])
+
     def test_a_damped_node_publishes_a_real_code_in_its_contribution(self):
         """The first rule that **transforms** rather than withholds: `code` is the
         value the parent counted, not null, which is the case ADR-0080 decision 2
@@ -501,11 +543,12 @@ class TheSpecIsTheContract(TestCase):
 
     def _a_tree_that_uses_every_shape(self):
         """One tree exercising every branch of the schema that has one: a pinned
-        node, a pinned entry, a coded entry, an entry whose record was refused, a
-        rank, a schedule, a container nothing answers for, and a node that has never
-        reported."""
+        node, a pinned entry, a coded entry, an entry whose record was refused, one
+        written from a form, a rank, a schedule, a container nothing answers for, and
+        a node that has never reported."""
         self.tree.upsert("/ci", StatusCode.ERROR, [
-            Entry("build", "build #4215 failed", code=StatusCode.ERROR, running=True),
+            Entry("build", "build #4215 failed", code=StatusCode.ERROR, running=True,
+                  form="ci.verdict"),
             Entry("lint", "lint #4215 passed", code=StatusCode.OK),
             Entry("deploy", "deploy #88 passed", code=StatusCode.OK,
                   refused="it is 2,811 bytes and the limit is 2,048"),

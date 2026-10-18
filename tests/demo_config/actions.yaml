@@ -44,7 +44,11 @@ actions:
   # An action that appears on one subtree and nowhere else: `under:` is compared
   # segment-wise, so this covers /security and /security/audit and would never
   # reach a /securityscan. It is the half of the selector vocabulary that is
-  # settled; a `tag:` selector waits for tags to exist.
+  # settled; a `tag:` selector waits for tags to exist. With an icon it is drawn
+  # as a square among the head's own buttons, its label the tooltip — beside the
+  # labelled *File it* chip, which names none — and on a phone, where `wiz`'s box
+  # has room for neither, both fold behind ⋯; never one alone where the state's own
+  # line beneath keeps it in the row.
   - label: Runbook
     slot: node.actions
     under: /security

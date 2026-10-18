@@ -6,10 +6,11 @@ on a port of its own, renders the fixture sheet beside it, and drives headless
 Chromium over both at three widths and on an emulated phone: the wall, a branch's
 page and a leaf's, the Series index with its folds open and a Series view, a
 subject's node and its runs' marks, Events, Maintenance, History, System, Links and
-Copy; it hovers every card head, which raises the inspection card where a node has
-one, drags a stretch across a curve, and pins the demo's job name that comes and
-goes, so that what a removed node leaves — its event, its suspended pin, its kept
-readings — is on the pages it visits last.
+Copy; it rests on every card head's name, which raises the inspection card where a
+node has one — its browser chooses the card on a pause (:data:`CHOSEN_LOOKS`) — drags a
+stretch across a curve, and pins the demo's job name that comes and goes, so that what
+a removed node leaves — its event, its suspended pin, its kept readings — is on the
+pages it visits last.
 
 Every step leaves a screenshot and what the browser said while it was taken: the
 console's errors, the Content-Security-Policy reports the page sent, and how far its
@@ -33,6 +34,7 @@ Dev-only: lives under ``tests/`` and never ships in the package.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import html
 import json
 import os
@@ -46,6 +48,7 @@ from collections.abc import Callable, Iterator, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
 
 _HERE = Path(__file__).resolve().parent
 _REPO_ROOT = _HERE.parent
@@ -93,6 +96,22 @@ class Profile:
 PROFILES = (Profile("desk-1440", 1440, 900), Profile("desk-1000", 1000, 800),
             Profile("desk-700", 700, 800), Profile("phone-390", 390, 800, phone=True))
 
+#: The looks the walk's browser chooses on the demo, as a viewer does in the settings
+#: menu (ADR-0029): the inspection card on a pause, which the walk raises on every
+#: card head, where the library's look keeps it off since 2026-10-18
+#: (``little_sister.looks``). Every other look is the library's.
+CHOSEN_LOOKS = {"inspection_card": "pause"}
+
+
+def open_context(browser: Any, profile: Profile, base: str) -> Any:
+    """A browser context of ``profile``'s screen for ``base``'s pages, the walk's
+    :data:`CHOSEN_LOOKS` chosen in the presentation cookie."""
+    context = browser.new_context(**profile.context())
+    context.add_cookies([{"name": "ls_prefs", "url": base,
+                          "value": urlencode(CHOSEN_LOOKS)}])
+    return context
+
+
 #: The facts a step is measured against: a name, what it holds a page to, and a
 #: script that answers every place the page does not hold it — an empty list where
 #: it does. Each is a function of the document alone, so a test can hand it a page
@@ -125,8 +144,8 @@ FACTS: dict[str, tuple[str, str]] = {
             return found;
         }"""),
     "head-overlap": (
-        "In a card's head the name, the title and the state do not lie over one "
-        "another.",
+        "In a head's row the name, the title, the actions, the state and the icons "
+        "do not lie over one another.",
         """() => {
             const found = [];
             const shown = (el) => {
@@ -135,27 +154,50 @@ FACTS: dict[str, tuple[str, str]] = {
                 return style.visibility !== 'hidden' && style.display !== 'none'
                     && Number(style.opacity) > 0.05 && box.width > 0 && box.height > 0;
             };
-            for (const head of document.querySelectorAll('.status-card__head')) {
-                // Two things lie over others on purpose and are not held apart: an
-                // action chip over the title while it shows (ADR-0034), and the
-                // pause mark on the seat the state keeps for it (ADR-0104).
+            // A name is its lines, not its box: where it broke onto a second line,
+            // the state may stand on that line beside it (ADR-0127 decision 3).
+            const rectsOf = (el) => {
+                if (el.matches('.status-card__name, .status-node__name')) {
+                    const range = document.createRange();
+                    range.selectNodeContents(el);
+                    const lines = Array.from(range.getClientRects())
+                        .filter((r) => r.width > 0 && r.height > 0);
+                    if (lines.length) { return lines; }
+                }
+                return [el.getBoundingClientRect()];
+            };
+            for (const head of document.querySelectorAll(
+                    '.status-card__head, .tree-box > .status-node__self')) {
+                // The row's parts, and the controls at its end: the node's actions
+                // and ⋯, the state cluster and the icons (ADR-0127 decision 3).
                 const parts = Array.from(head.querySelectorAll(
-                    ':scope > .status-card__name, :scope > .status-head__middle,'
-                    + ' :scope > .status-card__state')).filter(shown);
+                    ':scope > .status-card__name, :scope > .status-node__name,'
+                    + ' :scope > .status-head__middle,'
+                    + ' :scope > .node-controls > .node-actions > *,'
+                    + ' :scope > .node-controls > .node-more,'
+                    + ' :scope > .node-controls > .status-card__state,'
+                    + ' :scope > .node-controls > .status-node__state,'
+                    + ' :scope > .node-controls > .node-icons')).filter(shown);
                 for (let i = 0; i < parts.length; i += 1) {
                     for (let j = i + 1; j < parts.length; j += 1) {
-                        const a = parts[i].getBoundingClientRect();
-                        const b = parts[j].getBoundingClientRect();
-                        const wide = Math.min(a.right, b.right)
-                            - Math.max(a.left, b.left);
-                        const tall = Math.min(a.bottom, b.bottom)
-                            - Math.max(a.top, b.top);
-                        if (wide > 2 && tall > 2) {
+                        let over = null;
+                        for (const a of rectsOf(parts[i])) {
+                            for (const b of rectsOf(parts[j])) {
+                                const wide = Math.min(a.right, b.right)
+                                    - Math.max(a.left, b.left);
+                                const tall = Math.min(a.bottom, b.bottom)
+                                    - Math.max(a.top, b.top);
+                                if (wide > 2 && tall > 2 && !over) {
+                                    over = [wide, tall];
+                                }
+                            }
+                        }
+                        if (over) {
                             const name = (el) => el.className.toString().split(' ')[0]
                                 || el.tagName.toLowerCase();
                             found.push(`${head.dataset.path}: .${name(parts[i])} and `
                                 + `.${name(parts[j])} overlap by `
-                                + `${Math.round(wide)}×${Math.round(tall)}px`);
+                                + `${Math.round(over[0])}×${Math.round(over[1])}px`);
                         }
                     }
                 }
@@ -345,9 +387,18 @@ def _sign_in(walk: Walk, base: str) -> None:
         page.click("button[type=submit]")
 
 
+#: Longer than the inspection card waits for: the pointer at rest on a name for two
+#: thirds of a second (``inspect.js``). On a phone, long enough to see it is not
+#: offered.
+_CARD_IS_DUE = 900
+
+
 def _heads(walk: Walk, base: str, where: str, label: str) -> None:
-    """Point at every card head of a page — a tap on a phone — and record each: the
-    inspection card comes up where the node has one."""
+    """Point at every card head's name of a page and record each: on a desk the
+    inspection card comes up where the node has one, once the pointer has rested
+    there; on a phone a tap on the name closes the card to one line and the card is
+    not offered (ADR-0127 decision 11), and a second tap opens it again, so the page
+    walks on as it was."""
     page = walk.page
     walk.goto(f"{base}{where}")
     walk.step(label)
@@ -358,23 +409,29 @@ def _heads(walk: Walk, base: str, where: str, label: str) -> None:
         try:
             head.scroll_into_view_if_needed(timeout=2000)
             if walk.profile.phone:
-                head.tap(timeout=2000)
+                head.locator(".status-card__name").tap(timeout=2000)
             else:
-                head.hover(timeout=2000)
+                head.locator(".status-card__name").hover(timeout=2000)
         except Exception as error:
             walk.steps.append(Step(walk.profile.name, f"{label}: head {path}",
                                    page.url, note=f"not reached: {error}"[:200]))
             continue
-        page.wait_for_timeout(350)
+        page.wait_for_timeout(_CARD_IS_DUE)
         raised = page.evaluate(
             "() => { const c = document.getElementById('inspect-card');"
             " return !!c && !c.hidden; }")
+        state = head.evaluate(
+            "head => head.closest('.tree-node')?.getAttribute('data-state-now')")
         walk.step(f"{label}: head {path}",
-                  "inspection card raised" if raised else "no inspection card")
+                  ("inspection card raised" if raised else "no inspection card")
+                  + (f", the card {state}" if walk.profile.phone and state else ""))
         if page.url.split("?")[0].rstrip("/") != f"{base}{where}".rstrip("/"):
-            # a tap that opened the node instead: back to the page being walked
+            # a tap that opened the node's page instead: back to the page walked
             walk.goto(f"{base}{where}")
         elif walk.profile.phone:
+            if state == "closed":
+                head.locator(".status-card__name").tap(timeout=2000)
+                page.wait_for_timeout(100)
             page.keyboard.press("Escape")
     if not walk.profile.phone:
         page.mouse.move(2, 2)
@@ -455,8 +512,8 @@ def _pin_what_goes(walk: Walk, base: str, wait: Callable[[float], None]) -> bool
         walk.step("pin: the node never stood", "no pin set")
         return False
     try:
-        card.first.hover()
-        card.first.locator("summary.pin-control").first.click(timeout=3000)
+        card.first.locator('.status-card__head [data-control="pin"]').first.click(
+            timeout=3000)
         page.wait_for_function(
             "document.activeElement !== null"
             " && document.activeElement.name === 'reason'", timeout=3000)
@@ -503,7 +560,7 @@ def walk_demo(browser: Any, base: str, out: Path, steps: list[Step],
     """The live demo, on every screen."""
     walks: list[tuple[Any, Walk]] = []
     for profile in profiles:
-        context = browser.new_context(**profile.context())
+        context = open_context(browser, profile, base)
         walk = Walk(context.new_page(), profile, out, steps)
         walks.append((context, walk))
         _sign_in(walk, base)
@@ -566,6 +623,28 @@ def start_demo(state: Path, offset: str = "36s") -> tuple[Any, str]:
     server = make_server("127.0.0.1", 0, app, threaded=True)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server, f"http://127.0.0.1:{server.server_port}"
+
+
+@contextlib.contextmanager
+def demo(offset: str = "36s") -> Iterator[str]:
+    """The live demo as :func:`start_demo` starts it, in a directory of its own for as
+    long as the walk takes; its address. Once a process: the application starts and
+    stops once. The demo runs in that directory (``tests/demo_wsgi.py``), and its
+    instance keeps its state and its lease there, so on the way out the server stops,
+    then the instance — its one save, its lease let go — and the process goes back
+    where it was, all before the directory goes. Left to the stop at exit, the
+    instance found its lease gone with the directory and logged that it no longer
+    saved, and the process stood in a directory that was no more."""
+    here = Path.cwd()
+    with tempfile.TemporaryDirectory() as state:
+        server, base = start_demo(Path(state), offset)
+        try:
+            yield base
+        finally:
+            server.shutdown()
+            from little_sister.app import stop
+            stop(trigger="the walk's end")
+            os.chdir(here)
 
 
 def facts_counted(steps: Sequence[Step]) -> dict[str, int]:
@@ -651,8 +730,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     steps: list[Step] = []
     pages = [] if args.no_fixtures else render_fixtures(out)
-    with tempfile.TemporaryDirectory() as state:
-        server, base = start_demo(Path(state))
+    with demo() as base:
         try:
             with sync_playwright() as play:
                 browser = play.chromium.launch(executable_path=(
@@ -664,7 +742,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 walk_fixtures(browser, pages, out, steps)
                 browser.close()
         finally:
-            server.shutdown()
             index = write(steps, out)
     marked = sum(1 for step in steps if step.marked)
     print(f"{len(steps)} steps, {marked} marked: {index}")

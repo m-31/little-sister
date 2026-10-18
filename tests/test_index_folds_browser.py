@@ -28,6 +28,8 @@ from little_sister.engine import Engine
 from little_sister.series import MemoryStore, SeriesKey, SeriesRecord
 from little_sister.status import StatusCode
 from little_sister.tree import StatusTree
+from tests.browser_looks import looks
+from tests.browser_server import PageServer
 from tests.test_series_index import T0, _Cost, _Kept
 
 try:  # pragma: no cover - environment probe
@@ -76,6 +78,15 @@ _TABLE = """() => {
     return {table: box.scrollWidth, box: box.clientWidth,
             page: document.documentElement.scrollWidth, screen: window.innerWidth};
 }"""
+#: How many lines each open fold's three numbers take.
+_SAYS_LINES = """() => Array.from(document.querySelectorAll(
+    '.ls-series-index details[open] .ls-spark-row__says'))
+    .map(says => Math.round(says.getBoundingClientRect().height
+         / parseFloat(getComputedStyle(says).lineHeight)))"""
+#: How each open fold's three numbers may wrap.
+_SAYS_WRAP = """() => Array.from(document.querySelectorAll(
+    '.ls-series-index details[open] .ls-spark-row__says'))
+    .map(says => getComputedStyle(says).whiteSpace)"""
 #: Every part of every open fold, and each fold's own control, that is not wholly
 #: inside the screen's width.
 _OUTSIDE = """() => Array.from(document.querySelectorAll(
@@ -145,7 +156,8 @@ class IndexFoldsBrowserTests(unittest.TestCase):
             raise unittest.SkipTest(f"no chromium available: {error}") from error
         cls.saved = (app_module.status_tree, app_module.engine)
         app_module.status_tree, app_module.engine = _estate()
-        cls.server = make_server("127.0.0.1", 0, app_module.app, handler_class=_Quiet)
+        cls.server = make_server("127.0.0.1", 0, app_module.app,
+                                 server_class=PageServer, handler_class=_Quiet)
         threading.Thread(target=cls.server.serve_forever, daemon=True).start()
         cls.base = f"http://127.0.0.1:{cls.server.server_port}"
 
@@ -158,9 +170,11 @@ class IndexFoldsBrowserTests(unittest.TestCase):
         cls.browser.close()
         cls.playwright.stop()
 
-    def _index(self, **drawn_in: Any) -> Any:
+    def _index(self, *, theme: str | None = None, **drawn_in: Any) -> Any:
         context = self.browser.new_context(reduced_motion="reduce", **drawn_in)
         self.addCleanup(context.close)
+        if theme is not None:
+            context.add_cookies([looks(self.base, theme=theme)])
         page = context.new_page()
         page.route("https://cdn.jsdelivr.net/**", self._vendored)
         page.goto(f"{self.base}/login")
@@ -184,17 +198,26 @@ class IndexFoldsBrowserTests(unittest.TestCase):
     # --- a laptop's window --------------------------------------------------------
 
     def test_with_every_fold_open_the_table_is_no_wider_than_its_box(self) -> None:
-        # at the laptop's window, and up to the width where the numbers keep one line
-        for width in (946, 1200, 1399):
-            page = self._index(viewport={"width": width, "height": 900})
-            with self.subTest(width=width):
-                closed = page.evaluate(_TABLE)
-                self.assertLessEqual(closed["table"], closed["box"], closed)
-                page.evaluate(_OPEN_ALL)
-                opened = page.evaluate(_TABLE)
-                self.assertLessEqual(opened["table"], opened["box"], opened)
-                self.assertEqual(page.locator("svg.ls-spark").count(),
-                                 5 * len(_HOSTS) + 1)
+        # up to the width where the numbers keep one line, wrapping beneath their
+        # strips, in the library's theme and in the plain one; at the laptop's window
+        # in the plain theme's proportional faces alone: cyberpunk's monospace one
+        # stands the table a pixel past its box there with every fold closed and 27
+        # with every fold open, a scroll in the box (2026-10-18)
+        for theme, widths in (("plain", (946, 1200, 1499)),
+                              ("cyberpunk", (1200, 1400, 1499))):
+            for width in widths:
+                page = self._index(theme=theme,
+                                   viewport={"width": width, "height": 900})
+                with self.subTest(theme=theme, width=width):
+                    closed = page.evaluate(_TABLE)
+                    self.assertLessEqual(closed["table"], closed["box"], closed)
+                    page.evaluate(_OPEN_ALL)
+                    opened = page.evaluate(_TABLE)
+                    self.assertLessEqual(opened["table"], opened["box"], opened)
+                    self.assertEqual(page.locator("svg.ls-spark").count(),
+                                     5 * len(_HOSTS) + 1)
+                    # below the one line's width they may wrap, in every theme
+                    self.assertEqual(set(page.evaluate(_SAYS_WRAP)), {"normal"})
 
     def test_a_closed_fold_is_one_line_in_its_row(self) -> None:
         # ADR-0103 decision 2, as it was: closed, a fold is its count and nothing
@@ -246,22 +269,23 @@ class IndexFoldsBrowserTests(unittest.TestCase):
 
     def test_on_a_wide_window_a_curves_numbers_are_one_line(self) -> None:
         # newest, lowest and highest beneath a strip, where the table has the room:
-        # from 1400 pixels. How much room is the face's to say — this estate's table
-        # needs 1097 pixels with the numbers on one line in Inter and 1162 in DejaVu
-        # Sans, against a box of 1066 at 1200 — and the line has to hold in each
-        for width in (1400, 1600):
-            page = self._index(viewport={"width": width, "height": 900})
-            page.evaluate(_OPEN_ALL)
-            lines = page.evaluate("""() => Array.from(document.querySelectorAll(
-                '.ls-series-index details[open] .ls-spark-row__says'))
-                .map(says => Math.round(says.getBoundingClientRect().height
-                     / parseFloat(getComputedStyle(says).lineHeight)))""")
-            with self.subTest(width=width):
-                self.assertGreater(len(lines), 5)
-                self.assertEqual(set(lines), {1}, lines)
-                # and the table is still no wider than its box
-                measured = page.evaluate(_TABLE)
-                self.assertLessEqual(measured["table"], measured["box"], measured)
+        # from 1500 pixels, in every theme. How much room is the face's to say — this
+        # estate's table needs 1097 pixels with the numbers on one line in Inter and
+        # 1162 in DejaVu Sans, against a box of 1066 at 1200, and cyberpunk's
+        # monospace face 1309, against a box of 1266 at 1400 (2026-10-18) — and the
+        # line has to hold in each
+        for theme in ("plain", "cyberpunk"):
+            for width in (1500, 1600):
+                page = self._index(theme=theme,
+                                   viewport={"width": width, "height": 900})
+                page.evaluate(_OPEN_ALL)
+                lines = page.evaluate(_SAYS_LINES)
+                with self.subTest(theme=theme, width=width):
+                    self.assertGreater(len(lines), 5)
+                    self.assertEqual(set(lines), {1}, lines)
+                    # and the table is still no wider than its box
+                    measured = page.evaluate(_TABLE)
+                    self.assertLessEqual(measured["table"], measured["box"], measured)
 
     # --- a phone ------------------------------------------------------------------
 

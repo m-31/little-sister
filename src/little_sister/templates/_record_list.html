@@ -10,10 +10,10 @@
     data (ADR-0018).
 
     Its ink is Bootstrap's muted one where the list stands on a surface whose
-    fills are pale — a leaf's alert, the node-facts card — and the ink of what it
-    stands in elsewhere (``muted=false``): a branch's head and its depth-0 card are
-    status fills, and on a vivid one the muted gray measured 3.4:1 in the light
-    themes and 1.9:1 in the dark ones. -#}
+    fills are pale — the node-facts card — and the ink of what it stands in
+    elsewhere (``muted=false``): a line's record stands on its page's head or on
+    the one card of `depth=0`, status fills, and on a vivid one the muted gray
+    measured 3.4:1 in the light themes and 1.9:1 in the dark ones. -#}
 {%- macro record_list(record, extra_class="", muted=true) -%}
 <dl class="reason-record small{% if muted %} text-muted{% endif %}{% if extra_class %} {{ extra_class }}{% endif %}">
     {%- for field in record | record_fields %}

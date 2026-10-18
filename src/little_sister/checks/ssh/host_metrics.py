@@ -21,7 +21,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from little_sister import values
 from little_sister.checks.base import (
     CheckError,
     CheckResult,
@@ -37,12 +36,12 @@ from little_sister.checks.ssh.base import (
     parse_descriptions,
 )
 from little_sister.checks.ssh.metrics import (
-    grade,
     human_duration,
     human_kb,
     parse_metrics,
     reading,
     readings,
+    refuse_thresholds,
     unavailable,
     volume_name,
 )
@@ -95,15 +94,36 @@ MEASURES: dict[str, dict[str, object]] = {
                       "node": "disk/*", "axis_to": 100},
 }
 
-# (warn, error) — a value at or above the bound takes that status. Disk/memory/cpu
-# are percentages; load is the 1-minute average per CPU core. Sensible defaults;
-# override per aspect in the check's YAML.
-DEFAULT_THRESHOLDS: dict[str, tuple[float, float]] = {
-    "disk": (80.0, 90.0),
-    "memory": (85.0, 95.0),
-    "cpu": (85.0, 95.0),
-    "load": (0.8, 1.0),
+#: What this type grades (ADR-0131), each a maximum among the check's own keys: how
+#: full a filesystem may be — each volume's alike, where `disk_path` names several —
+#: how much of the memory may be in use, how busy the processor, and the one-minute
+#: load per core. Each level is the last value that passes; the defaults are the
+#: levels this type has always shipped, and a deployment re-sets any of them, or
+#: switches one off with `max_cpu: null`, in the check's own YAML.
+GRADINGS: dict[str, object] = {
+    "max_disk": {
+        "sentence": "How full a filesystem may be, each volume's alike where "
+                    "several are read.",
+        "kind": "pair", "field": "disk_pct", "unit": "share",
+        "warn": "80%", "error": "90%"},
+    "max_memory": {
+        "sentence": "How much of the host's memory may be in use.",
+        "kind": "pair", "field": "mem_pct", "unit": "share",
+        "warn": "85%", "error": "95%"},
+    "max_cpu": {
+        "sentence": "How busy the processor may be: 100% less its idle time.",
+        "kind": "pair", "field": "cpu_pct", "unit": "share",
+        "warn": "85%", "error": "95%"},
+    "max_load": {
+        "sentence": "The one-minute load average per CPU core.",
+        "kind": "pair", "field": "load1_per_core", "unit": "number",
+        "warn": 0.8, "error": 1.0},
 }
+
+#: What replaced each aspect of the retired `thresholds:` block, and the unit its
+#: level is written with.
+RETIRED_THRESHOLDS = {"disk": ("max_disk", "%"), "memory": ("max_memory", "%"),
+                      "cpu": ("max_cpu", "%"), "load": ("max_load", "")}
 
 # The leaf nodes this check owns beneath the host node: the peer ``ssh`` transport
 # leaf plus one per metric. ``disk`` may itself fan out per-filesystem, but owning
@@ -164,17 +184,16 @@ class HostMetricsCheck(SshScriptCheck):
     """Collect disk/memory/cpu/load from a host over SSH and report the host node
     with a peer ``ssh`` leaf plus a leaf per metric (all siblings)."""
 
-    def __init__(self, *, thresholds: dict[str, tuple[float, float]],
-                 descriptions: dict[str, str] | None = None,
+    def __init__(self, *, descriptions: dict[str, str] | None = None,
                  disk_path: str | None = None, profile: str = DEFAULT_PROFILE,
                  **kwargs: Any) -> None:
         # The per-aspect labels this type ships (ADR-0025). Declared, not applied:
         # the library resolves them against the deployment's `subnodes:` block and
         # the engine writes the result per child name, so nothing below reads a
-        # config key or layers a default.
+        # config key or layers a default. What it grades is declared the same way,
+        # and the library reads the deployment's levels (ADR-0131).
         super().__init__(subnode_defaults=SUBNODE_DEFAULTS,
-                         measure_defaults=MEASURES, **kwargs)
-        self.thresholds = thresholds
+                         measure_defaults=MEASURES, gradings=GRADINGS, **kwargs)
         self.descriptions = descriptions or {}
         self.disk_path = disk_path
         self.profile = profile
@@ -184,11 +203,11 @@ class HostMetricsCheck(SshScriptCheck):
                            base_dir: Path) -> dict[str, Any]:
         profile = _parse_profile(config.get("profile"))
         default_script, interpreter = PROFILES[profile]
+        refuse_thresholds(config.get("thresholds"), RETIRED_THRESHOLDS)
         return {
             **cls._connection_from_config(config, base_dir, default_script),
             "interpreter": interpreter,
             "profile": profile,
-            "thresholds": _parse_thresholds(config.get("thresholds")),
             "descriptions": parse_descriptions(config.get("descriptions")),
             "disk_path": _parse_disk_path(config.get("disk_path")),
         }
@@ -203,12 +222,10 @@ class HostMetricsCheck(SshScriptCheck):
         return config_markdown(fields)
 
     def _threshold_md(self, aspect: str) -> str:
-        """Config Markdown for a metric leaf — the grading thresholds it ran with
+        """Config Markdown for a metric leaf — the levels it was graded by
         (ADR-0013). ``load`` is a per-core average; the rest are percentages."""
-        warn, error = self.thresholds[aspect]
-        unit = "" if aspect == "load" else "%"
-        return config_markdown({"warn at": f"{warn:g}{unit}",
-                                "error at": f"{error:g}{unit}"})
+        return config_markdown({
+            "graded": self.grading_summary(f"max_{aspect}") or "not graded"})
 
     def _describe(self, leaf: str, default: str) -> str:
         """A leaf's description: the ``descriptions:`` override or the built-in
@@ -433,14 +450,14 @@ class HostMetricsCheck(SshScriptCheck):
         if pct is None:
             return unavailable(name, description, self._volume_about(),
                                dynamic=True)
-        warn, error = self.thresholds["disk"]
+        verdict = self.verdict("max_disk", value=float(pct))
         free = human_kb(sub.get("avail_kb"))
         total = human_kb(sub.get("total_kb"))
         mount = str(sub.get("path") or "")
         detail = f" — {free} free of {total}" if free and total else ""
         suffix = f" on {plain(mount)}" if mount else ""
-        return CheckResult(grade(float(pct), warn, error),
-                           [f"{float(pct):.0f}% used{detail}{suffix}"],
+        return CheckResult(verdict.code,
+                           [verdict.entry(f"{float(pct):.0f}% used{detail}{suffix}")],
                            name=name, description=description,
                            about=self._volume_about(),
                            config=self._threshold_md("disk"), dynamic=True)
@@ -453,8 +470,8 @@ class HostMetricsCheck(SshScriptCheck):
         if value is None:
             return unavailable(name, description)
         pct = float(value)
-        warn, error = self.thresholds[name]
-        return CheckResult(grade(pct, warn, error), [reason(record, pct)],
+        verdict = self.verdict(f"max_{name}", value=pct)
+        return CheckResult(verdict.code, [verdict.entry(reason(record, pct))],
                            name=name, description=self._describe(name, description),
                            config=self._threshold_md(name))
 
@@ -483,9 +500,9 @@ class HostMetricsCheck(SshScriptCheck):
         per_core = float(per_core)
         load1 = float(record.get("load1") or 0)
         ncpu = max(1, int(record.get("ncpu") or 1))
-        warn, error = self.thresholds["load"]
+        verdict = self.verdict("max_load", value=per_core)
         reason = f"{per_core:.2f} per core — load1 {load1:.2f} over {ncpu} CPUs"
-        return CheckResult(grade(per_core, warn, error), [reason],
+        return CheckResult(verdict.code, [verdict.entry(reason)],
                            name=name, description=description,
                            config=self._threshold_md("load"))
 
@@ -535,20 +552,3 @@ def _parse_disk_path(value: Any) -> str | None:
         return "\n".join(str(item) for item in value if str(item)) or None
     return str(value) if value else None
 
-
-def _parse_thresholds(raw: Any) -> dict[str, tuple[float, float]]:
-    """Merge per-aspect ``{warn, error}`` overrides over the defaults."""
-    if raw is None:
-        return dict(DEFAULT_THRESHOLDS)
-    if not isinstance(raw, dict):
-        raise CheckError("'thresholds' must be a mapping")
-    parsed: dict[str, tuple[float, float]] = {}
-    for aspect, (default_warn, default_error) in DEFAULT_THRESHOLDS.items():
-        spec = raw.get(aspect) or {}
-        if not isinstance(spec, dict):
-            raise CheckError(f"thresholds.{aspect} must be a mapping")
-        where = f"thresholds.{aspect}"
-        parsed[aspect] = (
-            values.real(spec, "warn", default=default_warn, where=where),
-            values.real(spec, "error", default=default_error, where=where))
-    return parsed

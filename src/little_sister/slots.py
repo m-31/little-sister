@@ -134,10 +134,15 @@ SLOTS: Mapping[str, Slot] = {
     ),
     "node.actions": Slot(
         name="node.actions",
-        context=("node", "surface"),
-        where="on every node the dashboard grid draws as a box — a card head and "
-              "each nested box under it — and beside the status on a leaf's own "
-              "page; an action whose subject is the whole node",
+        context=("node", "surface", "place"),
+        where="in the head's row of every node the dashboard grid draws, open or "
+              "closed — a card head, each nested box under it — and on a node's page, "
+              "a branch's or a leaf's, in the frame head of the node itself; an "
+              "action whose subject is the whole node. `place` says which: `card`, "
+              "`box` or `frame`, and `surface` whose page: `grid`, which the refresh "
+              "draws again, or `check`, a leaf's, which it does not. A closed node's "
+              "box is in the page hidden until found, so the filler is called for "
+              "every node at every render",
     ),
 }
 

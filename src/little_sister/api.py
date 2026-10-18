@@ -82,6 +82,16 @@ def _entry(line: ReasonLine) -> dict[str, Any]:
     ``refused`` is 2.6.0's (ADR-0093): where the seam refused the line's record,
     ``data`` is null and this is why, in the sentence the node's page shows; null on
     every other line, and always present, for the reason the two before it are.
+
+    ``form`` is 2.8.0's (ADR-0126 decision 7): the form the line was written from,
+    where its check's grading asked the library for it — the key a deployment's
+    ``display:`` block re-words that line under — and null on a line its check wrote
+    as a sentence of its own; always present, as ``refused`` is.
+
+    ``grading`` is 2.8.0's too (ADR-0131 decision 1): the grading that decided the
+    line's code, where one did — the name a deployment writes the keys of to grade
+    that line differently — and null on every other line; always present, as
+    ``form`` is.
     """
     return {
         "slug": line.slug,
@@ -91,6 +101,8 @@ def _entry(line: ReasonLine) -> dict[str, Any]:
         "subject": line.subject,
         "data": line.data,
         "refused": line.refused or None,
+        "form": line.form or None,
+        "grading": line.grading or None,
         "maintenance": _maintenance(line.maintenance),
     }
 

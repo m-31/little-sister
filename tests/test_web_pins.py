@@ -21,7 +21,7 @@ from little_sister.app import (
     _maintenance_rows,
     _MaintenancePin,
 )
-from little_sister.checks import Entry
+from little_sister.checks import Entry, Unit
 from little_sister.status import StatusCode
 from little_sister.tree import StatusTree
 from tests.page_tree import parse
@@ -48,54 +48,61 @@ class BranchPinTests(TestCase):
             sess["firstname"] = "Vera"
             sess["admin"] = False
 
-    # ----- a card's pause mark -----
+    # ----- a card's pin mark -----
 
-    def test_admin_card_head_carries_the_pause_mark(self):
+    def test_admin_card_head_carries_the_pin_mark_and_the_page_one_editor(self):
         self._login()
         self.tree.upsert("/system/alpha/disk", StatusCode.OK)
         body = self.client.get("/status").get_data(as_text=True)
-        self.assertIn('class="pin-control"', body)
+        self.assertIn('data-control="pin"', body)
         self.assertIn('aria-label="set maintenance for /system"', body)
-        # the mark is the summary of the browser's own disclosure: it opens the
-        # editor in the card, with no dialog to script and no link to follow
+        # the mark is a link to the node's page, which the script turns into the
+        # control that clones the page's one editor into the card's panel: no
+        # dialog to script, and no editor in every head
         self.assertNotIn('aria-haspopup="dialog"', body)
-        self.assertNotIn('role="button"', body)
-        self.assertIn(
-            "<strong>Maintenance for system and everything beneath it.</strong>",
-            body)
+        self.assertEqual(body.count('<template id="pin-editor">'), 1)
+        self.assertEqual(body.count(f'class="{EDITOR} '), 1)
+        self.assertIn("<strong>Maintenance for "
+                      '<span class="pin-editor__what">this node</span>.</strong>', body)
         self.assertIn("Which formats can I use?", body)
+        # what the pin would cover rides on the mark, from the unfiltered tree
+        self.assertRegex(
+            body, r'aria-label="set maintenance for /system"[^>]*data-beneath')
 
-    def test_viewer_sees_no_pause_mark_and_no_editor(self):
+    def test_viewer_sees_no_pin_mark_and_no_editor(self):
         self._viewer()
         self.tree.upsert("/system/alpha", StatusCode.OK)
         body = self.client.get("/status").get_data(as_text=True)
-        self.assertNotIn("pin-control", body)
+        self.assertNotIn('data-control="pin"', body)
+        self.assertNotIn("pin-editor", body)
         self.assertNotIn(EDITOR, body)
 
-    def test_kiosk_hides_the_pause_mark_even_for_admin(self):
+    def test_kiosk_hides_the_pin_mark_even_for_admin(self):
         # the kiosk is the wall display: no chrome to click (ADR-0029)
         self._login()
         self.client.set_cookie("ls_prefs", "layout=kiosk")
         self.tree.upsert("/system/alpha", StatusCode.OK)
         body = self.client.get("/status").get_data(as_text=True)
-        self.assertNotIn("pin-control", body)
+        self.assertNotIn('data-control="pin"', body)
+        self.assertNotIn("pin-editor", body)
         self.assertNotIn(EDITOR, body)
 
-    def test_mark_and_editor_ride_the_fragment(self):
-        # both stand in what the refresh swaps, so the fragment brings them
+    def test_the_mark_rides_the_fragment_and_the_editor_does_not(self):
+        # the mark stands in what the refresh swaps, so the fragment brings it; the
+        # editor is the page's, outside the swap, so no fragment carries one
         self._login()
         self.tree.upsert("/db", StatusCode.OK)
         frag = self.client.get("/status?fragment=1").get_data(as_text=True)
-        self.assertIn('class="pin-control"', frag)
-        self.assertIn(EDITOR, frag)
-        self.assertIn("<strong>Maintenance for db.</strong>", frag)
+        self.assertIn('data-control="pin"', frag)
+        self.assertNotIn(EDITOR, frag)
+        self.assertNotIn("pin-editor", frag)
 
-    def test_leaf_card_names_the_node_alone(self):
+    def test_a_leafs_mark_names_the_node_alone(self):
         self._login()
         self.tree.upsert("/uplink", StatusCode.OK)
         body = self.client.get("/status").get_data(as_text=True)
-        self.assertIn("<strong>Maintenance for uplink.</strong>", body)
-        self.assertNotIn("everything beneath it", body)
+        self.assertIn('aria-label="set maintenance for /uplink"', body)
+        self.assertNotIn("data-beneath", body)
 
     def test_pinned_card_states_the_pin_and_has_no_mark(self):
         self._login()
@@ -106,7 +113,7 @@ class BranchPinTests(TestCase):
         body = self.client.get("/status").get_data(as_text=True)
         self.assertIn("Silenced by <strong>pan</strong> until ", body)
         self.assertIn("1h 59m left", body)
-        self.assertNotIn("pin-control", body)
+        self.assertNotIn('aria-label="set maintenance for /db"', body)
 
     # ----- a branch's head -----
 
@@ -143,9 +150,10 @@ class BranchPinTests(TestCase):
         self.tree.upsert("/db", StatusCode.OK)
         body = self.client.get("/status").get_data(as_text=True)
         self.assertNotIn("viewed-head", body)
-        # one editor, the card's, for /db
+        # one editor, the page's, which the script aims at the card clicked
         self.assertEqual(body.count(f'class="{EDITOR} '), 1)
-        self.assertIn('name="path" value="/db"', body)
+        self.assertIn('name="path" value=""', body)
+        self.assertNotIn('name="path" value="/"', body)
 
     def test_viewer_branch_page_has_no_editor(self):
         self._viewer()
@@ -1093,16 +1101,18 @@ class BranchLinePinTests(TestCase):
         self.assertEqual(self._line(head, self.SCOPE).all("reason-record"), [])
 
     def test_a_record_takes_its_lines_ink_on_a_status_fill(self):
-        # A branch's head is a status fill, vivid where the node fails of its own,
+        # A page's head is a status fill, vivid where the node fails of its own,
         # and there Bootstrap's muted gray measured 3.4:1 in the light themes and
-        # 1.9:1 in the dark ones; a leaf's record stands in a pale alert and keeps it.
+        # 1.9:1 in the dark ones. A leaf's record stood in a pale alert and kept
+        # it; a leaf's page is framed as a branch's is now (backlog #91 §3.5), its
+        # lines on its head's fill, and its record takes the line's ink as well.
         record = self._line(self._head(), self.CANNOT).one("reason-record")
         self.assertFalse(record.has("text-muted"))
         self.tree.upsert("/cloud/leaf", StatusCode.WARN, [
             Entry("one", "a line of a leaf", StatusCode.WARN, data={"seen": "yes"})],
             members=True)
         leaf = parse(self._get("/status/cloud/leaf")).one("reason-record")
-        self.assertTrue(leaf.has("text-muted"))
+        self.assertFalse(leaf.has("text-muted"))
 
     def test_an_admin_gets_the_pause_mark_on_each_line_whatever_it_says(self):
         head = self._head()
@@ -1231,21 +1241,28 @@ class BranchLinePinTests(TestCase):
         self.assertNotIn("fragment", self._form(self._line(head, self.CANNOT))["next"])
 
     def test_the_inspection_card_leaves_a_lines_controls_alone(self):
+        # The card answers a node's name alone (`NAMES`, `inspect.js`), and the
+        # page's own head is no toggle: it has no card, and a control within its
+        # row is the control's own. The page's head keeps the rules, the setter and
+        # the lines beneath its row now, as a box does (backlog #91 §3.5): the row
+        # holds its toolbar's controls alone.
         script = self.client.get("/static/js/inspect.js").get_data(as_text=True)
-        found = re.search(r'var OWN_CONTROLS = "([^"]+)";', script)
+        found = re.search(r"var NAMES = '([^']+)';", script)
         assert found is not None
-        own = {name.lstrip(".") for name in found.group(1).split(", ")}
+        self.assertEqual(found.group(1).split(", "),
+                         [".tree-chip", '[data-control="toggle"]', ".ls-strip__name"])
         self._pin(self.UNREAD)
-        row = self._head().one("status-node__self")
+        head = self._head()
+        row = head.one("status-node__self")
         self.assertIn("data-path", row.attrs)
-        controls = row.all(tag="form") + row.all(tag="summary")
+        self.assertEqual(row.all(tag="form") + row.all(tag="details"), [])
+        self.assertGreater(len(head.all(tag="form") + head.all(tag="summary")), 0)
+        controls = row.all(tag="a") + row.all(tag="button")
         self.assertGreater(len(controls), 0)
-        for control in controls:
-            inside, node = False, control
-            while node is not None and "data-path" not in node.attrs:
-                inside = inside or any(node.has(name) for name in own)
-                node = node.parent
-            self.assertTrue(inside, control.source()[:120])
+        for element in (row, *row.walk()):
+            self.assertFalse(element.has("tree-chip")
+                             or element.attrs.get("data-control") == "toggle",
+                             element)
 
 
 class AtLineTests(TestCase):
@@ -1376,17 +1393,20 @@ class PinnedCardTests(TestCase):
         self.assertIn("silenced by <strong>pan</strong>", body)
         self.assertNotIn("maintenance-editor-form", body)       # nothing to write with
 
-    def test_an_unremarkable_container_page_adds_no_head_row(self):
+    def test_an_unremarkable_container_page_heads_its_frame_with_its_row_alone(self):
         # a container with no reading, no reasons and no pin has nothing of its own
-        # to say, and its page should still open with its children — for a reader
-        # who cannot pin it. An admin's page carries the head for the control that
-        # sets one (`tests/test_wall_pins.py`).
+        # to say, and its page opened with its children for a reader who could not
+        # pin it. A page frames its node now (backlog #91 §3.5): the head is the
+        # frame's top for every reader, and for this one it is its row alone.
         self.tree.upsert("/site/db", StatusCode.OK)
         self.client.get("/logout")
         with self.client.session_transaction() as sess:
             sess["username"], sess["firstname"], sess["admin"] = "vera", "Vera", False
         body = self.client.get("/status/site?depth=3").get_data(as_text=True)
-        self.assertNotIn("viewed-head", body)
+        head = parse(body).one("viewed-head")
+        parts = [part for part in head.children if not isinstance(part, str)]
+        self.assertEqual([part.attrs.get("class") for part in parts],
+                         ["status-node__self"])
 
     def test_pinned_with_entry_pins_names_the_node_pin_not_the_count(self):
         self.tree.upsert("/site/wiz", StatusCode.ERROR,
@@ -1527,11 +1547,14 @@ class DurationGuardTests(TestCase):
 
 class _Scheduled:
     """What the floor reads off a configured check: where it sits and how often
-    it runs."""
+    it runs — as its one unit's period (ADR-0130)."""
 
     def __init__(self, path: str, frequency_seconds: int) -> None:
         self.path = path
         self.frequency_seconds = frequency_seconds
+
+    def units(self) -> tuple[Unit, ...]:
+        return (Unit("", self.frequency_seconds, ""),)
 
 
 class IntervalFloorTests(TestCase):

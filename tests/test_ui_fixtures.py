@@ -16,6 +16,7 @@ from unittest import TestCase
 from little_sister.status import StatusCode
 from little_sister.tree import StatusTree
 from tests import ui_fixtures
+from tests.page_tree import parse
 from tests.render_ui_fixtures import render_copy_page, render_page
 from tests.ui_fixtures import FIXTURES, FIXTURES_BY_NAME
 
@@ -186,7 +187,8 @@ class WallFixtureTests(TestCase):
         self.assertIn("dependency-alerts", html)
         self.assertIn("production", html)
         self.assertIn("staging", html)
-        self.assertNotIn("leaf-chip", html)
+        # chips off: every node drawn open
+        self.assertNotIn('data-state="closed"', html)
 
     @staticmethod
     def _layout(html: str) \
@@ -263,13 +265,19 @@ class WallFixtureTests(TestCase):
 
     def test_chip_run_no_longer_disables_a_mixed_nested_grid(self):
         html = self._render("mixed_chip_branches")
-        self.assertIn('class="leaf-chip-run"', html)
+        self.assertIn('class="tree-run"', html)
         self.assertGreaterEqual(html.count('class="status-node '), 3)
-        self.assertRegex(
-            html,
-            r'<span class="leaf-chip-run">'
-            r'(?:<a class="leaf-chip[^>]*>.*?</a>){2}</span>',
-        )
+        page = parse(html)
+        card = page.one("status-card")
+        level = next(item for item in card.one("status-panel").children
+                     if not isinstance(item, str) and item.has("tree-kids"))
+        runs = [item for item in level.children
+                if not isinstance(item, str) and item.has("tree-run")]
+        self.assertTrue(runs)
+        self.assertTrue(all(
+            node.attrs.get("data-state") == "closed"
+            for run in runs for node in run.all("tree-node")))
+        self.assertGreaterEqual(sum(len(run.all("tree-node")) for run in runs), 2)
 
     def test_security_findings_flood_collapses_to_a_chip(self):
         # Layout (ADR-0024): the OK "informational" leaf that floods 150 findings is a
@@ -277,10 +285,16 @@ class WallFixtureTests(TestCase):
         # — the skyscraper is tamed and its findings live on the leaf's own page,
         # not the card. Reasons ≠ bad status: an OK card no longer drowns the grid.
         html = self._render("security_findings_150")
-        self.assertIn("leaf-chip", html)                     # the quiet leaves chipped
-        self.assertIn("informational", html)                # the chip still names it
-        self.assertNotIn("End of Life Software", html)      # findings off the overview
-        self.assertNotIn("--reason-lines", html)            # no reason block on a chip
+        page = parse(html)
+        band = next(node for node in page.all("tree-node")
+                    if node.attrs.get("data-node", "").endswith("/informational"))
+        self.assertEqual(band.attrs.get("data-state"), "closed")   # a chip
+        self.assertIn("informational", band.one("tree-chip").text())   # names it
+        # its findings ride in its box, hidden until found (ADR-0127 decision 1),
+        # so they are off the overview's face and a click away without a request
+        hold = band.one("tree-hold")
+        self.assertEqual(hold.attrs.get("hidden"), "until-found")
+        self.assertIn("End of Life Software", hold.text())
         self.assertNotIn("s-error", html)                   # everything is OK
         # the engine heartbeat is lifted out of the grid into the status strip
         self.assertIn("ls-strip", html)
@@ -308,9 +322,14 @@ class WallFixtureTests(TestCase):
         # time; `pair` covers two, so no single value can answer for both; the
         # `never-run` mount has not reported, and registration is not an observation.
         html = self._render("observation_times")
+        page = parse(html)
+        names = [name.text() for name in page.all("status-card__name")]
         for name in ("solo", "pair", "never-run"):
-            self.assertIn(f">{name}</a>", html)
-        self.assertEqual(html.count('class="status-card__time"'), 1)
+            self.assertIn(name, names)
+        # one in a card's head; the leaves beneath `pair` carry theirs in their
+        # boxes, drawn beside their chips and hidden until found (ADR-0127)
+        heads = page.all("status-card__head")
+        self.assertEqual(sum(len(head.all("status-card__time")) for head in heads), 1)
 
     def test_the_series_leaf_draws_its_curve_with_both_breaks(self):
         # ADR-0092 on the sheet, as ADR-0096 and ADR-0097 amend it: one curve, the

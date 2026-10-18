@@ -19,8 +19,8 @@ its own), and that was the evolution of this seam it was always described as, no
 rewrite.
 
 > Grounded in `src/little_sister/checks/` (`base.py`, `loader.py`, the built-in
-> types), `transport.py`, `fetch.py` and `app.py`. If a name here drifts from the
-> source, the source wins — update this doc.
+> types), `transport.py`, `fetch.py`, `rules.py` and `app.py`. If a name here drifts
+> from the source, the source wins — update this doc.
 
 ---
 
@@ -70,7 +70,9 @@ though the contract is wider than this document: §11 also promises `CHECK_TYPES
 `little_sister.app:app`, `little_sister.secrets`, the slot and CSP seams and the
 `LITTLE_SISTER_*` variables (§4).
 
-A check type is a subclass of `Check` decorated with `@register("<type>")`:
+A check type is a subclass of `Check` decorated with `@register("<type>")`. It
+implements `measure()` and `grade()`; one that reads several things on tempos of
+their own also declares its units and implements `measure_unit()` (§12):
 
 ```python
 from __future__ import annotations
@@ -504,7 +506,8 @@ constructor, but it is wrong: say why.
   thing: *this line makes no claim about its subject* — a claim you withheld, almost
   always because you could not ask. (*Never reported yet* is the **node**-level
   meaning of the same code, and not yours to write.) `coerce_code(...)` turns a config
-  string (e.g. `stale_code: WARN`) into a `StatusCode`.
+  string such as `WARN` into a `StatusCode`; the codes a grading gives a value are the
+  seam's to read (§5).
 - **If you withhold claims, grade the node you own.** `UNDEFINED` lines are skipped by
   the derivation, so a node whose lines are *all* withheld derives `UNDEFINED` — and
   an `UNDEFINED` own code is skipped again in favor of children, which is how an
@@ -602,6 +605,138 @@ constructor, but it is wrong: say why.
   default rather than at a deployment's setting: your package cannot see which one it
   is installed into. Values are escaped when they are rendered, so a record field needs
   no `plain()`.
+- **A line that carries a record is a form, and the library writes it: `Check.line`**
+  ([ADR-0126](adr/0126-a-line-is-a-template-over-its-record.md)). Where your grading
+  writes a line from one reading, declare its sentence as a **form** — a full name, one
+  sentence saying when your grading says it, and a default text, a template over the
+  record — and ask the library for the line:
+
+  ```python
+  FORMS = {
+      "actions.verdict": {
+          "sentence": "The verdict of the newest run that has one.",
+          "text": "[{line.name} ({branch}) / {workflow}]({completed.url}): "
+                  "{verdict}{? (#{completed.run_number})}"},
+      "actions.no_verdict": {
+          "sentence": "No run of the workflow on its branch has a verdict yet.",
+          "text": "{line.name} ({branch}) / {workflow}: no completed run"},
+  }
+  WORDS = {"name": {"sentence": "The repository's name, without its owner's.",
+                    "example": "shop"}}
+  FIELDS = {"branch": {"sentence": "The branch the runs are read on.",
+                       "example": "main"},
+            ...}   # every field a template may name, by its dotted name
+
+  super().__init__(line_forms=FORMS, line_words=WORDS, line_fields=FIELDS, **kwargs)
+
+  # in grade():
+  self.line("actions.verdict", reading, slug=slug(repo.id, workflow_id, branch),
+            code=StatusCode.OK, running=bool(in_flight), words={"name": repo.name})
+  ```
+
+  `Check.line(form, reading, *, slug, code=None, running=False, words=None)` renders
+  the form — a deployment's `display:` template where one re-words it, your default
+  otherwise — over the reading's record and the words, and hands back the `Entry` with
+  that text, the record as its `data`, the reading's subject and the form it was written
+  from, which the node's page shows beside the line. A line for the record alone
+  (`for_record`) is asked for the same way, with its `code`. So you stop writing the
+  sentence of such a line, its Markdown links, `plain()` around a name and `local_time`
+  or an age inside it; a line made from several readings carries no record and keeps
+  its sentence.
+
+  **What goes where.** A fact about the subject is the record's, whether you read it or
+  derived it from what you read — the word you chose for a run's outcome among them.
+  What you add from your configuration, from the clock or as your own wording is a
+  **word**, handed to the call and never stored: a link wrapped in a configured template,
+  a name a rule shortened, a region said only where several are read, an age, a rule's
+  own sentence. A word is text, a number or a flag, and one you leave out is not there.
+  Declare every word and every field a template may name — each a name, one sentence and
+  an example — as you declare your measures; `/system/installed` lists them with your
+  forms, for the deployment that writes against them. Their names are **stored keys**:
+  renaming one breaks a deployment's template, so it goes at the top of your release
+  notes. No word is called `default`, and no field's name starts with `line`.
+
+  **The notation**, which a deployment writes too. `{completed.run_number}` is a field by
+  its dotted name and `{line.name}` a word. `{? …}` is shown only when every value it
+  prints is there — a value is absent when it is null, missing, empty or false, and zero
+  is a value — and `{?running: …}` when `running` is as well, a flag it need not print;
+  segments nest, and what follows the mark is the segment's own, its spaces too, so
+  begin it with a space where its text would otherwise read as a flag's name and a
+  colon. A link is Markdown's, `[words]({completed.url})`, its target one value — a URL
+  the record holds, or a word — and a target that is absent or no http(s) URL leaves the
+  words as plain text; it holds back no segment. `{{` writes `{`, and `}}` writes `}`
+  outside a segment, since inside one a `}` ends it. The library escapes every value as
+  `plain()` does, writes a time under `at`, `started` or `ended` in the configured zone
+  and format, and prints a value absent outside every segment as `—`. There is no else,
+  no not and no comparison: a sentence your grading decides between is a form of its
+  own, which it chooses by name, and a phrase that only spells a state, or a list, is a
+  word.
+
+  Your defaults are checked against your declarations when a check of your type is
+  built — a field or a word you do not declare, a template the notation cannot read,
+  `{line.default}` in a default all raise `CheckError` — and `Check.line` refuses a form
+  or a word you do not declare, so your own tests meet a typo before a deployment does.
+  Test the finished line: what `Check.line` hands back is what every surface shows.
+- **What your grading judges by is declared, and the library grades it:
+  `Check.verdict`** ([ADR-0131](adr/0131-a-type-declares-what-it-grades-and-the-library-grades-it.md)).
+  Declare every value your grading judges — a name, which is the key a deployment
+  writes it under behind the block it lives in, one sentence, the record field it
+  reads, and its kind — and hand the declarations to `Check.__init__` as `gradings`:
+
+  ```python
+  GRADINGS = {
+      "ec2.max_per_name": {"sentence": "How many instances one name may carry.",
+                           "kind": "pair", "field": "count", "unit": "count",
+                           "rules": True},
+      "ec2.max_age": {"sentence": "How long an instance may run.", "kind": "pair",
+                      "field": "launched.at", "unit": "duration", "rules": True},
+      "cloudwatch.state_map": {"sentence": "What an alarm's state grades.",
+                               "kind": "map", "field": "state",
+                               "words": {"ALARM": "ERROR", "INSUFFICIENT_DATA": "WARN",
+                                         "OK": "OK"}},
+  }
+  super().__init__(gradings=GRADINGS, line_forms=FORMS, **kwargs)
+  self.ec2 = self.grading_block("ec2").read(config.get("ec2"), "ec2")
+
+  # in grade():
+  count = self.verdict("ec2.max_per_name", value=len(group), graded=self.ec2,
+                       rule=rule)
+  age = self.verdict("ec2.max_age", value=oldest, graded=self.ec2, rule=rule)
+  self.line("ec2.group", reading, slug=key, verdict=worst(count, age))
+  ```
+
+  A **pair** is a `max_…` or a `min_…` — its name says which way it grades — over a
+  number in one unit, `count`, `number`, `duration`, `size`, `amount` or `share`, with
+  default levels `warn` and `error` written as a deployment writes them; a **map**
+  declares its source's words and the default code of each; a **set** its `accepted`
+  values and the `code` any other takes; a **judgment** is a code your own logic
+  decides, to which a deployment gives a sentence. `Check.verdict(name, reading, …)`
+  answers the code a grading gives the declared field of `reading` — or `value=`, where
+  you derive it: an age from a time and the clock you are handed, a count of what one
+  name carries — under what its block grades with: the check's own keys, read as the
+  check is built, or a block you read with `grading_block(name).read()` and hand over as
+  `graded=`; a judgment is handed its `code=`. The `Verdict` holds the code, the
+  sentence a deployment wrote for the grading where it fired (`reason`), the rule whose
+  keys judged the value (`rule`) and what a value that did not pass was held against
+  (`against`: `20m`, `200, 204`) — and names the grading where it decided something,
+  none where a pair holds no level, switched off or never given one, so that the line
+  says no *graded by* where the check's card says *not graded*. Hand it to
+  `Check.line(…, verdict=…)`, which takes the line's code from it, names the grading on
+  the entry and hands your forms the words
+  `reason` and `rule` — the library declares both, so you declare neither — and write a
+  line that is a sentence of your own as `verdict.entry(text)`, the sentence after it.
+  `worst(*verdicts)` is a line two gradings judged: the worse code, the sentences in
+  your order. A judgment with more inputs than one — a stale success, an age and a run
+  time — keeps its logic in your code and asks for each comparison, and
+  `grading_summary(name, graded)` writes what a grading judges by for your
+  configuration card. Your declarations are checked when a check of your type is built,
+  so a mistake in one fails your own tests; a grading's name, the keys it is written
+  under and a map's words are **stored keys**, renamed only at the top of your release
+  notes. **The window is the library's**, on every check: `max_since_ok` grades how
+  long ago a subject last stood OK over what your check keeps (`series_keep`), and the
+  engine judges it after your grading and writes its line from the library's forms
+  `since_ok.last` and `since_ok.none` — nothing of yours asks for it, and neither a
+  grading nor a form of yours may take one of those names.
 - **Reasons are Markdown** — fold untrusted text in safely: `plain(text)` escapes an
   inline value (a path, an error, an API message); `code(text)` fences multi-line /
   log output as a verbatim block ([ADR-0018](adr/0018-markdown-rendering.md)). Never
@@ -862,7 +997,10 @@ else's logger, so hold it in a test against a line that library itself writes
   take `where=`, which names the block the value came from so the message sends a
   reader to the right line of the right file. `flag` is the deliberate exception: a
   truthiness read, no `required=`, no `where=`, and it never raises.
-  `parse_duration` reads the duration grammar, `coerce_code` a status name, and
+  `parse_duration` reads the duration grammar, `parse_size` a size written with a
+  unit — `500 GB`, `2 TiB`, `64 KiB`, or a bare number of bytes — into whole bytes,
+  the decimal prefixes and the binary ones both and the unit read as written (`500 gb`
+  is refused by name, so is `500G`), `coerce_code` a status name, and
   `parse_secret_refs` the `secrets:` block (§6).
 - **`base_dir` is the config file's own directory**, handed to `_extra_from_config`,
   and resolving your relative paths against it is the **convention** — `command`'s
@@ -904,23 +1042,25 @@ else's logger, so hold it in a test against a line that library itself writes
 - **Subnode labels: declare, don't mediate.** The per-aspect `title` / `about` a branch
   check ships are **declared**, in the two common constructor keywords
   `subnode_defaults` (`name → {title, about}`) and `label_tokens` (`token → value`),
-  handed to `super().__init__()` from your own `__init__`. The library does the rest:
-  it reads the deployment's `subnodes:` block out of your config, resolves each field —
-  the configured text when present, your default otherwise, with `{default}` letting a
+  handed to `super().__init__()` from your own `__init__`. The library does the rest: it
+  reads the deployment's `subnodes:` block out of your config, resolves each field — the
+  configured text when present, your default otherwise, with `{default}` letting a
   deployment **extend** rather than replace and `{token}`s expanded by a plain replace
   (never `str.format`, so backticks and stray braces in the Markdown survive) — and the
   engine writes the result per subnode *name*, at any depth. So **do not parse
   `subnodes:`**, and do not layer a default yourself: the readers you would be
   duplicating have already run, and they are no longer on this surface to call
-  ([ADR-0025](adr/0025-check-provided-subnode-metadata.md) — the
-  same shape `show_when_quiet` uses, and the epoch bump that retired
-  `parse_subnodes` / `resolve_text` / `expand_tokens`). Declare anything true of the
-  check *type*: a deployment then retunes or annotates one aspect without touching code
-  or `nodes.yaml`, and a type that runs several times in one deployment (one check per
-  team) carries its prose once instead of once per config file. Tokens are resolved at
-  **construction**, so a token value must be a construction-time fact — a label freezes
-  at the node's first fill, and text that changes with an observation belongs in
-  `reason`.
+  ([ADR-0025](adr/0025-check-provided-subnode-metadata.md) — the same shape
+  `show_when_quiet` uses, and the epoch bump that retired `parse_subnodes` /
+  `resolve_text` / `expand_tokens`). Declare anything true of the check *type*: a
+  deployment then retunes or annotates one aspect without touching code or `nodes.yaml`,
+  and a type that runs several times in one deployment (one check per team) carries its
+  prose once instead of once per config file. Tokens are resolved at **construction**,
+  so a token value must be a construction-time fact — a label freezes at the node's
+  first fill, and text that changes with an observation belongs in `reason`. A key in an
+  entry that the library does not read — a misspelt `titel`, say — is named in one line
+  when the check is built, beside its path and your type's name, where it used to do
+  nothing in silence.
 - **A label for a child only the run can name.** A volume, a repository, a function, an
   account a deployment configured: where you name a node from what you read, and not
   from a constant of your own, **say so — `CheckResult(name=…, dynamic=True)`**
@@ -940,34 +1080,87 @@ else's logger, so hold it in a test against a line that library itself writes
   `self.subnode_labels[name][field]`, rather than its own constant: that is what carries
   a deployment's override down to it (`host-metrics`' per-volume leaves under `disk`).
 - **Declaring that a node's quiet lines are the reading.** Most reason text is
-  diagnostic — while the node is quiet there is nothing to read — but some checks'
-  lines are an **inventory**: one line per instance, per volume, per account, read
-  *because* everything is fine. A check whose quiet lines are noise already drops
-  them itself; the opposite claim is `show_when_quiet`
-  ([ADR-0063](adr/0063-declining-the-density-trade.md)), and the dense dashboard then
-  keeps that node's full box and never folds it away. A check type's only part in it
-  is the **declaration**, and it goes where the labels go: `show_when_quiet: True`
-  in that subnode's `subnode_defaults` entry, beside its `title` and `about`, for an
-  aspect that is an inventory *by construction*. The type's map is then shaped like
-  the deployment's block, key for key, and one line in the package replaces an entry
-  per aspect per node path in every installation's `nodes.yaml`. Declare it as a
-  real boolean: a string is refused at load, naming the subnode, because
-  `bool("false")` is `True` and a quoted one would switch a node on while the source
-  says off.
-  Say nothing at all for a node the check has no opinion about — an entry that
-  omits the key leaves the field for somebody else, while `False` is a *statement*
-  and would shut out a declaration a deployment wanted to make. The deployment's
-  half needs nothing from you either: the library reads
-  `subnodes: {name: {show_when_quiet: …}}` out of the check's config, for **every**
-  type, and merges it over your declaration per name — so do not parse the key in a
-  check, and do not layer it yourself; both readers have already run. Ship a
-  declaration only for the aspect whose *content* is a list, not for one you would
-  like to be more visible — a wall of declared nodes is a configuration smell, and
-  dense mode's benefit shrinks by exactly as much as somebody declares.
-  `CheckResult.show_when_quiet` stays for the child a run *names* — a volume, an
-  instance — which is the same dynamic-child channel the labels keep, and the one source
-  a type has for the flag of a child that says `dynamic`; the root's own source is the
+  diagnostic — while the node is quiet there is nothing to read — but some checks' lines
+  are an **inventory**: one line per instance, per volume, per account, read *because*
+  everything is fine. A check whose quiet lines are noise already drops them itself; the
+  opposite claim is `show_when_quiet`
+  ([ADR-0063](adr/0063-declining-the-density-trade.md)), and the wall then opens that
+  node's box whatever its parent's ▤ says, and no fold the configuration sets hides it
+  or its quiet lines; a viewer's press still does. A check type's only part in it is the
+  **declaration**, and it goes where the labels go: `show_when_quiet: True` in that
+  subnode's `subnode_defaults` entry, beside its `title` and `about`, for an aspect that
+  is an inventory *by construction*. The type's map is then shaped like the deployment's
+  block, key for key, and one line in the package replaces an entry per aspect per node
+  path in every installation's `nodes.yaml`. Declare it as a real boolean: a string is
+  refused at load, naming the subnode, because `bool("false")` is `True` and a quoted
+  one would switch a node on while the source says off. For a level a run names — every
+  queue, every account, whose names no constant of yours knows — say it once for the
+  level: `children: {show_when_quiet: True}` in the parent aspect's `subnode_defaults`
+  entry claims it for each child of that node, whatever its name, and
+  `node_defaults={"children": {"show_when_quiet": True}}`, a constructor keyword beside
+  `subnode_defaults`, for each child of your check's own node
+  ([ADR-0128](adr/0128-where-a-nodes-first-look-comes-from.md)). A child's own name
+  entry beats its parent's `children:`, and either beats what a run stamps. Say nothing
+  at all for a node the check has no opinion about — an entry that omits the key leaves
+  the field for somebody else, while `False` is a *statement* and would shut out a
+  declaration a deployment wanted to make. The deployment's half needs nothing from you
+  either: the library reads `subnodes: {name: {show_when_quiet: …}}` out of the check's
+  config, for **every** type, its `children:` too, and the engine asks it before your
+  declaration as it writes each node — so do not parse the key in a check, and do not
+  layer it yourself; both readers have already run. Ship a declaration only for the
+  aspect whose *content* is a list, not for one you would like to be more visible — a
+  wall of declared nodes is a configuration smell, every one of them a box the wall
+  opens however a deployment sets its first look. `CheckResult.show_when_quiet` stays
+  for the child a run *names* — a volume, an instance — which is the same dynamic-child
+  channel the labels keep, and the one source a type has for the flag of a child that
+  says `dynamic` where no `children:` claims it; the root's own source is the
   `show_when_quiet:` key in its YAML, which no result may overrule.
+- **Declaring how your levels start: `chips`, `fold_ok`, `reason_cap`**
+  ([ADR-0128](adr/0128-where-a-nodes-first-look-comes-from.md)). A type knows which of
+  its levels are big — a repository's workflow runs, an account's services, a scanner's
+  severity bands — and which lines are worth reading only when they fail. Say so where
+  the labels go: `chips: True` in a subnode's `subnode_defaults` entry starts that
+  node's children as chips on the wall, `fold_ok: True` folds its healthy children and
+  lines behind *✓ +N ok*, and `reason_cap` gives its box a line budget of its own;
+  `children:` in the entry says the same for each child of the node, whatever its name,
+  and `node_defaults` carries all of it for your check's own node, which no name
+  reaches — `node_defaults={"chips": True, "children": {"chips": True}}` for
+  repositories that start as chips with their workflow runs chips too. It is a
+  **proposal**: the deployment's file takes it back, `nodes.yaml` overrides both per
+  path, and it ranks above `settings.yaml`, so it reaches every deployment that says
+  nothing. A boolean is a real boolean and `reason_cap` a whole number, or the check's
+  construction is refused, naming the entry; a key the library does not read is named
+  at startup. Nothing you close hides a failure for long: in each card the first three
+  failures a chip would hide open their way, and a node that claims `show_when_quiet`
+  starts open whatever its parent's `chips` says. Declare a level closed where it is
+  big for every deployment, not where one deployment would like it smaller — that is
+  the deployment's file. A package that declares them raises its floor to the release
+  of the library that reads them.
+- **What a line says is the deployment's to re-word: `display:`**
+  ([ADR-0126](adr/0126-a-line-is-a-template-over-its-record.md)). Beside `subnodes:` and
+  `measures:`, read by the library for every type: a form's full name to a template that
+  re-words it, keyed flat, with `{line.default}` standing for your default text — so a
+  team adds its own routine for a kind of node to what your lines say without a release
+  of yours. Do not read `display:` yourself. A key that names no form of your type, and a
+  template that names a field or a word you do not declare, stop the start naming the
+  file; your part is the declarations (§3).
+- **What a line is graded by is the deployment's to set, in one spelling per kind**
+  ([ADR-0131](adr/0131-a-type-declares-what-it-grades-and-the-library-grades-it.md)).
+  The library reads a deployment's keys for every grading you declare (§3): a pair as
+  `<key>_warn` and `<key>_error` in the block of what it grades — each level the last
+  value that passes, written with its unit (`26h`, `500 GB`, `80%`) — beside
+  `<key>_reason`, its sentence, with `<key>: null` switching it off and either level
+  written taking the pair as written; a map as a mapping of words to codes, merged over
+  your defaults word by word and matched with case and the spaces around a word folded,
+  a key that names no word you declare said once in the log and graded as written, and a
+  word no key names graded WARN; a set as one value or a list. Do not read those keys
+  yourself: a block of yours hands the library its mapping (§3), and a type that refuses
+  a key its block does not take adds `grading_block(name).keys` to the keys it takes.
+  What a key cannot mean stops the start, naming the file; a spelling your type retires
+  is refused in your `_extra_from_config`, naming the key that replaces it, as the
+  library's own checks refuse `thresholds:`.
+- **What a deployment says about part of an aspect is a rule list**, read by
+  `little_sister.rules` (§11): do not write a parser for one.
 - **Ownership** — two checks may not own overlapping nodes; the loader rejects the
   whole load with a named conflict. A branch check that shares a container overrides
   `owned_nodes()` to own its child subtrees only (§2), so peers can coexist (ADR-0015).
@@ -1404,3 +1597,217 @@ plumbing solved once should not be solved again — so a third check type needin
 and this roster is the point at which they stop being a pattern in a how-to and become
 something the check-authoring surface offers (`architecture.md` §11). Offering it is a
 version-contract commitment, so it waits for the third, not for the second.
+
+---
+
+## 11. Rules: what a deployment says about part of an aspect
+
+When a deployment needs to say something about **some** of what one of your aspects
+lists — leave one workflow of one repository out, judge a fleet of instances by limits
+of its own — give the aspect a `rules:` list and read it with `little_sister.rules`
+([ADR-0129](adr/0129-a-rule-list-is-the-librarys-and-a-value-matches-it-exactly.md)),
+never with a parser of your own. The library answers what every such list has to, the
+same way for every package: the rules are consulted in order and the first that
+matches decides, whole, so an exception is a rule written above the rule it excepts; a
+value compares exactly, as your source returned it — a name equal to it, a prefix it
+begins with, a regex matching it whole — and nothing folds case, a pattern that wants
+it folded saying `(?i)`; every rule has a `name:`, unique in its list; `ignore: true`
+drops what a rule matches; and what no rule could mean stops the start, naming the
+rule.
+
+**Declare the axes.** An axis is one way your aspect addresses a value. Where there are
+several, each is a key on the rule, written as a list of names or as a block of
+`names:`, `prefixes:` and `regexes:`, and a rule matches where every axis it writes
+matches — an axis it leaves out matches any value:
+
+```python
+from little_sister.rules import Axis, RuleList
+
+#: A workflow is addressed by its repository's name and its file.
+ACTIONS_AXES = (Axis("repositories"), Axis("files"))
+
+self.actions_rules: RuleList[None] = RuleList(
+    actions.get("rules"), "actions", ACTIONS_AXES)
+```
+
+```yaml
+actions:
+  rules:
+    - name: load-test-pipeline
+      repositories: [load-tests]
+      files: {names: [pipeline.yml], regexes: ['nightly-.*\.yml']}
+      ignore: true
+```
+
+The one axis of an aspect may be written on the rule itself, `on_rule=True`. An axis
+whose value can be missing — an instance without a `Name` tag — says `absent=True`,
+which is what lets a rule write `unnamed: true`; on any other axis the key is refused,
+since a rule written with it could never match:
+
+```python
+#: An instance is addressed by its Name tag, which it may not have.
+EC2_AXES = (Axis("name", absent=True, on_rule=True),)
+```
+
+```yaml
+ec2:
+  rules:
+    - name: build-fleet
+      prefixes: [build-]
+      max_age_warn: 6h
+    - name: nameless
+      unnamed: true
+      ignore: true
+```
+
+**What a rule grades is the library's.** Hand the list its block's gradings,
+`grading=self.grading_block("ec2")`, and a rule may write any grading of the block you
+declare with `"rules": True`, in the block's own spelling — a pair or a set whole, a
+map word by word ([ADR-0131](adr/0131-a-type-declares-what-it-grades-and-the-library-grades-it.md)
+decision 6) — read into the rule's `graded`, which `Check.verdict(…, rule=rule)` reads
+in place of the block's (§3). **What a rule says beyond that and `ignore:` is yours** —
+what a run reads, say. Name the keys and hand over a reader. It is given the ones a
+rule writes, and where the rule stands for a refusal; what it returns is the rule's
+`own`, which is `None` on a rule that writes none of them. A list whose rules write
+nothing of yours is a `RuleList[None]`. `ignore: true` beside a key of yours, or a
+grading's, is refused for you, since what a rule drops has no line for the key to say
+anything on:
+
+```python
+def _ec2_rule(rule: Mapping[str, Any], where: str) -> Limits:
+    ...  # raise CheckError(f"{where}: …") for a value you cannot take
+
+self.ec2_rules = RuleList(block.get("rules"), "ec2", EC2_AXES,
+                          own_keys=EC2_RULE_KEYS, read_own=_ec2_rule)
+```
+
+**Ask in both halves, and report once a run.** The grading asks `first(**values)`, a
+lookup that keeps nothing, since a grading keeps no state
+([ADR-0086](adr/0086-a-check-measures-and-grades.md) decision 6). The measuring half
+asks `see(**values)` for every value it reads — before it spends a request on one a
+rule drops — which answers the same and keeps the run's tally, and then, once,
+`report(self.path, whole=…)`, with `whole=False` where part of the scope could not be
+read. The report writes one `INFO` line naming the rules that matched nothing, when
+that set changes, and beside each what it missed: the rule above it that decided a
+value it matches — an exception written below the rule it excepts — or else a value it
+would have matched with case folded. Hand every value over under its axis's name, `None` for one that is absent — a wrong name raises `CheckError`, which your
+tests meet first — and match the value your source returned, never a name you
+shortened for display:
+
+```python
+def measure(self) -> list[Measurement]:
+    whole = True
+    for repo in self._repositories():
+        ...                          # whole = False where a read failed
+        for workflow in workflows:
+            rule = self.actions_rules.see(repositories=repo.name,
+                                          files=workflow.file)
+            if rule is not None and rule.ignore:
+                continue             # no line, and no request spent on it
+            ...
+    self.actions_rules.report(self.path, whole=whole)
+```
+
+**Where a rule judges a line, the line names it.** A rule owns a line where a key of
+its own judged it — a level, a gate, a switch, an `OK` included — and that line carries
+the rule's name as the word `rule`, `RULE_WORD`. Declare it among your `line_words`,
+print it in a segment of your default forms, and hand it over on those lines alone. A
+rule that only matches — an exception written above an `ignore:`, or one that writes
+nothing but its matcher — owns no line, and nor does a rule own a line its keys did not
+reach. A type whose rules only drop values declares no such word, and the rule's name
+stands in for no sentence:
+
+```python
+LINE_WORDS = {
+    ...,
+    RULE_WORD: {"sentence": "The rule whose own keys judged the line.",
+                "example": "build-fleet"},
+}
+# a default form's text: "{name}: {count} instance(s){? — rule {line.rule}}"
+words = {RULE_WORD: rule.name} if judged_by_rule else {}
+```
+
+A type that grades through the seam is handed the word with its verdict, on exactly
+the lines a rule's keys judged, and declares none (§3).
+
+## 12. Units: an aspect on a period of its own
+
+A check runs at one `frequency:`, and that is right until its aspects differ in what
+they cost or in how often their source has anything new to say. Alarms want a
+minute; a bucket's storage metrics are published once a day, and a month's cost is a
+request that is billed. The answer is **not** a second check with the other aspects
+switched off — two mounts split the account a pin is set on, and keep the
+configuration twice — and not the type skipping its read while its last answer is
+young, which would stamp the node for a look it did not take. It is a **unit**
+([ADR-0130](adr/0130-a-unit-has-a-period-of-its-own.md)): a thing the check reads on
+a slot of its own, answering for a node of its own.
+
+**Declare them, and read one at a time.** `units()` answers one `Unit` per unit —
+its `key`, its `period_seconds`, the `node` it answers for relative to the mount, and
+`cost_seconds`, what one run of it is expected to occupy a worker for (`None` where
+you do not estimate; ADR-0075's `expected_cost()` is not read where units are
+declared). `measure_unit(key)` reads the one unit and hands back its measurements,
+exactly as `measure()` hands back the whole check's; `grade()` is unchanged, and is
+handed the **newest reading of every unit** after each run — this unit's first, then
+the others in the order you declared them — so it builds the whole tree as it always
+did, and never has to know which unit ran. Keep `measure()` as every unit at once;
+your own tests use it, and the engine never calls it on a type that declares units.
+
+```python
+from little_sister.checks import Unit
+
+ASPECTS = ("cloudwatch", "ec2", "s3", "billing")
+CADENCE = {"s3": 86_400, "billing": 86_400}      # a fact about the source
+
+def units(self) -> tuple[Unit, ...]:
+    return tuple(
+        Unit(name, self.period_of(name), f"{account.name}/{name}")
+        for account in self.accounts
+        for name in self.active_aspects(account))
+
+def measure_unit(self, key: str) -> list[Measurement]:
+    account, name = self.unit_named(key)
+    return self.measurers[name](account, self.session_for(account))
+```
+
+**The period is `frequency:` in the aspect's own block**, read with
+`parse_duration`, beside the `enabled:` switch of §10 — not a check-level roster, for
+the reason §10 gives. Its default is a cadence your type declares where the source has
+one, else the check's own `frequency:`; a block that replaces another whole, as an
+account's block of an aspect does, carries its own key or falls back the same way. A
+period written shorter than a cadence you declare is a line in the log when the check
+loads, never a refusal: it spends requests and tells no lie.
+
+```yaml
+frequency: 60s            # what every aspect inherits
+s3:
+  enabled: true
+  frequency: 1d           # the type's own default for this aspect, written out
+```
+
+**A unit's key and its node are stored keys** (ADR-0078): a deployment's
+configuration is written against the key, and every maintenance pin beneath the node
+is held against its path. Renaming either is a breaking change, said at the top of
+your release notes. Give every unit a key of its own, declare each node once and none
+beneath another's — the engine refuses the rest at startup, naming the check — and
+override `measure_unit` whenever you override `units`.
+
+**What the engine does with them.** It releases each unit on its own period, a
+check's units one at a time, and runs every unit at start. After a unit's run it
+writes the unit's **own path** — the mount, the containers down to the node the unit
+answers for, and that node's subtree — and nothing beside it: a sibling aspect keeps
+what its own unit wrote, its stamp included, until its own unit runs again. The node
+a unit answers for says the unit's period and goes stale by it, carries the unit's
+run facts, and takes the unit's retry episode and its `late.<path>` line; a container
+between it and the mount says the shortest period beneath it and the earliest slot
+armed there. A unit whose measurement raises is an `ERROR` on its own node alone,
+its last reading kept; a grading that raises is the check's error, at its root. On
+`/system` a check's units read beneath it, each with its period and its last run.
+
+**Two things the engine leaves to you.** What one run of one unit opens: a check
+that opened a session at the top of `measure()` and read every aspect through it now
+reads one aspect per run, so a session kept for as long as its credentials last, and
+opened by whichever unit meets it expired, is the shape to design against. And who
+refreshes a reading several units share — an account's *opened* or *refused*, which
+every unit of that account can carry in its measurements, the grading spelling the
+estate's line from the newest of them.

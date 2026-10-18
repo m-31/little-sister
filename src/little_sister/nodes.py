@@ -12,10 +12,17 @@ The file is optional and is the ``nodes`` aspect of the configuration directory 
 ``config/nodes.yaml`` in each root of the path-list (ADR-0031) — so it can reach
 container / host nodes no single check owns. The consistency pass flags declarations
 no check feeds.
+
+An entry may also say how the node first looks (ADR-0128) — ``chips``, ``fold_ok``,
+``reason_cap`` — and, under ``children:``, the same and the claim for each child of
+the node, whatever its name. None of that is seeded: the look is the web page's, read
+from the map :func:`load_nodes` returns, which the start keeps for the life of the
+process, by :mod:`little_sister.first_look` and by the engine, which writes the claim
+a parent's ``children:`` makes as it writes each child.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +30,13 @@ import yaml
 
 from little_sister import self_report
 from little_sister.checks import Check, CheckError
+from little_sister.checks.metadata import (
+    CHILDREN_KEYS,
+    LOOK_KEYS,
+    Stated,
+    read_stated,
+    unknown_keys,
+)
 from little_sister.config_dir import aspect_files
 from little_sister.logger import logger
 from little_sister.reasons import plain, slug
@@ -58,13 +72,16 @@ class NodeMeta:
     title: str = ""
     order: int | None = None
     show_when_quiet: bool | None = None
+    #: How the node first looks, and under ``children:`` each child (ADR-0128) —
+    #: read by the first look and the engine, never seeded onto the tree.
+    look: Stated = field(default_factory=Stated)
 
     @property
     def declares(self) -> bool:
         """Whether this entry says anything at all. An entry that does not is
         dropped at parse time, so a stray key cannot become a node declaration."""
         return (bool(self.about) or bool(self.title) or self.order is not None
-                or self.show_when_quiet is not None)
+                or self.show_when_quiet is not None or self.look.says_anything)
 
     def merged_over(self, base: NodeMeta) -> NodeMeta:
         """This entry's fields, each falling back to ``base`` where unstated."""
@@ -73,10 +90,16 @@ class NodeMeta:
                         order=base.order if self.order is None else self.order,
                         show_when_quiet=(
                             base.show_when_quiet if self.show_when_quiet is None
-                            else self.show_when_quiet))
+                            else self.show_when_quiet),
+                        look=self.look.over(base.look))
 
 
 NODES_ASPECT = "nodes"
+#: What an entry may say: its labels, its rank, its claim, how it first looks, and
+#: ``children:``, whose block holds the look's keys and the claim for each child
+#: (:data:`~little_sister.checks.metadata.CHILDREN_KEYS`). A key outside these is
+#: named on the startup log, one line a file.
+NODE_KEYS = ("about", "title", "order", "show_when_quiet", *LOOK_KEYS, "children")
 
 
 def load_nodes(config_dir: str | Path | None = None) -> dict[str, NodeMeta]:
@@ -133,11 +156,37 @@ def resolve_metadata(checks: list[Check],
     return meta
 
 
+#: An ``about`` longer than this is named on the startup record (backlog #91 §3.5).
+#: Every view of a node shows its about open, beneath its trail and title, as the
+#: short account of what the node is — a sentence or a few — and past about 400
+#: characters, some four lines at a desk's width, it has stopped being one.
+ABOUT_NOTED_PAST = 400
+
+
+def note_long_about(path: str, about: str) -> None:
+    """Name an ``about`` past :data:`ABOUT_NOTED_PAST` characters on the startup
+    record, as an orphan is named: the node, its length, and where the rest can go.
+    One line per node, standing for the life of the process; a shorter one says
+    nothing. The startup pass calls it for what the configuration declares, and the
+    engine for what a run hands over (ADR-0025) when it first fills its node."""
+    length = len(about.strip())
+    if length <= ABOUT_NOTED_PAST:
+        return
+    self_report.startup.note(
+        slug("nodes", "long-about", path),
+        plain(f"the about of {path!r} is {length:,} characters, past the "
+              f"{ABOUT_NOTED_PAST} or so that every view of the node shows open as a "
+              f"short account of it; the rest can stand behind a link, or in the "
+              f"node's handbook once there is one"))
+
+
 def run_consistency_pass(checks: list[Check],
                          metadata: dict[str, NodeMeta]) -> None:
     """Surface metadata defects at startup: **warn** for a declared path no check
-    covers (an orphan — segment-wise check-root coverage, ADR-0014), and **info** for
-    a host / container node that has checks but no ``about`` (ADR-0012)."""
+    covers (an orphan — segment-wise check-root coverage, ADR-0014) and for an
+    ``about`` past :data:`ABOUT_NOTED_PAST` characters (:func:`note_long_about`), and
+    **info** for a host / container node that has checks but no ``about``
+    (ADR-0012)."""
     # The engine's heartbeat is check-less by design (ADR-0005) yet a fair
     # metadata target — a title/about there feeds the status strip and its
     # hover card (ADR-0024) — so it counts as covered, never as an orphan.
@@ -148,6 +197,9 @@ def run_consistency_pass(checks: list[Check],
                 slug("nodes", "orphan", path),
                 plain(f"nodes.yaml declares metadata for {path!r} but no check "
                       f"covers it"))
+        else:
+            # an orphan's about is shown nowhere, and the orphan's line says so
+            note_long_about(path, metadata[path].about)
     described = {path for path, entry in metadata.items() if entry.about}
     for container in sorted(_containers(checks)):
         if container not in described:
@@ -170,8 +222,10 @@ def _containers(checks: list[Check]) -> set[str]:
 
 def _read_nodes_file(node_file: Path) -> dict[str, NodeMeta]:
     """Parse one ``nodes.yaml`` into ``path -> NodeMeta``. Each value is a mapping
-    (``{about: …, title: …, order: …, show_when_quiet: …}``) or a bare-string
-    shorthand for ``about`` alone; an entry stating none of the four is dropped."""
+    (``{about: …, title: …, order: …, show_when_quiet: …}``, and how the node first
+    looks, ``chips`` / ``fold_ok`` / ``reason_cap`` / ``children:``) or a bare-string
+    shorthand for ``about`` alone; an entry stating none of them is dropped, and the
+    keys no entry knows are named in one line for the file."""
     try:
         with open(node_file, encoding="utf-8") as handle:
             data = yaml.safe_load(handle) or {}
@@ -180,10 +234,19 @@ def _read_nodes_file(node_file: Path) -> dict[str, NodeMeta]:
     if not isinstance(data, dict):
         raise CheckError(f"{node_file.name}: top-level YAML must be a mapping")
     nodes: dict[str, NodeMeta] = {}
+    unknown: list[str] = []
     for node_path, value in data.items():
         entry = _meta_of(value, f"{node_file.name}: {node_path}")
+        if isinstance(value, dict):
+            unknown.extend(unknown_keys(value, NODE_KEYS, str(node_path)))
         if entry.declares:
             nodes[join_path(str(node_path))] = entry   # canonical absolute path
+    if unknown:
+        # One line for the file: a misspelt `chip:` would otherwise load as an
+        # entry that says nothing and be dropped, in silence (ADR-0128).
+        logger.warning("nodes: %s: unknown key(s) %s, not read (an entry knows %s; "
+                       "a children: block %s)", node_file, ", ".join(unknown),
+                       ", ".join(NODE_KEYS), ", ".join(CHILDREN_KEYS))
     return nodes
 
 
@@ -202,7 +265,11 @@ def _meta_of(value: Any, where: str) -> NodeMeta:
         # *on* while the file says off, and nothing downstream could notice.
         quiet = (strict_flag(value, "show_when_quiet", where=where)
                  if value.get("show_when_quiet") is not None else None)
+        # How the node first looks, and its children (ADR-0128), read the same way:
+        # absent is nobody said, and a value of the wrong kind raises, so the file is
+        # not loaded and the start says so, as for any of the keys above.
         return NodeMeta(about=str(value.get("about", "")),
                         title=str(value.get("title", "")),
-                        order=order, show_when_quiet=quiet)
+                        order=order, show_when_quiet=quiet,
+                        look=read_stated(value, where))
     return NodeMeta(about=str(value) if value else "")

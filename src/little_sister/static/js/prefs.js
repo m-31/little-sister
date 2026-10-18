@@ -11,8 +11,8 @@
  * **Delegated on the document, not bound per element.** The band rides the ~10s
  * poll fragment on the dashboard, so listeners attached to the markup that happened
  * to be in the document at load would stop working after the first swap —
- * silently, and only on the pages that poll. The same shape links.js, reasons.js,
- * branches.js and maintenance.js already use. `change` bubbles, so one listener
+ * silently, and only on the pages that poll. The same shape links.js, tree.js
+ * and maintenance.js already use. `change` bubbles, so one listener
  * reaches a control that arrived after load without a MutationObserver.
  *
  * Without JavaScript each of the two forms keeps a `<noscript>` submit button, so a

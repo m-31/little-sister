@@ -36,7 +36,11 @@ host: mynas-ssh-alias        # SSH target — ~/.ssh/config alias or hostname/FQ
 # options: ["-o", "WarnWeakCrypto=no-pq-kex"]  # extra `ssh -o` args (see the ssh template)
 
 # --- grading ---------------------------------------------------------------
-# Temperature thresholds (°C), applied to system / cpu / each drive: at/above
-# `warn` → WARN, at/above `error` → ERROR. Defaults shown.
-# thresholds:
-#   temperature: {warn: 50, error: 60}
+# The temperature (°C) is a pair (ADR-0131), applied to system / cpu / each drive:
+# above `_warn` → WARN, above `_error` → ERROR, each level the last value that
+# passes. Defaults shown. A drive's SMART word is this type's own judgment — OK,
+# a warning where it warns, an error for any other word — and `smart_reason` is
+# the sentence its line says when it fires.
+# max_temperature_warn: 50
+# max_temperature_error: 60
+# smart_reason: "Replace the drive before the next one goes."

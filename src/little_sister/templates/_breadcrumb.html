@@ -35,9 +35,9 @@
     {%- for name, path in branch | breadcrumbs -%}
         <span class="text-muted">&nbsp;/ </span>
         {%- if loop.last -%}
-            <span class="text-muted">{{ name }}</span>
+            <span class="text-muted">{{ name | breakable }}</span>
         {%- else -%}
-            <a href="{{ crumb_href(path) }}" class="text-decoration-none text-reset crumb">{{ name }}</a>
+            <a href="{{ crumb_href(path) }}" class="text-decoration-none text-reset crumb">{{ name | breakable }}</a>
         {%- endif -%}
     {%- endfor -%}
 </span>

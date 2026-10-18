@@ -32,6 +32,7 @@ from little_sister import app as app_module
 from little_sister import links
 from little_sister.status import StatusCode
 from little_sister.tree import StatusTree
+from tests.browser_server import PageServer
 
 try:  # pragma: no cover - environment probe
     from playwright.sync_api import sync_playwright
@@ -132,7 +133,8 @@ class OwnPagesReportNothingTests(unittest.TestCase):
         ]
         for patch in cls.patches:
             patch.start()
-        cls.server = make_server("127.0.0.1", 0, app_module.app, handler_class=_Quiet)
+        cls.server = make_server("127.0.0.1", 0, app_module.app,
+                                 server_class=PageServer, handler_class=_Quiet)
         threading.Thread(target=cls.server.serve_forever, daemon=True).start()
         cls.base = f"http://127.0.0.1:{cls.server.server_port}"
 
@@ -213,7 +215,8 @@ class OwnPagesReportNothingTests(unittest.TestCase):
                 page = self._open("/links", screen)
                 # each icon from elsewhere was asked for and failed, and the page
                 # drew the glyph in its place; the mark of ours that the theme shows
-                # loaded from our own origin
+                # loaded from our own origin — the one for a dark canvas, in the
+                # library's theme, cyberpunk
                 self._wait_for(page, f"document.querySelectorAll("
                                      f"'{_ENTRY} svg.ls-links__icon').length === 2")
                 ours = page.evaluate(
@@ -221,7 +224,7 @@ class OwnPagesReportNothingTests(unittest.TestCase):
                     ".filter(image => getComputedStyle(image).display !== 'none')"
                     ".map(image => [new URL(image.src).pathname, image.naturalWidth])")
                 self.assertEqual([(path, width > 0) for path, width in ours],
-                                 [("/links/icon/on-light/grafana", True)])
+                                 [("/links/icon/on-dark/grafana", True)])
                 self.assertEqual(self._settled(page), [])
 
 

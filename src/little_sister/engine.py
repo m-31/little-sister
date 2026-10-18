@@ -4,7 +4,14 @@ One process runs one engine (ADR-0001). A scheduler thread submits *due* checks
 to a bounded thread pool. A run is **two steps** (ADR-0086): the check
 :meth:`~little_sister.checks.Check.measure`\\ s its object and hands back a
 record, then :meth:`~little_sister.checks.Check.grade`\\ s that record into the
-result this module upserts into the shared status tree. A check that raises or
+result this module upserts into the shared status tree. What is released is a
+**unit** (ADR-0078, ADR-0130): one schedule entry per unit a check declares, each on
+its own period, measured alone through
+:meth:`~little_sister.checks.Check.measure_unit`; the check is then graded whole
+over the newest reading of every unit, and the unit's own path — the containers
+above it and the node it answers for — is written and stamped, nothing beside it.
+A check that declares no units is one unit, released once per period, which is the
+check as it always ran. A check that raises or
 times out becomes ``ERROR`` (ADR-0040) — and where the *measurement* is what
 raised, the engine writes the failure record itself, so no author can forget to
 record a reading that failed. One whose secret references failed to resolve at
@@ -36,12 +43,13 @@ from datetime import date, datetime, timedelta
 from functools import partial
 from typing import Any
 
-from little_sister import instants, process, self_report
+from little_sister import first_look, instants, process, self_report
 from little_sister.checks import (
     Check,
     CheckError,
     CheckResult,
     Measurement,
+    Unit,
     checks_dirs,
     code,
     load_checks,
@@ -51,6 +59,7 @@ from little_sister.checks import (
 from little_sister.checks.output import FAILURE_BYTES, failure_text
 from little_sister.codes import RANKED, worst_of
 from little_sister.config import config
+from little_sister.grading import Grading
 from little_sister.limits import (
     COLLECTION_SPACING,
     MEMORY_LINE_MINUTES,
@@ -70,7 +79,9 @@ from little_sister.limits import (
     rise_text,
     stall_text,
 )
+from little_sister.line_template import Declarations
 from little_sister.logger import logger
+from little_sister.nodes import ABOUT_NOTED_PAST, NodeMeta, note_long_about
 from little_sister.pool import DaemonPool
 from little_sister.readiness import Outcomes
 from little_sister.reasons import Entry, Refusal, derive_code, lenient_records, slug
@@ -136,6 +147,10 @@ FAILURE_RECORD_BYTES = (len(json.dumps({"error": ""})) - len('""')
 # numbers the engine measures itself against and beside the setting that
 # overrides it; `Engine` reads it through `config` like the rest of them.
 DEFAULT_POLL_INTERVAL = 1.0
+# The period a schedule entry built without a unit carries: the library's own
+# default frequency, so a bare `_Scheduled(check, now)` in a test is the one-unit
+# check it was before units existed.
+DEFAULT_PERIOD = 900
 # The spread window for check start times: every check still runs in the first
 # sweep, but its schedule is phase-shifted once, at the first re-arm, by a
 # stable per-check offset within min(frequency, this) — so equal-frequency
@@ -172,16 +187,118 @@ HEARTBEAT_ABOUT = (
 )
 
 
-def _stagger(check: Check) -> float:
+def _stagger(check: Check, unit: Unit | None = None) -> float:
     """The check's personal schedule phase within
     ``min(frequency, STAGGER_WINDOW_SECONDS)``, applied once at the first
     re-arm. Derived from a digest of path *and* type — two checks may share a
     root node (e.g. host-metrics + macos-memory on one host) and those want
     separating most — and deterministic across restarts (crc32, not the
-    per-process-salted ``hash``), so the relative spread is reproducible."""
-    window = min(float(check.frequency_seconds), STAGGER_WINDOW_SECONDS)
-    digest = zlib.crc32(f"{check.path}\0{check.type_name}".encode())
+    per-process-salted ``hash``), so the relative spread is reproducible.
+
+    A declared unit has a phase of its own (ADR-0130): the window is its own
+    period's, and its key joins the digest, so two units of one check spread as two
+    checks do. The anonymous unit of a one-unit check digests what the check always
+    did, so nothing moves for it."""
+    period = check.frequency_seconds if unit is None else unit.period_seconds
+    window = min(float(period), STAGGER_WINDOW_SECONDS)
+    text = f"{check.path}\0{check.type_name}"
+    if unit is not None and unit.key:
+        text += f"\0{unit.key}"
+    digest = zlib.crc32(text.encode())
     return (digest % 1000) / 1000.0 * window
+
+
+def _units_of(check: Check) -> tuple[Unit, ...]:
+    """What ``check`` declares it reads on slots of its own (ADR-0130 decision 1),
+    checked as the engine needs it — a declaration the schedule could not honor is
+    a refusal to start naming the check (ADR-0051), never a degraded page.
+
+    A check that declares none answers one anonymous unit, and that is every check
+    that existed before units did. A check that declares its own gives every unit a
+    key, overrides ``measure_unit`` to read one, declares each node once and none
+    beneath another's — a node written by two units' runs would carry two stamps of
+    one look, which is what decision 4 refuses."""
+    try:
+        units = tuple(check.units())
+    except Exception as error:
+        raise CheckError(
+            f"check {check.path}: units() raised ({error!r})") from error
+    if not units:
+        raise CheckError(
+            f"check {check.path}: declares no unit at all — a check that declares "
+            f"none answers one, so an empty declaration is a defect of the type")
+    anonymous = len(units) == 1 and units[0].key == "" and units[0].node == ""
+    if anonymous:
+        return units
+    for unit in units:
+        if not unit.key:
+            raise CheckError(
+                f"check {check.path}: a declared unit needs a key of its own; one "
+                f"answering for {unit.node!r} has none")
+    if type(check).measure_unit is Check.measure_unit:
+        raise CheckError(
+            f"check {check.path}: declares {len(units)} unit(s) and no "
+            f"measure_unit() that reads one")
+    seen_keys: dict[str, Unit] = {}
+    seen_nodes: dict[str, Unit] = {}
+    for unit in units:
+        if unit.key in seen_keys:
+            raise CheckError(
+                f"check {check.path}: declares the unit {unit.key!r} twice")
+        seen_keys[unit.key] = unit
+        if unit.node in seen_nodes:
+            raise CheckError(
+                f"check {check.path}: the units {seen_nodes[unit.node].key!r} and "
+                f"{unit.key!r} both answer for the node {unit.node!r}")
+        seen_nodes[unit.node] = unit
+    for unit in units:
+        for other in units:
+            if other is unit or other.node == unit.node:
+                continue
+            if other.node == "" or unit.node.startswith(other.node + "/"):
+                raise CheckError(
+                    f"check {check.path}: the unit {unit.key!r} answers for "
+                    f"{unit.node!r}, beneath the node {other.node!r} the unit "
+                    f"{other.key!r} answers for — a node is written by one unit's "
+                    f"run")
+    return units
+
+
+@dataclass(frozen=True)
+class _UnitView:
+    """A declared unit as the limits' arithmetic reads a check
+    (:mod:`little_sister.limits` is duck-typed on these names): its node's path,
+    its own period, the check's timeout, and what one run of it costs. The check's
+    entries and record are declared once, on its first unit's view, so the sums
+    count them once; a one-unit check is handed to the arithmetic as itself."""
+
+    path: str
+    frequency_seconds: int
+    timeout_seconds: float
+    cost_seconds: float | None
+    check: Check | None
+
+    def expected_cost(self) -> float | None:
+        return self.cost_seconds
+
+    def expected_entries(self) -> int | None:
+        return None if self.check is None else self.check.expected_entries()
+
+    def expected_record(self) -> int | None:
+        return None if self.check is None else self.check.expected_record()
+
+
+def _views(check: Check, units: Sequence[Unit]) -> list[object]:
+    """What the limits read of ``check``: the check itself where it is one unit,
+    and otherwise one view per declared unit (ADR-0130 decision 5 — the startup
+    sum takes each unit's cost over its own period, and a timeout longer than a
+    unit's period is that unit's warning)."""
+    if len(units) == 1 and units[0].key == "":
+        return [check]
+    return [_UnitView(join_path(check.path, unit.node), unit.period_seconds,
+                      check.timeout_seconds, unit.cost_seconds,
+                      check if index == 0 else None)
+            for index, unit in enumerate(units)]
 
 
 def _retry_settings(check: Check) -> tuple[int, int]:
@@ -313,6 +430,32 @@ def _names_a_node_at_or_beneath(node: str, relative: str) -> bool:
         mine in (theirs, "*") for mine, theirs in zip(named, there, strict=False))
 
 
+def _child_on(result: CheckResult, segments: Sequence[str]
+              ) -> tuple[CheckResult | None, int]:
+    """The child of ``result`` that stands first on the path ``segments`` names,
+    and how many segments its name takes — a child may be named by several
+    (:meth:`Engine._store`) — or ``None`` and nothing where no child does."""
+    for child in result.children:
+        parts = split_path(child.name)
+        if parts and list(segments[:len(parts)]) == parts:
+            return child, len(parts)
+    return None, 0
+
+
+def _subtree(result: CheckResult, node: str) -> CheckResult | None:
+    """What ``result`` returned for the node ``node`` names, relative to its
+    root — the root itself for ``""`` — or ``None`` where the grading returned
+    no such node (ADR-0130)."""
+    segments = split_path(node)
+    current = result
+    while segments:
+        child, taken = _child_on(current, segments)
+        if child is None:
+            return None
+        current, segments = child, segments[taken:]
+    return current
+
+
 def _failure_measurement(check: Check,
                          error: BaseException) -> tuple[Measurement, ...]:
     """The reading a check that **raised** leaves behind: that it could not get
@@ -368,16 +511,19 @@ def _refused_lines(check: Check,
     return lines
 
 
-def _with_lines(result: CheckResult, lines: Sequence[Entry]) -> CheckResult:
+def _with_lines(result: CheckResult, lines: Sequence[Entry],
+                code: StatusCode = StatusCode.WARN) -> CheckResult:
     """``result`` with the engine's lines added to its root, in the node's own form
     (ADR-0093 decision 3, ADR-0042).
 
     A node whose lines carry their own codes derives its code from them, so each
-    line added here carries ``WARN`` itself. A node that declares its code keeps its
-    lines uncoded — a prose node stays prose, and members that carry the node's code
-    stay members — and its code is raised to ``WARN`` where it was better, never
-    lowered. Either way the verdict says it is incomplete: something the node reads
-    was not read, and green over it would be a false all-clear.
+    line added here carries ``code`` itself — ``WARN`` for the engine's own, the
+    window's for its line (ADR-0131 decision 7). A node that declares its code keeps
+    its lines uncoded — a prose node stays prose, and members that carry the node's
+    code stay members — and its code is raised to ``code`` where it was better,
+    never lowered. Either way the verdict says it is incomplete: something the node
+    reads was not read, or was not read as it should have been, and green over it
+    would be a false all-clear.
 
     **They stand after the grading's own failing lines and ahead of the rest** —
     the leading run of lines at ``ERROR`` or ``WARN``, each by its own code or the
@@ -395,14 +541,65 @@ def _with_lines(result: CheckResult, lines: Sequence[Entry]) -> CheckResult:
             break
         lead += 1
     if result.code is None:
-        coded = [replace(line, code=StatusCode.WARN) for line in lines]
+        coded = [replace(line, code=code) for line in lines]
         return replace(result, reason=[*graded[:lead], *coded, *graded[lead:]],
                        entries=result.members)
-    raised = (worst_of((result.code, StatusCode.WARN))
-              if result.code in RANKED else StatusCode.WARN)
+    raised = worst_of((result.code, code)) if result.code in RANKED else code
+    prose = [replace(line, code=None) for line in lines]
     return replace(result, code=raised,
-                   reason=[*graded[:lead], *lines, *graded[lead:]],
+                   reason=[*graded[:lead], *prose, *graded[lead:]],
                    entries=result.members)
+
+
+def _with_line_beneath(result: CheckResult, segments: Sequence[str],
+                       line: Entry) -> CheckResult:
+    """``result`` with ``line`` added, at the line's own code, to the node
+    ``segments`` names beneath its root — the root itself where they are none — in
+    that node's own form, as :func:`_with_lines` adds a line; and unchanged where the
+    grading returned no such node."""
+    if not segments:
+        return _with_lines(result, [line], line.code or StatusCode.WARN)
+    child, taken = _child_on(result, segments)
+    if child is None:
+        return result
+    changed = _with_line_beneath(child, segments[taken:], line)
+    return replace(result, children=tuple(changed if one is child else one
+                                          for one in result.children),
+                   reason=list(result.reason_entries), entries=result.members)
+
+
+def _lines_at(result: CheckResult
+              ) -> list[tuple[Entry, StatusCode, tuple[str, ...]]]:
+    """Every line a grading wrote, as :func:`_lines_of` lists them and in its order,
+    each beside the code of the node it hangs on and that node's path beneath the
+    root — the path the window's line for the reading the line carries is added at
+    (ADR-0131 decision 7)."""
+    shown: list[tuple[Entry, StatusCode, tuple[str, ...]]] = []
+    kept: list[tuple[Entry, StatusCode, tuple[str, ...]]] = []
+    pending: list[tuple[CheckResult, tuple[str, ...]]] = [(result, ())]
+    while pending:
+        node, at = pending.pop()
+        shown.extend((entry, node.stored_code, at) for entry in node.reason_entries)
+        kept.extend((entry, node.stored_code, at) for entry in node.for_record)
+        pending.extend((child, (*at, *split_path(child.name)))
+                       for child in reversed(node.children))
+    return shown + kept
+
+
+def _stands_at(measurement: Measurement,
+               lines: Sequence[tuple[Entry, StatusCode, tuple[str, ...]]],
+               taken: set[int]) -> tuple[tuple[str, ...] | None, StatusCode | None]:
+    """Where a reading among several stands, and at which code: the node the line it
+    became hangs on, found as :func:`_line_of` finds the line — by the record it
+    carries and the subject it names, the first not yet claimed — or nowhere."""
+    record = dict(measurement.record)
+    for index, (entry, node_code, at) in enumerate(lines):
+        if index in taken or entry.data is None:
+            continue
+        if entry.subject == measurement.subject and entry.data == record:
+            taken.add(index)
+            return at, entry.code if entry.code is not None else node_code
+    return None, None
 
 
 def _refused_entries(path: str, result: CheckResult, *, for_record: bool = False
@@ -594,6 +791,15 @@ class _Scheduled:
     check: Check
     next_due: float
     running: bool = False
+    #: The unit this entry releases (ADR-0130) — the check's one anonymous unit, or
+    #: one it declared — and the absolute path of the node it answers for, the
+    #: mount for the anonymous one. `latest` is the newest reading the unit handed
+    #: back, what the check is graded over beside its siblings' newest; `None`
+    #: before its first measurement, `()` where it measured nothing. Under the
+    #: engine lock.
+    unit: Unit = field(default_factory=lambda: Unit("", DEFAULT_PERIOD, ""))
+    node: str = ""
+    latest: tuple[Measurement, ...] | None = None
     # One-time schedule offset (see _stagger), spent at the first re-arm.
     stagger: float = 0.0
     # The budgeted failure retry (ADR-0033, amended by ADR-0060 and ADR-0125),
@@ -677,6 +883,12 @@ class CheckInfo:
     retrying: bool = False
     retry_attempt: int = 0
     retry_attempts: int = 0
+    #: The row is a **unit's** (ADR-0130): the path of the node it answers for —
+    #: the mount, for a check that declares no units — and its key, empty for the
+    #: anonymous unit. ``frequency_seconds`` above is the unit's own period. A
+    #: check's units stand beneath it, in the order it declared them.
+    node: str = ""
+    unit: str = ""
     #: What this check declared it costs (ADR-0075): worker seconds per run and
     #: reason entries held, or ``None`` where the type did not estimate. They sit
     #: beside ``elapsed_seconds`` — the measurement — on purpose: an estimate
@@ -701,6 +913,16 @@ class CheckInfo:
     #: one failing dependency withholds every check that names it, and a page that
     #: could only be read one node at a time would make that count an exercise.
     depends_on: str | None = None
+    #: What its type declares of its lines (ADR-0126): the forms, the words and the
+    #: fields a check's ``display:`` block may name — which ``/system/installed``
+    #: lists for every type this configuration runs, as the page a deployment writes
+    #: a template against.
+    line_declarations: Declarations = field(default_factory=Declarations)
+    #: What its type declares it grades (ADR-0131 decision 1): each value with its
+    #: sentence, its kind, its default and the keys a deployment writes it under —
+    #: which ``/system/installed`` lists for every type this configuration runs,
+    #: beside what the library grades on every check.
+    gradings: tuple[Grading, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -720,6 +942,9 @@ class EngineInfo:
     check_count: int
     running: int
     checks: tuple[CheckInfo, ...]
+    #: How many units the schedule releases (ADR-0130) — ``check_count`` where no
+    #: check declares any, and one row of ``checks`` each.
+    unit_count: int = 0
     declared_workers: float = 0.0
     declared_entries: int = 0
     entries_held: int = 0
@@ -803,8 +1028,16 @@ class Engine:
         self._limits = limits or Limits.from_machine(
             entry_limit=config.entry_limit, memory_share=config.memory_share,
             record_limit=config.record_limit, series_limit=config.series_limit)
+        # The checks, and what each declares it reads on slots of its own
+        # (ADR-0130): one unit for a check that declares none. Read first, because
+        # a declaration the schedule could not honor refuses the start as a
+        # declared load that cannot fit does, below.
+        self._checks: list[Check] = list(checks)
+        units_of: dict[int, tuple[Unit, ...]] = {
+            id(check): _units_of(check) for check in checks}
         # The pool is never larger than the roster: eight workers for three
-        # checks are five threads that can never be used.
+        # checks are five threads that can never be used. Units of one check run
+        # one at a time (`_submit_due`), so the roster is the checks, not the units.
         ceiling = config.max_workers if max_workers is None else max_workers
         self._max_workers = max(1, min(ceiling, max(1, len(checks))))
         # What the configured checks **declared** they cost, summed against the
@@ -812,8 +1045,12 @@ class Engine:
         # (ADR-0075). A declared load that cannot fit refuses here — first, before
         # anything is registered on the tree, so a refusal leaves nothing half
         # built — because those checks would still run and still report, without
-        # measuring what the operator believes they measure.
-        self._capacity = capacity(checks, max_workers=self._max_workers,
+        # measuring what the operator believes they measure. A check with units of
+        # its own is read one view per unit: each unit's cost over its own period
+        # (ADR-0130 decision 5).
+        views = [view for check in checks
+                 for view in _views(check, units_of[id(check)])]
+        self._capacity = capacity(views, max_workers=self._max_workers,
                                   limits=self._limits,
                                   record_floor=FAILURE_RECORD_BYTES)
         if refusals := self._capacity.refusals():
@@ -876,6 +1113,11 @@ class Engine:
                 join_path(owned) for other in checks if other is not check
                 for owned in other.owned_nodes())}))
             for check in checks}
+        # The deployment's `nodes.yaml` as loaded (ADR-0128), which the start hands
+        # over before the first tick (:meth:`declare_nodes`): a node's own entry is
+        # seeded onto the tree, and a parent's `children:` is read here as each child
+        # is written, since no path names the children it speaks for.
+        self._nodes: Mapping[str, NodeMeta] = {}
         self._clock = clock
         self._poll_interval = poll_interval
         now = clock()
@@ -884,19 +1126,34 @@ class Engine:
         # lockstep doesn't outlive the start. The failure-retry settings
         # (ADR-0033) resolve per check here — the per-check fields first, then
         # the settings defaults — so _execute reads two ints, never the config.
+        # One entry per **unit** (ADR-0130 decision 3): a check's units in the
+        # order it declared them, each on its own period, each answering for its
+        # own node — the mount, for the one anonymous unit of a check that declares
+        # none, which is every entry there was before.
         self._scheduled: list[_Scheduled] = []
+        self._units: dict[int, tuple[_Scheduled, ...]] = {}
         for check in checks:
             retry_interval, retry_attempts = _retry_settings(check)
-            self._scheduled.append(_Scheduled(
-                check, now, stagger=_stagger(check),
+            items = tuple(_Scheduled(
+                check, now, stagger=_stagger(check, unit), unit=unit,
+                node=join_path(check.path, unit.node),
                 retry_interval_seconds=retry_interval,
-                retry_attempts=retry_attempts))
+                retry_attempts=retry_attempts) for unit in units_of[id(check)])
+            self._units[id(check)] = items
+            self._scheduled.extend(items)
+        # The checks with a unit in flight: a check's units run one at a time, so
+        # a type's measuring half is never in two threads at once and one slow unit
+        # costs its check what one slow run did. Under the engine lock.
+        self._busy: set[int] = set()
         # What a run is called beside another in the log (ADR-0095 decision 4): its
-        # path, and its type too where two checks share the mount (ADR-0015).
-        mounts = Counter(item.check.path for item in self._scheduled)
+        # path, and its type too where two checks share the mount (ADR-0015) — and
+        # its unit's key, where the check declares units (ADR-0130).
+        mounts = Counter(check.path for check in checks)
         for item in self._scheduled:
             item.name = (item.check.path if mounts[item.check.path] == 1
                          else f"{item.check.path} ({item.check.type_name})")
+            if item.unit.key:
+                item.name += f" [{item.unit.key}]"
         # What the process holds, read by the tick's report, at a run's start and
         # end and around the tick (ADR-0095); and the wall clock, an instant: when
         # the engine started and a run did, when a reading was observed, when a
@@ -936,7 +1193,7 @@ class Engine:
         # runs; never a refusal, because a run longer than its period is a late
         # run, not a broken one.
         self._report = EngineReport(
-            checks, workers=self._max_workers, poll_interval=poll_interval,
+            views, workers=self._max_workers, poll_interval=poll_interval,
             limits=self._limits, capacity=self._capacity, resident=resident,
             left=left, wall=self._wall)
         for late in self._report.may_run_late:
@@ -948,7 +1205,7 @@ class Engine:
 
     @property
     def check_count(self) -> int:
-        return len(self._scheduled)
+        return len(self._checks)
 
     @property
     def outcomes(self) -> Outcomes:
@@ -956,23 +1213,32 @@ class Engine:
         configured, how many have stored a result at least once, and how many
         last stored an ``ERROR``. Recorded state, read under the lock — the
         readiness answer and the instance's own line both come from here, and
-        neither asks a check anything."""
+        neither asks a check anything. A check with units has stored once any of
+        them has, and is erroring while any of them last stored an ``ERROR``."""
         with self._lock:
-            stored = [item.last_stored for item in self._scheduled]
+            stored = [[item.last_stored for item in self._units[id(check)]]
+                      for check in self._checks]
         return Outcomes(
             configured=len(stored),
-            completed=sum(1 for code in stored if code is not None),
-            erroring=sum(1 for code in stored if code is StatusCode.ERROR))
+            completed=sum(1 for codes in stored
+                          if any(code is not None for code in codes)),
+            erroring=sum(1 for codes in stored
+                         if any(code is StatusCode.ERROR for code in codes)))
 
     def check_roots(self) -> list[str]:
         """Each configured check's node path — the static roots the maintenance
         reaper reconciles against at startup (ADR-0014/0015)."""
-        return [item.check.path for item in self._scheduled]
+        return [check.path for check in self._checks]
 
     @property
     def checks(self) -> list[Check]:
         """The configured checks (for startup node-metadata seeding, ADR-0012)."""
-        return [item.check for item in self._scheduled]
+        return list(self._checks)
+
+    def units(self) -> tuple[tuple[Check, Unit, str], ...]:
+        """Every unit the schedule releases, with its check and the absolute path
+        of the node it answers for (ADR-0130) — what a pin's floor is read from."""
+        return tuple((item.check, item.unit, item.node) for item in self._scheduled)
 
     @property
     def series(self) -> MemoryStore:
@@ -1020,8 +1286,7 @@ class Engine:
         or beneath it."""
         where = join_path(path)
         found: list[SubjectSeries] = []
-        for item in self._scheduled:
-            check = item.check
+        for check in self._checks:
             if check.series_keep < 1 or not (
                     _at_or_beneath(check.path, where)
                     or _at_or_beneath(where, check.path)):
@@ -1040,8 +1305,7 @@ class Engine:
         naming any. Read from the checks and never from the readings, so a view's
         tab does not come and go with them."""
         where = join_path(path)
-        for item in self._scheduled:
-            check = item.check
+        for check in self._checks:
             if check.series_keep < 1:
                 continue
             if _at_or_beneath(check.path, where):
@@ -1080,7 +1344,8 @@ class Engine:
             checks = tuple(
                 CheckInfo(path=item.check.path,
                           type_name=item.check.type_name,
-                          frequency_seconds=item.check.frequency_seconds,
+                          frequency_seconds=item.unit.period_seconds,
+                          node=item.node, unit=item.unit.key,
                           running=item.running,
                           running_since=item.run_started_at,
                           running_seconds=(now - item.run_started_mono
@@ -1094,13 +1359,15 @@ class Engine:
                           retrying=item.retrying,
                           retry_attempt=item.retry_used,
                           retry_attempts=item.retry_attempts,
-                          expected_cost=declared_cost.get(item.check.path),
-                          expected_entries=declared_entries.get(item.check.path),
-                          expected_record=declared_record.get(item.check.path),
-                          stated_record=stated_record.get(item.check.path),
+                          expected_cost=declared_cost.get(item.node),
+                          expected_entries=declared_entries.get(item.node),
+                          expected_record=declared_record.get(item.node),
+                          stated_record=stated_record.get(item.node),
                           record_bytes=item.record_bytes,
                           record_refused=item.record_refused,
-                          depends_on=item.check.depends_on)
+                          depends_on=item.check.depends_on,
+                          line_declarations=item.check.line_declarations,
+                          gradings=item.check.grading_declarations)
                 for item in self._scheduled)
             running = sum(1 for item in self._scheduled if item.running)
         uptime = (now - self._started_monotonic
@@ -1113,7 +1380,8 @@ class Engine:
         left, stall = self._report.left, self._report.stalled
         return EngineInfo(
             started_at=self._started_at, uptime_seconds=uptime,
-            max_workers=self._max_workers, check_count=len(self._scheduled),
+            max_workers=self._max_workers, check_count=len(self._checks),
+            unit_count=len(self._scheduled),
             running=running, checks=checks,
             declared_workers=self._capacity.workers,
             declared_entries=self._capacity.entries,
@@ -1151,8 +1419,8 @@ class Engine:
         self._scheduler = threading.Thread(
             target=self._loop, name="ls-scheduler", daemon=True)
         self._scheduler.start()
-        logger.info("engine: started %d check(s) on %d worker(s)",
-                    len(self._scheduled), self._max_workers)
+        logger.info("engine: started %d check(s), %d unit(s), on %d worker(s)",
+                    len(self._checks), len(self._scheduled), self._max_workers)
 
     def stop(self, *, trigger: str = "a call", timeout: float | None = 5.0) -> None:
         """The instance's stop (ADR-0088): idempotent, and a second call says
@@ -1175,7 +1443,7 @@ class Engine:
         if scheduler is not None:
             scheduler.join(timeout=timeout)
         with self._lock:
-            abandoned = [item.check.path for item in self._scheduled if item.running]
+            abandoned = [item.name for item in self._scheduled if item.running]
         ended = process.end_all()
         executor, self._executor = self._executor, None
         if executor is not None:
@@ -1237,7 +1505,7 @@ class Engine:
             if self._stopped:
                 return
             self._stopped = True
-            abandoned = [item.check.path for item in self._scheduled if item.running]
+            abandoned = [item.name for item in self._scheduled if item.running]
         self._stop.set()
         ended = process.end_all()
         executor, self._executor = self._executor, None
@@ -1335,9 +1603,14 @@ class Engine:
             for item in self._scheduled:
                 if item.running or item.next_due > now:
                     continue
+                # A check's units run one at a time: a unit due while another of
+                # its check is in flight waits for the next tick, and keeps its slot.
+                if id(item.check) in self._busy:
+                    continue
+                self._busy.add(id(item.check))
                 item.running = True
                 item.submitted_mono = now
-                item.next_due = (now + item.check.frequency_seconds
+                item.next_due = (now + item.unit.period_seconds
                                  + item.stagger)
                 item.stagger = 0.0
                 # the armed slot is the nominal one again; a non-OK completion
@@ -1470,26 +1743,43 @@ class Engine:
                 if (item.running and item.run_started_mono is None
                         and item.submitted_mono is not None
                         and item.last_run_at is not None):
-                    waiting.append(Waiting(item.check.path,
-                                           now - item.submitted_mono))
-                period = item.check.frequency_seconds
+                    waiting.append(Waiting(item.node, now - item.submitted_mono))
+                # The unit's own period, and its own node's path in the line
+                # (ADR-0130 decision 5): `late.<path>` names the unit.
+                period = item.unit.period_seconds
                 if period <= 0:
                     continue
                 if (item.run_started_mono is not None
                         and now - item.run_started_mono > period):
-                    late.append(LateRun(item.check.path,
-                                        now - item.run_started_mono, period,
-                                        in_flight=True))
+                    late.append(LateRun(item.node, now - item.run_started_mono,
+                                        period, in_flight=True))
                 elif (item.elapsed_seconds is not None
                         and item.elapsed_seconds > period):
-                    late.append(LateRun(item.check.path, item.elapsed_seconds,
+                    late.append(LateRun(item.node, item.elapsed_seconds,
                                         period, in_flight=False))
         self._report.observe(now, entries=self._tree.entry_count,
                              waiting=waiting, late=late,
                              series=self._series_held(swept))
 
+    def _newest(self, item: _Scheduled) -> tuple[Measurement, ...]:
+        """The newest reading of every unit of ``item``'s check, this unit's first
+        and the others in the order the check declared them (ADR-0130 decision 3):
+        what the check is graded over after this unit's run. A unit that has not
+        measured yet contributes nothing. Read under the engine lock."""
+        others = [other for other in self._units[id(item.check)] if other is not item]
+        return tuple(reading for entry in (item, *others)
+                     for reading in (entry.latest or ()))
+
     def _execute(self, item: _Scheduled, once: bool = False) -> None:
         check = item.check
+        unit = item.unit
+        # A declared unit answers for a node of its own (ADR-0130): its run writes
+        # its own path and is said of that node alone. The anonymous unit of a
+        # check that declares none is the check itself, run as it always was. In
+        # the log a run is the check's path, with the unit's key beside it where
+        # there is one — not `item.name`, whose type suffix is for the rise's line.
+        declared = bool(unit.key) or bool(unit.node)
+        label = f"{check.path} [{unit.key}]" if unit.key else check.path
         ran = not check.secret_errors
         # The engine's one clock: the tick reads this start back against the
         # same clock to see a run that has outgrown its period while still in
@@ -1515,8 +1805,9 @@ class Engine:
         # **The two halves, in order** (ADR-0086): the check reads the world, then
         # says what it read means. `measured` is not `measurements` being empty —
         # a run that measured nothing on purpose is a reading too — it is whether
-        # `measure()` returned at all, which is what decides who owes the failure
-        # record below.
+        # `measure_unit()` returned at all, which is what decides who owes the
+        # failure record below. What is measured is this unit; what is graded is
+        # the check, over the newest reading of every unit (ADR-0130 decision 3).
         measurements: tuple[Measurement, ...] = ()
         measured = False
         # When this run's reading was taken: ours, the one clock the grading is
@@ -1525,9 +1816,17 @@ class Engine:
         observed_at: datetime | None = None
         # **What the seam refused, and what the engine says about it** (ADR-0093):
         # the records it marked inside this run's two halves, and a line per
-        # reading whose record it refused, keyed by where that reading stands.
+        # reading whose record it refused, keyed by where that reading stands —
+        # among the newest readings the grading is handed, this unit's first.
         refusals: list[Refusal] = []
         refused: dict[int, Entry] = {}
+        # Whether `result` is the check graded whole, to be written on the unit's
+        # path — or the check's own error, stored at its root as a check that raised
+        # always was. And a declared unit's own failure, written on its node over
+        # what the grading says of it (ADR-0078 decision 4: an ERROR for the unit
+        # alone, its last reading kept).
+        whole = False
+        unit_failure: CheckResult | None = None
         try:
             if not ran:
                 # Pinned (ADR-0023): a secret reference failed to resolve at
@@ -1546,35 +1845,20 @@ class Engine:
                 # The measuring half alone may read what the check kept (ADR-0113
                 # decision 4): the mark closes before the grading is called.
                 with lenient_records(refusals), _measuring(check):
-                    answer = check.measure()
+                    answer = check.measure_unit(unit.key)
                 measurements = _measured(answer)
                 measured = True
                 # The clock is handed over rather than taken, so the grading is
                 # replayable over old records: same inputs, same verdict — and
                 # the instant it is handed is the reading's own `observed_at`.
                 observed_at = self._wall()
-                # A reading whose record was refused is kept out of the grading,
-                # which may read only records (ADR-0086 decision 6), and is the
-                # engine's to report.
-                refused = _refused_lines(check, measurements)
-                graded = tuple(reading
-                               for index, reading in enumerate(measurements)
-                               if index not in refused)
-                if refused and not graded:
-                    # Nothing passed, so there is nothing to grade: the run
-                    # stands as a check that raised (ADR-0040), the refusals its
-                    # reason, and each reading keeps the failure record the seam
-                    # gave it in place of what it refused.
-                    result = CheckResult(StatusCode.ERROR, list(refused.values()))
-                else:
-                    with lenient_records(refusals):
-                        result = check.grade(graded, observed_at)
-                    if not isinstance(result, CheckResult):
-                        result = CheckResult(
-                            StatusCode.ERROR, ["check returned no result"])
-                    result = _with_lines(result, list(refused.values()))
+                with self._lock:
+                    item.latest = measurements
+                    newest = self._newest(item)
+                result, refused = self._grade(check, newest, observed_at, refusals)
+                whole = True
         except Exception as error:  # any failure becomes an ERROR (ADR-0040)
-            logger.exception("engine: check %s raised", check.path)
+            logger.exception("engine: check %s raised", label)
             # The message is untrusted — it routinely carries a captured line, a
             # path or an API error body — so it is escaped like any other folded-in
             # text (ADR-0018). The trace is a code block: verbatim and inert.
@@ -1586,6 +1870,7 @@ class Engine:
             # A grading that raised over the readings that passed leaves the
             # refused ones refused: the node still says which, and why.
             result = _with_lines(result, list(refused.values()))
+            whole = False
             # Only where the **measurement** is what raised. A grading that threw
             # over a reading that succeeded has not made that reading untrue, and
             # replacing it with `{"error": …}` would throw away the one thing this
@@ -1593,11 +1878,33 @@ class Engine:
             if not measured:
                 measurements = _failure_measurement(check, error)
                 observed_at = self._wall()
+                if declared:
+                    # The unit alone (ADR-0078 decision 4): it keeps its last
+                    # reading, the check is graded over the newest readings it has,
+                    # and the failure is written on the unit's node over that. A
+                    # grading that raises in turn is the check's own error, at its
+                    # root, as it always was.
+                    unit_failure, refused = result, {}
+                    try:
+                        with self._lock:
+                            newest = self._newest(item)
+                        result, refused = self._grade(check, newest, observed_at,
+                                                      refusals)
+                        whole = True
+                    except Exception as again:
+                        logger.exception("engine: check %s raised in its grading",
+                                         check.path)
+                        result = _with_lines(
+                            CheckResult(StatusCode.ERROR,
+                                        [plain(f"check error: {again}")]),
+                            list(refused.values()))
+                        unit_failure = None
         finally:
             elapsed = self._clock() - started
             held_after = self._resident()
             with self._lock:
                 item.running = False
+                self._busy.discard(id(check))
                 if ran:
                     # Keep the runtime even when the run raised — a hanging check
                     # that hit its timeout should show the full wait.
@@ -1620,22 +1927,45 @@ class Engine:
         # the rise (ADR-0095 decision 8).
         collected = self._collect_after(held_before, held_after)
         figures = "".join(f"; {said}" for said in (rose, collected) if said)
-        # The node's own code, and what the run rolls up to beside it wherever the
-        # two differ (ADR-0099 decision 5): a root that declares nothing above
-        # children that grade said `UNDEFINED` on every run, full disk or not.
-        rolled = _rolled_up(result)
-        logger.info("check %s: %s%s (%.0f ms%s)%s", check.path,
-                    result.stored_code.name,
-                    "" if rolled is result.stored_code
+        # **The window** (ADR-0131 decisions 7 and 8): `max_since_ok` over what the
+        # check kept of each subject and this run's reading of it, its line added
+        # where the reading stands — before anything below reads the run, so that
+        # the node, its roll-up, the log line and the retry all read its code. A
+        # unit's failure is where its one reading stands; otherwise the unit's own
+        # node, or the check's root where the unit is the check.
+        if observed_at is not None:
+            if unit_failure is not None:
+                unit_failure = self._with_window(check, measurements, observed_at,
+                                                 unit_failure)
+            else:
+                result = self._with_window(
+                    check, measurements, observed_at, result,
+                    node=unit.node if whole and declared else "")
+        # What this run is **said of**: the check's root where the unit is the
+        # check, and otherwise the unit's own node as the grading placed it — its
+        # failure where it raised, `UNDEFINED` where the grading returned no node
+        # for it. The log line, the retry and the readiness read it; the node's
+        # own code, and what it rolls up to beside it wherever the two differ
+        # (ADR-0099 decision 5).
+        if unit_failure is not None:
+            said = unit_failure
+        elif whole and declared:
+            said = _subtree(result, unit.node) or CheckResult(StatusCode.UNDEFINED)
+        else:
+            said = result
+        rolled = _rolled_up(said)
+        logger.info("check %s: %s%s (%.0f ms%s)%s", label,
+                    said.stored_code.name,
+                    "" if rolled is said.stored_code
                     else f", rolls up to {rolled.name}",
-                    elapsed_ms, figures, _detail(result))
+                    elapsed_ms, figures, _detail(said))
         _say_refused(check, refused, result)
         with self._lock:
             # Every completion, whatever it stored: this is what `outcomes` reads
             # to see a first pass finish and an instance whose every check is
             # erroring (ADR-0073). It is set before the retry block below, which
             # may or may not touch `last_code` and means something else by it.
-            item.last_stored = result.stored_code
+            item.last_stored = said.stored_code
             # The largest record this run carried, written through on every
             # completion including one that carried none — the measurement is of
             # the last run, exactly like `elapsed_seconds` above it, and a figure
@@ -1656,7 +1986,9 @@ class Engine:
         # `host-metrics` and `aws` declare nothing on theirs — and a failing disk
         # read by the root's code never pulled the next run in. It is the
         # result's roll-up, not the node's, for the reasons `_rolled_up` gives:
-        # what this run read, which a pin cannot reach.
+        # what this run read, which a pin cannot reach. For a declared unit it is
+        # what the unit's own subtree rolls up to (ADR-0130 decision 5): its slot
+        # is pulled in for its own failure, never for a sibling's.
         #
         # **An episode ends on any change of the reading** (ADR-0060 decision 4),
         # not only on an OK as ADR-0033 first had it. That record assumed a non-OK
@@ -1691,38 +2023,166 @@ class Engine:
         # nominal re-arm or pulled-in slot, whichever won (ADR-0033) — never
         # `timestamp + frequency`. A one-shot run has no live schedule and
         # writes no next; a secret-pinned check never ran and writes no wall.
-        if once:
-            next_run_at = None
-        else:
-            with self._lock:
-                next_due = item.next_due
-            next_run_at = self._wall() + timedelta(
-                seconds=max(0.0, next_due - self._clock()))
-        self._tree.set_run_facts(check.path,
-                                 wall_seconds=elapsed if ran else None,
-                                 next_run_at=next_run_at)
+        # A declared unit's facts stand on its own node and on every container
+        # between it and the mount, each with the earliest slot armed beneath it
+        # (ADR-0130 decision 5).
+        self._set_run_facts(item, wall_seconds=elapsed if ran else None,
+                            once=once)
         # **Where the run's measurement lands.** One measurement is the run's own
-        # reading of its object and belongs on the check's node, which is what
-        # every type in this repository has. Several are the objects of one run,
-        # and which node, child or line each stands for is the grading's to say —
-        # it has already said it, in the tree it returned — so the engine places
-        # none of them and the node's own reading is cleared.
+        # reading of its object and belongs on the check's node — on the unit's
+        # own node, for a declared unit — which is what every type in this
+        # repository has. Several are the objects of one run, and which node,
+        # child or line each stands for is the grading's to say — it has already
+        # said it, in the tree it returned — so the engine places none of them and
+        # the node's own reading is cleared.
         measurement = measurements[0] if len(measurements) == 1 else None
         try:
-            self._store(check.path, result, check, is_root=True,
-                        measurement=measurement)
+            if whole and declared:
+                self._store_path(check.path, result, check,
+                                 split_path(unit.node), is_root=True, unit=unit,
+                                 measurement=measurement, failure=unit_failure)
+            else:
+                self._store(check.path, result, check, is_root=True,
+                            measurement=measurement)
         except Exception as error:
-            logger.exception("engine: failed to upsert %s", check.path)
+            logger.exception("engine: failed to upsert %s", label)
             self_report.runtime.see(
-                slug("upsert", check.path),
-                plain(f"the result of {check.path} could not be stored "
+                slug("upsert", item.node),
+                plain(f"the result of {label} could not be stored "
                       f"({error!r}); the node shows the run before"), log=False)
         if observed_at is not None:
-            self._keep_series(check, measurements, observed_at, result, refused)
+            self._keep_series(
+                check, measurements, observed_at, result,
+                refused if measured else None,
+                placed=said if declared else None)
+
+    def _with_window(self, check: Check, measurements: Sequence[Measurement],
+                     observed_at: datetime, result: CheckResult, *,
+                     node: str = "") -> CheckResult:
+        """``result`` with the window's line on the node of each subject it fired
+        for (ADR-0131 decisions 7 and 8): ``max_since_ok``, judged by the check over
+        what it kept of the subject and this run's reading of it — each at its own
+        time, the record's ``at`` where it gives one and when the engine took it
+        otherwise, and each at the code it stands at — where the check keeps a
+        series and its configuration writes a level of the window; ``result``
+        unchanged everywhere else.
+
+        A reading stands where :meth:`_keep_series` keeps it as standing: the one a
+        run handed back alone, and one of several that names the check's own object
+        and that no line carried, on ``node`` — the check's root, or the unit's own
+        node, a path beneath it — at what stood there; one a line carried, on the
+        node that line hangs on, at the line's code; any other, nowhere, and no
+        window is judged for it. The store is read here and never by the check,
+        which judges only what it is handed (decision 7).
+
+        Guarded like the series: a window that could not be judged is a line on the
+        instance's runtime node, and never the run's own result.
+        """
+        if check.series_keep < 1 or not check.grades_a_window:
+            return result
+        stood = _subtree(result, node)
+        if stood is None:
+            return result
+        base = tuple(split_path(node))
+        alone = len(measurements) == 1
+        lines = [] if alone else _lines_at(result)
+        taken: set[int] = set()
+        windowed = result
+        try:
+            for measurement in measurements:
+                subject = measurement.subject or (check.subject if alone else "")
+                if not subject:
+                    continue
+                where: tuple[str, ...] | None
+                if alone:
+                    where, code = base, _placed(stood)[0]
+                else:
+                    where, code = _stands_at(measurement, lines, taken)
+                    if where is None and subject == check.subject:
+                        where, code = base, _placed(stood)[0]
+                if where is None:
+                    continue
+                at = SeriesRecord(measurement.record, observed_at).at or observed_at
+                kept = [(record.at or record.observed_at, record.code)
+                        for record in self._series.window(
+                            SeriesKey(check.type_name, check.path, subject))]
+                line = check.window_line(at, [*kept, (at, code)], subject=subject)
+                if line is not None:
+                    windowed = _with_line_beneath(windowed, where, line)
+        except Exception as error:
+            logger.exception("engine: failed to judge the window of %s",
+                             check.path)
+            self_report.runtime.see(
+                slug("window", check.path),
+                plain(f"the window of {check.path} could not be judged "
+                      f"({error!r}); its node says this run without it"),
+                log=False)
+            return result
+        return windowed
+
+    def _grade(self, check: Check, newest: Sequence[Measurement],
+               observed_at: datetime, refusals: list[Refusal]
+               ) -> tuple[CheckResult, dict[int, Entry]]:
+        """The check graded whole over ``newest``, the readings it is handed —
+        the engine's lines about the readings the seam refused added to its root
+        — and those lines, keyed by where each refused reading stands among
+        ``newest`` (ADR-0093 decision 3). What the grading raises, it raises."""
+        # A reading whose record was refused is kept out of the grading, which
+        # may read only records (ADR-0086 decision 6), and is the engine's to
+        # report.
+        refused = _refused_lines(check, newest)
+        graded = tuple(reading for index, reading in enumerate(newest)
+                       if index not in refused)
+        if refused and not graded:
+            # Nothing passed, so there is nothing to grade: the run stands as a
+            # check that raised (ADR-0040), the refusals its reason, and each
+            # reading keeps the failure record the seam gave it in place of what
+            # it refused.
+            return CheckResult(StatusCode.ERROR, list(refused.values())), refused
+        with lenient_records(refusals):
+            result = check.grade(graded, observed_at)
+        if not isinstance(result, CheckResult):
+            result = CheckResult(StatusCode.ERROR, ["check returned no result"])
+        return _with_lines(result, list(refused.values())), refused
+
+    def _set_run_facts(self, item: _Scheduled, *, wall_seconds: float | None,
+                       once: bool) -> None:
+        """The run facts a unit's run leaves (ADR-0044, ADR-0130 decision 5): on
+        the node it answers for, its own armed slot; on every container between
+        that node and the mount, and on the mount, the earliest slot armed among
+        the check's units beneath it — the one-unit check's mount being the one
+        node that is both. A one-shot run has no live schedule and writes no
+        next."""
+        mount = item.check.path
+        segments = split_path(item.unit.node)
+        paths = [join_path(mount, *segments[:depth])
+                 for depth in range(len(segments) + 1)]
+        if once:
+            due = dict.fromkeys(paths, None)
+        else:
+            with self._lock:
+                units = self._units[id(item.check)]
+                now = self._clock()
+                due = {
+                    path: self._wall() + timedelta(seconds=max(0.0, min(
+                        other.next_due for other in units
+                        if _at_or_beneath(other.node, path)) - now))
+                    for path in paths}
+        for path in paths:
+            self._tree.set_run_facts(path, wall_seconds=wall_seconds,
+                                     next_run_at=due[path])
+
+    def _period_beneath(self, check: Check, path: str) -> int:
+        """The shortest period among ``check``'s units answering at or beneath
+        ``path`` — what a container between the mount and a unit's node says it
+        is read on (ADR-0130 decision 5)."""
+        return min(item.unit.period_seconds for item in self._units[id(check)]
+                   if _at_or_beneath(item.node, path))
 
     def _keep_series(self, check: Check, measurements: Sequence[Measurement],
                      observed_at: datetime, result: CheckResult,
-                     refused: Mapping[int, Entry] | None = None) -> None:
+                     refused: Mapping[int, Entry] | None = None, *,
+                     placed: CheckResult | None = None) -> None:
         """Keep this run's readings in their subjects' series, where the check
         keeps one at all (ADR-0087).
 
@@ -1751,6 +2211,10 @@ class Engine:
         — at the code that line carries (ADR-0093 decision 3): its own ``WARN`` on a
         node whose lines are coded, the node's where the node declares one.
 
+        ``placed`` is the node the one reading a declared unit handed back alone
+        is placed on — the unit's own, as the grading placed it, or its failure
+        (ADR-0130) — and the check's root where it is ``None``.
+
         Guarded like the upsert before it: a history that could not be kept is
         worth a line, and never the reading the tree already holds.
         """
@@ -1760,13 +2224,14 @@ class Engine:
         lines = [] if alone else _lines_of(result)
         taken: set[int] = set()
         refused = refused or {}
+        stood = result if placed is None else placed
         try:
             for index, measurement in enumerate(measurements):
                 subject = measurement.subject or (check.subject if alone else "")
                 if not subject:
                     continue
                 if alone:
-                    code, texts = _placed(result)
+                    code, texts = _placed(stood)
                 elif index in refused:
                     code = (StatusCode.WARN if result.code is None
                             else result.stored_code)
@@ -1776,7 +2241,7 @@ class Engine:
                     if code is None and subject == check.subject:
                         # No line carried it, and it names the check's own
                         # object: it stood on the node, as the placed one does.
-                        code, texts = _placed(result)
+                        code, texts = _placed(stood)
                 self._series.add(
                     SeriesKey(check.type_name, check.path, subject),
                     SeriesRecord(measurement.record, observed_at,
@@ -1792,9 +2257,16 @@ class Engine:
                       f"series ({error!r}); its history misses this run"),
                 log=False)
 
+    def declare_nodes(self, nodes: Mapping[str, NodeMeta]) -> None:
+        """Keep the deployment's ``nodes.yaml`` as loaded, for the claim a parent's
+        ``children:`` makes of each child as it is written (ADR-0128). Called by the
+        start, before the first tick, with the map it seeds the tree from."""
+        self._nodes = dict(nodes)
+
     def _store(self, path: str, result: CheckResult, check: Check,
                *, is_root: bool = False,
-               measurement: Measurement | None = None) -> None:
+               measurement: Measurement | None = None,
+               period: int | None = None) -> None:
         """Upsert a result and its subtree into the status tree.
 
         The root node inherits the check's ``description``; child nodes carry
@@ -1843,25 +2315,47 @@ class Engine:
         rank: it is root-ignored, because unlike ``order`` it *does* have an
         inline source of its own in the check's YAML — the root's declaration is
         that key, and a result overruling it would put a check's code ahead of the
-        file the deployment edits. On a child, **two sources meet here**, and the
-        same rule decides: the deployment's ``subnodes:`` declaration
-        (``check.subnode_show_when_quiet``, parsed by the library so no type has
-        to relay it, keyed by subnode *name* at any depth) beats the value the
-        child result carries — the type's shipped default — because the
-        deployment's file beats the check's code. What survives fills an unset
-        field only, so a ``nodes.yaml`` entry, seeded before the first tick,
-        still beats both. Nothing is coerced on the way: a stated ``False``
-        travels as ``False``, because here it is a statement and not the "said
-        nothing" that ``order``'s zero is.
+        file the deployment edits. On a child the claim is the first statement the
+        first look's layers make (:func:`little_sister.first_look.statement`, on
+        the addresses the look's keys ride, ADR-0128): ``nodes.yaml``, the node's
+        path and then its parent's ``children:``; the deployment's file, the node's
+        name under ``subnodes:`` and then its parent's name entry's ``children:`` —
+        the top level's for a child of the check's own node; then the type's
+        ``subnode_defaults`` and ``node_defaults`` the same way. Each beats the
+        value the child result carries — what a run stamps — because a declaration
+        beats a stamp, as the file beats the check's code (ADR-0063 decision 3).
+        What survives fills an unset field only, so a node's own ``nodes.yaml``
+        entry, seeded before the first tick, still beats everything. Nothing is
+        coerced on the way: a stated ``False`` travels as ``False``, because here
+        it is a statement and not the "said nothing" that ``order``'s zero is.
 
         **A child a run names takes nothing declared for its name** (ADR-0118).
         Both maps are keyed by the names a type always emits, and a subject's node
         is named by its source (ADR-0106): a function called ``batch`` is not the
         ``batch`` aspect. A result that says ``dynamic`` is therefore read from
         itself alone — its own ``title``, ``about`` and ``show_when_quiet`` — and
-        neither map is asked for its name. It is said of that node and of none
-        beneath it, and ``nodes.yaml``, seeded by path, still beats it.
+        neither map is asked for its name, though its parent's ``children:`` speaks
+        for it (ADR-0128), and the tree keeps that the run named it, for the first
+        look and for its own children. It is said of that node and of none beneath
+        it, and ``nodes.yaml``, seeded by path, still beats it.
+
+        ``period`` is what every node of this subtree says it is read on — a
+        declared unit's own, where this is the subtree the unit answers for
+        (ADR-0130 decision 5) — and the check's ``frequency`` where none is given,
+        which is the one-unit check.
         """
+        self._store_one(path, result, check, is_root=is_root,
+                        measurement=measurement, period=period)
+        for child in result.children:
+            self._store(join_path(path, child.name), child, check, period=period)
+        self._prune_returned(path, result, check)
+
+    def _store_one(self, path: str, result: CheckResult, check: Check,
+                   *, is_root: bool, measurement: Measurement | None,
+                   period: int | None) -> None:
+        """One node of a result, upserted as :meth:`_store` says — the root's
+        fields from the check, a child's from the result — with ``period`` as what
+        it is read on, or the check's ``frequency`` where none is given."""
         description = (check.description or None) if is_root else result.description
         config = (check.config_summary() or None) if is_root else result.config
         # One guard per field, below: this lookup is harmless on a root (whose
@@ -1873,10 +2367,22 @@ class Engine:
         about = None if is_root else (labels.get("about") or result.about or None)
         title = None if is_root else (labels.get("title") or result.title or None)
         order = result.order or None
-        declared = (None if is_root or result.dynamic
-                    else check.subnode_show_when_quiet.get(leaf_name(path)))
+        # Whether this run named the node, kept before anything is asked of it: the
+        # claim below, and the first look, read it for this node and its children. A
+        # root ignores it, as it ignores what a result says of its name.
+        self._tree.note_named_by_run(path, result.dynamic and not is_root)
+        declared = None if is_root else first_look.statement(
+            "show_when_quiet", path, check=check, nodes=self._nodes,
+            named_by_run=self._tree.named_by_run)
         show_when_quiet = None if is_root else (
-            declared if declared is not None else result.show_when_quiet)
+            bool(declared) if declared is not None else result.show_when_quiet)
+        # An about past about 400 characters is named once, when it first fills its
+        # node (backlog #91 §3.5): a later run's fills nothing, and one nodes.yaml
+        # declared keeps the field, so the run's never reaches the band to be named.
+        # The tree is asked only for an about that long.
+        long_about = (about if about is not None
+                      and len(about.strip()) > ABOUT_NOTED_PAST
+                      and not self._tree.about(path) else None)
         # The pre-normalized entries travel, not the raw input: the check has
         # already been through the one normalization (ADR-0036), and re-deriving
         # slugs here would be the same work done twice. `stored_code` is the
@@ -1884,7 +2390,8 @@ class Engine:
         self._tree.upsert(path, result.stored_code, result.reason_entries,
                           members=result.members,
                           description=description,
-                          frequency_seconds=check.frequency_seconds,
+                          frequency_seconds=(check.frequency_seconds
+                                             if period is None else period),
                           config=config, report=result.report,
                           about=about, title=title, order=order,
                           show_when_quiet=show_when_quiet,
@@ -1907,30 +2414,74 @@ class Engine:
                                    else measurement.subject or check.subject),
                           record=(None if measurement is None
                                   else dict(measurement.record)))
-        for child in result.children:
-            self._store(join_path(path, child.name), child, check)
-        # **What this node no longer returns is removed, where it says that its
-        # children are complete** (ADR-0109 decisions 1 and 2) — after they are
-        # written, so the tree holds every child the run returned, and never a
-        # node another check owns. A result that says nothing leaves every child
-        # where it is. A child named by several segments stands beneath a node the
-        # tree made for its first, and that node is what the run returned here.
-        if result.children_complete:
-            returned = {segments[0] for child in result.children
-                        if (segments := split_path(child.name))}
-            gone = self._tree.prune(
-                path, returned, protect=self._not_its_own.get(id(check), ()))
-            # One line for each child that went, however much went with it.
-            depth = len(split_path(path))
-            beneath: dict[str, int] = {}
-            for left in gone:
-                top = join_path(*split_path(left)[:depth + 1])
-                beneath[top] = beneath.get(top, 0) + (left != top)
-            for top, count in beneath.items():
-                logger.info(
-                    "check %s: %s is no longer reported, and was removed%s",
-                    check.path, top,
-                    f" with {count} node(s) beneath it" if count else "")
+        if long_about is not None:
+            note_long_about(path, long_about)
+
+    def _prune_returned(self, path: str, result: CheckResult,
+                        check: Check) -> None:
+        """**What this node no longer returns is removed, where it says that its
+        children are complete** (ADR-0109 decisions 1 and 2) — after they are
+        written, so the tree holds every child the run returned, and never a
+        node another check owns. A result that says nothing leaves every child
+        where it is. A child named by several segments stands beneath a node the
+        tree made for its first, and that node is what the run returned here. A
+        sibling subtree a unit's run did not write (ADR-0130 decision 4) is still
+        among what the run returned, and stays."""
+        if not result.children_complete:
+            return
+        returned = {segments[0] for child in result.children
+                    if (segments := split_path(child.name))}
+        gone = self._tree.prune(
+            path, returned, protect=self._not_its_own.get(id(check), ()))
+        # One line for each child that went, however much went with it.
+        depth = len(split_path(path))
+        beneath: dict[str, int] = {}
+        for left in gone:
+            top = join_path(*split_path(left)[:depth + 1])
+            beneath[top] = beneath.get(top, 0) + (left != top)
+        for top, count in beneath.items():
+            logger.info(
+                "check %s: %s is no longer reported, and was removed%s",
+                check.path, top,
+                f" with {count} node(s) beneath it" if count else "")
+
+    def _store_path(self, path: str, result: CheckResult, check: Check,
+                    segments: Sequence[str], *, is_root: bool, unit: Unit,
+                    measurement: Measurement | None,
+                    failure: CheckResult | None) -> None:
+        """**A unit's run writes its own path** (ADR-0130 decision 4): from the
+        mount down to the node the unit answers for, and the subtree beneath it —
+        and nothing beside it. ``result`` is the check graded whole and ``segments``
+        what is left of the unit's node beneath ``path``.
+
+        A container on the way is written with its own lines, as the whole grading
+        says them, and with the shortest period among the units beneath it; what it
+        says of its children — that they are complete — is applied after the path
+        beneath it is written, so a sibling the run returned and did not write
+        stays, and one it no longer returns goes (ADR-0109). The unit's node takes
+        its subtree whole, its own period, and the one reading the unit handed
+        back alone; ``failure`` — the unit's own, where its measurement raised —
+        is written over that node last, its children left where they are
+        (ADR-0078 decision 4). Where the grading returned no node on the path, the
+        containers above the gap are written and the walk ends there: what the
+        grading did not return, the run does not write.
+        """
+        if not segments:
+            self._store(path, result, check, is_root=is_root,
+                        measurement=measurement, period=unit.period_seconds)
+            if failure is not None:
+                self._store_one(path, failure, check, is_root=is_root,
+                                measurement=measurement,
+                                period=unit.period_seconds)
+            return
+        self._store_one(path, result, check, is_root=is_root, measurement=None,
+                        period=self._period_beneath(check, path))
+        child, taken = _child_on(result, segments)
+        if child is not None:
+            self._store_path(join_path(path, child.name), child, check,
+                             segments[taken:], is_root=False, unit=unit,
+                             measurement=measurement, failure=failure)
+        self._prune_returned(path, result, check)
 
 
 def create_engine(config_dir: str | None = None, *,

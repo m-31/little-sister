@@ -46,6 +46,15 @@ RECORD_BYTES = (len(json.dumps({"status": None, "response_ms": None, "error": ""
 #: is a code, and a curve of codes is a mistake a deployment can still make itself.
 MEASURES = {"response_ms": {"unit": "ms", "label": "Response time"}}
 
+#: What this type grades (ADR-0131): the statuses an answer may carry — a set of
+#: accepted values, `200` where the configuration names none, any other an error.
+GRADINGS: dict[str, object] = {
+    "expected_status": {
+        "sentence": "The statuses an answer may carry; any other is an error.",
+        "kind": "set", "field": "status", "accepted": [200],
+    },
+}
+
 
 def _flag(value: object, field: str) -> bool:
     """A configuration boolean that must actually be one.
@@ -63,21 +72,21 @@ def _flag(value: object, field: str) -> bool:
 
 @register("http")
 class HttpCheck(Check):
-    """GET a URL; OK when the response status is one of ``expected_status``."""
+    """GET a URL; OK when the response status is one of ``expected_status``, a set
+    of accepted values the library reads and grades by (ADR-0131)."""
 
     # `follow_redirects` is **required and has no default here**, deliberately. Every
     # instance is built through `from_config`, which always supplies it, so a default on
     # this line would be unreachable — a second place stating the policy, free to drift
     # out of step with `_extra_from_config` while no test could tell. The default lives
     # once, where the config is read.
-    def __init__(self, *, url: str, expected_status: set[int],
-                 follow_redirects: bool, **kwargs: Any) -> None:
+    def __init__(self, *, url: str, follow_redirects: bool, **kwargs: Any) -> None:
         # The URL **is** the object this check reads, so it is what the reading is
         # about — not the node's path, which is the deployment's label for where
         # the node hangs and may be renamed without the endpoint moving.
-        super().__init__(subject=url, measure_defaults=MEASURES, **kwargs)
+        super().__init__(subject=url, measure_defaults=MEASURES, gradings=GRADINGS,
+                         **kwargs)
         self.url = url
-        self.expected_status = expected_status
         self.follow_redirects = follow_redirects
 
     @classmethod
@@ -86,12 +95,8 @@ class HttpCheck(Check):
         url = config.get("url")
         if not url:
             raise CheckError("http check requires a 'url'")
-        expected = config.get("expected_status", 200)
-        if isinstance(expected, int):
-            expected = [expected]
         return {
             "url": str(url),
-            "expected_status": {int(s) for s in expected},
             # Defaulted to **today's behavior**, because the alternative is a silent
             # regrade: a check written against a URL that answers `200` after a `301`
             # would turn red on upgrade, on a config nobody edited (ADR-0058).
@@ -101,10 +106,9 @@ class HttpCheck(Check):
         }
 
     def config_summary(self) -> str:
-        expected = ", ".join(str(s) for s in sorted(self.expected_status))
         return config_markdown({
             "url": self.url,
-            "expected status": expected,
+            "expected status": self.grading_summary("expected_status"),
             # Named on the node because the two readings differ on the same URL, so an
             # operator looking at an unexpected verdict needs to know which was taken.
             "redirects": "followed" if self.follow_redirects else "reported",
@@ -205,7 +209,9 @@ class HttpCheck(Check):
         Pure over the record and this check's own `expected_status` — nothing here
         looks at the world, or at anything `measure` left behind, which is what
         lets the same verdict be reached again later over a record out of the
-        series. `measure` above always hands back exactly one reading.
+        series. The status is graded through the seam (ADR-0131): an answer outside
+        the set says which it expected, and the sentence the deployment wrote for
+        it after that. `measure` above always hands back exactly one reading.
 
         The line carries **no code of its own**: with a single line the node's own
         reading is already the verdict, and a coded entry beside a declared result
@@ -219,13 +225,10 @@ class HttpCheck(Check):
                 StatusCode.ERROR,
                 [Entry(RESPONSE_SLUG, f"request failed: {reason}")])
         elapsed_ms = record.get("response_ms")
-        note = ""
-        if status not in self.expected_status:
-            expected = ", ".join(str(s) for s in sorted(self.expected_status))
-            note = f" (expected {expected})"
-        return CheckResult(
-            StatusCode.OK if not note else StatusCode.ERROR,
-            [Entry(RESPONSE_SLUG, f"HTTP {status}{note} in {elapsed_ms} ms")])
+        verdict = self.verdict("expected_status", measurements[0])
+        note = f" (expected {verdict.against})" if verdict.against else ""
+        return CheckResult(verdict.code, [verdict.entry(
+            f"HTTP {status}{note} in {elapsed_ms} ms", slug=RESPONSE_SLUG)])
 
     def expected_entries(self) -> int:
         """One line, always: this check reads one endpoint (ADR-0075)."""

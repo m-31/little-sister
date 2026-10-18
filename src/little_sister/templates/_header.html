@@ -21,6 +21,16 @@
     <link rel="manifest" href="/static/site.webmanifest">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="{{ url_for('static', filename='css/overview.css') }}" rel="stylesheet">
+    {#- Before the first paint, without `defer`. It puts `ls-script` on <html>, under
+        which what `tree.js` will show stands from the first paint — the band's three
+        buttons, a node's page's ‖ — so that neither moves the page when the script
+        runs; and where the tab's map holds a fold (ADR-0127 decision 10), the wall's
+        grid is hidden until `tree.js` has put the map back, so the first look never
+        flashes under a viewer's folds. Every other page, and a tab with an empty
+        map, pays one cached request and the class. An external script, because the
+        policy names one inline script by its hash — the theme's below — and a
+        second hash would be a change to it. -#}
+    <script src="{{ url_for('static', filename='js/tree-pending.js') }}"></script>
     {#- What a dependent package ships for its slot fillers (ADR-0037). The
         **library** emits these tags, never the extension: an extension writing a
         tag into a page it does not own would be deciding load order and caching for
@@ -50,8 +60,11 @@
     either way, with CSS showing the sections in the rail or in the bar. Which
     of them arrives here is the viewer's own choice, read from the presentation
     cookie; `kiosk` is the third, and the one this file branches on rather than
-    leaving to CSS. -#}
-<body data-ls-theme="{{ theme }}" data-ls-layout="{{ layout }}"
+    leaving to CSS. Each look of `looks.py` is an attribute of its own, the
+    browser's choice or the deployment's default, which the stylesheet and the
+    scripts read — the theme first, `data-ls-theme`. -#}
+<body
+      {%- for look in looks %} {{ look.attribute }}="{{ look_values[look.key] }}"{% endfor %} data-ls-layout="{{ layout }}"
       {%- if card_status_line == 'below' %} data-ls-card-state="below"{% endif %}
       {%- if bs_theme %} data-bs-theme="{{ bs_theme }}"{% endif %}>
 {#- Resolving the `auto` theme before first paint. Why it exists and why it has to

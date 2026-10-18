@@ -28,6 +28,8 @@
                   {
                     "code": null,
                     "data": null,
+                    "form": null,
+                    "grading": null,
                     "maintenance": null,
                     "refused": null,
                     "running": false,
@@ -105,16 +107,50 @@
               "reported": "OK",
               "run": {
                 "frequency_seconds": 300,
-                "next_at": null,
+                "next_at": "<volatile>",
                 "observed_at": "<volatile>",
                 "stale_after_seconds": 900.0,
-                "wall_seconds": null
+                "wall_seconds": 0.42
               },
               "shielded_by": null,
               "show_when_quiet": null,
               "stale": false,
               "subject": "",
               "title": ""
+            },
+            {
+              "about": "",
+              "changes": 0,
+              "children": [],
+              "code": "UNDEFINED",
+              "config": "",
+              "contribution": {
+                "by": "undefined",
+                "code": null
+              },
+              "description": "",
+              "entries": {
+                "addressable": false,
+                "items": []
+              },
+              "maintenance": null,
+              "name": "backup",
+              "order": 0,
+              "own": "UNDEFINED",
+              "path": "/services/backup",
+              "record": null,
+              "report": "",
+              "reported": "UNDEFINED",
+              "run": {
+                "next_at": null,
+                "observed_at": null,
+                "wall_seconds": null
+              },
+              "shielded_by": null,
+              "show_when_quiet": null,
+              "stale": false,
+              "subject": "",
+              "title": "Backup"
             },
             {
               "about": "",
@@ -133,6 +169,8 @@
                   {
                     "code": null,
                     "data": null,
+                    "form": null,
+                    "grading": null,
                     "maintenance": null,
                     "refused": null,
                     "running": false,
@@ -178,6 +216,8 @@
                   {
                     "code": null,
                     "data": null,
+                    "form": null,
+                    "grading": null,
                     "maintenance": null,
                     "refused": null,
                     "running": false,
@@ -230,6 +270,8 @@
                   {
                     "code": null,
                     "data": null,
+                    "form": null,
+                    "grading": null,
                     "maintenance": null,
                     "refused": null,
                     "running": false,
@@ -378,9 +420,11 @@
                       "verdict": "failed",
                       "workflow": "CI"
                     },
+                    "form": "actions.verdict",
+                    "grading": null,
                     "maintenance": null,
                     "refused": null,
-                    "running": false,
+                    "running": true,
                     "slug": "1001-workflow-42-main",
                     "subject": "1001",
                     "text": "acme/api (main) / CI: failed (#128)"
@@ -388,7 +432,16 @@
                   {
                     "code": "WARN",
                     "data": null,
-                    "maintenance": null,
+                    "form": null,
+                    "grading": "actions.disabled_severity_map",
+                    "maintenance": {
+                      "created_at": "<volatile>",
+                      "created_by": "ada",
+                      "expires_at": "2026-12-19T12:30:00Z",
+                      "note": "off until the migration lands",
+                      "set_at": "<volatile>",
+                      "set_by": "ada"
+                    },
                     "refused": null,
                     "running": false,
                     "slug": "1001-workflow-77",
@@ -398,6 +451,8 @@
                   {
                     "code": "OK",
                     "data": null,
+                    "form": null,
+                    "grading": null,
                     "maintenance": null,
                     "refused": "it is 2,811 bytes and the limit is 2,048",
                     "running": false,
@@ -421,7 +476,7 @@
                 "wall_seconds": null
               },
               "shielded_by": null,
-              "show_when_quiet": null,
+              "show_when_quiet": true,
               "stale": false,
               "subject": "",
               "title": ""
@@ -437,6 +492,8 @@
               {
                 "code": null,
                 "data": null,
+                "form": null,
+                "grading": null,
                 "maintenance": null,
                 "refused": null,
                 "running": false,

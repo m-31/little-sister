@@ -1,11 +1,14 @@
 # ADR-0061 — Decoration cannot substitute for the thing it decorates
 
 - **Status:** Accepted
-- **Date:** 2026-08-16
+- **Date:** 2026-10-18 (accepted 2026-08-16)
 - **Related:** [ADR-0017](0017-node-title.md) (the title, and the rule that one which
-  only repeats the name is not drawn; this is the second question that rule opened), [ADR-0019](0019-inspection-popover.md) (the hover card, one of the
-  two surfaces here), [ADR-0018](0018-markdown-rendering.md) (raw HTML in a title is
-  escaped, which is why a package cannot solve this from outside),
+  only repeats the name is not drawn; this is the second question that rule opened),
+  [ADR-0019](0019-inspection-popover.md) (the inspection card, which names the node
+  with every title),
+  [ADR-0127](0127-the-wall-is-a-tree-and-a-click-opens-or-closes-a-node.md) (decision
+  2: a chip draws no title), [ADR-0018](0018-markdown-rendering.md) (raw HTML in a title
+  is escaped, which is why a package cannot solve this from outside),
   [ADR-0016](0016-node-addressing.md) (`name`, the thing a title may or may not stand
   in for), [ADR-0055](0055-sibling-order.md) (the declared rank a glyph would render)
 - **Register:** [`../decisions.md`](../decisions.md)
@@ -16,35 +19,29 @@ A node's `title` is a nicety beside its `name` (ADR-0017), which also says that 
 title which only repeats the name is not drawn at all. Both rules
 live in one predicate, `titles.py`, and every surface calls it.
 
-**Most surfaces draw both halves.** The leaf chip, the card head line, the heartbeat
-strip, the page band beside the breadcrumb and the `/maintenance` pin table each put
-the name (or the path, or the last crumb) down and then the title beside it. For those
-the only question is whether the title adds anything.
+**Most surfaces draw both halves.** An open node's head line, the inspection card, the
+heartbeat strip, the page band beside the breadcrumb and the `/maintenance` pin table
+each put the name (or the path, or the last crumb) down and then the title beside it,
+and a chip draws its name alone
+([ADR-0127](0127-the-wall-is-a-tree-and-a-click-opens-or-closes-a-node.md) decision 2).
+For those the only question is whether the title adds anything.
 
-**Two surfaces draw the title *instead of* the name**, and that is the case this
-record is about:
-
-* **`/copy`** (`copy_status._label`) labels an item with the title when there is one
-  and the name otherwise.
-* **The inspection popover** (`app._node_meta_map`) carries `title` and `about` and no
-  name, for the same reason it drops a repeated title — hovering `critical` would
-  otherwise pop a card whose entire content is the word *Critical*.
-
-Both are right while a title is a **word**. A node titled *Cluster A* is better named
-that way in a document pasted into a ticket, and *Cluster A* is a better card heading
-than `web`.
+**One surface draws the title *instead of* the name**, and that is the case this record
+is about: **`/copy`** (`copy_status._label`) labels an item with the title when there is
+one and the name otherwise. That is right while a title is a **word**: a node titled
+*Cluster A* is better named that way in a document pasted into a ticket.
 
 **What made this a decision is a glyph.** little-sister-github and little-sister-wiz
 both want a colored circle as a severity band's title — 🔴 for `critical`, 🟠 for
 `high` — carrying the band's severity in one character where a word costs a chip's
-width, and reading the rank those bands now declare (ADR-0055). On a chip that is a
-clear improvement, because the band's `name` is right beside it: the emoji is not the
-accessible channel, the name is, and nothing is lost.
+width, and reading the rank those bands now declare (ADR-0055). In an open node's head
+and in the inspection card that is a clear improvement, because the band's `name`
+stands right beside it: the emoji is not the accessible channel, the name is, and
+nothing is lost.
 
-On the two surfaces above, everything is lost. `/copy` would print a bare **🔴** — in
-the surface defined as *read somewhere with no chips and no styling* — and the card
-would contain nothing but a circle. A pasted document outlives the person who pasted
-it, and a color name is the one thing a reader cannot reconstruct from a color.
+On `/copy` everything is lost: it would print a bare **🔴**, in the surface defined as
+*read somewhere with no chips and no styling*. A pasted document outlives the person who
+pasted it, and a color name is the one thing a reader cannot reconstruct from a color.
 
 **And a package cannot fix it.** Raw HTML is escaped in titles (ADR-0018,
 `html=False`), so `aria-hidden` and a `title=` attribute are both unavailable to a
@@ -55,9 +52,12 @@ not at all.
 
 ### 1. A title with no letter and no digit in it cannot stand in for a name
 
-Where a surface draws the title *instead of* the name, a **decorative** title is drawn
-**with** the name rather than in place of it: `critical 🔴`, name first, in the same
-order the chip uses. A title that carries a word is unchanged and still stands alone.
+Where a surface draws the title *instead of* the name — `/copy` — a **decorative** title
+is drawn **with** the name rather than in place of it: `critical 🔴`, name first, in the
+same order a head uses. A title that carries a word is unchanged and still stands alone.
+The inspection card needs no such rule: it draws the node's name with every title, as
+its head does ([ADR-0019](0019-inspection-popover.md)), so it never stands a title in
+the name's place.
 
 The rule is stated as a property of the title, not as a list of emoji. *Decoration* is
 text with nothing in it that a reader could say out loud as the node's name — and
@@ -87,19 +87,18 @@ today's behavior exactly, and only a check that titles it `🔴` reaches the new
 be empty, to be drawn in that order with a space between. Not a joined string, because
 the two halves are not the same kind of text: a title is authored Markdown and keeps
 that contract, while a name is structural data that has to be escaped before it is
-drawn as Markdown — and each surface escapes it its own way (`_MD_INLINE_ESCAPE` in the
-copy document, `plain` on the way into the card). One decision, in one place; two
-renderings, where they already were.
+drawn as Markdown — and the copy document escapes it its own way, with
+`_MD_INLINE_ESCAPE`. One decision, in one place; the rendering, where it already was.
 
-This is also what makes the change small at the call sites, which is the point: a rule
-about *what a label is* should not become a rule about how two surfaces render.
+This is also what makes the change small at the call site, which is the point: a rule
+about *what a label is* should not become a rule about how a surface renders.
 
 ### 5. A view rule, never a data one
 
 As with ADR-0017. The **snapshot keeps the title**, and the **JSON API keeps
 emitting it** — dropping or rewriting a field is a contract change (ADR-0008), and a
 client drawing its own chips is entitled to its own decision about the glyph. What
-changes is only what two surfaces draw.
+changes is only what `/copy` draws.
 
 ## Consequences
 
@@ -107,13 +106,10 @@ changes is only what two surfaces draw.
   unblocks the severity ramps in little-sister-github and little-sister-wiz, which are
   held on this record.
 * **One behavior changes for a node that exists today**: any node whose title is
-  already wordless now shows its name too, on those two surfaces. That is the fix, and
-  it is strictly additive — nothing that was drawn stops being drawn.
-* The popover gains a heading that repeats the chip beneath it, for a node with a
-  glyph title. Accepted: a heading that names what you hovered is what a heading is,
-  and the alternative — dropping a wordless title from the card — would give one
-  predicate two answers for the sake of a case that no shipped band is, since every
-  band in both packages ships `about` text and would have a card regardless.
+  already wordless now shows its name too, on `/copy`. That is the fix, and it is
+  strictly additive — nothing that was drawn stops being drawn.
+* A severity band's glyph is seen in an open node's head and in the inspection card,
+  after its name, and not in a run of chips, which draw no title.
 * **Not a rule about emoji.** Nothing here says a title should or should not be a
   glyph; whether "a title may be a glyph" is a good idea at all is still being tried
   in the two packages that want it. This record only says what has to be true of the

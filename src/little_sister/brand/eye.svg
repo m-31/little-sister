@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0.5 3.53 58.8 37.59" overflow="visible">
+<!-- little-sister's eye, the family's drawing, in its full form; eye-small.svg beside it
+     is the form for 32 px and below. Drawn in the favicon's own 64-unit space and
+     mirrored, as the brand mark is, so the lashes point left. The view box is this
+     form's own, and the small form keeps it so both sit in the same place.
+     The eyeshadow is the group "eyeshadow": a renderer that wants the plain eye leaves
+     it out. The inks are fixed, and #343a40 is the one a renderer may swap for another.
+     tests/render_brand.py renders every icon the package serves from it. -->
+<g transform="translate(64,0) scale(-1,1)">
+<g id="eyeshadow">
+<defs>
+<linearGradient id="eyeshadow-fade" gradientUnits="userSpaceOnUse" x1="0" y1="19.47" x2="0" y2="10.87">
+<stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="#fff" stop-opacity="0"/>
+</linearGradient>
+<mask id="eyeshadow-mask" maskUnits="userSpaceOnUse" x="0" y="0" width="70" height="45">
+<rect x="0" y="0" width="70" height="45" fill="url(#eyeshadow-fade)"/>
+</mask>
+</defs>
+<path mask="url(#eyeshadow-mask)" fill="#a8235f" d="M7.5 33.5 C13.34 8.70 46.66 4.70 57.83 27.67 C45 17.5 19 17.5 7.5 33.5 Z"/>
+</g>
+<path fill="#343a40" d="M10 12 C23 2.5 44 1 56 7.5 C43 4.5 25 7 12 13.5 Z"/>
+<path fill="#fff" stroke="#343a40" stroke-width="1.6" d="M7 34 C16 19 44 16 57 29 C48 42 18 44 7 34 Z"/>
+<defs><clipPath id="eye-white"><path d="M7 34 C16 19 44 16 57 29 C48 42 18 44 7 34 Z"/></clipPath></defs>
+<g clip-path="url(#eye-white)">
+<circle cx="33" cy="27.5" r="9.5" fill="#48a374"/>
+<circle cx="33" cy="27.5" r="9.5" fill="none" stroke="#2f7d5b" stroke-width="2.4"/>
+<circle cx="33" cy="27.5" r="3.7" fill="#212529"/>
+<circle cx="36.2" cy="24.6" r="2.1" fill="#fff"/>
+<circle cx="30" cy="31" r="1.1" fill="#fff" opacity=".65"/>
+</g>
+<path fill="none" stroke="#343a40" stroke-width="4.6" stroke-linecap="round" d="M7 34 C16 19 44 16 57 29"/>
+<path fill="#343a40" d="M54.5 25.5 L63.5 20.5 L57 31.5 Z"/>
+<path fill="none" stroke="#343a40" stroke-width="2.3" stroke-linecap="round" d="M48 19 C51 16 54 14.5 57 13.5 M41.5 16.8 C43 14 44.5 12.5 46.5 11"/>
+</g>
+</svg>

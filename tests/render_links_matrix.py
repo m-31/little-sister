@@ -34,18 +34,19 @@ os.environ.setdefault("SECRET_KEY", "links-matrix")
 
 from little_sister import app as app_module  # noqa: E402
 from little_sister.app import app  # noqa: E402
+from tests.browser_server import PageServer  # noqa: E402
 
 # Imported and never started (ADR-0091): these are the pages a server without an
 # engine serves, so no banner says that nothing started one.
 app_module.engine_error = None
 
-THEMES = ("default", "vivid", "pastel", "dark", "cyberpunk", "auto")
+THEMES = ("plain", "vivid", "pastel", "dark", "cyberpunk", "auto")
 _REPO = _HERE.parent
 BOOTSTRAP = _REPO / "var" / "bootstrap" / "node_modules" / "bootstrap" / "dist"
 
 
 def serve() -> tuple[WSGIServer, str]:
-    server = make_server("127.0.0.1", 0, app)
+    server = make_server("127.0.0.1", 0, app, server_class=PageServer)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server, f"http://127.0.0.1:{server.server_port}"
 

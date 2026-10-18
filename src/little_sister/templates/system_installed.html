@@ -17,6 +17,12 @@
         {% include '_system_band.html' %}
         {%- set sections = [('check-types', 'Check types',
                              (types_in_use | length ~ ' in use') if types_in_use else '')] %}
+        {%- if line_types or types_in_use %}
+        {%- set sections = sections + [('lines', 'Lines', line_types | length if line_types else '')] %}
+        {%- endif %}
+        {%- if types_in_use %}
+        {%- set sections = sections + [('grading', 'Grading', grading_types | length if grading_types else '')] %}
+        {%- endif %}
         {%- if packages %}
         {%- set sections = sections + [('packages', 'Packages', packages | length)] %}
         {%- endif %}
@@ -140,6 +146,139 @@
                 {% endif %}
             </div>
         </div>
+
+        {#- What one type's lines say, or the library's on every check: its forms,
+            each with the sentence that says when and its default text, and the words
+            and the fields a template may name, each with its sentence and an
+            example. -#}
+        {%- macro lines_tables(lines) %}
+                    {% if lines.forms %}
+                    <div class="table-responsive position-relative mt-2">
+                    <table class="table table-sm align-top mb-0">
+                        <thead>
+                            <tr><th>Form</th><th>Said when</th><th>Default</th></tr>
+                        </thead>
+                        <tbody>
+                            {% for form in lines.forms %}
+                            <tr>
+                                <td><code>{{ form.name }}</code></td>
+                                <td class="text-muted">{{ form.sentence }}</td>
+                                <td><code>{{ form.text }}</code></td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                    </div>
+                    {% endif %}
+                    {% for kind, entries, prefix in (('Word', lines.words, 'line.'), ('Field', lines.fields, '')) if entries %}
+                    <div class="table-responsive position-relative mt-2">
+                    <table class="table table-sm align-top mb-0">
+                        <thead>
+                            <tr><th>{{ kind }}</th><th>Holds</th><th>For example</th></tr>
+                        </thead>
+                        <tbody>
+                            {% for entry in entries %}
+                            <tr>
+                                <td><code>{{ prefix }}{{ entry.name }}</code></td>
+                                <td class="text-muted">{{ entry.sentence }}</td>
+                                <td><code>{{ entry.example }}</code></td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                    </div>
+                    {% endfor %}
+        {%- endmacro %}
+        {%- macro lines_counted(lines) -%}
+            {{ lines.forms | length }} form{{ 's' if lines.forms | length != 1 else '' }} · {{ lines.words | length }} word{{ 's' if lines.words | length != 1 else '' }} · {{ lines.fields | length }} field{{ 's' if lines.fields | length != 1 else '' }}
+        {%- endmacro %}
+
+        {#- What the lines of each type this configuration runs say (ADR-0126): the
+            forms its grading names, each with the sentence that says when and its
+            default text, and the words and the fields a template may name, each with
+            its sentence and an example — the page a deployment writes a `display:`
+            block against. Only the types in use: a type's declarations are read when
+            one of its checks is built. Folded per type, because a type that says a
+            dozen kinds of line declares a page of them, and the reader has come for
+            one. The library's own forms come first, the window's line on every check
+            (ADR-0131 decision 7), and they are why the card stands wherever a check
+            runs. -#}
+        {% if line_types or types_in_use %}
+        <div class="card mb-3" id="lines">
+            <div class="card-body">
+                <h3 class="h6 text-muted text-uppercase">Lines</h3>
+                <p class="text-muted small mb-0">A check's <code>display:</code> block
+                    re-words a form by its name, in a template that names a field of the
+                    record by its dotted name, <code>{completed.url}</code>, and a word
+                    as <code>{line.why}</code>; <code>{line.default}</code> is the
+                    form's default.</p>
+                <details class="ls-system__lines mt-2" id="lines-every-check">
+                    <summary>every check <span class="text-muted small">{{ lines_counted(library_lines) }}</span></summary>
+                    {{ lines_tables(library_lines) }}
+                </details>
+                {% for row in line_types %}
+                <details class="ls-system__lines mt-2" id="lines-{{ row.origin.type_name }}">
+                    <summary><code>{{ row.origin.type_name }}</code> <span class="text-muted small">{{ lines_counted(row.lines) }}</span></summary>
+                    {{ lines_tables(row.lines) }}
+                </details>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+
+        {#- What each type this configuration runs grades (ADR-0131 decisions 1 and
+            6): every value its grading judges, with its sentence, its kind, the keys a
+            check's configuration writes it under — in the check's own keys, or in the
+            block its name begins with — what it grades with where nothing is written,
+            and whether a rule of its block may write it. The library's own come
+            first, the window every check takes, and they are why the card stands
+            wherever a check runs. Folded per type, as the lines are. -#}
+        {%- macro grading_table(rows) %}
+                    <div class="table-responsive position-relative mt-2">
+                    <table class="table table-sm align-top mb-0">
+                        <thead>
+                            <tr><th>Grading</th><th>Grades</th><th>Kind</th><th>Keys</th><th>Unless written</th><th>Rules</th></tr>
+                        </thead>
+                        <tbody>
+                            {% for row in rows %}
+                            <tr>
+                                <td><code>{{ row.name }}</code></td>
+                                <td class="text-muted">{{ row.sentence }}</td>
+                                <td>{{ row.kind }}</td>
+                                <td>{% for key in row.keys %}<code>{{ key }}</code>{{ ' ' if not loop.last }}{% endfor %}</td>
+                                <td>{{ row.default }}</td>
+                                <td>{{ 'may write it' if row.rules else '—' }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                    </div>
+        {%- endmacro %}
+        {% if types_in_use %}
+        <div class="card mb-3" id="grading">
+            <div class="card-body">
+                <h3 class="h6 text-muted text-uppercase">Grading</h3>
+                <p class="text-muted small mb-0">A check grades a value differently in
+                    its own keys, or in the block a grading's name begins with: a pair's
+                    <code>_warn</code> and <code>_error</code>, each level the last value
+                    that passes, written together or not at all, and
+                    <code>: null</code> switching it off; a map's words, matched with
+                    their case folded and merged over the type's; and
+                    <code>_reason</code>, the sentence a line says where that grading
+                    decided it.</p>
+                <details class="ls-system__lines mt-2" id="grading-every-check">
+                    <summary>every check <span class="text-muted small">{{ library_gradings | length }} grading{{ 's' if library_gradings | length != 1 else '' }}</span></summary>
+                    {{ grading_table(library_gradings) }}
+                </details>
+                {% for row in grading_types %}
+                <details class="ls-system__lines mt-2" id="grading-{{ row.origin.type_name }}">
+                    <summary><code>{{ row.origin.type_name }}</code> <span class="text-muted small">{{ row.gradings | length }} grading{{ 's' if row.gradings | length != 1 else '' }}</span></summary>
+                    {{ grading_table(row.gradings) }}
+                </details>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
 
         {# What is installed beside the library. A package reaches this instance
            through four seams and the tables below are each about one of them, so

@@ -28,6 +28,7 @@ from wsgiref.simple_server import WSGIRequestHandler, WSGIServer, make_server
 from little_sister import app as app_module
 from little_sister.status import StatusCode
 from little_sister.tree import StatusTree
+from tests.browser_server import PageServer
 from tests.page_tree import parse
 
 try:  # pragma: no cover - environment probe
@@ -169,7 +170,8 @@ class _CopyCase(unittest.TestCase):
                 cls.playwright.stop()
             raise unittest.SkipTest(f"no chromium available: {error}") from error
         cls.saved = app_module.status_tree
-        cls.server = make_server(_LOOPBACK, 0, app_module.app, handler_class=_Quiet)
+        cls.server = make_server(_LOOPBACK, 0, app_module.app,
+                                 server_class=PageServer, handler_class=_Quiet)
         threading.Thread(target=cls.server.serve_forever, daemon=True).start()
         cls.base = f"http://{cls.host}:{cls.server.server_port}"
 

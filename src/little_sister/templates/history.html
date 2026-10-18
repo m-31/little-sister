@@ -5,9 +5,12 @@
     {% set page_title = 'History' %}
     {% include '_header.html' %}
 
-    <div class="container-fluid mt-3 px-4">
+    <div class="container-fluid mt-3 px-4 ls-log">
         {#- The periods keep the measure they had; the readings beneath take the
-            page's width (ADR-0102 decision 1). -#}
+            page's width (ADR-0102 decision 1). The page is a log (`.ls-log`), as the
+            Events page is, and a period's status word stands in a span of its own:
+            cyberpunk restates the row tints on a log and lights each row's word in
+            its state's ink (ADR-0028). -#}
         <div class="ls-history__periods">
         {#- The same title and tabs as the node's other views (ADR-0097 decision 3):
             the breadcrumb's crumbs open their History pages, and the Status tab is
@@ -28,7 +31,7 @@
             <tbody>
                 {% for p in periods %}
                     <tr class="row-{{ p.code | status_slug }}">
-                        <td>{{ p.code.name.lower() }}</td>
+                        <td><span class="ls-log__status">{{ p.code.name.lower() }}</span></td>
                         {#- A period is a run of events that show one status (ADR-0099
                             decision 6), so an edited pin is one row. Where its
                             instant is a bound the period began before it: a first

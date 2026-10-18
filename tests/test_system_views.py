@@ -9,12 +9,15 @@ import html
 import logging
 import re
 from datetime import UTC, datetime
+from typing import ClassVar
 from unittest import TestCase, mock
 
 from little_sister import app as app_module
 from little_sister import logger as default
 from little_sister import noise
 from little_sister.engine import CheckInfo, EngineInfo
+from little_sister.grading import declare as declare_gradings
+from little_sister.line_template import declare
 from little_sister.logger import Entries
 from little_sister.tree import StatusTree
 
@@ -509,3 +512,207 @@ class LoggingSectionTests(TestCase):
         self.assertNotIn("example_sdk.retries", _said(packages))
         self.assertIn("example_sdk.retries INFO an unidentified caller (__main__) "
                       "— hides a line a retry", _said(section))
+
+
+class _Installed(TestCase):
+    """The Installed page as an engine running ``checks`` serves it."""
+
+    def setUp(self):
+        app_module.app.config["TESTING"] = True
+        self.client = app_module.app.test_client()
+        self.client.post("/login",
+                         data={"username": "pan", "password": "12345678"})
+
+    def _installed(self, *checks):
+        info = EngineInfo(started_at=datetime(2026, 10, 11, 10, 0, tzinfo=UTC),
+                          uptime_seconds=5.0, max_workers=8,
+                          check_count=len(checks), running=0, checks=checks)
+        stub = mock.Mock()
+        stub.info.return_value = info
+        with mock.patch.object(app_module, "engine", stub):
+            return self._page("/system/installed")
+
+    def _page(self, url):
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200, url)
+        return response.get_data(as_text=True)
+
+    @staticmethod
+    def _index(body):
+        return body.split('aria-label="Sections"', 1)[1].split("</nav>", 1)[0]
+
+
+class LinesSectionTests(_Installed):
+    """Installed lists what each type this configuration runs declares of its lines
+    (ADR-0126 decision 7): its forms, each with the sentence that says when the
+    grading says it and its default text, and the words and the fields a template
+    may name, each with its sentence and an example — the page a deployment writes a
+    ``display:`` block against — after the library's own, the window's line on every
+    check (ADR-0131 decision 7)."""
+
+    FORMS: ClassVar[dict[str, object]] = {
+        "run.verdict": {"sentence": "The newest run's verdict.",
+                        "text": "[{workflow}]({completed.url}): {verdict}"},
+        "run.stale": {"sentence": "The newest run passed too long ago.",
+                      "text": "{workflow}: passed {line.age} ago"}}
+    WORDS: ClassVar[dict[str, object]] = {
+        "age": {"sentence": "How long ago the run started.", "example": "2d"}}
+    FIELDS: ClassVar[dict[str, object]] = {
+        "workflow": {"sentence": "The workflow's name.", "example": "CI"},
+        "verdict": {"sentence": "The word for the run's outcome.",
+                    "example": "passed"},
+        "completed.url": {"sentence": "The run's page.",
+                          "example": "https://ci.example.org/runs/41"}}
+
+    @staticmethod
+    def _section(body):
+        return body.split('id="lines"', 1)[1].split('<div class="card mb-3"', 1)[0]
+
+    def test_it_lists_each_types_forms_words_and_fields(self):
+        declared = declare(self.FORMS, self.WORDS, self.FIELDS)
+        said = _said(self._section(self._installed(
+            _check(type_name="http", line_declarations=declared))))
+        self.assertIn("http 2 forms · 1 word · 3 fields", said)
+        self.assertIn("run.verdict The newest run's verdict. "
+                      "[{workflow}]({completed.url}): {verdict}", said)
+        self.assertIn("run.stale The newest run passed too long ago. "
+                      "{workflow}: passed {line.age} ago", said)
+        self.assertIn("line.age How long ago the run started. 2d", said)
+        self.assertIn("completed.url The run's page. https://ci.example.org/runs/41",
+                      said)
+
+    def test_it_stands_in_the_index_with_the_types_it_lists(self):
+        declared = declare(self.FORMS, self.WORDS, self.FIELDS)
+        body = self._installed(_check(type_name="http", line_declarations=declared))
+        index = body.split('aria-label="Sections"', 1)[1].split("</nav>", 1)[0]
+        self.assertIn("Lines", _said(index))
+        self.assertRegex(index, r'href="#lines">Lines <span[^>]*>1</span>')
+        self.assertRegex(body, r'id="lines"[^>]*>\s*<div class="card-body">\s*'
+                               r'<h3 class="h6 text-muted text-uppercase">Lines</h3>')
+
+    def test_a_type_is_listed_once_for_all_its_checks(self):
+        first = declare(self.FORMS, self.WORDS, self.FIELDS)
+        second = declare(
+            {"run.verdict": {"sentence": "Said again.", "text": "{workflow}"},
+             "run.none": {"sentence": "No run has completed.",
+                          "text": "{workflow}: no completed run"}},
+            None, {"workflow": {"sentence": "Its name, again.", "example": "CD"}})
+        section = self._section(self._installed(
+            _check(path="/ci/a", type_name="http", line_declarations=first),
+            _check(path="/ci/b", type_name="http", line_declarations=second)))
+        self.assertEqual(section.count('id="lines-http"'), 1)
+        said = _said(section)
+        self.assertIn("http 3 forms · 1 word · 3 fields", said)
+        self.assertIn("run.none No run has completed.", said)
+        self.assertIn("workflow The workflow's name. CI", said)
+        self.assertNotIn("Its name, again.", said)
+        self.assertNotIn("Said again.", said)
+
+    def test_a_type_whose_lines_are_its_own_sentences_is_not_listed(self):
+        body = self._installed(_check(type_name="http"))
+        self.assertNotIn('id="lines-http"', body)
+        said = _said(self._section(body))
+        self.assertIn("every check 2 forms · 3 words · 0 fields", said)
+        self.assertIn("since_ok.last Said where the newest reading kept of the subject "
+                      "that stood OK was taken longer before the reading graded than "
+                      "max_since_ok allows. last stood OK {line.since} ago "
+                      "(max {line.level}){? — {line.reason}}", said)
+        self.assertIn("since_ok.none Said where no reading kept of the subject stood "
+                      "OK", said)
+        self.assertIn("line.level The level of max_since_ok that was gone past, as "
+                      "the configuration wrote it. 26h", said)
+        self.assertIn('href="#lines">Lines</a>', self._index(body))
+
+    def test_with_no_check_running_there_are_no_lines_to_list(self):
+        body = self._installed()
+        self.assertNotIn('id="lines"', body)
+        self.assertNotIn('href="#lines"', body)
+
+
+class GradingSectionTests(_Installed):
+    """Installed lists what each type this configuration runs grades (ADR-0131
+    decisions 1 and 6): each value with its sentence, its kind, the keys a check's
+    configuration writes it under, what it grades with where nothing is written, and
+    whether a rule of its block may write it — after the library's own, the window
+    every check takes."""
+
+    GRADINGS: ClassVar[dict[str, object]] = {
+        "max_disk": {"sentence": "How full the disk may be.", "kind": "pair",
+                     "field": "disk_pct", "unit": "share", "warn": "80%",
+                     "error": "90%"},
+        "min_repos": {"sentence": "How many repositories are in scope.",
+                      "kind": "pair", "field": "repositories", "unit": "count",
+                      "warn": 20},
+        "ec2.state_map": {"sentence": "What an instance's state grades.",
+                          "kind": "map", "field": "state",
+                          "words": {"running": "OK", "stopped": "WARN"},
+                          "rules": True},
+        "expected_status": {"sentence": "The statuses that pass.", "kind": "set",
+                            "field": "status", "accepted": [200, 204]},
+        "smart": {"sentence": "A drive's SMART word.", "kind": "judgment",
+                  "field": "drives.*.smart"},
+    }
+
+    @staticmethod
+    def _section(body):
+        return body.split('id="grading"', 1)[1].split('<div class="card mb-3"', 1)[0]
+
+    def test_it_lists_what_each_type_grades(self):
+        said = _said(self._section(self._installed(_check(
+            type_name="http", gradings=declare_gradings(self.GRADINGS)))))
+        self.assertIn("http 5 gradings", said)
+        self.assertIn("max_disk How full the disk may be. a maximum, a share "
+                      "max_disk_warn max_disk_error max_disk_reason max_disk: null "
+                      "warn above 80%, error above 90% —", said)
+        self.assertIn("min_repos How many repositories are in scope. a minimum, a "
+                      "count min_repos_warn min_repos_error min_repos_reason "
+                      "min_repos: null warn below 20 —", said)
+        self.assertIn("ec2.state_map What an instance's state grades. a map of words "
+                      "state_map running → OK, stopped → WARN; any other word → WARN "
+                      "may write it", said)
+        self.assertIn("expected_status The statuses that pass. a set of accepted "
+                      "values expected_status expected_status_reason 200, 204; any "
+                      "other → ERROR —", said)
+        self.assertIn("smart A drive's SMART word. its type's judgment smart_reason "
+                      "— —", said)
+
+    def test_the_library_grades_the_window_on_every_check(self):
+        body = self._installed(_check(type_name="http"))
+        self.assertNotIn('id="grading-http"', body)
+        said = _said(self._section(body))
+        self.assertIn("every check 1 grading", said)
+        self.assertIn("max_since_ok How long before the reading graded the newest "
+                      "kept reading of its subject was taken that stood OK, the "
+                      "reading graded among them. the window, a maximum, a duration "
+                      "max_since_ok_warn max_since_ok_error max_since_ok_reason "
+                      "max_since_ok: null — —", said)
+        self.assertIn('href="#grading">Grading</a>', self._index(body))
+
+    def test_it_stands_in_the_index_with_the_types_it_lists(self):
+        body = self._installed(_check(type_name="http",
+                                      gradings=declare_gradings(self.GRADINGS)))
+        self.assertRegex(self._index(body),
+                         r'href="#grading">Grading <span[^>]*>1</span>')
+        self.assertRegex(body, r'id="grading"[^>]*>\s*<div class="card-body">\s*'
+                               r'<h3 class="h6 text-muted text-uppercase">Grading</h3>')
+
+    def test_a_type_is_listed_once_for_all_its_checks(self):
+        first = declare_gradings({"max_disk": self.GRADINGS["max_disk"]})
+        second = declare_gradings({
+            "max_disk": {"sentence": "Said again.", "kind": "pair",
+                         "field": "disk_pct", "unit": "share"},
+            "smart": self.GRADINGS["smart"]})
+        section = self._section(self._installed(
+            _check(path="/a", type_name="http", gradings=first),
+            _check(path="/b", type_name="http", gradings=second)))
+        self.assertEqual(section.count('id="grading-http"'), 1)
+        said = _said(section)
+        self.assertIn("http 2 gradings", said)
+        self.assertIn("max_disk How full the disk may be.", said)
+        self.assertIn("smart A drive's SMART word.", said)
+        self.assertNotIn("Said again.", said)
+
+    def test_with_no_check_running_there_is_nothing_graded_to_list(self):
+        body = self._installed()
+        self.assertNotIn('id="grading"', body)
+        self.assertNotIn('href="#grading"', body)

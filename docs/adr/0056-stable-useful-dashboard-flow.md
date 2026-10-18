@@ -1,14 +1,17 @@
 # ADR-0056 — Dashboard layout follows stable, useful flow
 
 - **Status:** Accepted
-- **Date:** 2026-09-05 (accepted 2026-08-15)
+- **Date:** 2026-10-18 (accepted 2026-08-15)
 - **Supersedes:** [ADR-0024](0024-dashboard-layout.md)
 - **Related:** [ADR-0005](0005-dashboard-freshness-and-self-monitoring.md)
   (the `little-sister` heartbeat),
   [ADR-0014](0014-maintenance-persistence.md) (maintenance pins),
   [ADR-0019](0019-inspection-popover.md) (chip and maintenance popovers),
   [ADR-0012](0012-node-metadata.md) (chip and strip metadata),
-  [ADR-0076](0076-the-instance-node-is-a-branch.md) (the branch the strip rolls up).
+  [ADR-0076](0076-the-instance-node-is-a-branch.md) (the branch the strip rolls up),
+  [ADR-0127](0127-the-wall-is-a-tree-and-a-click-opens-or-closes-a-node.md) (the tree
+  that replaces dense mode's switch, and the folds that replace `branch_cap`),
+  [ADR-0128](0128-where-a-nodes-first-look-comes-from.md) (the first look this prices).
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -43,18 +46,27 @@ record is complete on its own.
 ### Stable position and bounded content — decided 2026-07-19
 
 A card's position is a pure function of the filtered, depth-limited node set, its
-declared sibling order and available ordinary grid tracks. Live status, current
-reason count or text, measured element height, and chip-versus-box painting do not
-participate. A node-set, explicit filter/depth or viewport change may reflow; a
-status-only poll may not.
+declared sibling order, the first look its configuration gives each node
+([ADR-0128](0128-where-a-nodes-first-look-comes-from.md)) and available ordinary grid
+tracks. Live status, current reason count or text, measured element height, and a chip
+or a box drawn by a status or by a click do not participate: a click makes a card
+taller or shorter where it stands. A node-set, explicit filter/depth or viewport change
+may reflow; a status-only poll may not.
 
 Bound the remaining height variance:
 
 1. Dashboard reason blocks use the configured line budget and a sparse card keeps
    the established minimum-height floor.
-2. In dense mode, a quiet descendant leaf is a compact name-and-state chip; a
-   warn/error leaf remains a full box with its reason. The chip's detail is one
-   click away and its metadata remains inspectable.
+2. A node is a chip or a box, closed or open by a click
+   ([ADR-0127](0127-the-wall-is-a-tree-and-a-click-opens-or-closes-a-node.md)), and
+   how each starts is its configuration's. Where nobody speaks for a level, a quiet
+   descendant leaf is a compact name-and-state chip and a warn/error leaf a full box
+   with its reason — the density the page drew before the tree — until the built-in
+   look is ADR-0128's. A failure's box is never folded: it opens its way
+   within its card's budget of three, and past it is a red chip with its count; and
+   within item 1's line budget a box shows its failing lines first, errors, then
+   warnings, then the rest, each in its check's order (ADR-0127 decision 6). A chip's
+   detail is one click away and its metadata remains inspectable.
 3. The reserved `/little-sister` heartbeat leaves the card grid for a fit-content
    status-strip pill, and it is lifted **with its children**: the path is a branch,
    one child per contributor ([ADR-0076](0076-the-instance-node-is-a-branch.md)), and
@@ -72,10 +84,12 @@ The heartbeat sits in a right-aligned band at the top of `#status-grid`, beneath
 the view controls and inside the polled fragment. Its watching-eye mark distinguishes
 self-monitoring from ordinary nodes, and a stale heartbeat stays vivid.
 
-At every dense branch level, `branch_cap` limits only quiet full child boxes.
-Surplus boxes remain in the DOM behind an in-place `+N more`; a warn/error box is
-never folded, and `branches.js` preserves an open fold across a poll swap. With
-density off every node remains a full box and the cap does nothing.
+At a branch level nobody speaks for, `branch_cap` limits only quiet full child boxes:
+surplus boxes remain in the DOM behind an in-place `+N more`, a warn/error box is
+never folded, and the tab's map keeps an open fold across a poll swap. `branch_cap` and
+its `+N more` leave when the built-in look becomes ADR-0128's, and chips and the healthy
+fold are then the folds (ADR-0127 decision 6). The depth control and the
+chips switch have left the band with their cookies (ADR-0127 decision 7).
 
 ### Maintenance visibility — decided 2026-07-25
 
@@ -96,11 +110,17 @@ the configured line clamp; the detail page remains uncapped.
 ### Stable useful column flow — decided 2026-08-15
 
 For each top-level card, the server derives a **stable flow profile** from its
-filtered, depth-limited topology and configured `reason_cap`:
+filtered, depth-limited topology, the first look its configuration gives each node and
+its configured `reason_cap`:
 
-- every visible node is a potential reason host and costs at least its heading row,
-  scaling by `ceil(reason_cap / 6)`; this reads the stable configured budget, never
-  current reasons;
+- every visible open node is a potential reason host and costs at least its heading
+  row, scaling by `ceil(reason_cap / 6)` at its own `reason_cap`, which a check may set
+  for its nodes; this reads the stable configured budget, never current reasons;
+- a node closed by the configuration, or by a `depth=` in the address, is a chip in its
+  run, and each run is priced where it stands among its level's boxes, a line of chips
+  as a heading row at its level's width, estimated from the names of all the level's
+  children and never from a status
+  ([ADR-0128](0128-where-a-nodes-first-look-comes-from.md) decision 6);
 - for outer spans 1 through 32, the model applies the same 330 px ordinary nested
   track, gaps and per-level insets as the stylesheet, then sums sibling rows by the
   tallest branch in each row; and
@@ -110,7 +130,9 @@ filtered, depth-limited topology and configured `reason_cap`:
 This is an intentionally discrete model, not pixel measurement. A profile may jump
 from span one directly to span three when span two cannot open a nested track; a
 linear chain has no wider step at all. Reason text may come and go without changing
-the profile, while changing the configured reason budget deliberately changes it.
+the profile, while changing the configured reason budget deliberately changes it. So
+chip-versus-box painting enters the profile as the configured first look, while a status
+and a click never do.
 
 Within each consecutive source-order row every root starts at its first one-track
 step. The allocator's objective is min-max, not summed gain. A grid row is as tall
@@ -281,15 +303,19 @@ worth that cost only if per-card reflow proves to annoy in practice.
   an empty track because the next usable nested column needs two or more.
 - A high reason budget gives a reason-capable topology more influence without the
   unstable alternative of counting live reasons.
-- Mixed dense levels gain nested columns without turning every chip into a grid cell.
+- Mixed levels of chips and boxes gain nested columns without turning every chip into
+  a grid cell.
 - Poll payload is proportional to roots plus actual plan changes, rather than roots
   multiplied by 32.
 - The `/little-sister` reservation still costs one namespace; a chip still trades
   at-a-glance quiet reason text for density; both keep their original fallbacks.
-- Known and deliberate: dense mode still prices every visible node as a full
-  box-and-reason host, so with chips on the model overestimates heights and can
-  spend width the dense paint gains little from. That is the stability trade decided
-  above — chip painting must not move cards — and it is recorded rather than tuned.
+- The first look pays: measured on one deployment's tree at 1,280 pixels, the wall
+  priced by its first look is 3.4 screens where pricing every node open makes it 4.1.
+- Known and deliberate: a level nobody speaks for is priced as full box-and-reason
+  hosts, though the density draws its quiet leaves as chips, so the model overestimates
+  its height and can spend width the paint gains little from. That is the stability
+  trade decided above — a chip drawn by a status must not move cards — and it is
+  recorded rather than tuned.
 
 ## Alternatives considered
 
@@ -304,6 +330,8 @@ worth that cost only if per-card reflow proves to annoy in practice.
   unable to say which nesting widths are useful. This is the superseded ADR-0024
   allocation.
 - **A `wide` or `weight` hint in `nodes.yaml`** — stable but couples deployment
-  metadata to presentation and ages as a check's topology changes.
+  metadata to presentation and ages as a check's topology changes. The first look's
+  keys cross that line on purpose: they are the web page's settings, not metadata on
+  the node (ADR-0128 decision 5).
 - **One grid item per chip** — opens mixed levels but destroys the compact wrapping
   run. The full-row chip-run wrapper preserves both properties.

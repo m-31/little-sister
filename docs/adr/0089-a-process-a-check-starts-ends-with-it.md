@@ -7,7 +7,7 @@
   whose `Deadline` bounds a process as it bounds a request),
   [ADR-0049](0049-the-check-authoring-surface.md) (what a check may import, which this
   adds to), [ADR-0086](0086-a-check-measures-and-grades.md) (the measurement a run's
-  outcome becomes), `little-sister-aws` ADR-0001 (the package whose login is a process)
+  outcome becomes), `little-sister-aws` ADR-0015 (the package whose login is a process)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context

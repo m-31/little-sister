@@ -26,8 +26,8 @@ MEMORY_SAMPLE = (
 PROCESSES = [
     {"name": "findmy", "pattern": "FindMy.app"},
     {"name": "system-events", "pattern": "System Events.app"},
-    {"name": "findmy-pull", "pattern": "findmy-pull", "warn_mb": 512,
-     "error_mb": 1024},
+    {"name": "findmy-pull", "pattern": "findmy-pull", "max_rss_warn": "512 MiB",
+     "max_rss_error": "1 GiB"},
 ]
 
 
@@ -57,13 +57,13 @@ class MacosMemoryCheckTests(TestCase):
         self.assertEqual(set(kids), {"pressure", "swap", "compressor",
                                      "processes"})
         self.assertEqual(kids["pressure"].code, StatusCode.OK)
-        self.assertEqual(kids["pressure"].reason,
+        self.assertEqual(kids["pressure"].reason_texts,
                          ["normal — 62% of memory free system-wide"])
         self.assertEqual(kids["swap"].code, StatusCode.OK)
-        self.assertEqual(kids["swap"].reason,
+        self.assertEqual(kids["swap"].reason_texts,
                          ["1.4 GiB used of 3.0 GiB allocated"])
         self.assertEqual(kids["compressor"].code, StatusCode.OK)
-        self.assertEqual(kids["compressor"].reason,
+        self.assertEqual(kids["compressor"].reason_texts,
                          ["15% compressed — 1.2 GiB of 8.0 GiB RAM"])
 
     def test_processes_branch_grades_rss(self):
@@ -72,13 +72,13 @@ class MacosMemoryCheckTests(TestCase):
         procs = {c.name: c for c in self._kids(result)["processes"].children}
         self.assertEqual(set(procs), {"findmy", "system-events", "findmy-pull"})
         self.assertEqual(procs["findmy"].code, StatusCode.OK)     # 412 MB
-        self.assertEqual(procs["findmy"].reason,
+        self.assertEqual(procs["findmy"].reason_texts,
                          ["412.0 MiB RSS over 1 process, oldest up 2h 13m"])
-        self.assertEqual(procs["system-events"].reason,
+        self.assertEqual(procs["system-events"].reason_texts,
                          ["100.0 MiB RSS over 1 process, oldest up 1d 1h"])
         # not running is OK by design — liveness belongs to other checks
         self.assertEqual(procs["findmy-pull"].code, StatusCode.OK)
-        self.assertEqual(procs["findmy-pull"].reason, ["not running"])
+        self.assertEqual(procs["findmy-pull"].reason_texts, ["not running"])
 
     def test_no_processes_configured_omits_branch(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -99,13 +99,13 @@ class MacosMemoryCheckTests(TestCase):
         with tempfile.TemporaryDirectory() as directory:
             result = self._run(directory, stdout)
         kids = self._kids(result)
-        self.assertEqual(kids["swap"].code, StatusCode.WARN)        # 5000 ≥ 4096
-        self.assertEqual(kids["compressor"].code, StatusCode.WARN)  # 40 ≥ 35
+        self.assertEqual(kids["swap"].code, StatusCode.WARN)        # 5000 > 4096
+        self.assertEqual(kids["compressor"].code, StatusCode.WARN)  # 40 > 35
         with tempfile.TemporaryDirectory() as directory:
             result = self._run(
                 directory, stdout,
-                thresholds={"swap": {"warn": 1000, "error": 4500},
-                            "compressor": {"warn": 10, "error": 30}})
+                max_swap_warn="1000 MiB", max_swap_error="4500 MiB",
+                max_compressor_warn="10%", max_compressor_error="30%")
         kids = self._kids(result)
         self.assertEqual(kids["swap"].code, StatusCode.ERROR)
         self.assertEqual(kids["compressor"].code, StatusCode.ERROR)
@@ -118,12 +118,43 @@ class MacosMemoryCheckTests(TestCase):
             result = self._run(
                 directory, stdout,
                 processes=[{"name": "findmy-pull", "pattern": "findmy-pull",
-                            "warn_mb": 512, "error_mb": 1024}])
+                            "max_rss_warn": "512 MiB",
+                            "max_rss_error": "1 GiB"}])
         procs = {c.name: c for c in self._kids(result)["processes"].children}
         self.assertEqual(procs["findmy-pull"].code, StatusCode.WARN)
         # no elapsed key (older script): the reason simply omits the uptime
-        self.assertEqual(procs["findmy-pull"].reason,
+        self.assertEqual(procs["findmy-pull"].reason_texts,
                          ["600.0 MiB RSS over 2 processes"])
+
+    def test_the_pressure_level_grades_as_the_kernel_words_it(self):
+        """``max_pressure``'s defaults pass a normal level, warn at a warning and
+        err at a critical one, as the kernel's own words said before it was a
+        pair (ADR-0131)."""
+        codes = []
+        for level in (1, 2, 4):
+            with tempfile.TemporaryDirectory() as directory:
+                result = self._run(directory, f"pressure_level={level}\n")
+            codes.append(self._kids(result)["pressure"].code)
+        self.assertEqual(codes, [StatusCode.OK, StatusCode.WARN, StatusCode.ERROR])
+
+    def test_the_retired_thresholds_and_bounds_name_what_replaces_them(self):
+        for keys, said in (
+                ({"thresholds": {"swap": {"warn": 4096, "error": 8192},
+                                 "process": {"warn": 1024, "error": 2048}}},
+                 "write max_swap_warn: 4096 MiB, max_swap_error: 8192 MiB — and a "
+                 "watched process's levels, thresholds.process, are max_rss_warn "
+                 "and max_rss_error in its own entry (ADR-0131)"),
+                ({"processes": [{"name": "x", "pattern": "a", "warn_mb": 512,
+                                 "error_mb": 1024}]},
+                 "processes[1] 'warn_mb' and 'error_mb' are retired: a process's "
+                 "levels are a pair in its entry now, its level the last value that "
+                 "passes — write max_rss_warn: 512 MiB, max_rss_error: 1024 MiB "
+                 "(ADR-0131)")):
+            with tempfile.TemporaryDirectory() as directory, \
+                    self.assertRaises(CheckError) as caught:
+                self._check(directory, **keys)
+            self.assertTrue(str(caught.exception).endswith(said),
+                            str(caught.exception))
 
     def test_missing_proc_keys_are_unavailable(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -131,17 +162,20 @@ class MacosMemoryCheckTests(TestCase):
                                processes=PROCESSES)
         procs = {c.name: c for c in self._kids(result)["processes"].children}
         self.assertEqual(procs["findmy"].code, StatusCode.WARN)
-        self.assertEqual(procs["findmy"].reason, ["unavailable"])
+        self.assertEqual(procs["findmy"].reason_texts, ["unavailable"])
 
     def test_leaves_carry_thresholds_and_pattern(self):
         with tempfile.TemporaryDirectory() as directory:
             result = self._run(directory, MEMORY_SAMPLE, processes=PROCESSES)
         kids = self._kids(result)
-        self.assertIn("4096 MB", kids["swap"].config)
+        self.assertIn("warn above 4 GiB, error above 8 GiB", kids["swap"].config)
         self.assertIn("50%", kids["compressor"].config)
         procs = {c.name: c for c in kids["processes"].children}
         self.assertIn("FindMy.app", procs["findmy"].config)
-        self.assertIn("512 MB", procs["findmy-pull"].config)
+        self.assertIn("warn above 1 GiB, error above 2 GiB",
+                      procs["findmy"].config)
+        self.assertIn("warn above 512 MiB, error above 1 GiB",
+                      procs["findmy-pull"].config)
         # the shared host container stays bare
         self.assertEqual(result.config, "")
 
@@ -158,7 +192,7 @@ class MacosMemoryCheckTests(TestCase):
             result = self._run(directory, stdout)
         kids = self._kids(result)
         self.assertEqual(kids["pressure"].code, StatusCode.WARN)
-        self.assertIn("profile mismatch", kids["pressure"].reason[0])
+        self.assertIn("profile mismatch", kids["pressure"].reason_texts[0])
 
     def test_no_memory_data_is_failure(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -168,7 +202,7 @@ class MacosMemoryCheckTests(TestCase):
                                      "processes"})
         for child in kids.values():
             self.assertEqual(child.code, StatusCode.ERROR)
-        self.assertIn("no memory data", kids["pressure"].reason[0])
+        self.assertIn("no memory data", kids["pressure"].reason_texts[0])
 
     def test_connection_failure_marks_aspects_error(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -176,7 +210,7 @@ class MacosMemoryCheckTests(TestCase):
                                stderr="ssh: connect ... Connection refused")
         kids = self._kids(result)
         self.assertEqual(kids["compressor"].code, StatusCode.ERROR)
-        self.assertIn("Connection refused", kids["pressure"].reason[0])
+        self.assertIn("Connection refused", kids["pressure"].reason_texts[0])
 
     def test_script_args_carry_patterns(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -211,7 +245,9 @@ class MacosMemoryCheckTests(TestCase):
                           [{"name": "x", "pattern": "a"},
                            {"name": "x", "pattern": "b"}],   # duplicate name
                           [{"name": "x", "pattern": "a",
-                            "warn_mb": "lots"}]):        # non-numeric bound
+                            "max_rss_warn": "lots"}],    # not a size
+                          [{"name": "x", "pattern": "a",
+                            "warn_mb": 512}]):           # the retired bound
             with tempfile.TemporaryDirectory() as directory:
                 with self.assertRaises(CheckError, msg=repr(processes)):
                     self._check(directory, processes=processes)

@@ -31,5 +31,8 @@ frequency: 5s
 period: 20s
 series_keep: 80
 reading_cap: 8
+# The type proposes the job names as chips, as a type does a level of many (ADR-0128):
+# this deployment opens them, each job name's runs in view.
+chips: false
 measures:
   seconds: {unit: s, label: Run time}

@@ -8,8 +8,9 @@
     mirrored so the lashes point left and the invisible nose sits right, and it
     winks when you point at the brand (overview.css swaps the two groups). The
     **gaze** is the pair, and it blinks on its own — motion belongs to the login
-    page, never to the dashboard. Geometry is the canonical brand-r4 sheet; the
-    inks are tokens so a theme can re-ink the mark without forking this. -#}
+    page, never to the dashboard. The open eye's geometry is the drawing's,
+    brand/eye.svg, less its eyeshadow; the inks are tokens so a theme can re-ink
+    the mark without forking this. -#}
 {% if brand_figure | default('mark') == 'gaze' %}
     {% include '_gaze.html' %}
 {% else %}

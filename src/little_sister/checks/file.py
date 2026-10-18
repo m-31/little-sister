@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import os
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -13,17 +13,13 @@ from little_sister.checks.base import (
     CheckError,
     CheckResult,
     Measurement,
-    coerce_code,
     config_markdown,
-    parse_duration,
     plain,
     register,
 )
 from little_sister.checks.output import FAILURE_BYTES, failure_text
-from little_sister.spans import format_duration, format_span
+from little_sister.spans import format_span
 from little_sister.status import StatusCode
-
-DEFAULT_MAX_AGE_SECONDS = 1200   # 20 minutes
 
 #: What one record of this check costs, declared for the startup comparison
 #: (ADR-0075) — a **ceiling**. The failed read is the larger shape: `modified.at`
@@ -36,25 +32,34 @@ DEFAULT_MAX_AGE_SECONDS = 1200   # 20 minutes
 RECORD_BYTES = (len(json.dumps({"modified": {"at": None}, "error": ""}))
                 - len('""') + FAILURE_BYTES)
 
+#: What this type grades (ADR-0131): how long ago its file changed, a maximum — an
+#: error above twenty minutes where the configuration writes no level of its own.
+GRADINGS: dict[str, object] = {
+    "max_age": {
+        "sentence": "How long ago the file may have changed.",
+        "kind": "pair", "field": "modified.at", "unit": "duration",
+        "error": "20m",
+    },
+}
+
 
 @register("file")
 class FileFreshnessCheck(Check):
-    """OK if the file was modified within ``max_age``; otherwise ``stale_code``.
+    """OK while the file changed within ``max_age``'s levels — a maximum, written
+    ``max_age_warn`` and ``max_age_error`` among the check's own keys and an error
+    above twenty minutes where neither is (ADR-0131); WARN or ERROR beyond them.
 
     Use it as a heartbeat: a process that writes/touches a file regularly is
     healthy while the file stays fresh, and unhealthy once it goes stale. A
     relative ``file`` path resolves against the executing user's ``$HOME``.
     """
 
-    def __init__(self, *, file_path: str, max_age_seconds: int,
-                 stale_code: StatusCode, **kwargs: Any) -> None:
+    def __init__(self, *, file_path: str, **kwargs: Any) -> None:
         # The file **is** the object this check reads — the local twin of the
         # `http` check's URL. Not the node's path, which is where the deployment
         # chose to hang the node and says nothing about which file went stale.
-        super().__init__(subject=file_path, **kwargs)
+        super().__init__(subject=file_path, gradings=GRADINGS, **kwargs)
         self.file_path = file_path
-        self.max_age_seconds = max_age_seconds
-        self.stale_code = stale_code
 
     @classmethod
     def _extra_from_config(cls, config: dict[str, Any],
@@ -62,22 +67,17 @@ class FileFreshnessCheck(Check):
         raw = config.get("file")
         if not raw:
             raise CheckError("file check requires a 'file' path")
+        _refuse_the_retired_age(config)
         # File paths are relative to the executing user's $HOME ('~' expands too).
         path = Path(str(raw)).expanduser()
         if not path.is_absolute():
             path = Path.home() / path
-        return {
-            "file_path": str(path),
-            "max_age_seconds": parse_duration(
-                config.get("max_age"), DEFAULT_MAX_AGE_SECONDS),
-            "stale_code": coerce_code(config.get("stale_code"), StatusCode.ERROR),
-        }
+        return {"file_path": str(path)}
 
     def config_summary(self) -> str:
         return config_markdown({
             "file": self.file_path,
-            "max age": format_duration(self.max_age_seconds),
-            "stale code": self.stale_code.name.lower(),
+            "max age": self.grading_summary("max_age") or "not graded",
         })
 
     def measure(self) -> Measurement:
@@ -119,24 +119,43 @@ class FileFreshnessCheck(Check):
         clock it is given — which is exactly the three this seam promises, and why
         this check can be graded again next year over a record out of the series.
 
-        `measure` above always hands back exactly one reading.
+        The age is derived here, from the record's time and the clock, and handed
+        to the grading as the value it judges (ADR-0131 decision 1); a stale line
+        says the level it went beyond, and the sentence the deployment wrote for the
+        judgment after it. `measure` above always hands back exactly one reading.
         """
-        record = measurements[0].record
-        moment = record.get("modified", {}).get("at")
+        reading = measurements[0]
+        moment = reading.record.get("modified", {}).get("at")
         if moment is None:
-            failure = str(record.get("error") or "cannot read file")
+            failure = str(reading.record.get("error") or "cannot read file")
             return CheckResult(StatusCode.ERROR, [plain(failure)])
         age = (now - datetime.fromisoformat(moment)).total_seconds()
-        if age <= self.max_age_seconds:
+        verdict = self.verdict("max_age", reading, value=age)
+        if verdict.code == StatusCode.OK:
             return CheckResult(StatusCode.OK)
-        # The age is a measured span and the maximum a configured interval, each
-        # in the library's words for it (ADR-0099 decision 4): past a day in days
-        # and the hour beside them, where "1987h14m" was eighty-two days — and the
-        # maximum as it was written, where a week read "168h00m".
-        return CheckResult(self.stale_code, [
-            f"stale: last changed {format_span(age)} ago "
-            f"(max {format_duration(self.max_age_seconds)})"])
+        # The age is a measured span and the level a configured interval, each in
+        # the library's words for it (ADR-0099 decision 4): past a day in days and
+        # the hour beside them, where "1987h14m" was eighty-two days — and the level
+        # as it was written, where a week read "168h00m".
+        return CheckResult(verdict.code, [verdict.entry(
+            f"stale: last changed {format_span(age)} ago (max {verdict.against})")])
 
     def expected_record(self) -> int:
         """A timestamp and, on a bad read, a short reason (ADR-0075)."""
         return RECORD_BYTES
+
+
+def _refuse_the_retired_age(config: Mapping[str, Any]) -> None:
+    """Refuse the spelling the age had before it was a pair (ADR-0131 decision 2):
+    ``max_age`` with a level, and ``stale_code``, the code it took — naming what
+    replaces them, since a level passes at itself now."""
+    if "stale_code" not in config and config.get("max_age") is None:
+        return
+    level = config.get("max_age") or "20m"
+    code = str(config.get("stale_code") or "ERROR").strip().upper()
+    write = ("max_age: null, which switches the judgment off" if code == "OK"
+             else f"max_age_{'warn' if code == 'WARN' else 'error'}: {level}")
+    raise CheckError(
+        f"'max_age' with a level, and 'stale_code', are retired: the file check's "
+        f"age is a pair now, whose level is the last age that passes — write "
+        f"{write}, and drop 'stale_code' (ADR-0131)")

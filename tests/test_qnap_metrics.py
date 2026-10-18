@@ -48,22 +48,22 @@ class QnapMetricsCheckTests(TestCase):
         temps = {c.name: c for c in kids["temperature"].children}
         self.assertEqual(set(temps),
                          {"system", "drive1", "drive2", "drive3", "drive4"})
-        self.assertEqual(temps["system"].reason, ["41 °C"])
+        self.assertEqual(temps["system"].reason_texts, ["41 °C"])
         self.assertEqual(temps["system"].code, StatusCode.OK)
-        self.assertEqual(temps["drive4"].reason, ["44 °C"])
+        self.assertEqual(temps["drive4"].reason_texts, ["44 °C"])
         smart = {c.name: c for c in kids["smart"].children}
         self.assertEqual(smart["drive1"].code, StatusCode.OK)
-        self.assertEqual(smart["drive1"].reason, ["GOOD"])
+        self.assertEqual(smart["drive1"].reason_texts, ["GOOD"])
         self.assertEqual(smart["drive4"].code, StatusCode.WARN)   # Warning
-        self.assertEqual(smart["drive4"].reason, ["Warning"])
+        self.assertEqual(smart["drive4"].reason_texts, ["Warning"])
 
     def test_temperature_children_carry_thresholds(self):
         with tempfile.TemporaryDirectory() as directory:
             result = self._run(directory, QNAP_SAMPLE)
         kids = self._kids(result)
         temps = {c.name: c for c in kids["temperature"].children}
-        self.assertIn("50 °C", temps["system"].config)   # default warn
-        self.assertIn("60 °C", temps["system"].config)   # default error
+        self.assertIn("graded (°C):** warn above 50, error above 60",
+                      temps["system"].config)                     # the defaults
         # the shared host container stays bare
         self.assertEqual(result.config, "")
 
@@ -83,17 +83,36 @@ class QnapMetricsCheckTests(TestCase):
         with tempfile.TemporaryDirectory() as directory:
             result = self._run(directory, stdout)
         temps = {c.name: c for c in self._kids(result)["temperature"].children}
-        self.assertEqual(temps["system"].code, StatusCode.ERROR)   # 65 (>=60)
-        self.assertEqual(temps["drive1"].code, StatusCode.WARN)    # 55 (50..60)
+        self.assertEqual(temps["system"].code, StatusCode.ERROR)   # 65, above 60
+        self.assertEqual(temps["drive1"].code, StatusCode.WARN)    # 55, above 50
 
     def test_temperature_threshold_override(self):
         stdout = "drive1_bay=1\ndrive1_temp_c=44\ndrive1_smart=GOOD\ndrive_count=1\n"
         with tempfile.TemporaryDirectory() as directory:
-            result = self._run(
-                directory, stdout,
-                thresholds={"temperature": {"warn": 40, "error": 45}})
+            result = self._run(directory, stdout, max_temperature_warn=40,
+                               max_temperature_error=45)
         temps = {c.name: c for c in self._kids(result)["temperature"].children}
         self.assertEqual(temps["drive1"].code, StatusCode.WARN)    # 44 (40..45)
+
+    def test_the_retired_thresholds_name_what_replaces_them(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                self.assertRaises(CheckError) as caught:
+            self._check(directory,
+                        thresholds={"temperature": {"warn": 40, "error": 45}})
+        self.assertTrue(str(caught.exception).endswith(
+            "write max_temperature_warn: 40, max_temperature_error: 45 "
+            "(ADR-0131)"), str(caught.exception))
+
+    def test_a_smart_word_says_the_sentence_written_for_the_judgment(self):
+        stdout = "drive1_bay=1\ndrive1_smart=Abnormal\ndrive_count=1\n"
+        with tempfile.TemporaryDirectory() as directory:
+            result = self._run(directory, stdout,
+                               smart_reason="Replace the drive before the next.")
+        smart = {c.name: c for c in self._kids(result)["smart"].children}
+        self.assertEqual(smart["drive1"].code, StatusCode.ERROR)
+        self.assertEqual(smart["drive1"].reason_texts,
+                         ["Abnormal — Replace the drive before the next."])
+        self.assertEqual(smart["drive1"].reason_entries[0].grading, "smart")
 
     def test_smart_failure_is_error(self):
         stdout = "drive1_bay=1\ndrive1_smart=Abnormal\ndrive_count=1\n"

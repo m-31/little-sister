@@ -1,7 +1,7 @@
 # ADR-0118 — A child a run names says so, and takes nothing declared for its name
 
 - **Status:** Accepted
-- **Date:** 2026-10-04
+- **Date:** 2026-10-18 (accepted 2026-10-04)
 - **Related:** [ADR-0025](0025-check-provided-subnode-metadata.md) (decision 5: a label
   is declared for a subnode's name, and a result's own is the fallback — which this
   amends), [ADR-0063](0063-declining-the-density-trade.md) (decisions 2 and 3:
@@ -13,7 +13,9 @@
   [ADR-0109](0109-a-node-says-its-children-are-complete.md) (decision 1: a keyword that
   states a fact about a result and leaves what follows to the engine),
   [ADR-0049](0049-the-check-authoring-surface.md) (what a name on the surface costs),
-  [ADR-0051](0051-what-startup-refuses.md) (decision 2, the epoch)
+  [ADR-0051](0051-what-startup-refuses.md) (decision 2, the epoch),
+  [ADR-0128](0128-where-a-nodes-first-look-comes-from.md) (the first look's keys, on the
+  same addresses, and `children:`)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -70,11 +72,21 @@ is not that child. This amends [ADR-0025](0025-check-provided-subnode-metadata.m
 decision 5 and [ADR-0063](0063-declining-the-density-trade.md) decisions 2 and 3: *by
 name, at any depth* holds for a child that says nothing.
 
+The keys of a node's first look ride the same addresses
+([ADR-0128](0128-where-a-nodes-first-look-comes-from.md)), and a child that says so takes
+nothing declared for its name there either. What its parent says under `children:` —
+those keys and `show_when_quiet`, for each child of that node whatever its name — does
+reach it: that is how a type or a deployment speaks for a level a run names. Whether a
+run named a node is remembered beside the tree, for the page, and never on the
+snapshot.
+
 ### 3. Its labels are the ones its result carries
 
 `title`, `about` and `show_when_quiet` on its own `CheckResult`, each field for itself,
-and nothing where the result carries none. What those two records kept as a fallback is
-the one source a type has for such a child. A `nodes.yaml` entry for the node's path
+and nothing where the result carries none — but for `show_when_quiet` where its
+parent's `children:` says it, which beats what its own result stamps, a declaration over
+a stamp (decision 2). What those two records kept as a fallback is the one source a
+type has for such a child's labels. A `nodes.yaml` entry for the node's path
 beats it as it beats everything a check says, by being seeded before the first run, and
 what a run writes still fills an empty field only.
 

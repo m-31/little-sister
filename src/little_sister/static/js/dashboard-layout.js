@@ -22,6 +22,10 @@
  * poll's innerHTML swap, viewport changes and rail expansion.  If data is absent
  * or malformed, inline spans and columns are cleared and CSS's ordinary
  * auto-fill grid wins.
+ *
+ * `tree.js` reads the cards' head rows, which need the widths the plan gives, so
+ * it has the plan laid at once (`window.lsLayout.apply()`) before it reads them;
+ * the frame after a swap then finds the plan in place and writes nothing.
  */
 (function () {
     "use strict";
@@ -62,13 +66,34 @@
         return columns.split(/\s+/).length;
     }
 
+    // Whether the grid carries the plan its width selects already — what the frame
+    // after a swap finds once `tree.js` has had the grid planned: then nothing is
+    // written, and that frame lays nothing out again. A band that leaves the count to
+    // auto-fill carries only ones, which every count holds.
+    function carries(grid, cards, tracks, plan) {
+        if (grid.getAttribute("data-layout-tracks")
+                !== (tracks > 0 ? String(tracks) : null)) {
+            return false;
+        }
+        for (var i = 0; i < cards.length; i++) {
+            var span = Number(plan[i]);
+            if ((tracks === 0 && span !== 1)
+                    || cards[i].getAttribute("data-layout-span") !== String(span)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     function layout() {
         queued = false;
         var grid = root.querySelector(".status-grid");
         if (!grid) { return; }
         var cards = cardsOf(grid);
-        clear(grid, cards);
-        if (!cards.length) { return; }
+        if (!cards.length) {
+            clear(grid, cards);
+            return;
+        }
 
         var breakpoints;
         try {
@@ -76,22 +101,33 @@
                 grid.getAttribute("data-layout-breakpoints") || ""
             );
         } catch (error) {
+            clear(grid, cards);
             return;
         }
-        if (!Array.isArray(breakpoints) || !breakpoints.length) { return; }
+        if (!Array.isArray(breakpoints) || !breakpoints.length) {
+            clear(grid, cards);
+            return;
+        }
 
+        // The grid's own width is its container's, whatever its columns and spans,
+        // so it is read as the grid stands: after a swap `tree.js` has had planned,
+        // in the layout the frame needs anyway rather than in one of a cleared grid.
         var width = grid.getBoundingClientRect().width * 10;
         var tracks = 0;
         var plan = null;
         var previousWidth = 0;
         for (var point = 0; point < breakpoints.length; point++) {
             var entry = breakpoints[point];
-            if (!Array.isArray(entry) || entry.length !== 3) { return; }
+            if (!Array.isArray(entry) || entry.length !== 3) {
+                clear(grid, cards);
+                return;
+            }
             var entryWidth = Number(entry[0]);
             var entryTracks = Number(entry[1]);
             if (!Number.isInteger(entryWidth) || entryWidth < 1
                     || (point > 0 && entryWidth <= previousWidth)
                     || !Number.isInteger(entryTracks) || entryTracks < 0) {
+                clear(grid, cards);
                 return;
             }
             previousWidth = entryWidth;
@@ -99,7 +135,12 @@
             tracks = entryTracks;
             plan = entry[2];
         }
-        if (!Array.isArray(plan) || plan.length !== cards.length) { return; }
+        if (!Array.isArray(plan) || plan.length !== cards.length) {
+            clear(grid, cards);
+            return;
+        }
+        if (carries(grid, cards, tracks, plan)) { return; }
+        clear(grid, cards);
         if (tracks > 0) {
             grid.style.gridTemplateColumns =
                 "repeat(" + tracks + ", minmax(0, 1fr))";
@@ -123,6 +164,11 @@
         queued = true;
         window.requestAnimationFrame(layout);
     }
+
+    // `tree.js` reads each card's rows at the width the card's span gives it, so it
+    // has the grid planned at once before it reads them — after a swap, before the
+    // frame this script would plan it in.
+    window.lsLayout = { apply: layout };
 
     new MutationObserver(schedule).observe(root, {childList: true, subtree: true});
     new ResizeObserver(function (entries) {

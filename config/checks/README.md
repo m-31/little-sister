@@ -38,18 +38,54 @@ the Python class behind `type:` — is
 | `type` | `http`, `file`, `command`, or an SSH check (`ssh-connect`, `ssh-command`, `ssh-script`, `host-metrics`, `qnap-metrics`, `macos-memory`) | required |
 | `path` | the node's **absolute, slash-separated** path, e.g. `/system/alpha` (a segment may be an FQDN; the last segment is the node's name) | required |
 | `description` | human-readable description of what the check *does* (Markdown) | `""` |
-| `about` | subject metadata — what the node *is* (location, kind, context); Markdown. `nodes.yaml` overrides it | `""` |
+| `about` | subject metadata — what the node *is* (location, kind, context); Markdown, shown open beneath the node's name and title on every view of it, so a sentence or a few: one past 400 characters is warned about at startup. `nodes.yaml` overrides it | `""` |
 | `title` | a **short** display label for the node (briefer than `about`); Markdown. `nodes.yaml` overrides it | `""` |
 | `order` | this node's **declared rank among its siblings**: the row sorts by `(order, name)`, so a negative number pulls a node ahead of its unranked siblings and a positive one pushes it after them. A whole number, negative allowed; `nodes.yaml` overrides it, and both beat a rank the check's own result declares | unstated (sorts as `0`) |
-| `show_when_quiet` | `true` when this node's **quiet lines are still information** — an inventory whose list is read *because* everything is fine. The dense dashboard then keeps its full box and never folds it behind *+N more*. `nodes.yaml` overrides it; must be a real boolean (`"false"` in quotes fails the load rather than reading as *on*) | unstated |
+| `show_when_quiet` | `true` when this node's **quiet lines are still information** — an inventory whose list is read *because* everything is fine. The wall then opens its box whatever its parent's ▤ says and never folds it behind *+N more*, and no fold the configuration sets hides it or its quiet lines; a viewer's press still does. `nodes.yaml` overrides it; must be a real boolean (`"false"` in quotes fails the load rather than reading as *on*) | unstated |
+| `chips` | whether this node's **children start as chips** on the wall, each closed to its name and counts until it is clicked: `true` the compact look, `false` every child open. A child that claims `show_when_quiet` starts open whatever it says, and in each card the first three failures a chip would hide open their way, errors before warnings, with the nodes above them. Its type may propose it; what you write beats that, and `nodes.yaml` beats both, per path. A real boolean, or the start is refused, naming the file | the type's word, else `chips` in `settings.yaml`, else as the wall has always started: a quiet leaf as a chip |
+| `fold_ok` | whether this node's **healthy children and lines start folded** behind *✓ +N ok*, which a click shows: `true` the compact look. What claims `show_when_quiet` stays out of it. The same order and the same refusal as `chips` | the type's word, else `fold_ok` in `settings.yaml`, else shown |
+| `reason_cap` | this node's box's **line budget** on the wall, its failing lines first and the rest a click away behind *⌄ all N*. A whole number, `0` its lines all behind it; a bad value refuses the start, naming the file | the type's word, else `reason_cap` in `settings.yaml` (6) |
+| `children` | `chips`, `fold_ok`, `reason_cap` and `show_when_quiet` for **each child** of this node, whatever its name — how a look reaches a level a run names, the accounts or queues no name entry can; a child's own entry beats it. A block, under the top level or a `subnodes:` entry, never directly under `subnodes:` | — |
 | `frequency` | how often to run — `30s`, `15m`, `2h`, `1d`, or a number of seconds | `15m` |
 | `timeout` | per-run timeout (same duration format) | `30s` |
 | `series_keep` | how many readings of each thing the check reads — a URL, a host — it keeps as that thing's **history**, the oldest dropped first, and a restart keeps them. A whole number; `0` keeps none, and there is no deployment-wide default, because where a history is wanted is a choice per check. What every history together may weigh is bounded by `series_limit` in `settings.yaml` | `0` |
 | `measures` | which fields of what the check read are **drawn** as curves, over the readings `series_keep` keeps — each field by the dotted name its record list shows (`response_ms`, `timing.total_ms`), mapped to its **unit** or to `{unit, label, node}`. `node` is the node the curve stands on, a path from the check's own (`memory`, `disk/root`), which it stands on where it names none; every curve at or beneath a node is on that node's **Series** view. A `*` in the field picks every key of the things a record counts by name, and stands for it in the node and the label too: `volumes.*.avail_kb: {unit: KiB, label: Free space on *, node: disk/*}` is a curve per volume, on that volume's node. A unit is free text; `ms` and `s` are written as spans (`1.9 s`), `B`, `KiB`, `MiB`, `GiB` and `TiB` as sizes (`18.3 GiB`). A type may declare its own — `http` draws `response_ms` in `ms`, and `host-metrics`, `qnap-metrics` and `macos-memory` the numbers they grade — and this block merges over them per field: naming a field takes it whole, `field: null` draws it no more, and every field it does not name keeps the type's. A block of another shape refuses the start, naming the file | the type's |
 | `reading_cap` | how many of those readings — the newest — the Series view lists of each series beneath its curves; every one is on the **History** page of the check's node. A whole number, `0` the curves alone; a bad value refuses the start, naming the file | `reading_cap` in `settings.yaml` (10) |
+| `display` | what the check's **lines say**, re-worded: a **form**'s full name — the sentence the type's grading chose for a line, which the node's page shows beside it and `/system/installed` lists with its default text — mapped to a template that re-words it, `{line.default}` standing for the type's own text. A template names a field of what the check read by its dotted name, `{completed.url}`, and a word the type hands over as `{line.why}`; `{? …}` is shown only when every value it prints is there and `{?name: …}` when `name` is as well; a link is Markdown, `[words]({completed.url})`; `{{` writes a brace, and `}}` does outside a segment. A time under `at`, `started` or `ended` reads in the configured zone, and a value that is not there as `—`. A name that is no form of the type, and a template naming a field or a word the type does not declare, refuse the start, naming the file. None of the built-in types writes its lines as forms; the window's two, `since_ok.last` and `since_ok.none`, are the library's, on every check | the type's own |
+| `max_since_ok_warn`, `max_since_ok_error`, `max_since_ok_reason` | **the window**: how long a subject — the URL, the file, the host — may go without a reading that stood OK, over the readings `series_keep` keeps, each level the last span that passes (`26h`); beyond it a line of its own says so on the node, at the level's code, the reason after it. Every type takes it. A level on a check that keeps nothing refuses the start, and one beyond what the check keeps is said in the log at start. `display:` re-words its two lines, `since_ok.last` and `since_ok.none`, over `{line.since}`, `{line.level}` and `{line.reason}` | not graded |
 
 A non-`OK` result always carries a reason. A failed or timed-out run becomes
 `ERROR` (ADR-0040 / ADR-0001).
+
+## What a check grades by
+
+What a check type grades — a disk's use, a file's age, an HTTP status — the type
+declares, and `/system/installed` lists with its default and its keys. A deployment
+writes it in one spelling per kind, among the check's own keys or in the block of what
+it grades
+([ADR-0131](../../docs/adr/0131-a-type-declares-what-it-grades-and-the-library-grades-it.md)):
+
+- **A pair** of levels over a number, `<key>_warn` and `<key>_error`, each level the
+  last value that passes: a `max_…` pair fails above its levels and a `min_…` pair
+  below them. A level is written in the unit the type declares — a count, a number, a
+  duration (`20m`), a size (`4 GiB`), an amount, or a share with its percent sign
+  (`80%`). Writing any key of a pair takes the pair as written, so a level you leave
+  out is not compared, whatever the type's default; `<key>: null` switches the
+  judgment off, and the value is still shown. Equal levels, and an error level that is
+  not beyond the warning, refuse the start.
+- **A map** from a word of its source's vocabulary to a code, under the key its type
+  declares. A word matches with its case and the spaces around it folded, a map you
+  write merges over the type's word by word, a key naming no word the type knows is
+  said once in the log at start and grades as written, and a word no key names grades
+  `WARN`.
+- **A set** of accepted values, as `http`'s `expected_status`: any other value fails.
+- **`<key>_reason`**, beside a pair, a set or a judgment the type makes in its own
+  code, is the sentence the line says after its own text where that grading decided
+  it.
+
+A key that does not fit refuses the start, naming the file and the key, and so does
+one of the keys these replaced — `thresholds:`, `warn_mb` and `error_mb`, and the
+`file` check's `max_age` with a level and `stale_code` — naming what to write instead.
 
 ## Node metadata — `config/nodes.yaml`
 
@@ -60,7 +96,8 @@ path, so it can reach **container / host** nodes that no single check owns. It i
 layered across the roots and seeded at startup: a later root wins **per field** over
 an earlier one (the override is logged, naming both files), and a `nodes.yaml` value
 wins over the inline value on a check, also per field. A bare string is shorthand for
-`about`. A declared path that no check covers is warned about at startup
+`about`. A declared path that no check covers is warned about at startup, and so is
+an `about` past 400 characters
 ([ADR-0012](../../docs/adr/0012-node-metadata.md) /
 [ADR-0017](../../docs/adr/0017-node-title.md) /
 [ADR-0055](../../docs/adr/0055-sibling-order.md)).
@@ -103,7 +140,8 @@ GET a URL; OK when the response status matches.
 type: http
 path: /website                # absolute node path (ADR-0016)
 url: https://example.com
-expected_status: 200      # int or list, e.g. [200, 204]
+expected_status: 200      # int or list, e.g. [200, 204]; any other status is ERROR
+# expected_status_reason: "Only a 200 means the database answered."
 follow_redirects: true    # default; set false to read a 3xx as the answer
 frequency: 5m
 ```
@@ -116,14 +154,17 @@ codes you accept in `expected_status`, and a new one turns the check. It must be
 boolean; `"false"` in quotes is refused at load rather than read as true.
 
 ## `file`
-Heartbeat: OK while a file keeps being updated; stale otherwise.
+Heartbeat: OK while a file keeps being updated; stale otherwise. How old it may be is a
+pair, `max_age`: an error above twenty minutes where you write neither level.
 
 ```yaml
 type: file
 path: /nightly-export         # absolute node path (ADR-0016)
 file: logs/app.done                   # absolute, ~/…, or relative to your $HOME
-max_age: 20m                          # OK if modified within this window
-stale_code: ERROR                     # status when stale (default ERROR)
+max_age_error: 20m                    # ERROR once the file is older than this
+# max_age_warn: 10m                   # WARN once it is older than this
+# max_age_reason: "The export runs every quarter of an hour."
+# max_age: null                       # grade nothing; the age is still shown
 ```
 
 ## `command`
@@ -194,14 +235,15 @@ plus one leaf per metric (`disk`, `memory`, `cpu`, `load`), all **siblings** —
 ssh is only the helper that fetches the data, not its parent. The `ssh` leaf is
 OK normally, **WARN** when ssh prints an advisory (e.g. the post-quantum
 key-exchange notice), and ERROR on a failed connection; each metric carries its
-number even when OK and is graded by `thresholds`. `disk_path: all` (or a **list**
+number even when OK and is graded by a pair of its own — `max_disk`, `max_memory`,
+`max_cpu`, `max_load`. `disk_path: all` (or a **list**
 of paths) makes `disk` a branch with one graded child per filesystem (named by its
 volume, e.g. `root`, `MD0_DATA`), the fullest rolling up — a list monitors just
 those volumes (handy for skipping a NAS's near-full firmware partitions). One
 connection per run pipes a metrics script to the host's shell; the host's
 `profile` (`linux`, `macos` or `busybox`, default `linux`) selects the script and
 the interpreter (`bash`, or `sh` for busybox), and the script only measures while
-this check applies the thresholds. Each script self-checks the host (its OS
+this check grades. Each script self-checks the host (its OS
 family, and the linux profile also rejects a busybox userland) and reports a
 clear config error (a WARN on the `ssh` leaf) if the `profile` is wrong. Auth
 must be non-interactive
@@ -229,11 +271,15 @@ frequency: 2m
 #                          # a list → just those volumes as a `disk` branch, e.g.
 #                          #   disk_path: [/share/MD0_DATA, /share/HDB_DATA]
 # script: my-host-metrics.sh   # your own script, overriding the profile default
-# thresholds:              # value at/above 'warn' → WARN, at/above 'error' → ERROR
-#   disk:   {warn: 80, error: 90}     # percent used
-#   memory: {warn: 85, error: 95}     # percent used
-#   cpu:    {warn: 85, error: 95}     # percent busy
-#   load:   {warn: 0.8, error: 1.0}   # 1-min load average per CPU core
+# Each aspect is a pair: above `_warn` → WARN, above `_error` → ERROR (defaults shown)
+# max_disk_warn: 80%       # percent used, each volume's alike
+# max_disk_error: 90%
+# max_memory_warn: 85%     # percent used
+# max_memory_error: 95%
+# max_cpu_warn: 85%        # percent busy
+# max_cpu_error: 95%
+# max_load_warn: 0.8       # 1-min load average per CPU core
+# max_load_error: 1.0      # `max_load: null` grades the load not at all
 # descriptions:            # per-leaf description (Markdown), keyed by leaf name
 #   disk: Root filesystem on the NVMe drive
 #   load: 1-minute load average per core
@@ -264,16 +310,27 @@ no aspect, and no entry reaches it by its name, whatever the host calls it: wher
 in `nodes.yaml`
 ([ADR-0118](../../docs/adr/0118-a-child-a-run-names-takes-nothing-declared-for-its-name.md)).
 
-The same block carries the one non-label key:
-**`show_when_quiet`** (`subnodes: {disk: {show_when_quiet: true}}`), the per-aspect
-form of the common field above — *this leaf's quiet lines are still information*, so
-the dense dashboard keeps its box and never folds it. It resolves like the labels
-beside it: what you write here beats what the check type declared for that name — a
-type declares the flag for an aspect that is a roster *by construction*, so you may
-never need to write it at all — and `nodes.yaml` still overrides both, per node path
+The same block carries the keys of how a node first looks, beside its labels. The first
+is **`show_when_quiet`** (`subnodes: {disk: {show_when_quiet: true}}`), the per-aspect
+form of the common field above — *this leaf's quiet lines are still information*, so the
+wall keeps its box open and its lines in sight. It resolves like the labels beside it:
+what you write here beats what the check type declared for that name — a type declares
+the flag for an aspect that is a roster *by construction*, so you may never need to
+write it at all — and `nodes.yaml` still overrides both, per node path
 ([ADR-0063](../../docs/adr/0063-declining-the-density-trade.md)). Writing
-`show_when_quiet: false` is how you decline a declaration a type ships; leaving the
-key out says nothing.
+`show_when_quiet: false` is how you decline a declaration a type ships; leaving the key
+out says nothing. **`chips`**, **`fold_ok`** and **`reason_cap`**, the common fields
+above, take the same addresses — `subnodes: {backup: {chips: true}}` starts every
+`backup` node's children as chips — and resolve the same way: your entry over the
+type's, `nodes.yaml` over both, and `settings.yaml` beneath them all, for what nobody
+spoke for ([ADR-0128](../../docs/adr/0128-where-a-nodes-first-look-comes-from.md)).
+Under **`children:`** each of them speaks for each child of a node, whatever its name —
+`subnodes: {queues: {children: {show_when_quiet: true}}}` for every queue a run names,
+which no name entry reaches, or a top-level `children: {chips: false}` for each child of
+the check's own node — and a child's own entry beats it, as it beats what a run stamps;
+a `nodes.yaml` path takes a `children:` too. A key an entry or a `children:` block does
+not know is named in one startup line for the file, where it used to do nothing in
+silence.
 
 A check that reports several nodes like this returns a small tree of results
 (`CheckResult.children`); the engine writes each as a node under the check's node
@@ -289,8 +346,9 @@ same `path` and they sit side by side (their leaf sets are disjoint). Give the
 ## `qnap-metrics`
 QNAP hardware health over SSH (QTS `getsysinfo`): a `temperature` branch
 (`system`, `cpu` where the model has a sensor, and one `drive<bay>` per populated
-bay, in °C) and a `smart` branch (one `drive<bay>` per bay: `GOOD`→OK,
-`Warning`→WARN, else ERROR). Empty bays and absent sensors are skipped.
+bay, in °C, graded by the pair `max_temperature`) and a `smart` branch (one
+`drive<bay>` per bay: `GOOD`→OK, `Warning`→WARN, else ERROR, a judgment `smart_reason`
+says a sentence for). Empty bays and absent sensors are skipped.
 
 ```yaml
 type: qnap-metrics
@@ -299,8 +357,9 @@ host: nexus62            # required
 frequency: 2m
 # (no description — it shares the host node with the host-metrics check)
 # user / sudo / port / identity_file / options — same as the host-metrics check
-# thresholds:
-#   temperature: {warn: 50, error: 60}   # °C (system, cpu and each drive)
+# max_temperature_warn: 50     # °C (system, cpu and each drive); defaults shown
+# max_temperature_error: 60
+# smart_reason: "Replace the drive before the next one goes."
 # descriptions:            # per-leaf description, keyed by leaf name
 #   temperature: Chassis and drive temperatures
 #   smart: Per-drive SMART health
@@ -332,12 +391,16 @@ frequency: 2m
 # processes:               # watch these processes' RSS (omit for none)
 #   - name: findmy         # leaf name under `processes`
 #     pattern: FindMy.app  # substring of the full command line (`ps axo command`)
-#     warn_mb: 1024        # per-process override (default: thresholds.process)
-#     error_mb: 2048
-# thresholds:              # value at/above 'warn' → WARN, at/above 'error' → ERROR
-#   swap:       {warn: 4096, error: 8192}   # MB in use
-#   compressor: {warn: 35, error: 50}       # percent of physical RAM
-#   process:    {warn: 1024, error: 2048}   # default RSS MB for watched processes
+#     max_rss_warn: 1 GiB  # its resident memory, summed (default: 1 GiB / 2 GiB)
+#     max_rss_error: 2 GiB
+# Each is a pair: above `_warn` → WARN, above `_error` → ERROR (defaults shown). The
+# pressure is the kernel's own level — 1 normal, 2 warning, 4 critical.
+# max_pressure_warn: 1
+# max_pressure_error: 2
+# max_swap_warn: 4 GiB     # swap in use
+# max_swap_error: 8 GiB
+# max_compressor_warn: 35% # of physical RAM
+# max_compressor_error: 50%
 # descriptions:            # per-leaf description, keyed by leaf name
 #   compressor: Compressed-memory occupancy (panic precursor)
 ```

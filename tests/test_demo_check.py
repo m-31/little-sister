@@ -30,8 +30,9 @@ from little_sister.checks.base import (
     Measurement,
     parse_duration,
 )
-from little_sister.config import load_config
+from little_sister.config import DEFAULT_BRANCH_CAP, load_config
 from little_sister.engine import Engine
+from little_sister.first_look import FirstLooks, statement
 from little_sister.links import load_links
 from little_sister.nodes import NodeMeta, load_nodes, resolve_metadata
 from little_sister.reasons import DERIVED_PREFIX, Entry
@@ -95,6 +96,26 @@ class DemoScenarioTests(TestCase):
         result = SCENARIOS["children"](0.65 * 45, 45)
         self.assertEqual({c.name for c in result.children},
                          {"disk", "memory", "load"})
+
+    def test_the_fleet_folds_two_quiet_boxes_and_one_steps_out_when_it_fails(self):
+        # five hosts of two leaves each: a box each, five quiet boxes on one level
+        # past the branch cap of three — the "+N more" the tab's map keeps open
+        # (ADR-0127 decision 9) — and mid-cycle one host's disk fails, so that box
+        # is never folded while it does
+        quiet = SCENARIOS["fleet"](0.1 * 60, 60)
+        self.assertEqual([c.name for c in quiet.children],
+                         ["node-01", "node-02", "node-03", "node-04", "node-05"])
+        for host in quiet.children:
+            self.assertEqual([k.name for k in host.children], ["cpu", "disk"])
+            self.assertTrue(all(k.code is StatusCode.OK for k in host.children))
+        self.assertGreater(len(quiet.children), DEFAULT_BRANCH_CAP)
+        failing = SCENARIOS["fleet"](0.5 * 60, 60)
+        failed = {host.name: [k.code for k in host.children]
+                  for host in failing.children if any(
+                      k.code is not StatusCode.OK for k in host.children)}
+        self.assertEqual(failed, {"node-04": [StatusCode.OK, StatusCode.ERROR]})
+        self.assertTrue(SCENARIOS["fleet"](0.8 * 60, 60).children[3].children[1].code
+                        is StatusCode.OK)
 
     def test_audit_swells_to_150_findings_while_staying_ok(self):
         early = SCENARIOS["audit"](0.0, 120)
@@ -337,6 +358,23 @@ class PipelinesRecordTests(TestCase):
         result = run_check(check)
         self.assertEqual([e.slug for e in result.reason_entries if e.data],
                          ["web-build"])
+
+    def test_the_lines_come_in_the_checks_order_with_the_build_past_the_budget(self):
+        # as a provider lists them, by repository and workflow — never sorted by
+        # state — so the build that fails mid-cycle is the seventh of eight, past
+        # the wall's budget of six lines, where the box draws its failing lines
+        # first and the leaf page keeps this order (testing-the-gui.md, Mode 2)
+        check = DemoCheck(path="/ci/pipelines", scenario="pipelines", period=60.0)
+        for fraction in (0.1, 0.4, 0.75):
+            with self.subTest(fraction=fraction):
+                read = Measurement(record={"elapsed_seconds": fraction * 60,
+                                           "period_seconds": 60.0})
+                result = run_check(check, measurements=[read])
+                self.assertEqual(
+                    [e.slug for e in result.reason_entries],
+                    ["api-lint", "api-tests", "deploy-gate", "docs-build",
+                     "mobile-build", "nightly-audit", "web-build", "web-e2e"])
+        self.assertEqual(self._build(0.4).code, StatusCode.ERROR)
 
 
 class LatencyScenarioTests(TestCase):
@@ -866,6 +904,52 @@ class DemoFillerTests(TestCase):
                          {"demo.css", "demo.js"})
 
 
+class DemoFirstLookTests(TestCase):
+    """The demo starts as the canvas's panel *Where the first look comes from* drew it
+    (backlog #91 §7.5), each layer speaking once: the type proposes, its check's file
+    takes back, `nodes.yaml` speaks for a container no check writes."""
+
+    def setUp(self):
+        checks = load_checks(_DEMO_CONFIG_DIR)
+        self.checks = {check.path: check for check in checks}
+        self.looks = FirstLooks(checks, load_nodes(_DEMO_CONFIG_DIR),
+                                load_config(config_dir=_DEMO_CONFIG_DIR),
+                                lambda _path: False)
+
+    def _type(self, path, key):
+        return self.checks[path].type_statements.own.get(key)
+
+    def test_the_job_names_proposed_as_chips_and_taken_back_by_their_file(self):
+        self.assertIs(self._type("/ci/jobs", "chips"), True)
+        self.assertIs(self.looks.look("/ci/jobs").chips, False)
+
+    def test_the_workflows_lines_folded_by_the_type_and_shown_by_their_file(self):
+        self.assertIs(self._type("/ci/workflows", "fold_ok"), True)
+        self.assertIs(self.looks.look("/ci/workflows").fold_ok, False)
+        # the pipelines' stay folded: nobody takes them back
+        self.assertIs(self.looks.look("/ci/pipelines").fold_ok, True)
+
+    def test_a_hosts_a_backups_and_the_scanners_children_start_as_chips(self):
+        for path in ("/hosts/nas", "/storage/backup", "/security/wiz"):
+            self.assertIs(self.looks.look(path).chips, True, path)
+        # `informational` keeps its claim, so it starts open among the chips
+        self.assertIs(statement("show_when_quiet", "/security/wiz/informational",
+                                check=self.checks["/security/wiz"], nodes={},
+                                named_by_run=lambda _path: False), True)
+
+    def test_networks_children_start_as_chips_by_nodes_yaml(self):
+        self.assertIsNone(self.looks.writer("/network"))
+        self.assertIs(self.looks.look("/network").chips, True)
+
+    def test_every_other_level_is_left_to_todays_density(self):
+        said = {path for path in self.checks
+                if self.looks.look(path).chips is not None
+                or self.looks.look(path).fold_ok is not None}
+        self.assertEqual(said, {"/ci/jobs", "/ci/workflows", "/ci/pipelines",
+                                "/hosts/nas", "/storage/backup", "/security/wiz"})
+        self.assertIsNone(self.looks.look("/hosts/fleet").chips)   # its *+N more*
+
+
 class DemoCheckTests(TestCase):
     def test_run_returns_a_result(self):
         check = DemoCheck(path="/x", scenario="escalate", period=60.0)
@@ -880,14 +964,14 @@ class DemoCheckTests(TestCase):
         # the WSGI wrapper registers `demo` before this runs; importing DemoCheck
         # above did the same. Every config in the demo dir must load cleanly.
         checks = load_checks(_DEMO_CONFIG_DIR)
-        self.assertEqual(len(checks), 12)
+        self.assertEqual(len(checks), 13)
         self.assertTrue(all(isinstance(c, DemoCheck) for c in checks))
         self.assertEqual({c.path for c in checks},
                          {"/services/api", "/services/web", "/ci/nightly",
                           "/ci/pipelines", "/ci/reviews", "/ci/workflows",
                           "/ci/jobs",
                           "/network/vpn", "/storage/backup", "/hosts/nas",
-                          "/security/audit", "/security/wiz"})
+                          "/hosts/fleet", "/security/audit", "/security/wiz"})
 
     def test_dropped_child_ages_to_stale(self):
         # the mechanism the `silent` scenario relies on: a child omitted from a

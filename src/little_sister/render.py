@@ -7,7 +7,8 @@ A small, safe-by-default renderer on markdown-it-py: raw HTML is **escaped**
   **images are currently enabled**,
   and links **open in a new tab**
 (``target="_blank"``) with ``rel="noopener noreferrer"``. Exposed to templates via the
-``markdown`` (block) and ``markdown_inline`` (one-line) Jinja filters.
+``markdown`` (block) and ``markdown_inline`` (one-line) Jinja filters, and to the
+inspection card's map by :func:`first_block`.
 """
 from __future__ import annotations
 
@@ -60,3 +61,27 @@ def render_markdown(text: str) -> Markup:
 def render_markdown_inline(text: str) -> Markup:
     """Render Markdown **inline** — one line, no wrapping ``<p>`` — to safe HTML."""
     return Markup(_MD.renderInline(text))
+
+
+def first_block(text: str) -> tuple[Markup, int]:
+    """The first top-level block of ``text`` — a paragraph, a list, a code block,
+    whatever its Markdown opens with — rendered as :func:`render_markdown` renders
+    the whole, and the number of top-level blocks after it.
+
+    What the inspection card says of a node's ``about`` (ADR-0019): its first
+    paragraph, and how much more the node's page has, so that a type's documentation
+    stays a card and does not become a page. Read off markdown-it's tokens, so a
+    block is what the renderer makes one, a list with its items or a fenced block
+    with its blank lines, and a link reference defined further down still resolves.
+    Text with no block at all is ``("", 0)``."""
+    env: dict[str, Any] = {}
+    blocks: list[list[Token]] = []
+    depth = 0
+    for token in _MD.parse(text, env):
+        if depth == 0:
+            blocks.append([])
+        blocks[-1].append(token)
+        depth += token.nesting
+    if not blocks:
+        return Markup(""), 0
+    return Markup(_MD.renderer.render(blocks[0], _MD.options, env)), len(blocks) - 1

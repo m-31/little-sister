@@ -4,14 +4,19 @@ import re
 from pathlib import Path
 from unittest import TestCase
 
+from little_sister.checks.metadata import Stated
+from little_sister.config import Config
 from little_sister.dashboard_layout import (
     MAX_LAYOUT_TRACKS,
     FlowStep,
+    Priced,
     allocate_spans,
     dashboard_layout,
     flow_profile,
     visible_node_count,
 )
+from little_sister.first_look import FirstLooks, draw
+from little_sister.nodes import NodeMeta
 from little_sister.status import StatusCode
 from little_sister.tree import StatusSnapshot, StatusTree
 
@@ -66,7 +71,7 @@ def _best_legal_page(pieces, width_tenths: int) -> int:
 
 
 class ModelConstantsMirrorTheStylesheetTests(TestCase):
-    """The five layout constants are hand-copied from overview.css; if the
+    """The layout constants are hand-copied from overview.css; if the
     stylesheet moves, this is the red test instead of a slowly wrong layout."""
 
     @classmethod
@@ -90,7 +95,10 @@ class ModelConstantsMirrorTheStylesheetTests(TestCase):
 
     def test_nested_track_and_gap_match_the_node_children_grid(self):
         from little_sister import dashboard_layout as model
-        marker = ".status-card .node-children:has(> .status-node:nth-of-type(2)) {"
+        # two or more direct open nodes establish the nested grid (ADR-0127: an open
+        # node stands directly in its level, a closed one inside a run)
+        marker = (".status-card .node-children:has(> :is(.tree-node, .tree-solo)"
+                  " ~ :is(.tree-node, .tree-solo)) {")
         self.assertIn(marker, self.css)
         rule = self.css.split(marker, 1)[1].split("}", 1)[0]
         match = re.search(r"minmax\(min\(100%, (\d+)px\), 1fr\)", rule)
@@ -99,6 +107,94 @@ class ModelConstantsMirrorTheStylesheetTests(TestCase):
         gap = re.search(r"gap: ([\d.]+)rem", rule)
         assert gap is not None
         self.assertEqual(round(float(gap.group(1)) * 160), model._NESTED_GAP)
+
+    def test_the_chips_column_gap_matches_an_aligned_run(self):
+        from little_sister import dashboard_layout as model
+        rule = self._rule('body[data-ls-chip-runs="aligned"] .tree-run')
+        gap = re.search(r"gap: [\d.]+rem ([\d.]+)rem", rule)
+        assert gap is not None
+        self.assertEqual(round(float(gap.group(1)) * 160), model._CHIP_GAP)
+
+    def test_a_run_asks_its_own_column_how_many_it_holds(self):
+        # A run with room for one column only wraps as it comes (backlog #91's note,
+        # §2, 2026-10-17), and from two on stands in as many as fit, each a query on
+        # the run's own width against its line height — one column and the gap, the
+        # model's — with the stylesheet's fallback column the model's too.
+        from little_sister import dashboard_layout as model
+        rule = self._rule('body[data-ls-chip-runs="aligned"] .tree-run')
+        self.assertIn("container-type: inline-size;", rule)
+        self.assertIn("display: flex;", rule)
+        height = re.search(r"line-height: calc\(var\(--chip-w, (\d+)ch\) \+ "
+                           r"([\d.]+)rem\);", rule)
+        assert height is not None, rule
+        self.assertEqual(int(height.group(1)) * model._CHIP_CH,
+                         model._CHIP_FALLBACK)
+        self.assertEqual(round(float(height.group(2)) * 160), model._CHIP_GAP)
+        # two columns from twice the line height less one gap, each further column a
+        # line height more, up to the most tracks the planner plans
+        two = "@container (width >= calc(2lh - 0.3rem)) {"
+        self.assertIn(two, self.css)
+        node = self.css.split(two, 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("flex: 1 1 var(--chip-w, 12ch);", node)
+        self.assertIn(
+            "max-width: calc((100cqi + 0.3rem) / var(--columns, 2) - 0.3rem);", node)
+        found = [(int(lines), int(columns)) for lines, columns in re.findall(
+            r"@container \(width >= calc\((\d+)lh - 0\.3rem\)\) \{ "
+            r'body\[data-ls-chip-runs="aligned"\] \.tree-run > \.tree-node '
+            r"\{ --columns: (\d+); \} \}", self.css)]
+        self.assertEqual(found,
+                         [(k, k) for k in range(3, model.MAX_LAYOUT_TRACKS + 1)])
+
+    def test_a_chips_estimate_takes_its_anatomy_from_the_stylesheet(self):
+        # The server's estimate of a chip before the script measures it (backlog
+        # #91's note, §2, 2026-10-17): its padding and border, its cue and the cue's
+        # margin, the counts' margin where its level counts, and its font, as the
+        # stylesheet sizes them under the aligned look.
+        from little_sister import dashboard_layout as model
+
+        def alone(selector: str) -> str:
+            marker = "\n" + selector + " {\n"
+            self.assertEqual(self.css.count(marker), 1, selector)
+            return self.css.split(marker, 1)[1].split("}", 1)[0]
+        chip = alone(".tree-chip")
+        padding = re.search(r"padding: 1px (\d+)px;", chip)
+        border = re.search(r"border: (\d+)px solid", chip)
+        size = re.search(r"font-size: ([\d.]+)rem;", chip)
+        assert padding is not None and border is not None and size is not None
+        self.assertEqual(2 * (int(padding.group(1)) + int(border.group(1))),
+                         model.CHIP_EDGE_PX)
+        self.assertEqual(round(float(size.group(1)) * 160), model._CHIP_EM)
+        cue = re.search(r"width: ([\d.]+)em;", alone(".status-cue"))
+        cue_margin = re.search(r"margin-right: ([\d.]+)em;", self._rule(
+            'body[data-ls-chip-runs="aligned"] .tree-chip > .status-cue'))
+        counts = re.search(r"margin-left: ([\d.]+)em;", self._rule(
+            'body[data-ls-chip-runs="aligned"] .tree-chip > .tree-counts'))
+        assert cue is not None and cue_margin is not None and counts is not None
+        self.assertAlmostEqual(float(cue.group(1)) + float(cue_margin.group(1)),
+                               model.CHIP_CUE_EM)
+        self.assertAlmostEqual(float(counts.group(1)), model.CHIP_COUNTS_EM)
+
+    def test_each_themes_letter_is_the_one_the_planner_counts(self):
+        # The estimate's length reads `--ls-chip-letter` (backlog #91's note, §2,
+        # 2026-10-18): the root's for the system's faces, and a theme drawn in a
+        # face of its own restates it in its block — the planner's faces hold the
+        # same letters, theme by theme, and no theme restates one the planner does
+        # not know.
+        from little_sister import dashboard_layout as model
+        root = re.findall(r"^:root \{ --ls-chip-letter: ([\d.]+); \}$", self.css,
+                          re.M)
+        self.assertEqual([float(letter) for letter in root], [model.CHIP_LETTER])
+        self.assertEqual(model.CHIP_FACE.letter, model.CHIP_LETTER)
+        themed = {}
+        for theme, block in re.findall(
+                r'^body\[data-ls-theme="([a-z]+)"\] \{\n(.*?)^\}', self.css,
+                re.M | re.S):
+            letter = re.search(r"--ls-chip-letter: ([\d.]+);", block)
+            if letter is not None:
+                themed[theme] = float(letter.group(1))
+        self.assertEqual(themed, {theme: face.letter
+                                  for theme, face in model.CHIP_FACES.items()})
+        self.assertEqual(themed, {"cyberpunk": 1.0})
 
     def test_card_inset_matches_the_card_padding(self):
         from little_sister import dashboard_layout as model
@@ -719,10 +815,9 @@ class DashboardLayoutTests(TestCase):
         root = _deep_branch_root()
         cost = model._reason_cost(6)
         expected = model._height_pieces(root.children[0], 7, cost)
-        with mock.patch.object(
-                model, "_flow_height",
-                side_effect=AssertionError(
-                    "_height_pieces walked the subtree again")):
+        walked = AssertionError("_height_pieces walked the subtree again")
+        with mock.patch.object(model, "_flow_height", side_effect=walked), \
+                mock.patch.object(model, "_shape_height", side_effect=walked):
             self.assertEqual(
                 model._height_pieces(root.children[0], 7, cost), expected)
 
@@ -746,3 +841,264 @@ class DashboardLayoutTests(TestCase):
         self.assertIsNot(
             first,
             dashboard_layout(_snapshot(calm, "").children, 8, reason_cap=30))
+
+
+def _card(tree: StatusTree, path: str) -> StatusSnapshot:
+    node = tree.snapshot(path)
+    assert node is not None
+    return node
+
+
+class FirstLookPricingTests(TestCase):
+    """The planner prices the page's first look (ADR-0128 decision 6): a closed node
+    a chip in its level's run, each run its lines of chips at the level's width, a
+    closed top-level card one row, and each node's own line budget — never a status,
+    so what the failure budget opens moves no card."""
+
+    def setUp(self):
+        from little_sister import dashboard_layout as model
+        self.model = model
+        model._memo.clear()
+
+    def test_a_chip_is_estimated_at_its_characters_and_its_chrome(self):
+        # each character of a name and a count at 0.85 of a `0`, seven pixels; the
+        # padding and border, 20 pixels; the cue and its margin, 1.15 em of the
+        # chip's 12.8 pixels, and the counts' margin, half an em, where they stand
+        from little_sister.dashboard_layout import (
+            CHIP_FACE,
+            chip_estimate,
+            chip_face,
+            chip_width,
+        )
+        self.assertEqual(chip_width(10, counts=False), round(10 * 59.5 + 200 + 147.2))
+        self.assertEqual(chip_width(10, counts=True), round(10 * 59.5 + 200 + 211.2))
+        self.assertEqual(chip_width(0, counts=False), 347)
+        # in cyberpunk's monospace face each character is a whole `0` of 0.6 em,
+        # 7.7 pixels (2026-10-18); every other theme draws in the system's faces
+        mono = chip_face("cyberpunk")
+        self.assertEqual(chip_width(10, counts=False, face=mono),
+                         round(10 * 77 + 200 + 147.2))
+        for theme in ("auto", "plain", "vivid", "pastel", "dark", "no such"):
+            with self.subTest(theme=theme):
+                self.assertEqual(chip_face(theme), CHIP_FACE)
+        # and the same as the stylesheet's length, which the run's font resolves at
+        # the theme's letter
+        self.assertEqual(chip_estimate(10, counts=False),
+                         "calc(10 * var(--ls-chip-letter) * 1ch + 20px + 1.15em)")
+        self.assertEqual(chip_estimate(9, counts=True),
+                         "calc(9 * var(--ls-chip-letter) * 1ch + 20px + 1.65em)")
+
+    def test_a_closed_top_level_card_is_one_row(self):
+        tree = StatusTree()
+        for leaf in ("a", "b", "c", "d"):
+            tree.upsert(f"/one/{leaf}", StatusCode.OK)
+            tree.upsert(f"/two/{leaf}", StatusCode.OK)
+        roots = _snapshot(tree, "").children
+        self.assertEqual(dashboard_layout(roots, 8).weights, (5, 5))
+        layout = dashboard_layout(roots, 8, priced=Priced(closed=frozenset({"/one"})))
+        self.assertEqual(layout.weights, (1, 5))
+
+    def test_closed_children_are_a_run_of_chips_and_nothing_beneath_is_priced(self):
+        tree = StatusTree()
+        for leaf in ("a", "b", "c", "d"):
+            for deep in ("x", "y", "z"):
+                tree.upsert(f"/card/{leaf}/{deep}", StatusCode.OK)
+        card = _card(tree, "card")
+        kids = frozenset(child.path for child in card.children)
+        width = 3300                      # one ordinary track's content
+        open_rows = self.model._flow_height(card, 7, width, 1)
+        self.assertEqual(open_rows, 1 + 4 * 4)
+        # four chips of eight characters share one line at that width
+        priced = Priced(closed=kids, chip_w={"/card": 8 * self.model._CHIP_CH})
+        self.assertEqual(self.model._flow_height(card, 7, width, 1, priced), 1 + 1)
+
+    def test_a_run_takes_a_heading_row_for_each_line_of_chips(self):
+        tree = StatusTree()
+        for leaf in ("a", "b", "c", "d", "e"):
+            tree.upsert(f"/card/{leaf}", StatusCode.OK)
+        card = _card(tree, "card")
+        priced = Priced(closed=frozenset(child.path for child in card.children),
+                        chip_w={"/card": 10 * self.model._CHIP_CH})
+        chip = 10 * self.model._CHIP_CH + self.model._CHIP_GAP
+        for per_line, lines in ((1, 5), (2, 3), (4, 2), (5, 1)):
+            width = per_line * chip - self.model._CHIP_GAP
+            with self.subTest(per_line=per_line):
+                self.assertEqual(
+                    self.model._flow_height(card, 7, width, 1, priced), 1 + lines)
+                # a tenth narrower, one chip fewer to a line
+                self.assertEqual(
+                    self.model._flow_height(card, 7, width - 1, 1, priced),
+                    1 + -(-5 // max(1, per_line - 1)))
+
+    def test_a_run_that_holds_one_column_wraps_as_it_comes(self):
+        # Below two of its level's columns and their gap a run draws its chips at
+        # their own widths, sharing lines (backlog #91's note, §2, 2026-10-17): eight
+        # names of seven characters with their chips' room and two of thirty-four,
+        # in a level whose columns are thirty-four wide. Each chip takes its own
+        # width and the gap after it; a line holds what fits.
+        tree = StatusTree()
+        names = [f"dock_{letter}" for letter in "abcdefgh"] + ["quay_1", "quay_2"]
+        for name in names:
+            tree.upsert(f"/card/{name}", StatusCode.OK)
+        card = _card(tree, "card")
+        ch = self.model._CHIP_CH
+        own = {f"/card/{name}": (34 if name.startswith("quay") else 7) * ch
+               for name in names}
+        priced = Priced(closed=frozenset(own), chip_w={"/card": 34 * ch}, chip_own=own)
+        bound = 2 * 34 * self.model._CHIP_CH + self.model._CHIP_GAP
+        # at 400 pixels: seven docks, then the eighth and a quay, then a quay
+        self.assertEqual(self.model._flow_height(card, 7, 4000, 1, priced), 1 + 3)
+        # from two columns on, the level's columns line the run up as before, two
+        # to a line; a tenth short of them, eight docks, a quay and a quay
+        self.assertEqual(self.model._flow_height(card, 7, bound, 1, priced), 1 + 5)
+        self.assertEqual(
+            self.model._flow_height(card, 7, bound - 1, 1, priced), 1 + 3)
+        # and a chip whose own width is not given is as wide as its column
+        without = Priced(closed=frozenset(own), chip_w={"/card": 34 * ch})
+        self.assertEqual(self.model._flow_height(card, 7, 4000, 1, without), 1 + 10)
+
+    def test_a_line_of_chips_is_full_where_their_widths_and_gaps_are(self):
+        tree = StatusTree()
+        for name in ("a", "b", "c", "d"):
+            tree.upsert(f"/card/{name}", StatusCode.OK)
+        card = _card(tree, "card")
+        ch = self.model._CHIP_CH
+        own = {f"/card/{name}": 10 * ch for name in ("a", "b", "c", "d")}
+        priced = Priced(closed=frozenset(own), chip_w={"/card": 40 * ch}, chip_own=own)
+        chip = 10 * self.model._CHIP_CH + self.model._CHIP_GAP
+        # each chip's own width and the gap after it: four fit at exactly that
+        # much, a tenth less leaves the fourth for a line of its own
+        for per_line, lines in ((4, 1), (3, 2), (2, 2), (1, 4)):
+            with self.subTest(per_line=per_line):
+                self.assertEqual(self.model._flow_height(
+                    card, 7, per_line * chip, 1, priced), 1 + lines)
+        self.assertEqual(self.model._flow_height(card, 7, 4 * chip - 1, 1, priced),
+                         1 + 2)
+        self.assertEqual(self.model._flow_height(card, 7, 2 * chip - 1, 1, priced),
+                         1 + 4)
+
+    def test_boxes_beside_a_run_keep_every_track_that_fits(self):
+        # A run spans every track of its level, so none is empty and the boxes
+        # beside it keep the width of all the tracks that fit (measured in
+        # Chromium): at four tracks two boxes each take a quarter, where without
+        # the run they take half each.
+        def card(beside: bool) -> StatusSnapshot:
+            tree = StatusTree()
+            for box in ("a", "b"):
+                for leaf in ("x", "y"):
+                    tree.upsert(f"/card/{box}/{leaf}", StatusCode.OK)
+            if beside:
+                tree.upsert("/card/c", StatusCode.OK)
+            return _card(tree, "card")
+        # wide enough for two boxes of two tracks each, and so for four tracks
+        width = 2 * (2 * 3364 - 64 + 180) + 64
+        self.assertEqual(self.model._nested_columns(width, 2), 2)
+        self.assertEqual(self.model._nested_columns(width, 2, runs=True), 4)
+        # alone, each box holds its two leaves side by side; beside the run each
+        # box is one track wide and they stack, and the run is a line of its own
+        alone = self.model._flow_height(card(False), 7, width, 1)
+        beside = self.model._flow_height(card(True), 7, width, 1,
+                                         Priced(closed=frozenset({"/card/c"})))
+        self.assertEqual(alone, 1 + 2)
+        self.assertEqual(beside, 1 + 3 + 1)
+
+    def test_each_node_is_priced_at_its_own_line_budget(self):
+        tree = StatusTree()
+        tree.upsert("/card/a", StatusCode.OK)
+        tree.upsert("/card/b", StatusCode.OK)
+        roots = _snapshot(tree, "").children
+        self.assertEqual(dashboard_layout(roots, 8).weights, (3,))
+        priced = Priced(caps={"/card/a": 30})
+        self.assertEqual(dashboard_layout(roots, 8, priced=priced).weights, (7,))
+
+    def test_what_a_status_opens_or_closes_is_never_priced(self):
+        # the failure budget's openings, and today's density, which closes a
+        # quiet leaf by its status: the planner reads the configured look alone
+        def wall(failing: bool):
+            tree = StatusTree()
+            for leaf in ("a", "b", "c", "d"):
+                tree.upsert(f"/card/svc/{leaf}", StatusCode.OK, "in step")
+            tree.upsert("/plain/x/one", StatusCode.OK)
+            if failing:
+                tree.upsert("/card/svc/b", StatusCode.ERROR, "down")
+                tree.upsert("/plain/x/one", StatusCode.ERROR, "down")
+            root = _snapshot(tree, "")
+            looks = FirstLooks((), {"/card/svc": NodeMeta(look=Stated(chips=True))},
+                               Config(), lambda _path: False)
+            drawn = draw(root, looks)
+            return root, drawn
+        calm, calm_drawn = wall(failing=False)
+        hot, hot_drawn = wall(failing=True)
+        self.assertIn("/card/svc/b", hot_drawn.budget)
+        self.assertIn("/plain/x/one", calm_drawn.closed)    # the density's chip
+        self.assertEqual(calm_drawn.priced, hot_drawn.priced)
+        priced = Priced(closed=calm_drawn.priced, chip_w={"/card/svc": 420})
+        self.assertEqual(
+            dashboard_layout(calm.children, 8, priced=priced).breakpoints,
+            dashboard_layout(hot.children, 8, priced=Priced(
+                closed=hot_drawn.priced, chip_w={"/card/svc": 420})).breakpoints)
+
+    def test_the_memo_is_keyed_on_what_the_look_closes_and_costs(self):
+        tree = StatusTree()
+        for leaf in ("a", "b", "c"):
+            tree.upsert(f"/card/{leaf}", StatusCode.OK)
+        roots = _snapshot(tree, "").children
+        priced = Priced(closed=frozenset({"/card/a"}), chip_w={"/card": 280})
+        first = dashboard_layout(roots, 8, priced=priced)
+        self.assertIs(first, dashboard_layout(roots, 8, priced=Priced(
+            closed=frozenset({"/card/a"}), chip_w={"/card": 280})))
+        self.assertIsNot(first, dashboard_layout(roots, 8))
+        self.assertIsNot(first, dashboard_layout(roots, 8, priced=Priced(
+            closed=frozenset({"/card/a"}), chip_w={"/card": 2800})))
+        self.assertIsNot(first, dashboard_layout(roots, 8, priced=Priced(
+            closed=frozenset({"/card/a"}), chip_w={"/card": 280},
+            caps={"/card/b": 30})))
+        self.assertIsNot(first, dashboard_layout(roots, 8, priced=Priced(
+            closed=frozenset({"/card/a"}), chip_w={"/card": 280},
+            chip_own={"/card/a": 210})))
+
+    def test_bottom_up_pieces_match_the_reference_with_closed_levels(self):
+        # the same differential as the open wall's, over seeded walls whose
+        # levels mix runs and boxes at every depth, each box its own budget
+        import random
+        rng = random.Random(20261017)
+        for trial in range(10):
+            tree = StatusTree()
+            for index in range(rng.randint(1, 4)):
+                for child in range(rng.randint(1, 9)):
+                    for grand in range(rng.randint(0, 5)):
+                        chain = "".join(f"/e{level}"
+                                        for level in range(rng.randint(0, 2)))
+                        tree.upsert(f"/t{index}/c{child}/g{grand}{chain}",
+                                    StatusCode.OK)
+                    if not rng.randint(0, 3):
+                        tree.upsert(f"/t{index}/c{child}", StatusCode.OK)
+            root = _snapshot(tree, "")
+            paths: list[str] = []
+
+            def walk(node, paths=paths):
+                for kid in node.children:
+                    paths.append(kid.path)
+                    walk(kid)
+            walk(root)
+            closed = frozenset(path for path in paths
+                               if path.count("/") > 1 and rng.random() < 0.4)
+            priced = Priced(
+                closed=closed,
+                caps={path: rng.choice((0, 6, 12, 30)) for path in paths
+                      if rng.random() < 0.3},
+                chip_w={path: rng.randint(300, 3000) for path in paths},
+                chip_own={path: rng.randint(250, 4500) for path in closed
+                          if rng.random() < 0.9})
+            for node in root.children:
+                pieces = self.model._height_pieces(node, 7, 1, priced)
+                probes = {bound for bound, _height in pieces}
+                probes |= {bound - 1 for bound in probes if bound > 1}
+                probes |= set(range(1, self.model._MAX_CONTENT_WIDTH, 7919))
+                # and finely where a run that holds one column wraps its chips
+                probes |= set(range(1, 9000, 37))
+                for width in sorted(probes):
+                    with self.subTest(trial=trial, node=node.name, width=width):
+                        self.assertEqual(
+                            self.model._piece_height(pieces, width),
+                            self.model._flow_height(node, 7, width, 1, priced))

@@ -9,16 +9,26 @@ painting never participate, so polling cannot make a root jump between columns.
 
 Widths are modeled **and published** in integer tenths of a pixel; the client
 compares them against ``width * 10``, so no band is late against a browser's
-fractional width.  The five layout constants mirror ``static/css/overview.css``
-and are pinned to it by a structural test, so the stylesheet cannot drift away
-from the model silently.
+fractional width.  The layout constants mirror ``static/css/overview.css`` and
+are pinned to it by a structural test, so the stylesheet cannot drift away from
+the model silently.
+
+The shape priced is the page's **first look** (ADR-0128 decision 6), as the
+configuration draws it and never as a status or a click does: an open node is
+the box it always was, a closed one a chip in its level's run, each run as many
+heading rows as it has lines of chips at the level's width, and a closed
+top-level card one row (:class:`Priced`).  Nothing beneath a chip is priced.
+A run in a level narrower than two of its columns and their gap wraps as it
+comes (backlog #91's note, §2, 2026-10-17), each chip at its own width — the
+model's column the server's estimate, where the stylesheet's is the column the
+browser draws.
 """
 
 from __future__ import annotations
 
 from bisect import bisect_right
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Iterator, Mapping, Sequence
+from dataclasses import dataclass, field
 from itertools import pairwise
 
 from little_sister.config import DEFAULT_REASON_CAP
@@ -57,6 +67,101 @@ _MAX_CHOSEN_TRACK = 2 * _TRACK_WIDTH + _OUTER_GAP
 # No card content can be wider than the full grid; content-width thresholds
 # beyond this can never be reached and are dropped early.
 _MAX_CONTENT_WIDTH = _MAX_GRID_WIDTH
+
+# A run of chips (ADR-0127 decision 12): the column gap between its chips,
+# 0.3rem, as overview.css's aligned runs have it; and a chip as the server
+# estimates it before the script measures it (backlog #91's note, §2, 2026-10-17),
+# which the model needs only to tell how many chips share a line, and below two
+# columns where the run wraps as it comes. Each character of its name and its
+# count is ``CHIP_LETTER`` of a ``0`` of the chip's font — a font's measure and no
+# stylesheet's, a ``0`` of about 0.55em of the chip's 0.8rem in the system faces
+# the page names, ``_CHIP_CH`` — and its chrome is the stylesheet's: its padding
+# and border, ``CHIP_EDGE_PX``, its cue and the cue's margin, ``CHIP_CUE_EM``, and
+# where its level counts the counts' margin, ``CHIP_COUNTS_EM``, in ems of that
+# font, ``_CHIP_EM``. A theme drawn in a face of its own says how wide its
+# characters stand (:data:`CHIP_FACES`, 2026-10-18). A level whose estimate is
+# missing takes the stylesheet's fallback, ``12ch``.
+_CHIP_GAP = 48
+_CHIP_CH = 70
+_CHIP_EM = 128
+CHIP_LETTER = 0.85
+CHIP_EDGE_PX = 20
+CHIP_CUE_EM = 1.15
+CHIP_COUNTS_EM = 0.5
+_CHIP_FALLBACK = 12 * _CHIP_CH
+
+
+@dataclass(frozen=True)
+class ChipFace:
+    """How wide a chip's characters stand in a theme's face, as the estimate counts
+    them: each at ``letter`` of a ``0`` of the chip's font — the stylesheet's
+    ``--ls-chip-letter`` in that theme, which the estimate's length reads — and the
+    ``0`` itself ``zero`` tenths of a pixel at the chip's 0.8rem, the font's own
+    measure."""
+
+    letter: float
+    zero: int
+
+
+#: The system's proportional faces, every theme's but those named below: a name's
+#: letters run at 0.6 to 0.9 of a ``0``, and a ``0`` is about 0.55em.
+CHIP_FACE = ChipFace(CHIP_LETTER, _CHIP_CH)
+#: The themes drawn in a face of their own (backlog #91's note, §2, 2026-10-18):
+#: cyberpunk's monospace one, where every character is a whole ``0`` of 0.6em.
+CHIP_FACES: Mapping[str, ChipFace] = {"cyberpunk": ChipFace(1.0, 77)}
+
+
+def chip_face(theme: str) -> ChipFace:
+    """The face the chips of ``theme`` are drawn in: its own, or the system's."""
+    return CHIP_FACES.get(theme, CHIP_FACE)
+
+
+def _chip_ems(counts: bool) -> float:
+    return CHIP_CUE_EM + (CHIP_COUNTS_EM if counts else 0.0)
+
+
+def chip_width(chars: int, counts: bool, face: ChipFace = CHIP_FACE) -> int:
+    """A chip's width as the server estimates it, in the model's tenths of a pixel:
+    ``chars`` characters of its name and its count at the ``face``'s letter of its
+    ``0``, and its chrome — its padding and border, its cue, and where ``counts`` the
+    counts' margin."""
+    return round(chars * face.letter * face.zero + CHIP_EDGE_PX * 10
+                 + _chip_ems(counts) * _CHIP_EM)
+
+
+def chip_estimate(chars: int, counts: bool) -> str:
+    """The same estimate as a length of the stylesheet's, a level's ``--chip-w``
+    before the script measures it, which the run's font — the chip's — resolves:
+    each character at the theme's ``--ls-chip-letter`` of a ``ch``."""
+    return (f"calc({chars} * var(--ls-chip-letter) * 1ch + {CHIP_EDGE_PX}px"
+            f" + {_chip_ems(counts):g}em)")
+
+
+@dataclass(frozen=True)
+class Priced:
+    """What the planner prices of a page's first look beside its shape (ADR-0128
+    decision 6), none of it read off a status: the nodes the configuration closes
+    — a ``depth=`` level among them — each node's line budget where it has its
+    own, by a level's node the server's estimate of its chips' column width,
+    ``--chip-w`` (ADR-0127 decision 12), and by a closed node its chip at its own
+    width, which a run that holds one column wraps by — both in tenths of a pixel
+    (:func:`chip_width`), a chip not named there as wide as its level's column. A
+    closed top-level card is one row and a closed node beneath it a chip in its
+    level's run; what the failure budget opens and what ✓ folds are never priced,
+    so no status moves a card."""
+
+    closed: frozenset[str] = frozenset()
+    caps: Mapping[str, int] = field(default_factory=dict)
+    chip_w: Mapping[str, int] = field(default_factory=dict)
+    chip_own: Mapping[str, int] = field(default_factory=dict)
+
+
+#: A node as the model reads it: its stable cost, its level's chip column width
+#: in tenths where a run stands among its children (else ``0``), its children's
+#: shapes in their declared order, ``None`` for a closed one — a chip, beneath
+#: which nothing is priced — and those chips' own widths in tenths, in the same
+#: order.
+_Shape = tuple[int, int, tuple["_Shape | None", ...], tuple[int, ...]]
 
 
 @dataclass(frozen=True)
@@ -120,47 +225,145 @@ def visible_node_count(node: StatusSnapshot, remaining_depth: int) -> int:
     )
 
 
-def _nested_columns(width: int, child_count: int) -> int:
+def _shape(node: StatusSnapshot, remaining_depth: int, reason_cost: int,
+           priced: Priced | None = None) -> _Shape:
+    """The depth-limited shape of ``node``'s subtree as the model prices it.
+
+    Its cost scales only with the line budget — the node's own, where the first
+    look gives it one, else ``reason_cost`` — and never with its current lines.
+    A child the first look closes is a chip, its subtree unpriced; the chips'
+    column width is the level's estimate from the names of all its children,
+    which reads no status either.
+    """
+    cost = reason_cost
+    if priced is not None and node.path in priced.caps:
+        cost = _reason_cost(priced.caps[node.path])
+    if remaining_depth <= 0 or not node.children:
+        return (cost, 0, (), ())
+    closed = priced.closed if priced is not None else frozenset()
+    kids = tuple(
+        None if child.path in closed
+        else _shape(child, remaining_depth - 1, reason_cost, priced)
+        for child in node.children
+    )
+    chip_w = 0
+    own: tuple[int, ...] = ()
+    if None in kids:
+        chip_w = (priced.chip_w.get(node.path, _CHIP_FALLBACK)
+                  if priced is not None else _CHIP_FALLBACK)
+        owns = priced.chip_own if priced is not None else {}
+        own = tuple(owns.get(child.path, chip_w)
+                    for child, kid in zip(node.children, kids, strict=True)
+                    if kid is None)
+    return (cost, chip_w, kids, own)
+
+
+def _nested_columns(width: int, child_count: int, runs: bool = False) -> int:
+    """The tracks a level's open boxes stand in at ``width``.
+
+    Two or more open boxes make the level a grid of auto-fit 330px tracks, which
+    drops its empty tracks — unless a run of chips spans the row: a run spans
+    every track, so none is empty, and the boxes keep the width of all the tracks
+    that fit, however few of them they fill (measured in Chromium: two boxes
+    beside a run at 1,400 pixels each take a quarter of the level).
+    """
     if child_count < 2:
         return 1
     fitting = (
         (width + _NESTED_GAP + _COLUMN_TOLERANCE)
         // (_TRACK_WIDTH + _NESTED_GAP)
     )
-    return min(child_count, max(1, fitting))
+    return max(1, fitting) if runs else min(child_count, max(1, fitting))
+
+
+def _run_lines(chips: Sequence[int], chip_w: int, width: int) -> int:
+    """The lines a run takes at a level ``width`` wide, ``chips`` its chips' own
+    widths: as many to a line as columns of ``chip_w`` fit, from two on; below
+    two, the run wraps as it comes (backlog #91's note, §2, 2026-10-17) — each chip
+    at its own width with the gap after it, a line holding what fits and a chip
+    wider than the level a line of its own."""
+    per_line = (width + _CHIP_GAP) // (chip_w + _CHIP_GAP)
+    if per_line >= 2:
+        return -(-len(chips) // per_line)
+    lines = 0
+    used = width
+    for own in chips:
+        needs = own + _CHIP_GAP
+        if used + needs > width:
+            lines += 1
+            used = needs
+        else:
+            used += needs
+    return lines
+
+
+def _level_rows(kids: Sequence[_Shape | None], heights: Iterator[int],
+                columns: int, chip_w: int, width: int,
+                own: Sequence[int] = ()) -> int:
+    """The rows a level costs: its open boxes, ``heights`` in their order,
+    chunked into rows of ``columns`` between its runs — a row as tall as its
+    tallest box — and each run its lines of chips, where it stands, ``own`` its
+    chips' own widths in order (each as wide as the column where it is short)."""
+    rows = 0
+    boxes: list[int] = []
+    chips: list[int] = []
+    widths = iter(own)
+
+    def boxes_rows() -> int:
+        return sum(max(boxes[start:start + columns])
+                   for start in range(0, len(boxes), columns))
+
+    for kid in kids:
+        if kid is None:
+            if boxes:
+                rows += boxes_rows()
+                boxes = []
+            chips.append(next(widths, chip_w))
+            continue
+        if chips:
+            rows += _run_lines(chips, chip_w, width)
+            chips = []
+        boxes.append(next(heights))
+    if chips:
+        rows += _run_lines(chips, chip_w, width)
+    if boxes:
+        rows += boxes_rows()
+    return rows
+
+
+def _shape_height(shape: _Shape | None, width: int) -> int:
+    """Stable vertical flow rows for one shape at ``width``: the straight-line
+    reference evaluation, re-walking the subtree at every width."""
+    if shape is None:
+        return 1
+    cost, chip_w, kids, own = shape
+    if not kids:
+        return cost
+    boxes = [kid for kid in kids if kid is not None]
+    columns = _nested_columns(width, len(boxes), len(boxes) < len(kids))
+    child_width = max(
+        1,
+        (width - _NESTED_GAP * (columns - 1)) // columns - _NODE_INSET,
+    )
+    heights = iter([_shape_height(box, child_width) for box in boxes])
+    return cost + _level_rows(kids, heights, columns, chip_w, width, own)
 
 
 def _flow_height(node: StatusSnapshot, remaining_depth: int, width: int,
-                 reason_cost: int) -> int:
+                 reason_cost: int, priced: Priced | None = None) -> int:
     """Estimate stable vertical flow rows for ``node`` at ``width``.
 
     Every visible node owns a heading and can own a reason block, so its stable
     cost scales only with the configured reason-line cap; it never inspects
     current reason count or text.  Siblings share rows once the CSS can fit
-    another ordinary nested column, and a row costs its tallest branch.
+    another ordinary nested column, and a row costs its tallest branch; a run of
+    chips costs its lines.
     """
-    if remaining_depth <= 0 or not node.children:
-        return reason_cost
-
-    columns = _nested_columns(width, len(node.children))
-    child_width = max(
-        1,
-        (width - _NESTED_GAP * (columns - 1)) // columns - _NODE_INSET,
-    )
-    children = [
-        _flow_height(child, remaining_depth - 1, child_width, reason_cost)
-        for child in node.children
-    ]
-    rows = sum(
-        max(children[start:start + columns])
-        for start in range(0, len(children), columns)
-    )
-    return reason_cost + rows
+    return _shape_height(_shape(node, remaining_depth, reason_cost, priced), width)
 
 
-def _height_pieces(node: StatusSnapshot, remaining_depth: int,
-                   reason_cost: int) -> tuple[tuple[int, int], ...]:
-    """The subtree's modeled height as ``(from_width, height)`` pieces.
+def _shape_pieces(shape: _Shape | None) -> tuple[tuple[int, int], ...]:
+    """A shape's modeled height as ``(from_width, height)`` pieces.
 
     Built bottom-up: each node combines its **children's pieces** instead of
     re-walking its whole subtree at every threshold, so a node's work is
@@ -170,20 +373,24 @@ def _height_pieces(node: StatusSnapshot, remaining_depth: int,
     at ten thousand — a per-poll price for merely deep deployments.)
 
     A node's height can change where its own nested column count flips —
-    ``k`` ordinary tracks first fit — and where a child's height changes,
-    mapped back through the exact integer arithmetic the width division
-    uses.  The union is a superset of the true change points, which is all
-    correctness needs: a spurious threshold merges away as an equal piece.
-    ``_flow_height`` remains the straight-line reference implementation; a
+    ``k`` ordinary tracks first fit, every count that can while a run holds the
+    level's tracks — where a run's chips per line change, below two columns where
+    a stretch of a run's chips first fits on one line, and where a child's
+    height changes, mapped back through the exact integer arithmetic the width
+    division uses.  The union is a superset of the true change points, which is
+    all correctness needs: a spurious threshold merges away as an equal piece.
+    ``_shape_height`` remains the straight-line reference implementation; a
     differential test holds the two together.
     """
-    if remaining_depth <= 0 or not node.children:
-        return ((1, reason_cost),)
+    if shape is None:
+        return ((1, 1),)
+    cost, chip_w, kids, own = shape
+    if not kids:
+        return ((1, cost),)
 
-    child_pieces = [
-        _height_pieces(child, remaining_depth - 1, reason_cost)
-        for child in node.children
-    ]
+    boxes = [kid for kid in kids if kid is not None]
+    runs = len(boxes) < len(kids)
+    child_pieces = [_shape_pieces(box) for box in boxes]
     child_bounds = sorted({
         bound
         for pieces in child_pieces
@@ -191,7 +398,10 @@ def _height_pieces(node: StatusSnapshot, remaining_depth: int,
     })
 
     thresholds: set[int] = {1}
-    for columns in range(1, min(len(node.children), MAX_LAYOUT_TRACKS) + 1):
+    most = (0 if len(boxes) < 2
+            else MAX_LAYOUT_TRACKS if runs
+            else min(len(boxes), MAX_LAYOUT_TRACKS))
+    for columns in range(1, max(1, most) + 1):
         if columns >= 2:
             flip = (columns * (_TRACK_WIDTH + _NESTED_GAP)
                     - _NESTED_GAP - _COLUMN_TOLERANCE)
@@ -202,25 +412,57 @@ def _height_pieces(node: StatusSnapshot, remaining_depth: int,
             mapped = columns * (bound + _NODE_INSET) + gap_total
             if 1 < mapped <= _MAX_CONTENT_WIDTH:
                 thresholds.add(mapped)
+    chip_runs: list[list[int]] = []
+    widths = iter(own)
+    chips: list[int] = []
+    for kid in kids:
+        if kid is None:
+            chips.append(next(widths, chip_w))
+        elif chips:
+            chip_runs.append(chips)
+            chips = []
+    if chips:
+        chip_runs.append(chips)
+    longest = max((len(run) for run in chip_runs), default=0)
+    for per_line in range(2, longest + 1):
+        reach = per_line * (chip_w + _CHIP_GAP) - _CHIP_GAP
+        if 1 < reach <= _MAX_CONTENT_WIDTH:
+            thresholds.add(reach)
+    # below two columns a run wraps as it comes: its lines change where a stretch
+    # of its chips, each with the gap after it, first fits on one
+    bound = 2 * chip_w + _CHIP_GAP
+    for run in chip_runs:
+        for start, first in enumerate(run):
+            reach = first + _CHIP_GAP
+            for own_width in run[start + 1:]:
+                reach += own_width + _CHIP_GAP
+                if reach >= bound:
+                    break
+                if 1 < reach <= _MAX_CONTENT_WIDTH:
+                    thresholds.add(reach)
 
     pieces: list[tuple[int, int]] = []
     for width in sorted(thresholds):
-        columns = _nested_columns(width, len(node.children))
+        columns = _nested_columns(width, len(boxes), runs)
         child_width = max(
             1,
             (width - _NESTED_GAP * (columns - 1)) // columns - _NODE_INSET,
         )
-        heights = [
-            _piece_height(child, child_width) for child in child_pieces
-        ]
-        rows = sum(
-            max(heights[start:start + columns])
-            for start in range(0, len(heights), columns)
-        )
-        height = reason_cost + rows
+        heights = iter([_piece_height(child, child_width)
+                        for child in child_pieces])
+        height = cost + _level_rows(kids, heights, columns, chip_w, width, own)
         if not pieces or pieces[-1][1] != height:
             pieces.append((width, height))
     return tuple(pieces)
+
+
+def _height_pieces(node: StatusSnapshot, remaining_depth: int,
+                   reason_cost: int,
+                   priced: Priced | None = None) -> tuple[tuple[int, int], ...]:
+    """The subtree's modeled height as ``(from_width, height)`` pieces
+    (:func:`_shape_pieces`), the node itself never closed: a closed top-level
+    card is priced by :func:`dashboard_layout`."""
+    return _shape_pieces(_shape(node, remaining_depth, reason_cost, priced))
 
 
 def _piece_height(pieces: Sequence[tuple[int, int]], width: int) -> int:
@@ -276,7 +518,8 @@ def _profile_at(pieces: Sequence[tuple[int, int]], grid_width: int,
 
 
 def flow_profile(node: StatusSnapshot, remaining_depth: int, reason_cap: int,
-                 max_span: int = MAX_LAYOUT_TRACKS) -> FlowProfile:
+                 max_span: int = MAX_LAYOUT_TRACKS,
+                 priced: Priced | None = None) -> FlowProfile:
     """The useful span steps at the 330px track minimum, for diagnostics.
 
     The published breakpoints price each width band exactly; this fixed-width
@@ -285,7 +528,8 @@ def flow_profile(node: StatusSnapshot, remaining_depth: int, reason_cap: int,
     """
     if max_span < 1:
         raise ValueError("max_span must be at least 1")
-    pieces = _height_pieces(node, remaining_depth, _reason_cost(reason_cap))
+    pieces = _height_pieces(node, remaining_depth, _reason_cost(reason_cap),
+                            priced)
     return _profile_at(pieces, _grid_start(max_span), max_span)
 
 
@@ -541,42 +785,36 @@ def _plan_breakpoints(
     return tuple(breakpoints)
 
 
-_Shape = tuple["_Shape", ...]
-
-
-def _shape(node: StatusSnapshot, remaining_depth: int) -> _Shape:
-    """The depth-limited tree shape — the only thing the layout reads."""
-    if remaining_depth <= 0:
-        return ()
-    return tuple(
-        _shape(child, remaining_depth - 1) for child in node.children
-    )
-
-
 # Every number in a DashboardLayout is a pure function of the depth-limited
-# tree *shape* and the reason budget — names, statuses and reasons never
-# enter — so one memo entry serves every poll until the topology, the view
-# depth or the configured budget actually changes.  A handful of entries
-# covers the depth control's values; the cap only guards against a
-# pathological churn of node sets.  Entries are immutable, so the worst a
-# concurrent render can do is compute one twice.
+# tree *shape* — each node's stable cost, which children the first look closes
+# and each level's chip width — so names, statuses and reasons never enter, and
+# one memo entry serves every poll until the topology, the view depth or what
+# the configuration says actually changes.  A handful of entries covers the
+# depth control's values; the cap only guards against a pathological churn of
+# node sets.  Entries are immutable, so the worst a concurrent render can do is
+# compute one twice.
 _MEMO_CAP = 16
-_memo: dict[tuple[int, int, tuple[_Shape, ...]], DashboardLayout] = {}
+_memo: dict[tuple[_Shape | None, ...], DashboardLayout] = {}
 
 
 def dashboard_layout(nodes: Sequence[StatusSnapshot], max_depth: int,
-                     reason_cap: int = DEFAULT_REASON_CAP) -> DashboardLayout:
-    """Build stable flow pieces, diagnostic plans and width breakpoints."""
+                     reason_cap: int = DEFAULT_REASON_CAP,
+                     priced: Priced | None = None) -> DashboardLayout:
+    """Build stable flow pieces, diagnostic plans and width breakpoints for the
+    page's top-level cards, ``nodes``, as its first look draws them (``priced``,
+    every node open where it is ``None``)."""
     remaining_depth = max(0, max_depth - 1)
-    key = (remaining_depth, reason_cap,
-           tuple(_shape(node, remaining_depth) for node in nodes))
+    cost = _reason_cost(reason_cap)
+    closed = priced.closed if priced is not None else frozenset()
+    key = tuple(
+        None if node.path in closed
+        else _shape(node, remaining_depth, cost, priced)
+        for node in nodes
+    )
     cached = _memo.get(key)
     if cached is not None:
         return cached
-    cost = _reason_cost(reason_cap)
-    pieces_per_root = tuple(
-        _height_pieces(node, remaining_depth, cost) for node in nodes
-    )
+    pieces_per_root = tuple(_shape_pieces(shape) for shape in key)
     weights = tuple(
         _piece_height(pieces, _span_width(_TRACK_WIDTH, 1, 1))
         for pieces in pieces_per_root

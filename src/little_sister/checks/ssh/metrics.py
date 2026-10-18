@@ -4,7 +4,8 @@ The deliberate **public** API shared by the SSH-script checks (the system
 ``ssh`` metrics check and ``qnap``) — replacing the underscore back-door they used
 to import from each other. ``parse_metrics`` turns a script's ``key=value`` blob
 into a dict and ``reading`` / ``readings`` turn those strings into the numbers a
-record holds; ``grade`` maps a value + thresholds to a :class:`StatusCode`;
+record holds; ``refuse_thresholds`` names what replaces the ``thresholds:`` block
+the checks graded by before their levels were pairs (ADR-0131);
 ``human_kb`` / ``human_duration`` format sizes and uptimes; ``unavailable`` is the
 "no data" leaf; ``volume_name`` makes a tree-safe filesystem node name; and the
 ``*_notices`` / ``oneline`` helpers tidy ssh's stderr. Pure, so it is unit-testable
@@ -14,7 +15,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from little_sister.checks.base import CheckResult
+from little_sister.checks.base import CheckError, CheckResult
 from little_sister.status import StatusCode
 
 
@@ -67,13 +68,38 @@ def readings(metrics: Mapping[str, str],
     return {key: reading(metrics.get(key)) for key in keys}
 
 
-def grade(value: float, warn: float, error: float) -> StatusCode:
-    """Higher is worse: ERROR at/above ``error``, WARN at/above ``warn``."""
-    if value >= error:
-        return StatusCode.ERROR
-    if value >= warn:
-        return StatusCode.WARN
-    return StatusCode.OK
+def refuse_thresholds(raw: object, replaced: Mapping[str, tuple[str, str]],
+                      *, also: str = "") -> None:
+    """Refuse the ``thresholds:`` block these checks graded by before each level was a
+    pair of the check's own keys (ADR-0131 decision 2), naming what replaces what the
+    block wrote: ``thresholds: {disk: {warn: 90, error: 95}}`` is
+    ``max_disk_warn: 90%`` and ``max_disk_error: 95%``. ``replaced`` maps each aspect
+    to its pair's key and the unit a level is written with; equal levels, under which
+    the warning could never be said, become the error level alone. ``also`` is a
+    sentence of a type's own, for an aspect whose level moved elsewhere."""
+    if raw is None:
+        return
+    writes: list[str] = []
+    for aspect, levels in (raw.items() if isinstance(raw, Mapping) else ()):
+        key, unit = replaced.get(str(aspect), ("", ""))
+        if not key or not isinstance(levels, Mapping):
+            continue
+        warn, error = levels.get("warn"), levels.get("error")
+        if warn is not None and warn != error:
+            writes.append(f"{key}_warn: {_level(warn)}{unit}")
+        if error is not None:
+            writes.append(f"{key}_error: {_level(error)}{unit}")
+    said = ", ".join(writes) or " and ".join(
+        f"{key}_warn, {key}_error" for key, _ in replaced.values())
+    raise CheckError(
+        f"'thresholds' is retired: each level is a pair of the check's own keys now, "
+        f"its level the last value that passes, and <key>: null switches one off — "
+        f"write {said}{' ' + also if also else ''} (ADR-0131)")
+
+
+def _level(value: object) -> str:
+    """A level of the retired block, as the pair that replaces it writes it."""
+    return f"{value:g}" if isinstance(value, int | float) else str(value)
 
 
 def unavailable(name: str, description: str, about: str = "", *,

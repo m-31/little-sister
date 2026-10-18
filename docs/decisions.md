@@ -99,7 +99,8 @@ surfaces as `WARN` on every connecting check. → [record](adr/0011-ssh-check-fa
 A node's `about` is a Markdown note fed in precedence order `nodes.yaml` (keyed by
 path, so container nodes and graft points are reachable) > inline on the owning check >
 empty, kept separate from `description`; branch checks describe each leaf through a
-`descriptions:` map; a startup pass warns about an `about` path no check covers.
+`descriptions:` map; a startup pass warns about an `about` path no check covers and
+notes one past 400 characters, since every view of a node shows its `about` open.
 → [record](adr/0012-node-metadata.md)
 
 ### ADR-0013 — Surface check config as node display metadata
@@ -136,8 +137,9 @@ last segment, no longer authored; the separator lives in `status.py` helpers.
 ### ADR-0017 — Node title: a short display label
 
 An optional one-line Markdown `title`, fed like `about` (`nodes.yaml` > inline on the
-owning check > empty), shown after the node name on a card and beside the breadcrumb in
-a page header, never replacing the name. → [record](adr/0017-node-title.md)
+owning check > empty), shown after the node name on an open node's head, in the
+inspection card and beside the breadcrumb in a page header — a chip draws none — never
+replacing the name. → [record](adr/0017-node-title.md)
 
 ### ADR-0018 — Markdown rendering for node text
 
@@ -149,10 +151,13 @@ JSON envelope keeps raw Markdown. → [record](adr/0018-markdown-rendering.md)
 
 ### ADR-0019 — Inspection popover (hover card)
 
-A client-side hover card shows a node's static `title` / `about` as server-rendered
-Markdown from a path-keyed map the dashboard preloads, positioned by Floating UI,
-surviving the grid swaps by event delegation; it replaces the `title=` tooltips and
-needs no new route. → [record](adr/0019-inspection-popover.md)
+A client-side hover card shows a node's name, title and the first block of its
+`about`, as server-rendered Markdown from a path-keyed map every refresh of the grid
+carries, and never its live state. It opens on a pause on a node's name where a
+browser's look says so — the library's look keeps it closed — is not offered on touch,
+stays on its node through the grid swaps, replaces the `title=` tooltips and needs no
+new route.
+→ [record](adr/0019-inspection-popover.md)
 
 ### ADR-0020 — Deployment-supplied user list — **superseded**
 
@@ -222,17 +227,21 @@ stays `stale`; the JSON `timestamp` is nullable.
 
 The stylesheet names its palette once on `:root` — per status a vivid fill and a pale
 tint, each with its ink, borders mixed from the ink — and paints only from it; a theme
-is an override block on `body[data-ls-theme]`, never a fork. The accessibility bar
-outranks any swatch: status text holds AA in every gated theme, and a pick that
-collides finds another vehicle. → [record](adr/0028-design-tokens-and-themes.md)
+is an override block on `body[data-ls-theme]`, never a fork; the library's theme is
+cyberpunk. The accessibility bar outranks any swatch: status text holds AA in every
+theme, and a pick that collides finds another vehicle.
+→ [record](adr/0028-design-tokens-and-themes.md)
 
 ### ADR-0029 — Presentation preferences live in a cookie, not in the server
 
-One long-lived `ls_prefs` cookie per browser, read server-side into
-`body[data-ls-theme][data-ls-layout]` so the page renders in the chosen scheme; every
-failure mode lands on the defaults per key; the settings menu posts to `/preferences`.
-The look belongs to the browser, not the session; functional per-user settings wait for a
-real store. → [record](adr/0029-per-user-presentation-preferences.md)
+One long-lived `ls_prefs` cookie per browser, read server-side onto `<body>` — the
+layout and the looks of one roster, the theme, how a run of chips is drawn, whether the
+inspection card opens and how a head's row and a chip answer the pointer, the looks
+defaulting to the deployment's `settings.yaml` — so the page renders in the chosen
+look; every failure mode lands on the defaults per key; the settings menu posts to
+`/preferences`. The look belongs to the browser, not the session; functional per-user
+settings wait for a real store.
+→ [record](adr/0029-per-user-presentation-preferences.md)
 
 ### ADR-0030 — Curated links come from a deployment-supplied file
 
@@ -282,7 +291,8 @@ a dependent package registers a template of its own (reachable only as
 `ext/<package>/<name>`, additive, never shadowing) plus an optional context provider,
 which receives the names it declares and returns `None` for *nothing here*. A broken
 filler contributes nothing and the page renders. Slots: `reason.actions` (with the whole
-`line`) and `node.actions` (card head, nested box, leaf page).
+`line`) and `node.actions`, in the head's row of every open box and of a node's page's
+frame, `place` telling a card, a box and a frame apart.
 → [record](adr/0034-template-slots-for-dependent-packages.md)
 
 ### ADR-0035 — A dependent package registers its own configuration aspect
@@ -464,13 +474,13 @@ stated `0` is a real declaration. Ordering by the live grade stays rejected.
 
 ### ADR-0056 — Dashboard layout follows stable, useful flow
 
-Supersedes ADR-0024 and keeps its position rule and density surfaces. Each root gets a
-stable flow profile derived from the filtered, depth-limited topology and the
-configured `reason_cap` — never from status, reasons or measured height; a span is a
-useful step only when it removes a modeled row per added track; the server publishes
-`(tenths, tracks, plan)` breakpoints and the browser sets exactly that many tracks
-from its measured width. `dashboard_columns: plain` withholds the plan; auto-fill CSS
-is the fallback. → [record](adr/0056-stable-useful-dashboard-flow.md)
+Supersedes ADR-0024 and keeps its position rule. Each root gets a stable flow profile
+derived from the filtered topology, the first look it starts in (ADR-0128) and the
+configured `reason_cap` — never from status, reasons, a click or measured height; a
+span is a useful step only when it removes a modeled row per added track; the server
+publishes `(tenths, tracks, plan)` breakpoints and the browser sets exactly that many
+tracks from its measured width. `dashboard_columns: plain` withholds the plan; auto-fill
+CSS is the fallback. → [record](adr/0056-stable-useful-dashboard-flow.md)
 
 ### ADR-0058 — `little_sister.transport`: a vocabulary for asking something that might not answer
 
@@ -496,8 +506,8 @@ completed run that rolls up to `UNDEFINED` does not arm a retry.
 
 A title with no letter and no digit in it (`isalnum` per character, so a Japanese or
 Cyrillic title is a word) cannot stand in for a name and is drawn with it — `critical 🔴`
-— on the two surfaces that draw the title instead of the name, `/copy` and the popover;
-display only. → [record](adr/0061-decoration-is-not-a-label.md)
+— on the one surface that draws the title instead of the name, `/copy`; display only.
+→ [record](adr/0061-decoration-is-not-a-label.md)
 
 ### ADR-0062 — Navigation chrome is layout behavior, not a preference
 
@@ -509,12 +519,13 @@ pinned and scrolls only its constrained child, and the kiosk is untouched.
 ### ADR-0063 — A node may decline the density trade (`show_when_quiet`)
 
 An optional tri-state boolean on the node — `nodes.yaml` > the deployment's `subnodes:`
-block > the type's declared default > a stamped child result > unstated — read as a
-common field for every type; a child that says a run names it, `dynamic=True`, takes the
-flag its own result carries, or none, beneath `nodes.yaml` (ADR-0118). A declared node
-is never a chip and never a fold candidate. Display metadata only: no event, no
-aggregation, no cookie, no envelope change; *hide idle* still hides it.
-→ [record](adr/0063-declining-the-density-trade.md)
+block > the type's declared default > a stamped child result > unstated — read for every
+type, on the first look's addresses, `children:` included (ADR-0128); a child that says
+a run names it, `dynamic=True`, takes nothing declared for its name, but its parent's
+`children:` and then its own result, beneath `nodes.yaml` (ADR-0118). A declared node
+starts open whatever its parent's `chips` says, and no configured fold hides it. Display
+metadata only: no event, no aggregation, no cookie, no envelope change; *hide idle*
+still hides it. → [record](adr/0063-declining-the-density-trade.md)
 
 ### ADR-0064 — A secret resolver is a registration like the others
 
@@ -1117,10 +1128,10 @@ percents of a whole declare 100.
 `CheckResult(dynamic=True)` says that a node is named by its source, or by what a
 deployment's configuration calls a thing, and not by its type's code. Nothing declared
 for a name reaches it — neither the type's `subnode_defaults` nor the deployment's
-`subnodes:` block — and its labels are the `title`, `about` and `show_when_quiet` its
-own result carries; `nodes.yaml`, by path, still beats them. It is said of one node and
-of none beneath it, a root ignores it, and a result that says nothing is read by its
-name as before.
+`subnodes:` block — and its labels are the `title` and `about` its own result carries,
+with its `show_when_quiet` unless its parent's `children:` says it (ADR-0128);
+`nodes.yaml`, by path, still beats them. It is said of one node and of none beneath it,
+a root ignores it, and a result that says nothing is read by its name as before.
 → [record](adr/0118-a-child-a-run-names-takes-nothing-declared-for-its-name.md)
 
 ### ADR-0119 — A wait that ends by its count writes a row
@@ -1198,3 +1209,67 @@ It is read of the result, not the node, so a pin cannot reach it, and
 `retry_interval: 0` on one check stays the switch for an estate too expensive to
 read twice.
 → [record](adr/0125-the-failure-retry-reads-what-a-run-rolls-up-to.md)
+
+### ADR-0126 — A line is a template over its record, and a deployment may re-word it
+
+A line that carries a record is rendered once, where the grading hands it back
+(`Check.line`): the form the grading names, over the record's fields and the words it
+hands over under `line.`, which are never stored. It is Markdown, links included; a
+segment leaves out what is absent, and nothing else is logic; a time reads in the
+configured zone. A type declares its forms, words and fields, a deployment re-words a
+form in the check's `display:` block, an undeclared name stops the start, and an entry
+names its form. → [record](adr/0126-a-line-is-a-template-over-its-record.md)
+
+### ADR-0127 — The wall is a tree: a node is closed or open, and a click changes which
+
+Every node on the wall and its pages is a chip — its state's cue, its name and its
+counts, a branch's own failure among them — or a box; a click changes which where it
+stands, a level keeping its order, and a top-level card closes to one line in its place.
+An open head's corner holds ↗, the healthy fold and ▤ as icons, its actions before them.
+Three failures to a card open their way past chips; `branch_cap`, depth and the chips
+switch go. What a viewer opens is a map of what differs, kept for the tab and put back
+after every refresh; chip runs line up in columns, or wrap where a browser says so.
+→ [record](adr/0127-the-wall-is-a-tree-and-a-click-opens-or-closes-a-node.md)
+
+### ADR-0128 — Where a node's first look comes from: `chips`, `fold_ok` and `reason_cap`
+
+Three keys per node — whether its children start as chips, whether its healthy ones
+start folded, its line budget — resolved most specific first: the viewer for the tab,
+`nodes.yaml` by path, the check's file, the type's declaration, `settings.yaml`, built
+in (open, healthy shown). They ride the labels'
+addresses and `children:`, which reaches a level a run names; `show_when_quiet` stays a
+key of its own on the same addresses. They are the web page's settings, never on the
+snapshot, and the planner prices the first look they give.
+→ [record](adr/0128-where-a-nodes-first-look-comes-from.md)
+
+### ADR-0129 — A rule list is the library's, and a value matches it exactly
+
+A package's rules are the library's rule list: in order, the first match deciding, a
+required `name:`, `ignore:` an action refused beside the package's own keys, a key
+nobody takes stopping the start. A package declares its axes — named, or one on the
+rule — and whether a value can be absent, which `unnamed: true` matches. A value
+compares exactly: no case folded, a regex matching the whole value. A rule that matched
+nothing is an `INFO` line naming the rule above that decided its value, or a near miss
+in case; a line a rule's own keys judged carries the word `rule`. → [record](adr/0129-a-rule-list-is-the-librarys-and-a-value-matches-it-exactly.md)
+
+### ADR-0130 — A unit has a period of its own, and a run stamps only what it answered for
+
+A type declares its units — a key, a period, the node each answers for — and measures
+one at a time (`units()`, `measure_unit`); a check that declares none is the one-unit
+check. The period is `frequency:` in the unit's own block, else a cadence the type
+declares, else the check's. The engine releases units, grades the whole check over the
+newest reading of every unit, and writes the unit's own path alone — the containers
+above it and the node it answers for — leaving a sibling what its own unit wrote. Run
+facts, tolerance, retry and cost are per unit; a unit runs at start, and is never armed
+from the series. → [record](adr/0130-a-unit-has-a-period-of-its-own.md)
+
+### ADR-0131 — A type declares what it grades, and the library grades it
+
+A type declares every value it grades — a map from a word to a code, a pair of levels
+over a number, a set of accepted values, a window over its kept records — with its
+default and the key a deployment writes, and the library reads, refuses, lists and
+applies it, handing the line its `reason`. A pair is `<name>_warn` and `_error` beside
+`<name>_reason`, `null` switching it off, passing at its level, `max_` above and `min_`
+below; a map folds its words and logs a key no word matches; a rule writes what its
+block grades; a window is handed to the seam cut at the reading, `since` first.
+→ [record](adr/0131-a-type-declares-what-it-grades-and-the-library-grades-it.md)

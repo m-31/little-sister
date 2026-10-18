@@ -31,15 +31,27 @@ timezone: Europe/Berlin
 # strftime format for the times a page shows. The log's stamp keeps its own shape.
 time_format: "%Y-%m-%d %H:%M:%S"
 
-# Reason lines a dashboard card shows before a header chevron reveals the rest (the
-# reason-overflow budget, ADR-0056). Short reasons show this many reasons; a reason that
-# wraps to several lines uses more of the budget. A non-negative integer; default 6.
+# Reason lines a box on the wall shows, its failing lines first, before "⌄ all N"
+# beneath them reveals the rest (the reason-overflow budget, ADR-0056). Short reasons
+# show this many reasons; a reason that wraps to several lines uses more of the budget.
+# A non-negative integer; default 6. A check's file, its type or a nodes.yaml entry may
+# give a node a `reason_cap` of its own, which wins for that node (ADR-0128).
 reason_cap: 6
 
-# Quiet (non-warn/error) child boxes a branch shows in the dense ("chips") view
-# before a "+N more" control reveals the rest (ADR-0056). Warn/error boxes
-# are never capped, so nothing urgent is hidden; with the density switch off,
-# everything is spelled out regardless. A non-negative integer; default 3.
+# How the wall first draws what no check's file, no check type and no nodes.yaml entry
+# speaks for (ADR-0128): `chips: true` starts every level beneath the cards as chips,
+# `false` every node open; `fold_ok: true` folds every node's healthy children and
+# lines behind "✓ +N ok". For both, `true` is the more compact look. A value that is no
+# boolean is said in the log and left unset. Unset, the wall starts as it always has:
+# a quiet leaf as a chip, everything else open.
+#
+# chips: false
+# fold_ok: false
+
+# Quiet (non-warn/error) open boxes a level shows before a "+N more" control reveals
+# the rest (ADR-0056), on a level whose node says nothing of `chips` (above). Warn/error
+# boxes are never capped, so nothing urgent is hidden; a level that says how it starts
+# shows what it says. A non-negative integer; default 3.
 branch_cap: 3
 
 # Maintenance pins the strip pill's popover shows before a "+N more" links to the full
@@ -72,6 +84,31 @@ card_status_line: beside
 # choices, and falls back to `flow`. A per-viewer value and a possible `packed`
 # mode are later steps of this same key, never a second switch.
 dashboard_columns: flow
+
+# The looks a browser chooses for itself in the settings menu, and the deployment
+# defaults (ADR-0029): a browser that never chose one follows this file, and one that
+# has keeps its choice in the presentation cookie. Display only; a value the look
+# does not have warns, names its choices, and falls back to the library's own.
+#
+# The theme (ADR-0028): `cyberpunk`, the library's, neon on a near-black canvas in a
+# monospace face; `plain`, the light palette the others are drawn from; `vivid` and
+# `pastel`, light ones; `dark`; or `auto`, plain or dark as the viewer's system asks.
+theme: cyberpunk
+# How a run of chips — a node's closed children standing next to each other — is
+# drawn (ADR-0127 decision 12): `aligned`, the library's, in columns its level's runs
+# share, sized for its children's names and its branches' counts, so a chip only ever
+# grows taller where it stands — a run with room for one column only coming as it
+# comes; or `wrapped`, as they come, each chip at its own width, which is the compact
+# view.
+chip_runs: aligned
+# Whether a pause on a node's name — a chip, the name in an open node's head — opens
+# its inspection card (ADR-0019): `off`, the library's, which keeps the card closed
+# for the pointer and the keyboard alike, or `pause`.
+inspection_card: "off"
+# How a head's row and a chip say that a click opens or closes the node, under the
+# pointer: `wash`, the library's, a wash of their ink, or `outline`, an outline of it
+# in the wash's place. Under forced colors the outline stands either way.
+toggle_hover: wash
 
 # Default maintenance window when an admin sets maintenance without an explicit
 # duration (e.g. 12h, 7d). Maintenance always expires — there is no indefinite pin.

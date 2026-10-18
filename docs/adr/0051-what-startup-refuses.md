@@ -1,7 +1,7 @@
 # ADR-0051 — What startup refuses at the plugin boundary
 
 - **Status:** Accepted
-- **Date:** 2026-10-04 (accepted 2026-08-08, decided while writing the procedure for
+- **Date:** 2026-10-18 (accepted 2026-08-08, decided while writing the procedure for
   moving a check type into a repository of its own)
 - **Related:** [ADR-0049](0049-the-check-authoring-surface.md) (the surface this
   versions, and the gate this completes),
@@ -71,7 +71,12 @@ would still not say what the plugin actually depends on.
    one commit passes. The snapshot is what a *released* plugin was built against, and
    a same-commit edit does not touch it. Removing a name therefore forces the choice
    into the open — restore it, or bump the epoch and write the next snapshot. A
-   snapshot file is append-only within its epoch.
+   snapshot file is append-only within its epoch, and it holds every name its epoch
+   promises, not only those the §11 block held when the epoch opened: a name that joins
+   the block joins the snapshot in the same change, and the gate refuses a block that
+   promises a name the snapshot lacks. A name without its line is one a rename of code
+   and block in one commit passes for — as it would have for five names of epoch 3,
+   the four of `little_sister.process` and `plain` of `little_sister.reasons`.
 
 5. **Both refusals are hard, unlike the neighboring registration seams.** A slot
    filler, an asset, a policy contribution or an aspect that fails to register is a

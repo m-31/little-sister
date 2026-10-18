@@ -62,13 +62,27 @@ how it stood. A second,
 **realistic-wall** tier embeds the extremes in a
 populated overview (all content synthetic): an 80-root mixed wall (root scale), a
 multi-front incident wall (eruption + trace + stale/idle/maintenance at once), an
-overview with two tall roots, dozens of descendants, chips off and spare grid columns
+overview with two tall roots, dozens of descendants, every node open and spare grid columns
 (subtree balance), an
 **OK** severity leaf flooding 150 long audit findings (the real-deployment case
 that once made a skyscraper column — since the ADR-0024 chips it collapses to one
-quiet pill, the flood living on its leaf page), and single-token reasons — a
+quiet pill, the flood in its box beside the chip, hidden until found, and on its leaf
+page), single-token reasons — a
 ~300-char URL, an image digest, a 500-char `code()` line — that stress *width*
-rather than length. Add a case by appending a `Fixture` there; every fixture is
+rather than length, and a **deployment's own tree**, its names replaced
+(`tests/anonymized_tree.py`, from `tests/fixtures/anonymized_tree.json`): 265 nodes
+under two teams, six levels deep, a level of 20 repositories with 63 workflows and a
+security band of findings over 1,000 characters, every line made-up text of the
+recorded length, shown with the deployment's `reason_cap` of 30 — the tree the
+interactive wall's design round measured its answers on, whose cost today
+`tests/test_wall_cost.py` holds as the baseline the interactive
+wall's stages state their growth against: the refresh's fragment in bytes and
+elements for a viewer and for an admin, on the tree as recorded, made worse four
+ways and mounted as the deployment that runs mounts it — one team's five checks as
+the wall's cards, the variant `deployed` — its weight on the wire where the browser
+takes gzip, and the render's time and peak memory (what a browser pays for the same
+wall is Mode 5's). The file is read by eye and scanned against `release/private_strings.txt`
+before it changes. Add a case by appending a `Fixture` there; every fixture is
 also rendered as a smoke test in `tests/test_ui_fixtures.py`, so a template that
 breaks on an extreme is caught by the gate.
 
@@ -190,6 +204,12 @@ time:
 - **children** — disk / memory / load in a shifting mix, so the card's roll-up
   moves. Its three also carry a **declared rank** (below), which is why they read in
   that order rather than with `load` filed in the middle.
+- **fleet** — five hosts of two quiet leaves each under `/hosts/fleet`: five quiet
+  **boxes** on one level, two past the branch cap of three, so the level folds them
+  behind **+2 more** — the fold the tab's map keeps (below). Mid-cycle one host's
+  disk fills: a failing box is never folded, so it steps out of the fold by itself
+  and the count reads *+1 more* until it clears, while a level the viewer opened
+  stays open.
 - **audit** — a wiz-style findings leaf that stays **OK** while its reason list
   swells to ~150 long lines, then clears: a skyscraper card growing and
   collapsing under the poll without ever changing color. Its findings are
@@ -208,10 +228,11 @@ time:
   alphabetical, which is the demonstration *and* the proof that a check declaring
   nothing is unaffected. One band is not a chip at all: `informational` declares
   `show_when_quiet` ([ADR-0063](adr/0063-declining-the-density-trade.md)), so it
-  keeps its box and its four inventory lines beside four siblings that collapse —
-  the band whose text is read *because* nothing is wrong, no longer visible only
-  when something is. Point `_SHOW_WHEN_QUIET` at another band and the box moves;
-  empty it and the whole card chips again.
+  starts open with its four inventory lines beside four siblings that start as
+  chips — the band whose text is read *because* nothing is wrong, no longer visible
+  only when something is; a click opens any of the four, and ▤ on `wiz` folds all
+  five. Point `_SHOW_WHEN_QUIET` at another band and the box moves; empty it and the
+  whole card chips again.
 - **reviews** — a small queue of pull requests waiting for a reviewer, whose reasons
   are a keyed **mapping**. Never empty, never more than six lines, and re-worded on
   every run.
@@ -219,7 +240,12 @@ time:
   ([ADR-0042](adr/0042-entries-carry-their-own-code.md)): each line declares its
   own verdict, the check declares no node code at all, and one build walks the
   whole arc in a cycle — passed, a rerun in italic on a passing job, failed,
-  the retry running *while the line stays red*, recovered. That build line carries
+  the retry running *while the line stays red*, recovered. Its eight lines come in
+  the check's own order, by repository and workflow, the build seventh — past the
+  wall's budget of six — so on the wall the box shows its **failing lines first**:
+  the failed build and the waiting gate lead while they fail, the healthy ones fill
+  the rest of the budget, and *⌄ all 8* beneath them shows the lot; on `/status/ci/pipelines`
+  the lines stand as the check wrote them, the build seventh. That build line carries
   its run's record, so the leaf page shows a line's times in the configured zone —
   the completed run's `completed.at`, and a run in flight's `running.started` beside
   a null `running.ended` — and every demo node's *Measured* card shows its reading's
@@ -280,6 +306,21 @@ time:
   ([ADR-0116](adr/0116-a-path-with-no-node-says-what-is-known-of-it.md)). When it returns its runs stand
   on its node again, the new ones behind the old, and its History shows the time it was
   away as a period of *undefined* between two of *ok*.
+
+**The demo starts as its files say**
+([ADR-0128](adr/0128-where-a-nodes-first-look-comes-from.md)), each layer speaking once.
+The `demo` type proposes how each scenario's own node starts (`_FIRST_LOOK` in
+`tests/demo_check.py`): the job names, a host's, the backup's and the scanner's
+children as chips, and the pipelines' and the workflows' passing lines folded behind
+*✓ +N ok*. The demo's own files take two of those back — `ci_jobs.yaml` opens the job
+names (`chips: false`) and `ci_workflows.yaml` shows the workflows' lines
+(`fold_ok: false`) — and `nodes.yaml` starts `/network`'s tunnel as a chip, a container
+no check writes getting its look where it gets its title. Everything else is drawn as
+nobody spoke for it, `fleet`'s *+2 more* among it. A failure under a chip opens its way,
+three to a card, errors first: when `vpn` flaps red its chip opens, and when `medium`
+warns among the bands its box opens beside chips, `high` and `critical` after it as
+they fail, while `informational` stands open throughout by its claim. The pipelines'
+box shows its failing lines with *✓ +N ok* after them, and its funnel shows the rest.
 
 ### Members, and the two slug promises
 
@@ -532,9 +573,10 @@ it into the ticket beside the document.
 ### Maintenance
 
 Maintenance is not a scenario — a check cannot set a real pin (that is the tree's
-concern). Set one from the admin **Set maintenance** button on a node's status line
-(`pan` is an admin), or from the pause mark at the end of a line on `/ci/reviews` and
-`/security/audit`.
+concern). Set one as an admin (`pan` is one) from ‖ at the end of a head's icons —
+on the wall, or in the head of a node's page, where without script the head's own
+**Set maintenance** stands beneath its row — or from the pause mark at the end of a
+line on `/ci/reviews` and `/security/audit`.
 
 The read/edit interaction has one concrete walk:
 
@@ -564,13 +606,13 @@ The read/edit interaction has one concrete walk:
    open *Edit* once more and save with **nothing changed**: who pinned it gains no
    *Last changed* beside it, and the same pin's editor left open in a second tab
    still saves. *Clear* remains a separate action, and comes back at the line too.
-4. Repeat at node depth: *Set maintenance* on the status line opens the node's editor
-   beneath it, saying how many lines it silences. Pinned, the node's block heads a
-   frame round every line, the line pinned before says *also silenced on its own*,
+4. Repeat at node depth: ‖ in the head's row opens the node's editor beneath the row,
+   saying how many lines it silences. Pinned, the node's block heads the page's frame,
+   which runs round every line, the line pinned before says *also silenced on its own*,
    and raw `<script>` entered as a note stays visible as escaped text rather than
    becoming an element. With scripts disabled, each *Edit* and each mark still opens
    its editor. A branch's page states its node's pin in its head, above the children,
-   and an admin's *Set maintenance* stands there: open `/status/ci`, set a pin from the
+   and an admin's ‖ stands there: open `/status/ci`, set a pin from the
    head and read it back in the block, whose *Edit* fills the expiry field the same
    way. Open `/status/ci/reviews`: its frame is headed by `/ci`'s block too, without
    buttons — *This node is silenced from /ci* — whose link leads back to the pin. Back
@@ -581,25 +623,31 @@ The read/edit interaction has one concrete walk:
    ([ADR-0099](adr/0099-a-status-that-still-holds-says-since-when.md) decisions 6 to
    8). *Clear* the pin: the card says *since* that moment, *when its maintenance
    ended*, and History's maintenance row has its end and keeps the note.
-5. On the dashboard, move the pointer over a card that is not pinned: a pause mark
-   shows at the end of its head, and Tab reaches it without the pointer. Click it. The
-   editor opens **in the card**, which grows to hold it, and its first sentence names
-   what the pin covers — *services and everything beneath it*. The line above the grid
-   reads *updated … — paused while editing* at once. Type half a sentence and leave it
-   for half a minute: the grid does not refresh and what was typed stays. Press
-   Escape: the editor closes, the mark has the focus again, the line drops the words,
-   and the next refresh, at most ten seconds on, brings the grid up to date. Open the
-   editor again and leave it for more than a minute: everything but that card dims, as
-   the page does when it loses its server
+5. On the dashboard, every open head of a node without a pin — a card's and a box's
+   — ends its icons in ‖, shown always, its tooltip *Set maintenance*; Tab to a head's
+   name and on to its toolbar, then → to the end, reaches it without the pointer.
+   Click the services card's. The editor opens **in the card**, which grows to hold
+   it, where the pin's block will stand, and its first sentence names what the pin
+   covers — *services and everything beneath it*; the page holds one editor, outside
+   the grid, and the mark clones it, so the developer tools show no form in any other
+   head. The line above the grid reads *updated … — paused while editing* at once.
+   Type half a sentence and leave it for half a minute: the grid does not refresh and
+   what was typed stays. Press Escape: the editor closes and is gone from the card,
+   the mark has the focus again, the line drops the words, and the next refresh, at
+   most ten seconds on, brings the grid up to date. Open the editor again and leave it
+   for more than a minute: everything but that card dims, as the page does when it
+   loses its server
    ([ADR-0104](adr/0104-a-pin-is-one-block-on-what-it-silences.md) decision 7);
-   *Cancel*, and the page refreshes at once. Then set the pin, with *hide idle* on and
+   *Cancel*, and the page refreshes at once. Open `web`'s `api` box and click its ‖:
+   the editor opens in the box, after its head's row and before its lines, and holds
+   the refresh as the card's does. Then set the services pin, with *hide idle* on and
    a depth of your own in the address. The wall comes back as it was asked for, and
    the card states its pin as the block: who, until when and what is left, and the
    note in full. *Edit* and *Clear* show while the pointer is over the card or the
-   keyboard is on them, *Edit* holds the stored expiry, and the card has no pause mark
-   while it is pinned. With scripts disabled the mark still opens the editor and
-   closes it again. The kiosk layout and a viewer's wall show the block without
-   buttons, and no mark.
+   keyboard is on them, *Edit* holds the stored expiry, and the card has no ‖ while
+   it is pinned. With scripts disabled ‖ is a link to the node's page, whose head
+   keeps *Set maintenance*. The kiosk layout and a viewer's wall show the block
+   without buttons, and no ‖.
 6. Pin a second node, so that two are, and open **Maintenance**. The pins stand under
    their node's path: *The whole node* first, then its lines in the order the node's
    own page lists them, each opening with its line and, under the node's pin, saying
@@ -708,9 +756,195 @@ it keeps one, and the node's title stands on the line beneath, where the trail l
 it less room than a word needs. On Events, History and both System views a table
 scrolls inside its box while the bar and the rail stay put, and System's schedule,
 scrolled to *Seen*, is still there after the next poll. Open an editor on a node's
-page and on the Maintenance page: it fits. Two things do not, and are known: the
-rail's labels, opened, stand beside the page and take half a phone's width, and at
-320 pixels the wall under the rail is a few pixels wider than the screen.
+page and on the Maintenance page: it fits. Tap an action chip once — *Copy* or
+*Nudge* on a line of `/status/ci/reviews`' head, *File it* in a card's head on the
+wall: the link is followed on that tap, and no inspection card comes up for the node
+the chip stands in; a tap on the node's name opens or closes the node, and no card
+comes up for it either. Two things do
+not fit, and are known: the rail's labels, opened, stand beside the page and take half
+a phone's width, and at 320 pixels the wall under the rail is a few pixels wider than
+the screen.
+
+### The tree, and the tab's map
+
+Every node on the wall is closed, a **chip**, or open, a **box**, and a click on it
+changes which, where it stands
+([ADR-0127](adr/0127-the-wall-is-a-tree-and-a-click-opens-or-closes-a-node.md)
+decision 1). Click the `web` chip in the services card: it opens in its place to a
+box with its head and its lines, the chips beside it standing where they were, and
+the focus is on the box's name; click anywhere on that head — the name, the title,
+the state word, the space between — and it closes to the chip again, but a click on
+its icons or on the *File it* action is that control's, and a drag that selects the
+head's text toggles nothing. Ctrl-click (⌘-click) a chip or a name: the node's page
+opens in a new tab, as the link says. Tab to a chip and press Enter or Space: the
+same. A click on a card's head closes the card to one line, its head and its counts —
+*hosts* reads *● 2 ✓ 11*, or *● 1 ✓ 12* in the half minute `node-04`'s disk is fine,
+and *security* *6* — in its place, the other cards unmoved, and a click opens it
+again; a closed card that fails is vivid, as a failing chip is. Each chip says what
+is beneath it: a cue, its name and its counts, one total where all share a state and
+each state's glyph and count where they mix, none on a leaf of one line — `audit`
+reads *53*, `web` its cue and name alone; rest the pointer on a chip and the words
+are the tooltip — *53 ok*, *1 ok*, and on a card's name *2 errors, 11 ok*. In the
+developer tools each node carries `data-why`, the rule that
+decided its look: `drawn`, `entry` once you clicked it, `swq` on `informational`,
+`parent` after its parent's ▤, `mode` under a band button, `page` for a page's own
+node and its children, `kept` for a card an open node beneath it keeps open under
+*Close all*.
+
+The **head's icons**, in each open head's upper right corner: ↗ opens the node's
+page; the **funnel** folds the node's healthy children and lines behind *✓ +N ok*
+after the rest, pressed while they are folded, its tooltip the count — on `fleet` it
+folds the four green hosts behind *✓ +4 ok* and leaves `node-04`, and on `wiz` a
+press takes `informational` too, which the configuration would leave open; **▤**
+folds every
+child to a chip, pressed while all are, released while all are open and half-washed
+between, and a click on one child afterwards changes that child alone; and last,
+for an admin, **‖** on every head whose node has no pin (*Maintenance*, below). A
+dot on a button says the viewer set it differently from the configured look. On the
+kiosk no head carries them, and a tap toggles a node as anywhere.
+
+The **head's row** never wraps: before the state stand the node's **actions** — on
+the security card *Runbook*, a square wearing its icon, its label the tooltip, and
+*File it*, a chip wearing its label since it names no icon — and the state and the
+icons end the row, the title between the name and them giving way first, with an
+ellipsis (`jobs`' *Batch j…*). Narrow the window to a phone's: the actions a row has
+no room for fold behind **⋯** — `wiz`'s box folds *File it* and *Runbook*,
+`informational`'s all three — but never one alone where the state's own line keeps
+it in the row: `jobs`' box keeps *File it* and carries its state on a line beneath.
+Open ⋯ by a click or by Enter: its menu lists the folded by their labels, ↓ and ↑
+walk it, Escape closes it and gives ⋯ the focus back, and so does a click elsewhere;
+widen the window and the actions are back in the row within a moment. The
+demo's cards carry their state on a standing second line (`card_status_line: below`
+in its `settings.yaml`); set it to `beside` and a card's state stands in the row,
+dropping beneath only where the name would be cut with every action folded. A box's
+state does the same without a setting: on a phone `ci`'s `jobs` and `pipelines`
+boxes, whose rows hold a time beside the word, put the state beneath and keep *File
+it* in the row; narrower still, a name wraps, last of all, where its words meet —
+`collect-queue` after its hyphen, a name of underscores after one of them, never
+inside a word that fits a line — and a copy of it is the name whole; and where
+it has broken onto a second line the state stands on that line, beneath the icons,
+instead of a third of its own — at a small phone's 320 pixels `pipelines`,
+`workflows` and `wiz`'s `informational` show it, while `nightly` and `reviews`, whose
+names stay whole, keep the state on a line of its own. Each square's symbol is 16 of
+its 24 pixels — two thirds, and still two thirds with the browser's font set larger —
+and a card's chips stand a little below its own lines, as a box's do. Narrow a card
+until its title has less room than two letters: it goes rather than leave a clipped
+letter. No caret stands before a head's cue: move the pointer along a head, and the
+row is washed with its own ink wherever a click would open or close it — on the
+name, the title, the state, the space between — and not on its squares, its actions,
+⋯, its menu or a card's pip; press, and the wash deepens; the name underlines no
+more. A chip answers the same way, its press a deeper wash over its colour; Tab to a
+chip and its focus ring stays under the pointer. That is the look `toggle_hover:
+wash`, the library's since 2026-10-18; choose *Under the pointer: outline* in the
+settings menu and the row and the chip wear an outline of their ink instead, a chip's
+a pixel out, the press still a wash. On a phone neither the outline nor the underline
+shows, only the press. The
+controls of a head are **one toolbar**: Tab stops once in it, on the control last
+used there, and ←, →, Home and End walk the rest; put the keyboard on *File it*,
+wait for a refresh, and the focus is on *File it* of the same node. On a touch
+screen the squares stand 8 pixels apart, and a tap in the gap lands on the nearer
+one. A box whose lines run past the budget ends them in **⌄ all N** — `nightly`'s
+*⌄ all 12*, `pipelines`' *⌄ all 8* — which shows the lot and reads *⌃ less* until
+clicked again.
+
+The band's three buttons: **Close all** closes everything the configuration opened
+and keeps what you opened, with the nodes above it — open `web`'s `api` first, press
+*Close all*, and the services card and `api` stand open while everything else is a
+chip or a one-line card; the button is pressed and carries *· 1*, the one node the
+map holds, and a second click on it closes everything. **Open all** opens every node,
+the healthy shown and every *+N more* unfolded; **As configured** brings the first
+look back and empties the map, and with a `depth=` in the address loads the address
+without it. `depth=2` in the address closes every node two levels below the wall —
+the cards' children — for that one load, the viewer's word, and writes no cookie;
+`depth=0` keeps the one-card overview, closed to its head and counts, which a click
+opens to its own lines.
+
+**Find** in the page (Ctrl-F, ⌘-F): type a word of a chip's line — of `node-02`'s
+disk reading under the fleet, or of an audit finding under `security`'s `audit` chip
+— and the match opens its node and every closed node above it as a click would,
+the band counting them; type a letter at a time in Safari, Firefox and Chrome and
+watch which boxes close again — a reveal is provisional for two seconds, and a later
+match elsewhere within them closes what the earlier one opened, but for the nodes
+above the new match, while a click or a key in the page keeps it; a closed node's
+name is on its chip and in its hidden head, so stepping through a name's matches
+opens the node at the second; what the funnel folds stays beyond the find.
+
+A close **holds for its incident** (decision 9): close `node-04`'s `disk` box under
+the fleet while it fails, and it stays a red chip through the half minute it recovers
+in each cycle — a recovery shorter than ten minutes by the server's clock is a
+flicker, and only a failure after ten minutes out of failure opens the node again.
+
+A **node's page** is the same tree, framed (decision 8). Open `/status/ci`: the frame
+wears the node's state at its edge, and its head is the node's own row — its name,
+title and state, its actions and its icons, the funnel, ▤ and an admin's ‖, and no ↗ —
+with what the check says of itself beneath it and the page's cards inside the frame; a
+click on that head opens and closes nothing. Press ▤ and the cards close; back on the
+wall, `ci`'s children are chips there too. Open a leaf's page,
+`/status/security/audit`: it is framed the same way, with no status card — its head,
+then its findings inside the frame and its facts after them — and its funnel folds the
+healthy findings: open `audit`'s chip on the wall, and they are folded there too. As
+an admin, ‖ in either head's row opens the editor for the node's pin beneath the row,
+which stands out of sight until then; Escape closes it and gives ‖ the focus back.
+With scripts disabled the head shows the editor's own *Set maintenance* instead. On
+every view of a node — Status, Series, History, Copy — the *about* stands open in the
+band, beneath the trail and the title.
+
+What a viewer opens on the wall stands through the refresh and a reload (decisions 9
+and 10): one script, `static/js/tree.js`, keeps it in the tab's `sessionStorage`
+under `ls-wall-map`, and `poll.js` hands it the swap. Open **+2 more** on the hosts
+card and *⌄ all 8* on `/ci/pipelines`' box, then wait ten seconds: the grid is
+swapped and both stand, the card's new readings under them. Reload the tab: both
+stand, and the grid does not flash its first look before they come back —
+`tree-pending.js` in the head hides it until the map is applied. Open the wall in a
+**new tab**: it starts as configured, and the first tab keeps its own. Put the
+keyboard's focus on *⌃ less* (Tab to it) and wait for a refresh: the focus is on the
+same control of the same box, and the page did not scroll; the same for a chip or a
+box's name. Rest the pointer on a card's name until its inspection card is up and
+wait for a refresh: the card stays on its node. In the developer tools, *Application
+› Session storage*, the map reads
+`{"v":1,"mode":null,"nodes":{"/hosts/fleet":{"more":true},"/ci/pipelines":{"lines":true}}}`,
+a click on a chip adds `{"open":true}` under its path, a press of ▤ `{"chips":true}`,
+and a second click on each empties it; no cookie is written. Switch the layout to
+**kiosk** and open a fold: a reload starts as configured and the storage holds no map
+— the kiosk keeps it in memory, and five minutes without a pointer, a touch, a key or
+the wheel bring the first look back, with the address's `depth=` as it was.
+`/system` refreshes as it did; it has no map.
+
+### The runs of chips, the hover card, and the looks a browser chooses
+
+A run of chips lines up in the columns its level shares
+([ADR-0127](adr/0127-the-wall-is-a-tree-and-a-click-opens-or-closes-a-node.md)
+decision 12). On the hosts card the fleet's chips stand in columns, each stretched to
+its column with its count at the right, and the runs on either side of an open box
+line up, one `x` down a column. Open a chip, wait for a refresh, reload: the columns
+stay where they were. Narrow the window until two columns no longer fit: the run
+wraps as it comes, each chip at its own width, sharing lines, and no name is cut; widen
+it again and the columns come back. A name wider than its column wraps where its words
+meet. In the settings menu *Chips: wrapped* draws every run as it comes; and with
+JavaScript off the columns still stand, sized by the server's estimate, which decides
+too where a run has room for one column only — so a run near the line may change from
+one to the other as the page's script measures its level.
+
+The card answers a node's name alone ([ADR-0019](adr/0019-inspection-popover.md)'s
+updates), once a browser asks for it: the library's look is `inspection_card: off`
+since 2026-10-18, so first choose *Hover card: on a pause* in the settings menu. Then
+rest the pointer on the name of a chip that wears the help cursor — its node
+has a title or an *about* — and about two thirds of a second later its card comes up — the name and the title as the head draws
+them, the first block of its *about*, and *… N more paragraphs on its page* linking
+there where more follows — and not sooner; moving on the name starts the pause again.
+Rest it on the rest of a head's row, its title, its state or an icon: nothing comes,
+and only the names that have a card wear the help cursor, the row the pointer's. Click
+a name: the node opens or closes and no card follows, even with the hand still moving
+on it. Tab to a name: the card is up at once, and Escape closes it. On a node's page
+its own head has none — its *about* is open in the band. Back in the settings menu:
+*Hover card: off* keeps the card closed for the pointer and the keyboard, and no name
+wears the help cursor; with the operating system's high contrast on (forced colors) a
+head's row and a chip wear the outline whichever look answers the pointer. Both
+survive a reload, and `/preferences` writes a look into the cookie only once it is
+chosen: set `inspection_card: pause` in `tests/demo_config/settings.yaml` and restart
+the demo, and a browser that never chose has the card, while one that chose *off*
+keeps none. The demo is drawn in the library's theme, cyberpunk; *Theme: plain* is
+the light palette the other themes are drawn from.
 
 ---
 
@@ -752,18 +986,24 @@ text and the folds of its setup guide, closed and opened, the coded reason lines
 seeded tree, on its leaf page a pin's block
 with its buttons and its opened editor, the Maintenance page's count, headings
 and records, the same block on the wall — in a box inside a card, in the editor a
-card's pause mark opens, and in a branch's head — and the chips in the rows of the
-Events page, and measures each as the eye actually gets it: the *computed* ink,
-the background composited from every translucent layer above the first opaque
-one, stacked opacity folded in. It prints the WCAG ratio:
+card's ‖ clones into it, and in a branch's head — every culprit's own name and state
+word on its fill, a failing box's, a warning's, a pinned box's and an undefined
+card's, the head's row's chips, *⌄ all N* and the band's buttons, and its squares,
+the icons on an error's and an ok's fill, ⋯ on a card drawn narrow for it and an
+action wearing its icon, their glyphs and their resting edges against the non-text
+bar — and the chips and status words in the rows of the Events page and of a node's
+History tab, and measures each as the eye actually gets it: the *computed* ink, the
+background composited from every translucent layer above the first opaque one,
+stacked opacity folded in. It prints the WCAG ratio:
 
 ```bash
 npm i --prefix var/bootstrap bootstrap@5.3.2     # once; var/ is gitignored
 uv run python tests/sweep_contrast.py
 ```
 
-It exits non-zero if a gated theme misses AA. Cyberpunk is the declared fun
-theme: measured and reported, never gated.
+It exits non-zero if a theme misses AA — every theme, cyberpunk too since it
+became the library's default on 2026-10-18, where it had been the declared fun
+theme, measured and reported and never gated.
 
 **Why a browser, when the tokens are right there.** The menu is a Bootstrap
 dropdown, and *Bootstrap paints it*: `.ls-menu__panel` sets a width and a
@@ -783,9 +1023,10 @@ and takes its ink from our tokens, which is the general answer whenever a
 Bootstrap component's own color has to hold the bar on six canvases.
 
 A pin's block is walked for the same reason. Its statement and its note sit on the
-block's own tint, a pair the tokens can measure; but *Set maintenance* stands on the
-page's alert, which Bootstrap paints, and the editor's labels, muted help and
-*Cancel* are Bootstrap's inks on our panel. So the block's buttons draw from the ink
+block's own tint, a pair the tokens can measure; but *Set maintenance*, which a page
+without script shows beneath the head's row, and ‖ in the row stand on the head's
+status fill, and the editor's labels, muted help and *Cancel* are Bootstrap's inks on
+our panel. So the block's buttons draw from the ink
 they stand in rather than wearing an outline variant, and the sweep opens the editor
 and reads each of those rows where it lands. On the Maintenance page the same blocks
 stand on the page's own canvas, with rows a node's page does not have: the count
@@ -851,6 +1092,15 @@ own flow, and a cap on it read from the bar's measured height made the bar grow 
 shrink twice a second. These claims have all been wrong before, and none is visible in
 one screenshot.
 
+**The browser files read the library's look**, as a browser that never chose does:
+since 2026-10-18 the cyberpunk theme, in a monospace face, the inspection card off and
+a wash under the pointer. A file that tests the card on a pause, the outline under the
+pointer, or a premise of the plain theme's proportional face — a name that breaks at
+a width, a band whose trail keeps one line, a table whose numbers keep one line — chooses
+that look as a viewer does in the settings menu, with the presentation cookie
+`tests/browser_looks.py` writes; a premise of the plain face says so where it is chosen,
+and what the monospace face does there instead.
+
 The same module carries one claim that is about **paint alone**: an action chip laid
 over a node's title must not read through to it
 ([ADR-0034](adr/0034-template-slots-for-dependent-packages.md)). It is measured by
@@ -904,18 +1154,41 @@ a node of 80 lines that can each be pinned, and Chromium scrolling to the 60th,
 pinning, editing and clearing it — the page has to come back with that line in the
 window, clear of the bar, each time — and opening an editor on a note, where the
 cursor has to stand at the note's end. And over a wall of three cards, with the
-page's clock in the test's hand: a card's pause mark opening its editor in the card,
-the refresh holding off while it is open and dropping an answer that was on its way,
-the line saying *paused while editing* at once, the page dimming a minute later but
-for the card being edited, and the mark keeping its seat at the end of the state
-however the head wraps — with a pointer, with the keyboard, by touch and without
-script. A node's inspection card stays away while its editor is open, and a pinned
+page's clock in the test's hand: a card's ‖ cloning the page's one editor into the
+card and a box's into the box after its row, the clone the browser's disclosure that
+Escape closes and takes away, the refresh holding off while it is open and dropping
+an answer that was on its way, the line saying *paused while editing* at once, the
+page dimming a minute later but for the card being edited, an editor opened from a
+nested box's block holding the refresh as a card's does, ‖ shown always, ending the
+row after the state and reached by the keyboard, a link to the node's page without
+script — with a pointer, with the keyboard and by touch — and on a node's page, a
+branch's and a leaf's, the head's own ‖ opening the editor the head keeps, out of sight
+until then, Escape closing it and giving ‖ the focus back. A node's inspection card stays away while its editor is open, and a pinned
 card is drawn at every width a card comes in, its sentence ending no line inside the
 date of its expiry. Run it when `maintenance-edit.js`, `poll.js`, `inspect.js`, the
 block's templates or styles, or what `POST /maintenance` returns to change:
 
 ```
 uv run pytest tests/test_pin_browser.py
+```
+
+`tests/test_actions_browser.py` holds a tap on an action chip to its link
+([ADR-0034](adr/0034-template-slots-for-dependent-packages.md)): a real server over a
+card with a nested box of member lines, a nested box of prose and a leaf card, each
+with a title so its name is one the inspection card answers to, a deployment's chips
+beside the library's Copy, and Chromium emulating a phone. One tap on a line's Copy,
+on a deployment's chip on a line and on a node's own chip in a box's head and a card's
+has to follow the link — to the line's document, or to a new tab at the chip's address
+— and raise no card, in both shapes a tap reaches the page in: Chromium's own, which
+gives the link the focus first, and one dispatched as a browser that gives it none
+sends it, the pointer down and up and then the click. And the phone has to keep every
+line's Copy chip and a head's chip in view — shown outright where nothing hovers, inside
+the screen, and large enough to tap — on the wall and on a leaf's own page. Run it when
+`inspect.js`, the chips' templates, their stylesheet rules or the rows that carry them
+in `_status_grid.html` change:
+
+```
+uv run pytest tests/test_actions_browser.py
 ```
 
 `tests/test_phone_browser.py` holds every page to a phone
@@ -995,7 +1268,9 @@ uv run pytest tests/test_curve_frame_browser.py
 real server over an estate shaped like a deployment's — eight hosts of five curves each,
 two checks on one node, checks that draw nothing — and Chromium at desk widths from
 946 pixels to 1600 and emulating a phone. With every fold open the table has to be no
-wider than its box, a curve's three numbers have to keep one line from 1400, a fold's
+wider than its box — in the library's theme and in the plain one, and at 946 in the
+plain one alone, where cyberpunk's monospace face scrolls it in its box — a curve's three
+numbers have to keep one line from 1500 in both and may wrap below it, a fold's
 strips have to stand in a column, and a closed fold has to be one line; on the phone
 every fold's control and every open fold's label, strip and values have to be inside
 the screen, and a row has to say everything its columns said. Run it when
@@ -1053,6 +1328,188 @@ still being answered. Run it when `copy.js` or `_copy_controls.html` change:
 uv run pytest tests/test_copy_browser.py
 ```
 
+`tests/test_brand_browser.py` holds the icons the package serves to the drawing they are
+rendered from, `src/little_sister/brand/`: it renders every one again through
+`tests/render_brand.py` and compares each committed image with its fresh render, pixel
+by pixel, allowing what a rasterizer moves on its own from one build to another — so an
+icon edited by hand fails, and so does one carrying a digest copied from another image.
+Whether each image is the drawing as it is now is the everyday gate's,
+`tests/test_brand.py`, which reads the digest every image carries. After changing the
+drawing, render the icons again and run it:
+
+```
+uv run --group browser python tests/render_brand.py
+uv run pytest tests/test_brand_browser.py
+```
+
+`tests/test_a11y_browser.py` lets a scanner look at whole pages where the files above
+each hold one claim: axe-core, injected by `axe-playwright-python` from the browser
+group, runs the rules tagged for WCAG 2.2 at A and AA over the demo's wall, a branch's
+page and the kiosk's wall, at 1,280 pixels and on an emulated phone of 390, each in the
+library's theme, cyberpunk, and in the plain one the baseline was first taken in. The
+demo runs in a child interpreter on a port of its own, 36 seconds into its scenarios.
+**Every finding is held to a baseline** in the test — what the scan found on the wall
+before the interactive wall was built, each entry a rule and the component it stands on
+with the reason it stands, the brand's inks and the head's small words on a vivid fill
+among them, and the plain theme's own entries, its pale tints' and its bar's, apart —
+so a change that adds a finding fails the day it is made, and an entry that no scan of
+its theme finds any more fails too and leaves with the change that mended it. What the
+scanner could not decide is not a finding. Run it when a template, a slot's filler or
+the stylesheet changes, and at every slice of the interactive wall:
+
+```
+uv run --group browser pytest tests/test_a11y_browser.py
+```
+
+`tests/test_tree_state_browser.py` holds the tab's map on the page's own clock, as
+`test_pin_browser.py` does: a level's *+N more* and a box's *⌄ all N* opened by a
+click stand through a refresh and a reload, with the grid held back until they are
+back and nothing of it in a cookie; a nested box's too; a new tab starts as
+configured; the keyboard's focus returns to the same control of the same node
+without a scroll; an open inspection card stays on its node; the system page
+refreshes without the map; a map of another version is dropped whole; a browser
+that refuses storage keeps the map for the page's life; and on the kiosk a reload
+starts as configured, nothing reaches the storage, a pointer that only moves holds
+the five minutes off, and five minutes without input bring the first look back with
+the address's `depth=`; and a branch's page whose children all left polls on — the
+swap lands, saying what stands there, no banner rises, and a reload is the leaf's
+page:
+
+```
+uv run --group browser pytest tests/test_tree_state_browser.py
+```
+
+`tests/test_tree_browser.py` holds the tree's mechanics the same way, the server's
+clock held where a test reads the time a render carries: a click opening a chip in
+its place and closing it again, a card closing to one line with its counts and no
+card moving, a click on a head's title or state closing it and one on its icons not,
+a drag that selects the head's text not, a modified click keeping the link, Enter
+and Space, a chip opened below the fold brought into view and one in view not moving,
+the focus on the other face after each toggle and put back after a swap without a
+scroll; ▤ folding every child and opening them all, mixed once a click opens one, a
+child whose claim would keep it open given an entry of its own; the funnel folding
+the healthy and a press taking `show_when_quiet` and a roster's own quiet lines, its
+tooltip and *✓ +N ok* counting the fold in force, and standing on a green node as on a
+failing one; the band's three buttons, the one in force pressed with the count of the
+map's nodes and a `depth=`, *Close all* keeping a node the viewer opened and the
+nodes above it while the statuses beneath change, a click on the button in force
+dropping what it counts, *Open all* showing the healthy and every level's surplus,
+*As configured* loading the address without its `depth=`, and with `tree.js` held back
+the band's buttons in their place from the first paint, as the script draws them, and
+a node's page's ‖ in its head's row where *Set maintenance* would stand beneath it —
+without script, neither; the icons' edge and wash at rest, pressed and mixed, the
+band's at rest and in force, and `.is-changed` cleared by
+*As configured*; everything through a swap and a reload; a close giving way once the
+node was out of failure for ten minutes of the server's clock, a pin beneath it or
+not, holding through a shorter recovery, through renders that skip the hold's end and
+in a tab that saw no render out of failure, and an open never giving way; a find's
+reveal by a fragment naming a line beneath two closed nodes — `beforematch` at both,
+the innermost first, both opened with their entries, the level re-formed around the
+node and the node itself in place, kept through a swap — a second fragment within two
+seconds closing the first reveal's nodes but those above the new match, two seconds
+apart or with a click between both standing, and a closed wrapper's `display` kept
+against Bootstrap's `[hidden]`; `data-why` for each rule; a swap and a click waking
+the three other scripts' observers once each; on the kiosk a tap toggling and no
+head carrying icons; a phone's tap toggling without an inspection card; and a node's
+page framed, its node open whatever the map holds and a click on its head writing
+nothing, its ▤ folding the page's cards and its funnel the healthy ones and its own
+lines by the node's own entries, so the wall follows, a leaf's page keeping its fold,
+and its head one toolbar. Its
+`HeadRow` classes hold the head's row over a wall where every node carries three
+actions: the actions before the state and the icons, shown always; what a narrowed
+card's row has no room for folding behind ⋯, whose menu lists the folded by their
+labels and gives the focus back on Escape; nothing folding where ⋯'s own square and
+gap would give the row's overflow back; a lone action keeping its place, the state
+taking its line beneath, where that line keeps it in the row, and folding alone, the
+state in the row, where it does not; the state dropping beneath where the name would
+be cut, the name wrapping last, and `card_status_line: below` giving every
+card's state its line and the actions the room back — not where the row's own line
+holds it; a name broken onto a second line carrying the state there, beneath the
+icons, a card's under `below` as a box's, and a state that would touch the name's
+words, or stand nearer them than the toolbar's gap, keeping its own line; the glyphs
+16 pixels in their 24-pixel squares; a card's children 6 pixels below its lines; a
+title squeezed below 2.5em hidden at every width a card narrows through; the glyphs
+growing with their squares at a 20-pixel font; a long name broken only after its
+underscores and copied whole; the row under the pointer outlined in
+its own ink at 60 %, 3 pixels out, on a card's head and a box's, from its title, name,
+state and cue — not from an icon, the gap between two, an action, ⋯, its menu or a
+card's pip — and pressed a wash of 12 % reaching 4 pixels past it, not where a control
+of its own is pressed, the name not underlined, the pointer's cursor on the row and
+the help cursor on a name whose pause brings the card, both looks from their tokens,
+and the look `toggle_hover: wash` setting them, the outline standing under forced
+colors; a chip on a card, in a box and failing,
+outlined a pixel out with its tint kept and nothing underlined, its focus ring kept
+under the pointer, pressed a wash over its tint, from the same tokens; the row read
+with nothing squeezed, at every
+width of a card and of a box,
+down to the half pixel where folding every action still leaves the row short; a box
+a click, the map or a reload opens measured at once, and a window that grows giving
+the row its room back once the grid's observer has seen the new width; a head's
+controls one toolbar walked with the arrow keys, its
+stop kept through a swap; *⌄ all N* beneath clipped lines, whether the server drew it
+or the script found a wrapping line; an admin's ‖ cloning the editor and holding the
+swap; a refresh reading again only the rows the server drew otherwise or that stand at
+another width — none on a quiet one, the rest drawn as they were read, their folds, ⋯
+and the state beneath or beside — every row read at the width the planner gives its
+card, a spanned one's as on the load, and the planner's frame after a swap writing
+nothing; the rows this page drew read again when asked for, all of them when the
+pointer turns coarse, the toolbar's gap read anew, and when the root's font grows; and
+on a phone a card of three actions keeping its name whole, its squares 8
+pixels apart with a tap in the gap landing on one of them, and a row and a chip
+under a finger wearing no outline and their press the wash. Its `ChipRunTests` hold
+the runs of chips: the runs on either side of an open child lining up, every chip
+stretched to its column, nothing cut; a level's width what its widest name and its
+largest count need, measured in pixels, and neither a click, a count nor a reload in
+another state moving it; a name past the level's bound wrapping inside its column
+where its words meet, its row standing taller; counts that do not fit beside a name
+beneath it, at the right; the look `wrapped` drawing each chip at its own width; and
+without script the server's estimate in characters. Its `HoverCardTests`
+hold the card on the page's own clock: on a pause of two thirds of a second on a
+chip's name or a head's, and nothing sooner nor over the rest of the row; moving on
+the name starting the pause again; no card while a click is under way, from a pause
+it ended, or from the hand that clicked moving just after; the keyboard opening it at
+once and Escape closing it; `off` keeping it closed and marking no name; a node a run
+names after the load having its card after the next swap, and a refresh during the
+pause opening it on the name it drew; the help cursor on the names that have one; and
+its heading the name as text and a glyph title beside it. Chromium moves nothing in a
+page for a pointer moved past the window's edge, so they bring each name into view
+first:
+
+```
+uv run --group browser pytest tests/test_tree_browser.py
+```
+
+`tests/test_wall_cost_browser.py` takes what the wall costs a browser on the anonymized
+tree of Mode 1, in the library's theme — cyberpunk since 2026-10-18, whose monospace
+face reads every wall taller than the plain theme's did — today's numbers the baseline
+the interactive wall's stages state their growth against: the **screens** the design
+round read off its prototype, measured again
+on the real wall — a page's height over 900 pixels on a desk and 780 on a phone, the
+window as tall — the whole wall at 1,280 and 1,920 pixels and on a phone, a node's pages
+at 1,024 as the prototype's boards were, and a team's card and its github box on the
+wall at the width the planner gives them, on the tree as recorded and made worse as the
+round made it: an outage of every workflow, every leaf failing, a branch of 100
+repositories, a band of 300 findings. The **deployed wall** is read beside them — the
+tree mounted as the deployment that runs mounts it, one team's five checks as the
+wall's cards — on the desk it is mostly looked at on, 2,560 pixels wide with a screen
+of 1,300 there, its aws card and its github card on their own, and at 1,920 and 1,280
+pixels and on a phone. Each is read as an admin, whose ‖ stands on every
+open head without a pin, and the walls as a viewer too — the same session, signed again
+with `admin` false, ‖ on no head — so that what a team sees and what is an admin's alone
+stand side by side. The prototype's reading stands beside each case as what the round
+worked from; it copied today's look by hand, drew a card alone at 700 pixels and a
+page's facts at a typical size, so a card's and a page's reading is near it, not the
+same. And the **swap**: one refresh asked of `poll.js` as a tab coming back asks it,
+timed from the fragment's last byte to the second frame after it is in the page, with
+the CPU throttled four times — the parse, the observers a swap wakes and the layout,
+where stage 2 applies the tab's map. A reading may differ from its baseline by 15 % or
+0.3 screens, the wrapping another machine's face gives (below), never a stage's growth,
+which raises the number in the file and says so:
+
+```
+uv run --group browser pytest tests/test_wall_cost_browser.py
+```
+
 **A width is measured in the face the machine has.** A browser draws `system-ui` in
 its machine's typeface: San Francisco on a Mac, and in the cloud container it has been
 Inter and it has been DejaVu Sans. The faces differ by more than a layout's margins —
@@ -1080,6 +1537,19 @@ EOF
 FONTCONFIG_FILE=var/scratch/dejavu.conf uv run pytest tests/test_phone_browser.py
 ```
 
+**A page is served from `tests/browser_server.py`.** `wsgiref`'s server answers one
+request at a time, and the connections that arrive meanwhile wait in its socket's listen
+queue, which `socketserver` makes five long. A page's stylesheets and scripts come six at
+a time, more than a dozen of them on a node's page, and under the gate's coverage the
+server is still on the first when the rest arrive. Linux keeps a connection that finds
+the queue full waiting until there is room; macOS resets it, and the page loads without
+that file — on a Mac, `maintenance-edit.js` failed so with `net::ERR_CONNECTION_RESET`,
+and the test waited thirty seconds for the class that script sets, in a different test
+each run and never in a sandbox.
+`PageServer` is `wsgiref`'s server with the platform's longest queue, and every browser
+file serves its pages from it:
+`make_server("127.0.0.1", 0, app, server_class=PageServer, handler_class=…)`.
+
 ## Mode 6 — the walk (a review, repeated)
 
 The other modes each hold one claim. `tests/walk_gui.py` goes looking: it starts the
@@ -1095,7 +1565,9 @@ uv run python tests/walk_gui.py                          # → var/gui-walk/inde
 ```
 
 On every screen it opens the wall and a branch's wall and points at each card head — a
-tap on the phone — which raises the inspection card where a node has one; a branch's
+tap on the phone — which raises the inspection card where a node has one, its browser
+choosing the card on a pause as a viewer does in the settings menu, since the library's
+look keeps it off (`CHOSEN_LOOKS` in the script); a branch's
 page, a leaf's and its History; a subject's branch and node; Events, Maintenance, both
 System views, Links, Copy and About; the Series index with every fold open; and two
 Series views, with a pointer at rest on a curve and, with a mouse, a stretch dragged
@@ -1110,8 +1582,10 @@ A walk takes about eight minutes, most of it the demo's own clock.
 console's errors, the Content-Security-Policy reports the page sent, and how far the
 layout shifted with no input. **And every step is measured** against a short list of
 facts (`FACTS` in the script): a page no wider than its screen, a raised card inside
-the screen, the name, the title and the state of a card's head not lying over one
-another, and everything a curve or a sparkline draws inside its plot. A fact that does
+the screen, the name, the title, the actions, the state and the icons of a head's
+row — a card's and a box's — not lying over one another, a name read as its lines
+rather than its box, since the state may stand on a broken name's second line, and
+everything a curve or a sparkline draws inside its plot. A fact that does
 not hold **marks** the step.
 
 **Nothing fails.** A review collects, so the walk always ends with its gallery,
@@ -1123,12 +1597,29 @@ and nothing in the layout makes — and the demo's readings change under the wal
 list marks a step as a real shift does — a mark that comes back at the same step on a
 second walk is the one to believe.
 
+**A baseline.** Before the interactive wall's stage 2 the walk was taken twice on
+4174324, in the cloud container, and marked the same nine steps both times; its
+gallery is kept beside the checkout, git-ignored, where `docs/handover.md` says. The
+walks after the wall's stages are read against it: `walk.json`'s facts and their
+counts first, then the marked steps, then the same step's screenshot side by side —
+a mark the baseline carries is today's, a new one is the stage's. Two of the
+baseline's marks are the walk's own reading of what the page does on purpose or
+has always done: the console's 404 on a removed node's own address, which that page
+answers (ADR-0116), and a layout shift on the sheet's large walls at 1,440 pixels,
+where `dashboard-layout.js` plans the grid again after the first paint. The baseline
+is drawn in the plain theme, then called *default*; a walk since 2026-10-18 draws the
+library's cyberpunk, whose monospace face sets every name wider, so its screenshots
+differ from the baseline's in every face and the facts' counts and the marked steps are
+what read across.
+
 **A fact that is fixed moves into a test of Mode 5**, which is where a claim is held;
 the walk finds, Mode 5 keeps. `tests/test_walk_gui.py` holds the facts themselves, each
 against a page of the test's own that is broken in its way, which it has to mark, and
-the same page sound, which it has to pass — a walk that never fails would otherwise
-look the same with a fact that measures nothing. Its half that needs no browser runs in
-the ordinary gate. Run it when a fact is added or changed:
+the same page sound, which it has to pass — a walk that never fails would otherwise look
+the same with a fact that measures nothing. It holds the walk's own end too: the server
+stops, then the demo's instance — its one save, its lease let go — and the process goes
+back where it was, before the directory the demo ran in goes. Its half that needs no
+browser runs in the ordinary gate. Run it when a fact is added or changed:
 
 ```
 uv run pytest tests/test_walk_gui.py

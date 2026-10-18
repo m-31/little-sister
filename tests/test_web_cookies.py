@@ -126,10 +126,14 @@ class CookieSecurityTests(TestCase):
         self._login(HTTPS)
         response = self.client.get("/status?depth=3&view=1", base_url=HTTPS)
         headers = response.headers.getlist("Set-Cookie")
-        # depth + hide_ok + hide_idle + dense. The count is asserted so that a route
+        # hide_ok + hide_idle: the two filters. The depth and density cookies went
+        # with dense mode (ADR-0127 decision 7) — a `depth=` is the viewer's word
+        # for one load and writes none. The count is asserted so that a route
         # which quietly stopped setting them cannot make this test pass by covering
         # nothing at all.
-        self.assertEqual(len(headers), 4, headers)
+        self.assertEqual(len(headers), 2, headers)
+        self.assertEqual(sorted(header.split("=", 1)[0] for header in headers),
+                         ["hide_idle", "hide_ok"])
         for header in headers:
             self.assertIn("secure", attributes(header), header)
 
@@ -137,9 +141,25 @@ class CookieSecurityTests(TestCase):
         self._login(HTTP)
         response = self.client.get("/status?depth=3&view=1", base_url=HTTP)
         headers = response.headers.getlist("Set-Cookie")
-        self.assertEqual(len(headers), 4, headers)
+        self.assertEqual(len(headers), 2, headers)
         for header in headers:
             self.assertNotIn("secure", attributes(header), header)
+
+    def test_the_retired_view_cookies_are_expired_with_the_same_attributes(self):
+        # The first answer that finds a `depth` or `dense` cookie expires it, once
+        # (ADR-0127 decision 7): a deletion is a Set-Cookie too, and carries the
+        # same flags as the cookies the page sets, so a browser matches and drops it.
+        self._login(HTTPS)
+        self.client.set_cookie("depth", "3", domain="localhost")
+        self.client.set_cookie("dense", "1", domain="localhost")
+        response = self.client.get("/status", base_url=HTTPS)
+        headers = response.headers.getlist("Set-Cookie")
+        self.assertEqual(sorted(header.split("=", 1)[0] for header in headers),
+                         ["dense", "depth"])
+        for header in headers:
+            self.assertIn("max-age=0", header.lower(), header)
+            self.assertIn("secure", attributes(header), header)
+            self.assertIn("samesite=lax", header.lower(), header)
 
 
 if __name__ == "__main__":

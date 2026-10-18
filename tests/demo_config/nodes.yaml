@@ -35,6 +35,9 @@
   order: 6
   title: Network
   about: Links between sites, and the tunnels over them.
+  # A container no check speaks for gets its look here, as it gets its title
+  # (ADR-0128): its links start as chips, and a tunnel that fails opens its way.
+  chips: true
 
 /storage:
   order: 5

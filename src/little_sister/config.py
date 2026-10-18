@@ -11,8 +11,8 @@ field and a default here and reading them in :func:`load_config`.
 from __future__ import annotations
 
 import os
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -29,6 +29,7 @@ from little_sister.limits import (
     SERIES_LIMIT,
 )
 from little_sister.logger import logger, stamp_in
+from little_sister.looks import LOOKS, Look
 from little_sister.state import DEFAULT_STATE_INTERVAL
 
 DEFAULT_TIMEZONE = "Europe/Berlin"
@@ -72,8 +73,17 @@ class Config:
     # clamped to this many lines, so short reasons show that many reasons while a
     # wrapped reason uses more of the budget.
     # A non-negative int (0 shows none up front); the _status_grid.html reason macro
-    # passes it through as the block's --reason-lines. Not reasons.js's CLIP_SLOP.
+    # passes it through as the block's --reason-lines. Not tree.js's CLIP_SLOP.
     reason_cap: int = DEFAULT_REASON_CAP
+    # How the wall first looks wherever nobody else speaks for a node (ADR-0128):
+    # `chips`, whether a node's children start as chips, and `fold_ok`, whether its
+    # healthy lines and children start folded behind *✓ +N ok* — `true` the more
+    # compact look for both. The fourth of the first look's layers: a node's
+    # `nodes.yaml` entry, the file of the check that writes it and that check's type
+    # speak first (`little_sister.first_look`). Unset is `None`, nobody said, and the
+    # built-in look decides — until the interactive wall's last step, today's density.
+    chips: bool | None = None
+    fold_ok: bool | None = None
     # What this instance is called, on `/system` and in whatever a package writes
     # down about the process it is running in (ADR-0074). Empty means the
     # hostname, which in a container is already the task or pod name. Validated
@@ -175,6 +185,14 @@ class Config:
     # default 1, which publishes at once and is what every deployment had before
     # there was a counter. A check may override it for itself.
     escalate_after: int = DEFAULT_ESCALATE_AFTER
+    # The deployment's default for each look a browser may choose for itself
+    # (`looks.py`, ADR-0029): its theme, how a run of chips is drawn, whether a pause
+    # on a node's name opens its card, how a row and a chip answer the pointer. Read
+    # from the key the look is named by; a
+    # value the look does not have warns and gives way to the library's own. A
+    # browser that has chosen keeps its choice in the presentation cookie.
+    looks: Mapping[str, str] = field(
+        default_factory=lambda: {look.key: look.default for look in LOOKS})
 
     @property
     def tzinfo(self) -> ZoneInfo:
@@ -214,6 +232,18 @@ def _valid_reason_cap(value: object) -> int:
         logger.warning("config: reason_cap %d is negative; using 0", cap)
         return 0
     return cap
+
+
+def _valid_switch(name: str, value: object) -> bool | None:
+    """A tri-state switch of the first look (ADR-0128): ``None`` where the key is
+    absent, else a real boolean. Anything else is logged and left unset, as the caps
+    beside it are replaced by their defaults — ``values.flag`` would read a quoted
+    ``"false"`` as true, and ``values.strict_flag`` would raise at import, where
+    nothing catches it and no instance would start."""
+    if value is None or isinstance(value, bool):
+        return value
+    logger.warning("config: %s %r is not true or false; leaving it unset", name, value)
+    return None
 
 
 def _valid_branch_cap(value: object) -> int:
@@ -271,6 +301,24 @@ def _valid_card_status_line(value: object) -> str:
                        value, "/".join(CARD_STATUS_LINES),
                        DEFAULT_CARD_STATUS_LINE)
         return DEFAULT_CARD_STATUS_LINE
+    return choice
+
+
+def _valid_look(look: Look, value: object) -> str:
+    """The deployment's default for ``look``: one of its values, or the library's own
+    with a warning naming the choices — a look only ever changes how a page is
+    drawn, so a bad value costs that look and nothing else.
+
+    YAML 1.1 reads an unquoted ``off`` as false, and ``on`` as true, so
+    ``inspection_card: off`` arrives as a boolean: it is read back as the word it
+    was written as."""
+    if isinstance(value, bool):
+        value = "on" if value else "off"
+    choice = str(value).strip().lower()
+    if choice not in look.values:
+        logger.warning("config: %s %r is not one of %s; using %r", look.key, value,
+                       "/".join(look.values), look.default)
+        return look.default
     return choice
 
 
@@ -437,6 +485,28 @@ def settings_files(config_dir: str | Path | None = None) -> list[Path]:
     return aspect_files(SETTINGS_ASPECT, config_dir)
 
 
+#: Every key ``settings.yaml`` has, which :func:`load_config` reads: anything else in
+#: the file is named at load, since a misspelt key would otherwise do nothing and
+#: say nothing (backlog #91 §7.10).
+SETTINGS_KEYS: tuple[str, ...] = (
+    "timezone", "time_format", "maintenance_default_expiry", "instance",
+    "reason_cap", "chips", "fold_ok", "branch_cap", "maintenance_cap", "reading_cap",
+    "retry_interval", "retry_attempts", "stacktrace", "card_status_line",
+    "dashboard_columns", "state_interval", "max_workers", "entry_limit",
+    "memory_share", "record_limit", "series_limit", "escalate_after",
+    *(look.key for look in LOOKS),
+)
+
+
+def _warn_unknown_settings(layer: Mapping[str, Any], source: Path) -> None:
+    """Name the keys of one settings file that nothing reads, beside the ones that
+    are read, as `links.yaml`'s loader does for its own."""
+    unknown = sorted(str(key) for key in layer if str(key) not in SETTINGS_KEYS)
+    if unknown:
+        logger.warning("config: %s: unknown key(s) %s (known: %s)", source,
+                       ", ".join(unknown), ", ".join(SETTINGS_KEYS))
+
+
 def _read_settings(source: Path) -> dict[str, Any]:
     """One settings file as a mapping. Every problem — absent, unparsable, not a
     mapping — logs and yields ``{}``, so a bad layer costs its own keys and not the
@@ -478,7 +548,9 @@ def load_config(path: str | Path | None = None, *,
     sources = [Path(path)] if path is not None else settings_files(config_dir)
     data: dict[str, Any] = {}
     for source in sources:
-        data.update(_read_settings(source))
+        layer = _read_settings(source)
+        _warn_unknown_settings(layer, source)
+        data.update(layer)
     timezone = _valid_timezone(
         values.text(data, "timezone", default=DEFAULT_TIMEZONE), zone_read)
     if not sources:
@@ -493,6 +565,8 @@ def load_config(path: str | Path | None = None, *,
             default=DEFAULT_MAINTENANCE_EXPIRY),
         instance=values.text(data, "instance", default=""),
         reason_cap=_valid_reason_cap(data.get("reason_cap", DEFAULT_REASON_CAP)),
+        chips=_valid_switch("chips", data.get("chips")),
+        fold_ok=_valid_switch("fold_ok", data.get("fold_ok")),
         branch_cap=_valid_branch_cap(data.get("branch_cap", DEFAULT_BRANCH_CAP)),
         maintenance_cap=_valid_maintenance_cap(
             data.get("maintenance_cap", DEFAULT_MAINTENANCE_CAP)),
@@ -519,23 +593,29 @@ def load_config(path: str | Path | None = None, *,
             data.get("series_limit", SERIES_LIMIT)),
         escalate_after=_valid_escalate_after(
             data.get("escalate_after", DEFAULT_ESCALATE_AFTER)),
+        looks={look.key: _valid_look(look, data.get(look.key, look.default))
+               for look in LOOKS},
     )
     if sources:
         logger.info(
             "config: loaded %s — timezone=%s, time_format=%r, reason_cap=%d, "
+            "chips=%s, fold_ok=%s, "
             "branch_cap=%d, maintenance_cap=%d, reading_cap=%d, "
             "maintenance_default_expiry=%s, "
             "retry_interval=%s, retry_attempts=%d, card_status_line=%s, "
             "dashboard_columns=%s, state_interval=%d, max_workers=%d, "
             "entry_limit=%d, memory_share=%s, record_limit=%d, "
-            "series_limit=%d, escalate_after=%d",
+            "series_limit=%d, escalate_after=%d, looks=%s",
             ", ".join(str(source.resolve()) for source in sources),
-            cfg.timezone, cfg.time_format, cfg.reason_cap, cfg.branch_cap,
+            cfg.timezone, cfg.time_format, cfg.reason_cap,
+            "unset" if cfg.chips is None else cfg.chips,
+            "unset" if cfg.fold_ok is None else cfg.fold_ok, cfg.branch_cap,
             cfg.maintenance_cap, cfg.reading_cap, cfg.maintenance_default_expiry,
             cfg.retry_interval or "off", cfg.retry_attempts,
             cfg.card_status_line, cfg.dashboard_columns, cfg.state_interval,
             cfg.max_workers, cfg.entry_limit, cfg.memory_share,
-            cfg.record_limit, cfg.series_limit, cfg.escalate_after)
+            cfg.record_limit, cfg.series_limit, cfg.escalate_after,
+            ", ".join(f"{key}={value}" for key, value in cfg.looks.items()))
     return cfg
 
 

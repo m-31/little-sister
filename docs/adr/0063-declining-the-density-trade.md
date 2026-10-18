@@ -1,7 +1,7 @@
 # ADR-0063 — A node may decline the density trade (`show_when_quiet`)
 
 - **Status:** Accepted
-- **Date:** 2026-10-04 (accepted 2026-08-22)
+- **Date:** 2026-10-18 (accepted 2026-08-22)
 - **Related:** [ADR-0056](0056-stable-useful-dashboard-flow.md) (the chip, the
   quiet-box fold, and the stability rule this must not disturb),
   [ADR-0012](0012-node-metadata.md) / [ADR-0017](0017-node-title.md) /
@@ -16,15 +16,25 @@
   chip still offers), [ADR-0008](0008-json-output-api.md) (JSON envelope, unchanged
   here), [ADR-0061](0061-decoration-is-not-a-label.md) (a client draws its own chips),
   [ADR-0118](0118-a-child-a-run-names-takes-nothing-declared-for-its-name.md) (a
-  child that says a run names it takes the flag its own result carries).
+  child that says a run names it takes nothing declared for its name),
+  [ADR-0127](0127-the-wall-is-a-tree-and-a-click-opens-or-closes-a-node.md) (the wall as
+  a tree: a click, ▤ and the folds a declared node starts outside of),
+  [ADR-0128](0128-where-a-nodes-first-look-comes-from.md) (the first look's addresses,
+  `children:` among them, which the flag rides).
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
 
-The dense dashboard view buys height with two compactions (ADR-0056): a quiet leaf is
-painted as a name-and-state **chip** rather than a box — "a chip trades at-a-glance
-quiet reason text for density" — and quiet full boxes past `branch_cap` fold behind an
-in-place *+N more*. A warn/error node is exempt from both, so nothing urgent hides.
+The wall buys height by drawing quiet nodes small. The dense view did it with two
+compactions (ADR-0056): a quiet leaf is painted as a name-and-state **chip** rather than
+a box — "a chip trades at-a-glance quiet reason text for density" — and quiet full
+boxes past `branch_cap` fold behind an in-place *+N more*. The tree that replaces it
+([ADR-0127](0127-the-wall-is-a-tree-and-a-click-opens-or-closes-a-node.md)) does it by
+a node's first look ([ADR-0128](0128-where-a-nodes-first-look-comes-from.md)): its
+children start as chips where `chips` says so, and its healthy ones folded where
+`fold_ok` does. Neither hides a failure: the density exempts a warn/error node from both
+compactions, and in the tree a failing node is a red chip where it does not open its
+way.
 
 That prices every quiet node the same, and quiet nodes differ in what their lines
 *are*. Most reason text is diagnostic: it explains a problem, so while the node is
@@ -66,7 +76,9 @@ quiet.* The name deliberately does not mention the chip. The chip is one surface
 current painting, a client rendering the tree draws its own (ADR-0061), and a field
 whose value can only be explained by pointing at one template's condition would be
 GUI configuration riding in the tree. This one is explained by pointing at the node's
-lines.
+lines. The keys that say how a node starts, `chips` among them (ADR-0128), may name
+what the page does, because they are the web page's settings and ride in no tree; this
+field rides in the snapshot, and so names its claim.
 
 ### 2. Sources and precedence — the labels' lattice, exactly
 
@@ -83,11 +95,21 @@ the declaration mirrors the configuration key for key, and an aspect that is a
 roster *by construction* (an `ec2` inventory, one line per instance) is declared
 once in the type and inherited by every account of every installation — **>** the
 value on the child `CheckResult`, the **dynamic-child channel**, stamped by the run
-for a name no declaration could have anticipated **>** unstated. The deployment's
-block and the type's declared default reach a child by its name where the child says
-nothing ([ADR-0118](0118-a-child-a-run-names-takes-nothing-declared-for-its-name.md));
-a child that says a run names it, `dynamic=True`, takes the flag its own result
-carries, or none, with a `nodes.yaml` entry for its path still above it.
+for a name no declaration could have anticipated **>** unstated. Each place also speaks
+for every child of a node at once, by a `children:` block under the node's own entry —
+in `nodes.yaml` under its path, in the deployment's block and the type's map under its
+name, and for the children of the check's own node at the file's top level and in the
+type's `node_defaults` — the addresses of the first look's keys
+([ADR-0128](0128-where-a-nodes-first-look-comes-from.md) decision 3), where a child's
+own name entry beats its parent's `children:` within one place and the places keep
+their order. The deployment's block and the type's declared default reach a child by
+its name where the child says nothing
+([ADR-0118](0118-a-child-a-run-names-takes-nothing-declared-for-its-name.md)); a child
+that says a run names it, `dynamic=True`, takes nothing declared for its name and takes
+its parent's `children:`, so a type declares the flag for a level runs name —
+`batch: {children: {show_when_quiet: true}}` for every queue — where it would stamp
+each result. With no `children:` above it, it takes the flag its own result carries, or
+none, a `nodes.yaml` entry for its path still above it.
 
 The mechanism is the seed-once / fill-empty write the lattice already uses, and the
 field is a **tri-state** for the reason `order` is `None` rather than `0` when
@@ -117,8 +139,11 @@ nothing, by subnode **name at any depth**: one `disk: {show_when_quiet: true}` r
 every host's `disk` leaf, which is the per-account copy-paste ADR-0025 closed for
 labels. The map's value beats the one the child result carries, for the same reason
 the root ignores its result copy: a declaration — the deployment's file first, the
-type's map beneath it — beats what a run stamps. A child that says a run names it,
-`dynamic=True`, takes the flag its own result carries, or none (ADR-0118).
+type's map beneath it — beats what a run stamps. A `children:` statement names no path,
+so the engine is handed the statements when the files load and applies them as it
+stores each child, `nodes.yaml`'s among them (ADR-0128 decision 4); a parent's
+`children:` beats what the child's own result stamps, a declaration over a stamp, for a
+child a run names too.
 
 Two consequences are the point, and one is the price. A deployment can state the
 field for **any installed branch check** by editing its own YAML — a library upgrade
@@ -139,24 +164,26 @@ declaration then closes the loop in the other direction: once `subnode_defaults`
 exists for the labels, the flag rides its entries too, and the type's half of the
 block is one map, shaped like the block itself.
 
-### 4. What it does: both dense compactions, or the field lies
+### 4. What it does: every fold the configuration sets, or the field lies
 
-In the dense view a declared node is exempt the way a warn/error node already is:
+A declared node **starts open** whatever its parent's `chips` says, and **no healthy
+fold the configuration sets** — its parent's or its own — hides it or its quiet lines
+([ADR-0127](0127-the-wall-is-a-tree-and-a-click-opens-or-closes-a-node.md) decision 5).
+Where the density still draws a level nobody spoke for, it is exempt from both of its
+compactions the way a failing node is: **never painted as a chip**, and **never counted
+a surplus quiet box**, so the `branch_cap` fold cannot put it behind *+N more*.
 
-- it is **never painted as a chip** — it keeps its full box and its reason lines; and
-- it is **never counted a surplus quiet box**, so the `branch_cap` fold cannot put it
-  behind *+N more*.
+The exemption is from every fold or from none: a node kept out of the chip and then
+folded shows *less* than the chip did — exemption from one compaction and not the other
+would make the field hide exactly what it promised to show. The declaration is per node
+and does not cascade: a declared container keeps its own box, and its quiet children
+start as their own first look says unless declared themselves.
 
-The second is not generosity: a node kept out of the chip and then folded shows
-*less* than the chip did — exemption from one compaction and not the other would make
-the field hide exactly what it promised to show. The declaration is per node and does
-not cascade: a declared container keeps its own box, and its quiet leaf children chip
-as usual unless declared themselves.
-
-With density off the field does nothing — every node is a full box already. And it
-moves nothing: chip-versus-box painting was never an input to the stable flow
-profile, which prices every visible node as a full box-and-reason host (ADR-0056), so
-declaring a node changes painting inside a card and no card's position or span.
+A viewer's word is over the claim, for the tab: ▤ pressed on its parent closes it with
+its siblings, a funnel pressed on its parent folds it with the other healthy children,
+and its own funnel folds its quiet lines. And it moves cards: the planner prices the
+first look ([ADR-0128](0128-where-a-nodes-first-look-comes-from.md) decision 6), and a
+declared node is priced open, the box it starts as.
 
 ### 5. What it is not
 
@@ -166,9 +193,9 @@ declaring a node changes painting inside a card and no card's position or span.
   for problems only, and a declared node is still `OK`. The field re-weights
   density; it does not redefine idle. (Maintenance is different — not idle — and
   stays so.)
-- **Not a preference, and no new cookie key.** The viewer's controls are untouched
-  in both directions: density off still boxes everything, and no per-node override
-  joins the settings menu (the ADR-0029 / ADR-0062 line).
+- **Not a preference, and no cookie key.** What a viewer closes or folds holds for the
+  tab and no longer, in the tab's own map (ADR-0127 decision 9), and no per-node
+  override joins the settings menu (the ADR-0029 / ADR-0062 line).
 - **Not in the JSON envelope here.** The snapshot carries it and the web renders it;
   the envelope (ADR-0008) is unchanged, and a client drawing its own chips is
   entitled to its own decision (ADR-0061) until the field joins the contract as its
@@ -192,15 +219,13 @@ declaring a node changes painting inside a card and no card's position or span.
 - Chips remain the default. The field is for nodes whose quiet text is the reading;
   a wall of declared nodes is a configuration smell, not a mechanism failure, and
   dense mode's height benefit shrinks by exactly as much as somebody declares.
-- The dense flow model keeps overestimating chip heights — the trade ADR-0056
-  records — and gains nothing new to mispredict: a declared node is priced as the
-  full box it now always is.
-- One template macro owns both dense conditions today, so the painting change is
-  local. The tests that hold the whole are the chip condition, the fold exemption,
-  the per-field precedence across all four sources, the tri-state — an explicit
-  `false` beating a declared or stamped `true` — a declared value beating a stamped
-  one while a stamped value survives for an undeclared name, and a type that never
-  heard of the key receiving a deployment's declaration anyway.
+- The planner gains nothing new to mispredict: a declared node is priced as the open
+  box it always starts as.
+- The tests that hold the whole are the open start under a parent's `chips`, the fold
+  exemption, the per-field precedence across every place and its `children:`, the
+  tri-state — an explicit `false` beating a declared or stamped `true` — a declared
+  value beating a stamped one while a stamped value survives for an undeclared name,
+  and a type that never heard of the key receiving a deployment's declaration anyway.
 
 ## Alternatives considered
 
@@ -236,11 +261,10 @@ declaring a node changes painting inside a card and no card's position or span.
   pollutes roll-up, events and the envelope, and a permanent yellow is a light
   people stop reading — the argument the `aws` check's `batch` grading already
   records against alarm fatigue.
-- **Do nothing** — the detail is one click away (ADR-0019), and density can be
-  turned off. True and beside the point: the popover serves drill-down and the
-  dashboard's job is the glance. An inventory read through one click per node per
-  look is not glanceable, and turning density off spends the whole wall to un-hide
-  two nodes.
+- **Do nothing** — the detail is one click away, and the wall can be opened whole.
+  True and beside the point: a click serves drill-down and the dashboard's job is the
+  glance. An inventory read through one click per node per look is not glanceable, and
+  opening everything spends the whole wall to un-hide two nodes.
 - **Exempt declared nodes from *hide idle* too.** Rejected above: that filter
   answers to the viewer, and overriding an explicit "problems only" would make the
   field louder than the person at the screen.

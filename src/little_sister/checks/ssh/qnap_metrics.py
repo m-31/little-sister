@@ -4,8 +4,7 @@ Pipes the bundled ``qnap-health.sh`` (which calls QTS's ``getsysinfo``) to the h
 and reports two branches **on the host node**, beside the host metrics:
 
 - ``temperature`` — ``system``, ``cpu`` (where the model exposes them) and one
-  ``drive<bay>`` child per populated bay, in °C, graded by ``warn`` / ``error``
-  thresholds.
+  ``drive<bay>`` child per populated bay, in °C, graded by ``max_temperature``.
 - ``smart`` — one ``drive<bay>`` child per populated bay: ``GOOD`` → OK,
   ``Warning`` → WARN, anything else → ERROR.
 
@@ -22,9 +21,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from little_sister import values
 from little_sister.checks.base import (
-    CheckError,
     CheckResult,
     Measurement,
     config_markdown,
@@ -33,21 +30,37 @@ from little_sister.checks.base import (
 )
 from little_sister.checks.ssh.base import SshScriptCheck, parse_descriptions
 from little_sister.checks.ssh.metrics import (
-    grade,
     parse_metrics,
     reading,
     readings,
+    refuse_thresholds,
     unavailable,
 )
 from little_sister.status import StatusCode, join_path
 
 DEFAULT_SCRIPT = "qnap-health.sh"
-DEFAULT_TEMP_THRESHOLDS = (50.0, 60.0)   # °C (warn, error)
 TEMPERATURE_DESCRIPTION = "Temperature (°C)"
 SMART_DESCRIPTION = "Drive SMART status"
 
 SMART_OK = {"GOOD", "OK", "PASSED", "NORMAL"}
 SMART_WARN = {"WARNING", "WARN"}
+
+#: What this type grades (ADR-0131): how hot the system, its processor and each
+#: drive may run, a maximum in °C, each level the last temperature that passes; and
+#: a drive's SMART verdict, a judgment this type makes from the NAS's own word — OK
+#: where it says so, a warning where it warns, an error for any other word, so that a
+#: word nobody named is never quieter than a failing drive — to which a deployment
+#: may give a sentence.
+GRADINGS: dict[str, object] = {
+    "max_temperature": {
+        "sentence": "How hot the system, its processor and each drive may run, in "
+                    "°C.",
+        "kind": "pair", "field": "sys_temp_c", "unit": "number",
+        "warn": 50, "error": 60},
+    "smart": {
+        "sentence": "A drive's SMART verdict, as the NAS words it.",
+        "kind": "judgment", "field": "drives.*.smart"},
+}
 
 #: What this type's nodes are graded on, each on the node that grades it — the
 #: curves it draws by default (ADR-0096 decision 6). A drive is keyed by its node's
@@ -67,22 +80,18 @@ MEASURES: dict[str, object] = {
 class QnapMetricsCheck(SshScriptCheck):
     """QNAP temperatures + per-drive SMART, reported beside the host metrics."""
 
-    def __init__(self, *, temp_warn: float, temp_error: float,
-                 descriptions: dict[str, str] | None = None,
+    def __init__(self, *, descriptions: dict[str, str] | None = None,
                  **kwargs: Any) -> None:
-        super().__init__(measure_defaults=MEASURES, **kwargs)
-        self.temp_warn = temp_warn
-        self.temp_error = temp_error
+        super().__init__(measure_defaults=MEASURES, gradings=GRADINGS, **kwargs)
         self.descriptions = descriptions or {}
 
     @classmethod
     def _extra_from_config(cls, config: dict[str, Any],
                            base_dir: Path) -> dict[str, Any]:
-        warn, error = _parse_temp_thresholds(config.get("thresholds"))
+        refuse_thresholds(config.get("thresholds"),
+                          {"temperature": ("max_temperature", "")})
         return {
             **cls._connection_from_config(config, base_dir, DEFAULT_SCRIPT),
-            "temp_warn": warn,
-            "temp_error": error,
             "descriptions": parse_descriptions(config.get("descriptions")),
         }
 
@@ -97,9 +106,10 @@ class QnapMetricsCheck(SshScriptCheck):
         return {join_path(self.path, "temperature"), join_path(self.path, "smart")}
 
     def _temp_threshold_md(self) -> str:
-        """Config Markdown for a temperature leaf — its °C thresholds (ADR-0013)."""
-        return config_markdown({"warn at": f"{self.temp_warn:g} °C",
-                                "error at": f"{self.temp_error:g} °C"})
+        """Config Markdown for a temperature leaf — the °C levels it was graded by
+        (ADR-0013)."""
+        return config_markdown({
+            "graded (°C)": self.grading_summary("max_temperature") or "not graded"})
 
     # --- the two halves (ADR-0086) -------------------------------------------
 
@@ -197,8 +207,9 @@ class QnapMetricsCheck(SshScriptCheck):
         if not isinstance(value, (int, float)):
             return unavailable(name, description)
         celsius = float(value)
-        return CheckResult(grade(celsius, self.temp_warn, self.temp_error),
-                           [f"{celsius:.0f} °C"], name=name,
+        verdict = self.verdict("max_temperature", value=celsius)
+        return CheckResult(verdict.code, [verdict.entry(f"{celsius:.0f} °C")],
+                           name=name,
                            description=description,
                            config=self._temp_threshold_md())
 
@@ -207,12 +218,26 @@ class QnapMetricsCheck(SshScriptCheck):
         for name, sub in _drives(record):
             status = str(sub.get("smart") or "")
             if status and status != "--":
-                children.append(_smart_leaf(name, status))
+                children.append(self._smart_leaf(name, status))
         smart_desc = self._describe("smart", SMART_DESCRIPTION)
         if not children:
             return unavailable("smart", smart_desc)
         return CheckResult(StatusCode.UNDEFINED, name="smart",
                            description=smart_desc, children=tuple(children))
+
+    def _smart_leaf(self, name: str, status: str) -> CheckResult:
+        """A drive's SMART leaf: the judgment this type makes from the NAS's word,
+        with the sentence a deployment wrote for it where it fired (ADR-0131)."""
+        upper = status.upper()
+        if upper in SMART_OK:
+            code = StatusCode.OK
+        elif upper in SMART_WARN:
+            code = StatusCode.WARN
+        else:
+            code = StatusCode.ERROR
+        verdict = self.verdict("smart", code=code)
+        return CheckResult(verdict.code, [verdict.entry(plain(status))], name=name,
+                           description=SMART_DESCRIPTION)
 
 
 def _drive_readings(metrics: Mapping[str, str]) -> dict[str, dict[str, Any]]:
@@ -241,28 +266,3 @@ def _drives(record: Mapping[str, Any]) -> list[tuple[str, Mapping[str, Any]]]:
             if isinstance(sub, Mapping)]
 
 
-def _smart_leaf(name: str, status: str) -> CheckResult:
-    upper = status.upper()
-    if upper in SMART_OK:
-        code = StatusCode.OK
-    elif upper in SMART_WARN:
-        code = StatusCode.WARN
-    else:
-        code = StatusCode.ERROR
-    return CheckResult(code, [plain(status)], name=name,
-                       description=SMART_DESCRIPTION)
-
-
-def _parse_temp_thresholds(raw: Any) -> tuple[float, float]:
-    """``thresholds: {temperature: {warn, error}}`` over the °C defaults."""
-    warn, error = DEFAULT_TEMP_THRESHOLDS
-    if raw is None:
-        return warn, error
-    if not isinstance(raw, dict):
-        raise CheckError("'thresholds' must be a mapping")
-    spec = raw.get("temperature") or {}
-    if not isinstance(spec, dict):
-        raise CheckError("thresholds.temperature must be a mapping")
-    where = "thresholds.temperature"
-    return (values.real(spec, "warn", default=warn, where=where),
-            values.real(spec, "error", default=error, where=where))

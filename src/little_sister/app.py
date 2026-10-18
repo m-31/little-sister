@@ -1,10 +1,12 @@
 import atexit
+import gzip
 import json
+import math
 import os
 import re
 import threading
-from collections.abc import Callable, Iterator, Mapping, Sequence
-from dataclasses import dataclass, replace
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from functools import cache, partial
 from pathlib import Path
@@ -29,11 +31,12 @@ from flask import (
 from flask.sessions import SecureCookieSessionInterface
 from flask.typing import ResponseReturnValue
 from jinja2 import ChoiceLoader, StrictUndefined
-from markupsafe import Markup
+from markupsafe import Markup, escape
 
 from little_sister import (
     __version__,
     csp,
+    first_look,
     identity,
     instants,
     link_probe,
@@ -55,8 +58,14 @@ from little_sister.api import (
     status_envelope,
 )
 from little_sister.assets import Assets
-from little_sister.checks import CheckError, parse_duration, plain
-from little_sister.checks.base import DURATION_UNITS, TypeOrigin, registered_types
+from little_sister.checks import Check, CheckError, parse_duration, plain
+from little_sister.checks.base import (
+    DURATION_UNITS,
+    LIBRARY_GRADINGS,
+    WINDOW_DECLARATIONS,
+    TypeOrigin,
+    registered_types,
+)
 from little_sister.config import config
 from little_sister.config_dir import (
     CONFIG_DIR_ENV,
@@ -83,7 +92,15 @@ from little_sister.curves import (
     runs_drawable,
     runs_of,
 )
-from little_sister.dashboard_layout import dashboard_layout
+from little_sister.dashboard_layout import (
+    CHIP_FACE,
+    ChipFace,
+    Priced,
+    chip_estimate,
+    chip_face,
+    chip_width,
+    dashboard_layout,
+)
 from little_sister.engine import Engine, EngineInfo, SubjectSeries, create_engine
 from little_sister.errors import ConfigError
 from little_sister.event_filter import (
@@ -94,20 +111,24 @@ from little_sister.event_filter import (
     FilterRefused,
     read_filter,
 )
+from little_sister.first_look import Drawn, FirstLooks
+from little_sister.grading import MAP, PAIR, SET, SINCE, Graded, Grading
 from little_sister.icons import known_names, read_icon
 from little_sister.instance import this_instance
 from little_sister.keeper import registered_keeper
 from little_sister.lease import Lease, LeaseRefused
 from little_sister.limits import format_size, format_weight
+from little_sister.line_template import Declarations, Declared, Form
 from little_sister.links import LINKS_ASPECT, current_links, links_policy_sources
 from little_sister.logger import logger, open_log_file
+from little_sister.looks import LOOKS, LOOKS_BY_KEY
 from little_sister.maintenance import MaintenanceEntry, MaintenanceStore
 from little_sister.measures import Measure
 from little_sister.nodes import load_nodes, resolve_metadata, run_consistency_pass
 from little_sister.origins import PackageOrigin, package_origin
 from little_sister.paths import shown_path
 from little_sister.reasons import RECORD_TIMESTAMP_KEYS, record_leaves
-from little_sister.render import render_markdown, render_markdown_inline
+from little_sister.render import first_block, render_markdown, render_markdown_inline
 from little_sister.secrets import (
     SecretError,
     check_reference,
@@ -131,7 +152,7 @@ from little_sister.status import (
     on_same_line,
     split_path,
 )
-from little_sister.titles import Labeled, label_parts, shown_title
+from little_sister.titles import Labeled, shown_title
 from little_sister.tree import (
     CAUSE_LINE_PIN_ENDED,
     CAUSE_LINE_PIN_SET,
@@ -140,11 +161,19 @@ from little_sister.tree import (
     CAUSE_PIN_SET,
     CAUSE_REACHED,
     CAUSE_REMOVED,
+    STATE_CODE,
+    ChipCounts,
     Event,
+    ReasonLine,
     StatusPeriod,
     StatusSnapshot,
+    chip_counts,
     events_from_payload,
+    failing,
+    failing_first,
+    healthy,
     last_alive,
+    line_healthy,
     nodes_from_payload,
     stale_after_seconds,
     status_tree,
@@ -165,11 +194,14 @@ _core_loader = app.jinja_env.loader
 if _core_loader is not None:
     app.jinja_env.loader = ChoiceLoader([_core_loader, slots.ExtensionLoader()])
 
-# How deep the /status tree renders before stopping (the default and the ceiling
-# for the user-chosen depth).
+# How deep the /status tree renders before stopping, and the ceiling for a
+# `depth=` in the address.
 MAX_DEPTH = 8
-# Remember a viewer's chosen view (depth + the on/off switches) for a year.
+# Remember a viewer's chosen filters (the on/off switches) for a year.
 VIEW_COOKIE_MAX_AGE = 60 * 60 * 24 * 365
+# The view cookies the band wrote before the wall became a tree (ADR-0127
+# decision 7): no longer read, and expired once, on the first answer that finds one.
+RETIRED_VIEW_COOKIES = ("depth", "dense")
 
 # Presentation preferences (ADR-0029): how this browser wants the surface to
 # look. One cookie holds them, urlencoded so a later key can join without a
@@ -178,9 +210,11 @@ VIEW_COOKIE_MAX_AGE = 60 * 60 * 24 * 365
 # surface *says*, there is no server state, and logging out keeps the look.
 PREFS_COOKIE = "ls_prefs"
 PREFS_COOKIE_MAX_AGE = 60 * 60 * 24 * 365
-THEMES = ("auto", "default", "vivid", "pastel", "dark", "cyberpunk")
+# The themes are a look (`looks.py`): their default the deployment's, the library's
+# cyberpunk. `default` was the plain theme's name until 2026-10-18; a cookie that
+# still says it follows the deployment's default, as any value the roster lacks does.
+THEMES = LOOKS_BY_KEY["theme"].values
 LAYOUTS = ("rail", "topbar", "kiosk")
-DEFAULT_THEME = "default"
 DEFAULT_LAYOUT = "rail"
 # Themes whose canvas is dark enough that Bootstrap's own chrome must follow
 # (`data-bs-theme`). `auto` is deliberately absent: only the browser knows what
@@ -207,21 +241,24 @@ def _connection_is_secure() -> bool:
     return has_request_context() and request.is_secure
 
 
-def _resolve_depth() -> int:
-    """The render depth: an explicit ``?depth=`` wins, else the saved cookie,
-    else :data:`MAX_DEPTH`. Clamped to ``0..MAX_DEPTH``."""
+def _resolve_depth() -> int | None:
+    """A ``depth=`` in the address, clamped to ``0..MAX_DEPTH``, or ``None`` where
+    the address carries none (or nonsense). The viewer's word for one load, as the
+    band's three buttons are (ADR-0127 decision 7): ``depth=N`` closes every node N
+    levels below the page's node, the wall's cards being level 1, and ``depth=0``
+    closes the page's node itself to one card. Never from or into a cookie."""
     raw = request.args.get("depth")
     if raw is None:
-        raw = request.cookies.get("depth")
+        return None
     try:
-        depth = MAX_DEPTH if raw is None else int(raw)
+        depth = int(raw)
     except ValueError:
-        depth = MAX_DEPTH
+        return None
     return max(0, min(depth, MAX_DEPTH))
 
 
 def _resolve_flag(name: str, default: bool) -> bool:
-    """A tri-source on/off view flag (like :func:`_resolve_depth`): an explicit form
+    """A tri-source on/off view flag: an explicit form
     value wins (present ⇒ the switch was checked, or a manual ``?name=1``/``0``);
     else, on a form submission — marked by the hidden ``view`` field — an *absent*
     switch means off (an unchecked checkbox sends nothing); else the saved cookie;
@@ -238,21 +275,34 @@ def _resolve_flag(name: str, default: bool) -> bool:
 
 
 def _presentation() -> dict[str, str]:
-    """This browser's theme and layout, read from the one presentation cookie
-    (ADR-0029).
+    """This browser's layout and each of the looks of `looks.py`, its theme among
+    them, read from the one presentation cookie (ADR-0029).
 
     Every failure mode lands on the defaults, independently per key: no cookie,
     an unparsable one, a key the roster no longer has, a value someone typed by
     hand. A preference is a *look*, so a bad one must never be able to break a
-    page — the worst it can do is show the default.
+    page — the worst it can do is show the default. A look's default is the
+    deployment's (`settings.yaml`), so a browser that never chose one follows it.
     """
+    chosen = _chosen_looks()
     values = parse_qs(request.cookies.get(PREFS_COOKIE, ""))
-    theme = (values.get("theme") or [""])[0]
     layout = (values.get("layout") or [""])[0]
     return {
-        "theme": theme if theme in THEMES else DEFAULT_THEME,
         "layout": layout if layout in LAYOUTS else DEFAULT_LAYOUT,
-    }
+    } | {look.key: chosen.get(look.key, config.looks[look.key]) for look in LOOKS}
+
+
+def _chosen_looks() -> dict[str, str]:
+    """The looks this browser has chosen, as the presentation cookie keeps them: a
+    look the browser never chose is absent, and so is one whose value the look no
+    longer has."""
+    values = parse_qs(request.cookies.get(PREFS_COOKIE, ""))
+    chosen: dict[str, str] = {}
+    for look in LOOKS:
+        value = (values.get(look.key) or [""])[0]
+        if value in look.values:
+            chosen[look.key] = value
+    return chosen
 
 
 @app.context_processor
@@ -265,8 +315,12 @@ def _inject_presentation() -> dict[str, object]:
         "theme": current["theme"],
         "layout": current["layout"],
         "bs_theme": "dark" if current["theme"] in DARK_THEMES else "",
-        "themes": THEMES,
         "layouts": LAYOUTS,
+        # The looks a browser chooses and the deployment defaults (`looks.py`), the
+        # theme first: the settings menu offers each, and `<body>` carries each one
+        # in force.
+        "looks": LOOKS,
+        "look_values": {look.key: current[look.key] for look in LOOKS},
         # the kiosk's exit is a write of this value — the way out is simply
         # choosing the default layout again
         "default_layout": DEFAULT_LAYOUT,
@@ -338,6 +392,47 @@ def _static_by_hash(endpoint: str, values: dict[str, Any]) -> None:
     digest = own_assets.digest(str(values.get("filename", "")))
     if digest is not None:
         values["v"] = digest
+
+
+# What is sent compressed (ADR-0127, on Lex's word of 2026-10-16): the documents and
+# the fragments the ten-second refresh fetches, which carry both faces of every node
+# and so weigh four to five times what the wall did, and the JSON envelopes, a whole
+# tree each — never a static file, which the browser keeps by its hash (ADR-0112) and
+# `send_file` streams. The level is gzip's own: on a deployment's recorded wall it
+# takes the fragment from 574 KB to 26 KB in 4 ms, beside a render of 100 ms, and a
+# further level buys a kilobyte for twice the time. Nothing under a kilobyte is worth
+# the header.
+GZIP_MIMETYPES = frozenset(
+    {"text/html", "application/json", "application/problem+json"})
+GZIP_MIN_BYTES = 1024
+GZIP_LEVEL = 6
+
+
+@app.after_request
+def _compressed_where_asked(response: Response) -> Response:
+    """Send a page, a fragment or an envelope gzipped where the request takes gzip.
+
+    Registered first, so it runs last of the application's ``after_request`` hooks:
+    the body it compresses is the one every other hook has seen, and the headers they
+    set stand. ``Vary: Accept-Encoding`` goes on every answer of these kinds, taken or
+    not, so that a cache between here and a browser never hands a compressed answer
+    to one that did not ask. Nothing a page carries is a secret to leak by its
+    compressed length (the session rides in its cookie, and a pin's compare-and-set
+    token is the pin's own time), so the compression-oracle attacks on TLS are no
+    reason to send a wall at five times its weight.
+    """
+    if response.mimetype not in GZIP_MIMETYPES or response.direct_passthrough:
+        return response
+    response.vary.add("Accept-Encoding")
+    if (response.status_code != 200 or "Content-Encoding" in response.headers
+            or request.accept_encodings.quality("gzip") <= 0):
+        return response
+    body = response.get_data()
+    if len(body) < GZIP_MIN_BYTES:
+        return response
+    response.set_data(gzip.compress(body, GZIP_LEVEL, mtime=0))
+    response.headers["Content-Encoding"] = "gzip"
+    return response
 
 
 @app.after_request
@@ -599,12 +694,23 @@ def preferences() -> ResponseReturnValue:
     later page then has to defend against.
     """
     current = _presentation()
-    theme = request.form.get("theme", "")
+    # A look, the theme among them, is written once the browser has chosen it — in
+    # this post, where the menu sends a value the deployment does not default to, or
+    # in an earlier one, which the cookie keeps — so a browser that never chose
+    # follows the deployment's default when that changes. The menu posts every group
+    # at once, each as it stands, so a value equal to the default is no choice by
+    # itself. The layout, whose default is a constant, is written as it stands.
+    chosen: dict[str, str] = {}
+    kept = _chosen_looks()
+    for look in LOOKS:
+        posted = request.form.get(look.key, "")
+        if posted in look.values and (look.key in kept
+                                      or posted != config.looks[look.key]):
+            chosen[look.key] = posted
+        elif look.key in kept:
+            chosen[look.key] = kept[look.key]
     layout = request.form.get("layout", "")
-    chosen = {
-        "theme": theme if theme in THEMES else current["theme"],
-        "layout": layout if layout in LAYOUTS else current["layout"],
-    }
+    chosen["layout"] = layout if layout in LAYOUTS else current["layout"]
     response = make_response(redirect(_safe_next(request.form.get("next"))))
     response.set_cookie(PREFS_COOKIE, urlencode(chosen),
                         max_age=PREFS_COOKIE_MAX_AGE, samesite="Lax",
@@ -616,6 +722,191 @@ def preferences() -> ResponseReturnValue:
 def _status_slug(code: StatusCode) -> str:
     """Lower-case status name, used as a CSS class suffix (`s-ok`, `s-error`…)."""
     return code.name.lower()
+
+
+@app.template_filter("failing_first")
+def _failing_first(lines: Iterable[ReasonLine]) -> list[ReasonLine]:
+    """A box's lines as its line budget shows them: errors, then warnings, then the
+    rest, each group in the check's order (`tree.failing_first`, ADR-0127 decision 6).
+    For the clamped block alone; a node's own lines on its page keep the check's
+    order."""
+    return failing_first(lines)
+
+
+# --- the wall's tree (ADR-0127): what the templates ask of each node ----------------
+#
+# One vocabulary over what a node contributes (`tree.py`, backlog #91 §7.9): what the
+# healthy fold folds, what a close's incident reads, what a chip counts.
+
+app.jinja_env.globals["healthy"] = healthy
+app.jinja_env.globals["failing"] = failing
+app.jinja_env.globals["line_healthy"] = line_healthy
+app.jinja_env.globals["state_code"] = STATE_CODE.__getitem__
+# the cues' shapes, drawn once per page as a sprite (`_status_cue.html`)
+app.jinja_env.globals["status_codes"] = tuple(StatusCode)
+
+
+def _chip_counts_map(node: StatusSnapshot | None) -> dict[str, ChipCounts]:
+    """Every node's chip counts by path, taken on the snapshot **before** *hide ok*
+    and *hide idle* drop nodes (ADR-0127 decision 2) — as the page's containers are —
+    so a filter changes what the page shows and never what a chip says."""
+    counts: dict[str, ChipCounts] = {}
+
+    def walk(current: StatusSnapshot) -> None:
+        counts[current.path] = chip_counts(current)
+        for child in current.children:
+            walk(child)
+
+    if node is not None:
+        walk(node)
+    return counts
+
+
+def _leaves_map(node: StatusSnapshot | None) -> dict[str, int]:
+    """How many leaves stand beneath each branch, by path, on the same unfiltered
+    snapshot as the chips' counts: what a branch's chip counts with the tree and
+    never with a status, which a level's runs keep room for (`_chip_room`)."""
+    leaves: dict[str, int] = {}
+
+    def walk(current: StatusSnapshot) -> int:
+        if not current.children:
+            return 1
+        leaves[current.path] = sum(walk(child) for child in current.children)
+        return leaves[current.path]
+
+    if node is not None:
+        walk(node)
+    return leaves
+
+
+#: How far past the rest a level's widest name may size its runs' columns: at most
+#: this many times the level's 90th-percentile name (backlog #91's note, §2,
+#: 2026-10-15), a name past it wrapping inside its column.
+CHIP_NAME_BOUND = 1.5
+
+
+@dataclass(frozen=True)
+class ChipRoom:
+    """What a level's runs of chips are sized for under the look `chip_runs:
+    aligned` (ADR-0127 decision 12): the characters the server counts for their
+    column — the widest name's and the largest count's — and the largest count of
+    leaves among the level's branches, which `tree.js` keeps room for when it
+    measures the names in pixels. The estimate counts each character at the theme's
+    letter of a `0` — 0.85 in the system's faces, a whole one in cyberpunk's — and
+    adds the chip's chrome, a count's margin among it where the level counts
+    (`dashboard_layout.chip_width`, backlog #91's note, §2, 2026-10-17 and
+    2026-10-18)."""
+
+    chars: int
+    leaves: int
+
+    @property
+    def estimate(self) -> str:
+        """The column as the stylesheet's length, the level's `--chip-w`, which
+        reads the theme's letter."""
+        return chip_estimate(self.chars, counts=self.leaves > 0)
+
+    def tenths(self, face: ChipFace) -> int:
+        """The same column in the planner's tenths of a pixel, in ``face``."""
+        return chip_width(self.chars, counts=self.leaves > 0, face=face)
+
+
+def _chip_room(children: Sequence[StatusSnapshot],
+               leaves: Mapping[str, int]) -> ChipRoom:
+    """A level's column width for its runs, from what never changes with status
+    (ADR-0127 decision 12): the widest of its children's names, open or closed, at
+    most :data:`CHIP_NAME_BOUND` times their 90th percentile, in characters, and the
+    digits of the largest count of leaves among its branches — a leaf brings none,
+    its total being the count of its lines, which each reading writes. The names
+    are the ones the filters leave, as every face the page draws is; the leaves are
+    counted on the unfiltered tree, as the chips count them."""
+    names = sorted(len(child.name) for child in children)
+    if not names:
+        return ChipRoom(0, 0)
+    typical = names[max(0, math.ceil(0.9 * len(names)) - 1)]
+    widest = min(names[-1], math.floor(CHIP_NAME_BOUND * typical))
+    most = max((leaves.get(child.path, 0) for child in children if child.children),
+               default=0)
+    return ChipRoom(widest + (len(str(most)) if most else 0), most)
+
+
+def _chip_own(child: StatusSnapshot, leaves: Mapping[str, int],
+              face: ChipFace) -> int:
+    """A closed child's chip at its own width, in the planner's tenths of a pixel, as
+    a run that holds one column draws it, wrapping as it comes (backlog #91's note,
+    §2, 2026-10-17): its name and the digits of the leaves beneath it where it is a
+    branch — a leaf brings none, as its level's estimate has it — with the chrome of
+    a chip that draws its count, or none, in ``face``
+    (`dashboard_layout.chip_width`)."""
+    most = leaves.get(child.path, 0) if child.children else 0
+    return chip_width(len(child.name) + (len(str(most)) if most else 0),
+                      counts=bool(most), face=face)
+
+
+#: Every node's first look (ADR-0128), as the start builds it from the loaded
+#: checks, the deployment's `nodes.yaml` and `settings.yaml` (`_seed_node_metadata`).
+#: Until the start has run, and where no engine runs, `settings.yaml` alone speaks.
+first_looks: FirstLooks | None = None
+
+
+def _first_looks() -> FirstLooks:
+    """The resolver the page draws its first look from (`first_look.FirstLooks`)."""
+    if first_looks is not None:
+        return first_looks
+    return FirstLooks((), {}, config, status_tree.named_by_run)
+
+
+def _first_drawn(node: StatusSnapshot | None, depth_closed: int | None,
+                 looks: FirstLooks | None = None, *, dense: bool = True) -> Drawn:
+    """What the page draws of ``node``'s nodes as they arrive (`first_look.draw`,
+    backlog #91 §7.5): the configured look, today's density where nobody spoke, and
+    the failure budget's openings; nothing where the page draws no tree."""
+    if node is None:
+        return Drawn()
+    return first_look.draw(node, looks or _first_looks(), depth_closed=depth_closed,
+                           dense=dense)
+
+
+def _priced(node: StatusSnapshot | None, drawn: Drawn,
+            leaves: Mapping[str, int], face: ChipFace = CHIP_FACE) -> Priced:
+    """What the planner prices of the page's first look (ADR-0128 decision 6): the
+    nodes the configuration closes, each node's line budget, the chips' column width
+    of each level a run stands in, the estimate its `--chip-w` carries
+    (`_chip_room`), and each of those chips at its own width (`_chip_own`), which a
+    run that holds one column wraps by, both in tenths of a pixel in the ``face``
+    the browser's theme draws them in — none of it read off a status."""
+    chips: dict[str, int] = {}
+    own: dict[str, int] = {}
+
+    def walk(current: StatusSnapshot) -> None:
+        if any(child.path in drawn.priced for child in current.children):
+            chips[current.path] = _chip_room(current.children, leaves).tenths(face)
+            for child in current.children:
+                if child.path in drawn.priced:
+                    own[child.path] = _chip_own(child, leaves, face)
+        for child in current.children:
+            walk(child)
+
+    if node is not None:
+        walk(node)
+    return Priced(closed=drawn.priced, caps=drawn.caps, chip_w=chips, chip_own=own)
+
+
+def _healthy_counts(node: StatusSnapshot) -> tuple[int, int]:
+    """What the healthy fold on a node folds (ADR-0127 decision 4): the configured
+    fold's count, which leaves a child that claims `show_when_quiet` and a claiming
+    node's own quiet lines alone, and a press's, which takes them too (decision 5).
+    Both ride on the funnel and on *✓ +N ok*, and `tree.js` draws the one in force."""
+    kids = [child for child in node.children if healthy(child)]
+    lines = [line for line in node.reasons if line_healthy(node, line)]
+    pressed = len(kids) + len(lines)
+    configured = (sum(1 for child in kids if not child.show_when_quiet)
+                  + (0 if node.show_when_quiet else len(lines)))
+    return configured, pressed
+
+
+app.jinja_env.globals["chip_room"] = _chip_room
+app.jinja_env.globals["healthy_counts"] = _healthy_counts
 
 
 @app.template_filter("url_branch")
@@ -655,6 +946,24 @@ def _node_title(node: Labeled) -> str:
     the question with only half of it. Anything carrying a `name` and a `title`
     answers — a `StatusSnapshot`, a maintenance pin."""
     return shown_title(node.name, node.title)
+
+
+#: Where a name wider than its line may break: after an underscore, a dot or a
+#: hyphen inside it, so `code_scanning_security` reads `code_scanning_` over
+#: `security` rather than `code_scanning_securit` over `y`. The browser breaks at
+#: none of the first two by itself, and `overflow-wrap: anywhere` stays the last
+#: resort for one word longer than its line.
+_NAME_BREAK = re.compile(r"([_.-])(?=.)")
+
+
+@app.template_filter("breakable")
+def _breakable(name: object) -> Markup:
+    """``name`` escaped, a `<wbr>` after each `_`, `.` and `-` inside it (backlog
+    #91's note, §2, 2026-10-16) — for a name drawn where it may wrap: a card's or
+    a box's head, a node page's head and heading, the trail. `<wbr>` is no
+    character, so a copied name, a find and the name a screen reader is given are
+    the name as it is; an attribute takes the name itself."""
+    return Markup(_NAME_BREAK.sub(r"\1<wbr>", str(escape(str(name)))))
 
 
 @app.template_filter("breadcrumbs")
@@ -708,21 +1017,6 @@ def _shorten(text: object, length: int = 200) -> str:
             cut = link.start() or link.end()
             break
     return string[:cut].rstrip() + "…"
-
-
-_STATUS_ALERT = {
-    StatusCode.OK: "alert-success",
-    StatusCode.WARN: "alert-warning",
-    StatusCode.ERROR: "alert-danger",
-    StatusCode.MAINTENANCE: "alert-primary",
-    StatusCode.UNDEFINED: "alert-secondary",
-}
-
-
-@app.template_filter("status_alert")
-def _status_alert(code: StatusCode) -> str:
-    """Bootstrap alert class for a status code (the light info boxes)."""
-    return _STATUS_ALERT.get(code, "alert-danger")
 
 
 @app.template_filter("duration")
@@ -1807,35 +2101,29 @@ def _nothing_left(hidden: Sequence[StatusSnapshot], under: str = "") -> str:
             f"{idle:,} {'is' if idle == 1 else 'are'} idle.")
 
 
-def _node_meta_map(node: StatusSnapshot | None) -> dict[str, dict[str, str]]:
-    """Path → rendered ``{title, about}`` HTML for the inspection popover
-    (ADR-0019), for every node in ``node``'s subtree that has either. This static
-    metadata is preloaded with the dashboard page; the hover card renders from it
-    client-side, so it survives the polled grid swaps. (``description`` is not in
-    the card — it stays on the leaf detail page.)"""
-    out: dict[str, dict[str, str]] = {}
+def _node_meta_map(node: StatusSnapshot | None) -> dict[str, dict[str, str | int]]:
+    """Path → what the inspection card (ADR-0019) says of a node's ``about``, for
+    every node of ``node``'s subtree that has one: its first block, rendered
+    (``about``), and how many blocks follow it (``more``), which the card counts as
+    *… 3 more paragraphs on its page*.
+
+    The card's heading is the node's name and title as its own head draws them,
+    which every node's box carries, open or closed, so the map carries neither: a
+    title that only repeats the name is already dropped there (`titles.py`), and a
+    node with neither a title nor an ``about`` has no card. The map rides in every
+    fragment of the refresh (`_status_grid.html`), so a node a run names after the
+    load has its card and a changed ``about`` is current. (``description`` is not
+    in the card: it stays on the node's own page, beneath its head's row.)"""
+    out: dict[str, dict[str, str | int]] = {}
     if node is None:
         return out
     stack = [node]
     while stack:
         current = stack.pop()
-        meta: dict[str, str] = {}
-        # A title that only repeats the name is dropped here as on the chip that
-        # opens the card (`titles.py`) — otherwise hovering `critical` pops a card
-        # whose entire content is the word *Critical*. A node left with no metadata
-        # at all falls out of the map, and gets no hover card, which is right.
-        # And a title with no word in it is drawn **with** its name rather than
-        # instead of it (ADR-0061): this card has no name of its own, so a band
-        # titled 🔴 would head a card with a bare circle. `plain` because a name is
-        # structural data and this string is about to be rendered as Markdown.
-        name, title = label_parts(current.name, current.title)
-        if title:
-            label = f"{plain(name)} {title}" if name else title
-            meta["title"] = str(render_markdown_inline(label))
         if current.about:
-            meta["about"] = str(render_markdown(current.about))
-        if meta:
-            out[current.path] = meta
+            block, more = first_block(current.about)
+            if block:
+                out[current.path] = {"about": str(block), "more": more}
         stack.extend(current.children)
     return out
 
@@ -2725,15 +3013,24 @@ def _inject_user_avatar() -> dict[str, str]:
 def _seed_node_metadata(engine: Engine) -> None:
     """Resolve `about` (nodes.yaml > inline check), seed it onto the tree, and run
     the startup consistency pass (ADR-0012). A bad `nodes.yaml` is logged, not
-    fatal — node metadata must not stop monitoring."""
+    fatal — node metadata must not stop monitoring. The file as loaded is kept by
+    the engine for the life of the process (ADR-0128): what a path's `children:`
+    says is read as each child is written, since no path names the children. And
+    the page's first look is built from it, the checks and `settings.yaml` — the
+    checks' alone where the file was not read."""
+    global first_looks
     try:
-        metadata = resolve_metadata(engine.checks, load_nodes())
+        declared = load_nodes()
+        metadata = resolve_metadata(engine.checks, declared)
     except CheckError as error:
         self_report.startup.note(
             "nodes",
             plain(f"nodes.yaml was not loaded ({error}); every node shows what its "
                   f"check says and none of the metadata written there"))
+        first_looks = FirstLooks(engine.checks, {}, config, status_tree.named_by_run)
         return
+    engine.declare_nodes(declared)
+    first_looks = FirstLooks(engine.checks, declared, config, status_tree.named_by_run)
     for path, meta in metadata.items():
         status_tree.set_about(path, meta.about)
         status_tree.set_title(path, meta.title)
@@ -3078,18 +3375,25 @@ def _split_heartbeat(
 
 
 def _containers(node: StatusSnapshot | None) -> frozenset[str]:
-    """Which of the nodes a page draws as cards hold others: the viewed node, its
-    card at depth 0, and its children, the cards at every other depth.
+    """Which of the nodes a page draws hold others: the viewed node and every node
+    beneath it with children — a card, a nested box, or its card at depth 0.
 
     Read before a filter drops a child. A pin on a node covers everything beneath it
-    whether or not the page shows it, and the editor a card opens says what its pin
-    would cover (ADR-0104 decision 3) — so a card *hide ok* left without children
-    still says *and everything beneath it*.
+    whether or not the page shows it, and the editor an admin's ‖ opens in a node's
+    box says what its pin would cover (ADR-0104 decision 3, ADR-0127 decision 3) —
+    so a node *hide ok* left without children still says *and everything beneath
+    it*, which its ‖ carries as ``data-beneath``.
     """
     if node is None:
         return frozenset()
-    return frozenset(drawn.path for drawn in (node, *node.children)
-                     if drawn.children)
+
+    def beneath(drawn: StatusSnapshot) -> Iterator[str]:
+        if drawn.children:
+            yield drawn.path
+            for child in drawn.children:
+                yield from beneath(child)
+
+    return frozenset(beneath(node))
 
 
 @app.route('/status')
@@ -3121,8 +3425,14 @@ def status(branch: str = "") -> ResponseReturnValue:
     # page was a node's when it loaded, and its script takes a 200.
     if node is None and branch and not request.args.get('fragment'):
         return _no_node_page(user, branch)
-    # A leaf node (a check) gets its own detail page.
-    if branch and node is not None and not node.children:
+    # A leaf node (a check) gets its own detail page — on a load. The part an open
+    # page's refresh asks for is a fragment whatever the node has become: a branch's
+    # page polls on after a run named none of its children, and is answered with
+    # the grid for a node without any, not with a leaf's page, which the page's
+    # script would read as a lost session (ADR-0127 decision 10). The next load of
+    # the address is the leaf's page.
+    if branch and node is not None and not node.children \
+            and not request.args.get('fragment'):
         # The current period's start — or None when this node has no transition of its
         # own to bound one, in which case the page reports the single observation
         # instead of a from/until of one instant (ADR-0027).
@@ -3135,6 +3445,9 @@ def status(branch: str = "") -> ResponseReturnValue:
         focus, focus_orphan = _focus_of(branch, node)
         return render_template('check.html', username=user.name,
                                firstname=user.firstname, node=node,
+                               # Its fold as its files say (ADR-0128): ✓ ok is a
+                               # leaf page's one fold, and it starts as configured.
+                               drawn=_first_drawn(node, None),
                                # The curves that stand on this node (ADR-0097
                                # decision 2), and the views beside this one.
                                node_curves=_node_curves(node), view="status",
@@ -3185,16 +3498,23 @@ def status(branch: str = "") -> ResponseReturnValue:
     here = _own_address()
     hide_ok = _resolve_flag('hide_ok', False)
     hide_idle = _resolve_flag('hide_idle', False)
-    dense = _resolve_flag('dense', True)
     # Surface the maintenance set (ADR-0014) from the *unfiltered* snapshot, so the
     # index and the "contains maintenance" pips survive hide-idle and any depth.
     now = _now()
     node_pins, entry_pins, maintenance_ancestors = _maintenance_view(node, now)
     maintenance_rows = _maintenance_rows(node_pins, entry_pins)
+    # What each chip counts (ADR-0127 decision 2), from the same unfiltered
+    # snapshot: a filter changes what the page shows, never what a chip says.
+    chip_counts_by_path = _chip_counts_map(node)
+    # and how many leaves each branch has, which its level's runs keep room for
+    chip_leaves = _leaves_map(node)
     # What the grid says where the filters leave none of the nodes it shows: what
     # they hid. With hide ok on, the wall is the list of problems and empty on a good
     # day, and it must read as all well there rather than as nothing reporting.
     nothing_left = ""
+    if node is not None and branch and not node.children:
+        # the refresh of a branch's page whose node has no children any more
+        nothing_left = f"Nothing stands beneath {node.name} now."
     if node is not None and (hide_ok or hide_idle):
         hidden: set[StatusCode] = set()
         if hide_ok:
@@ -3210,14 +3530,34 @@ def status(branch: str = "") -> ResponseReturnValue:
             nothing_left = _nothing_left(node.children,
                                          under=node.name if branch else "")
         node = replace(node, children=kept)
+    # The whole tree is drawn, every node open or closed (ADR-0127 decision 1):
+    # `depth=N` closes the level N below the page's node, and `depth=0` alone keeps
+    # the one-card rendering, the page's node closed to its head and counts.
     depth = _resolve_depth()
+    max_depth = 0 if depth == 0 else MAX_DEPTH
+    depth_closed = depth if depth else None
+    # The first look (ADR-0128, backlog #91 §7.5): how each node the filters leave
+    # starts — as its files say, today's density where nobody spoke, the failure
+    # budget's openings among them — and what the planner prices of it, which reads
+    # no status. `depth=0`'s one card draws no tree. The chips are priced in the face
+    # this browser's theme draws them in, as its estimate's length is read.
+    drawn = _first_drawn(node, depth_closed) if max_depth >= 1 else Drawn()
+    priced = _priced(node, drawn, chip_leaves,
+                     chip_face(_presentation()["theme"]))
     # One server-formatted stamp per response (ADR-0006): rendered into the page
     # so it dates its data from the first paint (page JavaScript cannot read
     # navigation-response headers), and sent as X-Rendered-At so the poll loop
     # reads the same clock — "updated …" / "could not refresh — last ok …" honor
-    # settings.yaml's time_format and timezone, not the browser's locale.
+    # settings.yaml's time_format and timezone, not the browser's locale. The
+    # same clock in whole seconds rides on the grid for the tab's map, which holds
+    # a close for its node's incident by the server's time (decision 9).
     rendered_at = _format_local(now)
+    rendered_s = int(now.timestamp())
     no_node = _no_node(branch, now) if node is None and branch else None
+    # What the hover card says of each node's `about` (ADR-0019), the strip's
+    # among them, for the nodes the grid draws: it rides in the fragment, so a node
+    # a run names after the load has its card and a changed text is current.
+    node_meta = _node_meta_map(node) | _node_meta_map(heartbeat)
     if request.args.get('fragment'):
         body = render_template('_status_grid.html', node=node, branch=branch,
                                no_node=no_node,
@@ -3229,8 +3569,12 @@ def status(branch: str = "") -> ResponseReturnValue:
                                # after every load and come back on a reload.
                                dependents=(status_tree.dependents(branch)
                                            if branch else ()),
-                               max_depth=depth, hide_ok=hide_ok,
-                               hide_idle=hide_idle, dense=dense,
+                               max_depth=max_depth, depth_closed=depth_closed,
+                               drawn=drawn, priced=priced,
+                               hide_ok=hide_ok, hide_idle=hide_idle,
+                               chip_counts=chip_counts_by_path,
+                               chip_leaves=chip_leaves,
+                               rendered_s=rendered_s,
                                is_admin=user.admin,
                                # The fragment carries the page's editors of a pin
                                # (ADR-0104 decision 7), so it is handed what they
@@ -3240,16 +3584,14 @@ def status(branch: str = "") -> ResponseReturnValue:
                                here=here, containers=containers,
                                focus=focus, focus_orphan=focus_orphan,
                                pins_above=pins_above,
-                               heartbeat=heartbeat, reason_cap=config.reason_cap,
+                               heartbeat=heartbeat, node_meta=node_meta,
+                               reason_cap=config.reason_cap,
                                branch_cap=config.branch_cap,
                                maintenance_cap=config.maintenance_cap,
                                maintenance_rows=maintenance_rows,
                                maintenance_ancestors=maintenance_ancestors,
                                nothing_left=nothing_left)
     else:
-        # The hover card (ADR-0019) must know the strip too: the lifted
-        # heartbeat's nodes.yaml title/about join the map like any node's.
-        node_meta = _node_meta_map(node) | _node_meta_map(heartbeat)
         body = render_template('status.html', username=user.name,
                                firstname=user.firstname, node=node,
                                no_node=no_node,
@@ -3259,9 +3601,12 @@ def status(branch: str = "") -> ResponseReturnValue:
                                dependents=(status_tree.dependents(branch)
                                            if branch else ()),
                                branch=branch, since=since, made_by=made_by,
-                               max_depth=depth,
-                               depth_limit=MAX_DEPTH, hide_ok=hide_ok,
-                               hide_idle=hide_idle, dense=dense,
+                               max_depth=max_depth, depth_closed=depth_closed,
+                               drawn=drawn, priced=priced,
+                               hide_ok=hide_ok, hide_idle=hide_idle,
+                               chip_counts=chip_counts_by_path,
+                               chip_leaves=chip_leaves,
+                               rendered_s=rendered_s,
                                is_admin=user.admin,
                                maintenance_default=config.maintenance_default_expiry,
                                maintenance_timezone=config.timezone,
@@ -3279,19 +3624,20 @@ def status(branch: str = "") -> ResponseReturnValue:
     response = make_response(body)
     response.headers['X-Rendered-At'] = rendered_at
     response.headers['X-Assets'] = assets_digest()
-    # Persist a view choice only when the viewer set it explicitly (never on the
-    # ~10s poll fragment), so the chosen shape sticks across visits.
+    # Persist a filter only when the viewer set it explicitly (never on the ~10s
+    # poll fragment), so the chosen shape sticks across visits.
     if not request.args.get('fragment'):
-        if 'depth' in request.args:
-            response.set_cookie('depth', str(depth),
-                                max_age=VIEW_COOKIE_MAX_AGE, samesite='Lax',
-                                secure=_connection_is_secure())
-        for name, value in (('hide_ok', hide_ok), ('hide_idle', hide_idle),
-                            ('dense', dense)):
+        for name, value in (('hide_ok', hide_ok), ('hide_idle', hide_idle)):
             if request.args.getlist(name) or request.args.get('view'):
                 response.set_cookie(name, '1' if value else '0',
                                     max_age=VIEW_COOKIE_MAX_AGE, samesite='Lax',
                                     secure=_connection_is_secure())
+    # The depth and density cookies the band wrote are no longer read (ADR-0127
+    # decision 7): the first answer that finds one expires it, so neither lingers.
+    for name in RETIRED_VIEW_COOKIES:
+        if name in request.cookies:
+            response.delete_cookie(name, samesite='Lax',
+                                   secure=_connection_is_secure())
     return response
 
 
@@ -3458,19 +3804,51 @@ def _interval_floor(path: str) -> _IntervalFloor | None:
     (no engine, as in the tests) or none covers the path; the one-second floor
     of decision 13 stays there. A check that runs less often than the one-year
     ceiling could never be covered at all, so it sets no floor either.
+
+    A check with units of its own counts as the period of the node that answers
+    at ``path`` (ADR-0130 decision 5): the unit's, where the pin stands at or
+    beneath the node a unit answers for, and otherwise — the pin above the units,
+    on a container or the mount — the shortest period among the units beneath it,
+    which is what that container says it is read on. A pin on an account whose
+    aspects run every minute and once a day covers a run of the minute's within
+    the hour; it is the daily aspect's own node that needs the day.
     """
     if engine is None:
         return None
     slowest: _IntervalFloor | None = None
     for check in engine.checks:
-        seconds = check.frequency_seconds
-        if seconds <= 0 or not on_same_line(path, check.path):
+        seconds = _period_at(check, path)
+        if seconds is None or seconds <= 0:
             continue
         if slowest is None or seconds > slowest.seconds:
             slowest = _IntervalFloor(seconds, check.path)
     if slowest is not None and slowest.seconds > MAX_MAINTENANCE_SECONDS:
         return None
     return slowest
+
+
+def _period_at(check: Check, path: str) -> int | None:
+    """What ``check`` says a node at ``path`` is read on, where it covers the
+    path at all (:func:`_interval_floor`): the period of the unit answering at or
+    above it, else the shortest period of the units beneath it, else ``None`` —
+    read off the check's own declaration, `units()`, which for a check that
+    declares none is one unit at the mount with the check's `frequency`."""
+    if not on_same_line(path, check.path):
+        return None
+    where = join_path(path)
+    above: list[tuple[int, int]] = []
+    beneath: list[int] = []
+    for unit in check.units():
+        node = join_path(check.path, unit.node)
+        if where == node or where.startswith(node.rstrip("/") + "/"):
+            above.append((len(node), unit.period_seconds))
+        elif node.startswith(where.rstrip("/") + "/"):
+            beneath.append(unit.period_seconds)
+    if above:
+        return max(above)[1]
+    if beneath:
+        return min(beneath)
+    return None
 
 
 def _above_the_floor(seconds: float, source: str,
@@ -4042,6 +4420,48 @@ def events() -> ResponseReturnValue:
                            window_args=dict(window.written))
 
 
+#: How ``/system/installed`` names a pair's unit, and each kind that has no unit.
+_UNIT_NAMES = {"count": "a count", "number": "a number", "duration": "a duration",
+               "size": "a size", "amount": "an amount", "share": "a share"}
+_KIND_NAMES = {MAP: "a map of words", SET: "a set of accepted values",
+               "judgment": "its type's judgment"}
+
+
+@dataclass(frozen=True)
+class GradingRow:
+    """One value a type grades, as ``/system/installed`` lists it (ADR-0131
+    decisions 1 and 6): its full name — the block it lives in, then its key — its
+    sentence, its kind, every key a deployment writes it under in that block, what
+    it grades with where nothing is written, and whether a rule of the block may
+    write it."""
+    name: str
+    sentence: str
+    kind: str
+    keys: tuple[str, ...]
+    default: str
+    rules: bool
+
+    @classmethod
+    def of(cls, grading: Grading) -> 'GradingRow':
+        """The row for one declaration: a pair's keys with the ``null`` that
+        switches it off last, and a default written as the configuration card writes
+        a setting — *warn above 80%, error above 90%* — or a dash where there is
+        none."""
+        keys = grading.keys
+        if grading.kind in (PAIR, SINCE):
+            way = "a maximum" if grading.most else "a minimum"
+            kind = f"{way}, {_UNIT_NAMES.get(grading.unit, grading.unit)}"
+            if grading.kind == SINCE:
+                kind = f"the window, {kind}"
+            keys = (*keys[1:], f"{keys[0]}: null")
+        else:
+            kind = _KIND_NAMES.get(grading.kind, grading.kind)
+        default = Graded(grading.block, {grading.name: grading.default}).summary(
+            grading.name, grading)
+        return cls(grading.name, grading.sentence, kind, keys, default or "—",
+                   grading.rules)
+
+
 @dataclass(frozen=True)
 class TypeRow:
     """One check type on ``/system``'s roster, with the checks that name it.
@@ -4054,11 +4474,57 @@ class TypeRow:
     """
     origin: TypeOrigin
     paths: tuple[str, ...]
+    #: What the type declares of its lines (ADR-0126) — its forms, its words and
+    #: its fields — as the checks that name it were built with. Empty for a type no
+    #: check names, since a type's declarations are read when one of its checks is
+    #: built, and for a type whose lines are sentences of its own.
+    lines: Declarations = field(default_factory=Declarations)
+    #: What the type declares it grades (ADR-0131), as the checks that name it were
+    #: built with — empty, as ``lines`` is, for a type no check names and for one
+    #: that grades in its own code alone.
+    gradings: tuple[GradingRow, ...] = ()
 
     @property
     def count(self) -> int:
         """How many checks name this type — the number the row leads with."""
         return len(self.paths)
+
+    @property
+    def says(self) -> bool:
+        """Whether the type declares anything a ``display:`` block may name."""
+        return bool(self.lines.forms or self.lines.words or self.lines.fields)
+
+
+def _declared_lines(declared: Sequence[Declarations]) -> Declarations:
+    """One type's declarations, as its checks were built with them: each form, word
+    and field once, in the order the first check to declare it gave — the same for
+    every check of a type that declares them as constants, and every name any of
+    them declared for one that does not."""
+    forms: dict[str, Form] = {}
+    words: dict[str, Declared] = {}
+    fields: dict[str, Declared] = {}
+    for one in declared:
+        for form in one.forms:
+            forms.setdefault(form.name, form)
+        for word in one.words:
+            words.setdefault(word.name, word)
+        for item in one.fields:
+            fields.setdefault(item.name, item)
+    return Declarations(tuple(forms.values()), tuple(words.values()),
+                        tuple(fields.values()))
+
+
+def _declared_gradings(declared: Sequence[Sequence[Grading]]
+                       ) -> tuple[GradingRow, ...]:
+    """One type's gradings, as its checks were built with them: each once, by its
+    name, in the order the first check to declare it gave — as
+    :func:`_declared_lines` reads its lines."""
+    rows: dict[str, GradingRow] = {}
+    for one in declared:
+        for grading in one:
+            if grading.name not in rows:
+                rows[grading.name] = GradingRow.of(grading)
+    return tuple(rows.values())
 
 
 def _type_roster(
@@ -4096,9 +4562,15 @@ def _type_roster(
     for an unknown `type:` leaves exactly this page with no engine behind it.
     """
     used: dict[str, list[str]] = {}
+    declared: dict[str, list[Declarations]] = {}
+    graded: dict[str, list[tuple[Grading, ...]]] = {}
     for check in (info.checks if info is not None else ()):
         used.setdefault(check.type_name, []).append(check.path)
-    in_use = [TypeRow(origin, tuple(used[origin.type_name]))
+        declared.setdefault(check.type_name, []).append(check.line_declarations)
+        graded.setdefault(check.type_name, []).append(check.gradings)
+    in_use = [TypeRow(origin, tuple(used[origin.type_name]),
+                      _declared_lines(declared[origin.type_name]),
+                      _declared_gradings(graded[origin.type_name]))
               for origin in registered_types() if origin.type_name in used]
     folded = [TypeRow(origin, ()) for origin in registered_types()
               if origin.type_name not in used]
@@ -4233,6 +4705,13 @@ def system_installed() -> ResponseReturnValue:
     blocked inside somebody else's code is undebuggable from this instance unless
     the page says who asked for each origin (ADR-0048 §7).
 
+    And what each type this configuration runs declares of its lines (ADR-0126):
+    the forms its grading names, each with the sentence that says when and its
+    default text, and the words and the fields a template may name, each with its
+    sentence and an example — the page a deployment writes a ``display:`` block
+    against, since a type's declarations live in its package and nowhere a
+    deployment can read them.
+
     And what the log leaves out (ADR-0121 decision 7): whether the library's
     default is in charge of it, the root's level, every logger that carries a
     level of its own with where the level comes from — a cap a package declared,
@@ -4249,6 +4728,11 @@ def system_installed() -> ResponseReturnValue:
     return render_template('system_installed.html', username=user.name,
                            firstname=user.firstname, version=__version__,
                            types_in_use=in_use, types_folded=folded,
+                           line_types=[row for row in in_use if row.says],
+                           grading_types=[row for row in in_use if row.gradings],
+                           library_lines=WINDOW_DECLARATIONS,
+                           library_gradings=tuple(GradingRow.of(grading)
+                                                  for grading in LIBRARY_GRADINGS),
                            slot_fillers=slots.all_fillers(),
                            packages=_registering_packages(),
                            extra_aspects=aspects,

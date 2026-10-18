@@ -35,7 +35,10 @@ prose node whose reason lists look alike and behave differently.
 declares its own verdict plus a ``running`` flag, the check emits **no code of its
 own** (the seam derives it), healthy lines are emitted on purpose — the per-aspect
 choice a deployment makes — and the failed build's retry runs in italic while the
-line stays red, which is the whole design in one line. Its build line also carries
+line stays red, which is the whole design in one line. Its eight lines come in the
+check's own order, by repository and workflow, the build seventh — past the wall's
+budget of six lines, where a box shows its failing lines first (ADR-0127 decision 6)
+and a leaf's page lists them as written. Its build line also carries
 its run's **record** (ADR-0082), the way a GitHub ``actions`` line does: the run it
 last completed under a nested ``completed.at``, and the run in flight with its
 ``started`` beside a null ``ended`` — so the leaf page shows a line's times, in the
@@ -344,13 +347,16 @@ def _pipelines(t: float, period: float,
     node derives — this scenario returns **no code of its own**, dogfooding the
     seam. ``web-build`` walks the design's one-line arc across the cycle: passed →
     a run in flight on a passing job (ok, italic) → failed (red, upright) → the
-    retry running while the verdict stays red → recovered. ``api-tests`` stays
-    green so the mixed list is mixed, ``deploy-gate`` waits mid-cycle (warn), and
-    ``nightly-audit`` has never concluded (UNDEFINED: ignored by the derivation,
-    ring cue). Healthy lines are emitted deliberately — the per-aspect choice
-    ADR-0042 leaves to a deployment — and the list obeys the three-tier ordering
-    rule (non-OK, then in-flight, then healthy and idle), so the failures stay
-    above the ``reason_cap`` fold.
+    retry running while the verdict stays red → recovered. The other seven stay
+    green so the mixed list is mixed, but for ``deploy-gate``, which waits mid-cycle
+    (warn), and ``nightly-audit``, which has never concluded (UNDEFINED: ignored by
+    the derivation, ring cue). Healthy lines are emitted deliberately — the
+    per-aspect choice ADR-0042 leaves to a deployment — and the list is in the
+    check's own order, by repository and workflow, as a provider lists them: the
+    build is the seventh of eight, past the wall's budget of six lines, so the wall
+    shows that a box draws its failing lines first (ADR-0127 decision 6) while the
+    leaf page lists them as the check wrote them. Until that rule the scenario
+    sorted its own lines, failures first, so that the fold never hid one.
 
     ``at`` is the reading's own time. Given it, the build line carries its run's
     record, its times counted from it — a completed run at the point of the cycle
@@ -407,18 +413,18 @@ def _pipelines(t: float, period: float,
             if 0.3 <= f < 0.9 else
             Entry("deploy-gate", "deploy (main) / gate: approved in 12s",
                   StatusCode.OK))
-    lines = [build, gate,
+    lines = [Entry("api-lint", "api (main) / lint: passed in 41s", StatusCode.OK),
              Entry("api-tests", "api (main) / tests: passed in 2m01s",
                    StatusCode.OK),
+             gate,
+             Entry("docs-build", "docs (main) / build: passed in 1m12s",
+                   StatusCode.OK),
+             Entry("mobile-build", "mobile (main) / build: passed in 11m40s",
+                   StatusCode.OK),
              Entry("nightly-audit", "nightly / audit: has never completed",
-                   StatusCode.UNDEFINED)]
-
-    def tier(entry: Entry) -> int:
-        if entry.code in (StatusCode.ERROR, StatusCode.WARN):
-            return 0
-        return 1 if entry.running else 2
-
-    lines.sort(key=tier)        # stable: emission order survives within a tier
+                   StatusCode.UNDEFINED),
+             build,
+             Entry("web-e2e", "web (main) / e2e: passed in 6m33s", StatusCode.OK)]
     return CheckResult(reason=lines)
 
 
@@ -457,6 +463,34 @@ def _children(t: float, period: float) -> CheckResult:
                 f"{volumes} volume{'s' if volumes != 1 else ''}, one memory "
                 f"bank, one load average.\n\nNothing here carries a verdict — "
                 f"what would is a reason."))
+
+
+#: The fleet's hosts: five quiet boxes on one level, two past the branch cap of
+#: three, so the level folds the surplus behind *+N more* — the fold the tab's map
+#: keeps through the refresh and a reload (ADR-0127 decision 9). Each host has two
+#: leaves, which is what makes it a box and not a chip.
+_FLEET = ("node-01", "node-02", "node-03", "node-04", "node-05")
+_FLEET_FAILS = "node-04"
+
+
+@_scenario("fleet")
+def _fleet(t: float, period: float) -> CheckResult:
+    """A fleet of five hosts, each a box of two quiet leaves: more quiet boxes than
+    the branch cap shows, so the level folds two behind *+N more* — which the
+    viewer opens, and the tab's map keeps open through every refresh and a reload.
+    Mid-cycle one host's disk fills: a failing box is never folded, so it steps out
+    of the fold on its own and the count behind *+N more* drops by one until it
+    clears, while the level the viewer opened stays open."""
+    f = t / period
+    hosts = []
+    for name in _FLEET:
+        disk = (CheckResult(StatusCode.ERROR, ["disk 97% full — /var/log"], name="disk")
+                if name == _FLEET_FAILS and 0.4 <= f < 0.7
+                else CheckResult(StatusCode.OK, name="disk"))
+        hosts.append(CheckResult(StatusCode.OK, name=name, children=(
+            CheckResult(StatusCode.OK, name="cpu"), disk)))
+    return CheckResult(StatusCode.OK, children=tuple(hosts),
+                       report=f"Enumerated **{len(_FLEET)} hosts**, two leaves each.")
 
 
 #: The severity bands a cloud-posture scanner reports, in the order they mean
@@ -498,6 +532,24 @@ _BAND_LABELS: dict[str, dict[str, object]] = {
     name: {"title": name.capitalize(), "about": about,
            **({"show_when_quiet": True} if name == _SHOW_WHEN_QUIET else {})}
     for name, _, about in _BANDS}
+
+#: How each scenario's own node starts (ADR-0128, `node_defaults`): what a type
+#: would declare of the levels it knows to be big or of lines read only when they
+#: fail, so that the demo starts as the canvas's panel *Where the first look comes
+#: from* drew it (backlog #91 §7.5). The job names and a host's, a backup's and the
+#: scanner's children start as chips — the job names taken back by their check's
+#: file, `ci_jobs.yaml` — and the two CI scenarios fold their passing lines,
+#: `ci_workflows.yaml` showing them again. `informational` keeps its claim and so
+#: starts open among the chips. A scenario not named here says nothing, and the
+#: page draws it as nobody spoke.
+_FIRST_LOOK: dict[str, dict[str, object]] = {
+    "runs": {"chips": True},
+    "children": {"chips": True},
+    "silent": {"chips": True},
+    "severity": {"chips": True},
+    "pipelines": {"fold_ok": True},
+    "workflows": {"fold_ok": True},
+}
 
 #: What each band has found, per fifth of the loop. A row is one band's counts as
 #: the cycle turns, so the whole arc is legible here rather than assembled out of
@@ -620,7 +672,10 @@ class DemoCheck(Check):
         # (ADR-0025). Every scenario declares them, and only the `severity` one
         # emits children by those names — a declaration for a name a run never
         # produces is inert, which is what lets one type declare for all of them.
-        super().__init__(subnode_defaults=_BAND_LABELS, **kwargs)
+        # Its own node's first look is the scenario's (`_FIRST_LOOK`), as a type's
+        # is its kind's (ADR-0128).
+        super().__init__(subnode_defaults=_BAND_LABELS,
+                         node_defaults=_FIRST_LOOK.get(scenario), **kwargs)
         self.scenario = scenario
         # `entries: true` reads a prose scenario's reason list as **members**
         # instead (ADR-0036) — a harness knob, not a model change: it exists so one

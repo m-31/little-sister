@@ -113,7 +113,7 @@ refuse() {
   shift
   echo "ERROR: port ${port} is held by another process; refusing to measure it:" >&2
   for pid in "$@"; do
-    echo "  PID ${pid}: $(cmd_of "$pid")" >&2
+    echo "  $(named_pid "$pid")" >&2
     if is_an_instance "$pid"; then hint=1; fi
   done
   if [ "$hint" = 1 ]; then any_instance_hint; fi
@@ -138,7 +138,7 @@ find_instance() {
   existing="$(listeners_on "$target")"
   foreign=""
   for pid in $existing; do
-    is_ours "$pid" || foreign="${foreign} ${pid}"
+    if is_a_stranger "$pid"; then foreign="${foreign} ${pid}"; fi
   done
   if [ -n "$foreign" ]; then
     # shellcheck disable=SC2086  # one word per PID

@@ -1,7 +1,7 @@
 # ADR-0014 — Persist maintenance to a file, with auto-expiry
 
 - **Status:** Accepted
-- **Date:** 2026-10-04 (accepted 2026-06-27)
+- **Date:** 2026-10-18 (accepted 2026-06-27)
 - **Related:** [ADR-0001](0001-in-process-threaded-engine.md) (one process, in
   memory), [ADR-0002](0002-rlock-snapshot-synchronization.md) (the tree owns state),
   [ADR-0003](0003-config-and-secrets-via-env-file.md) (config / secrets in files),
@@ -20,7 +20,9 @@
   [ADR-0110](0110-what-every-node-last-showed-is-kept-beside-the-log.md) (the
   forgetting of what every node last showed, which takes the reaper's roots),
   [ADR-0120](0120-every-stored-time-is-an-instant.md) (a pin's times are instants,
-  written in UTC and read strictly).
+  written in UTC and read strictly),
+  [ADR-0130](0130-a-unit-has-a-period-of-its-own.md) (decision 5: a check's units, whose
+  periods decision 13's floor reads).
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -204,6 +206,14 @@ asked.
     one second and at most a year — and, because a window that ends before the check
     it covers runs again silences no run of it, at least the longest `frequency`
     among the checks that **cover** the pin, *covers* read exactly as §5 reads it.
+    Where a check declares **units**
+    ([ADR-0130](0130-a-unit-has-a-period-of-its-own.md) decision 5), the floor is read
+    per unit: a pin at or beneath the node a unit answers for needs at least that
+    unit's period, and a pin above a check's units — on a container or the mount — at
+    least the shortest period among the units beneath it, which is what that node says
+    it is read on. A window that ends before the fastest unit beneath it runs again
+    silences no run of anything; one that outlasts it silences runs of that unit, which
+    is what the floor exists to guarantee.
     §4 said *finite*, and finite was not enough. `-1d` and `0` parse cleanly,
     land `expires_at` in the past, and the very next sweep drops the entry — so the
     reason text and both authorships are gone within a tick, behind a redirect that

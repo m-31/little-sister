@@ -9,18 +9,23 @@ console, the reports a page sends, how far its layout shifted — is held the sa
 way, through a step.
 
 The part that needs no browser runs in the ordinary gate: what a vendored URL
-resolves to, how a report reads, and that the gallery leads with what was marked.
-The rest is skipped wherever Playwright or a Chromium binary is unavailable.
+resolves to, how a report reads, that the gallery leads with what was marked, and
+that the walk leaves the demo it ran before the demo's directory goes. The rest is
+skipped wherever Playwright or a Chromium binary is unavailable.
 """
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 from typing import Any
 
 from tests import walk_gui
+from tests.running import subprocess_env
 from tests.walk_gui import FACTS, PROFILES, Step, Walk
 
 try:  # pragma: no cover - environment probe
@@ -35,7 +40,25 @@ _HEAD = ("<div class='status-card__head' data-path='/hosts' style='display:flex;
          "width:300px;position:relative'>"
          "<a class='status-card__name' style='{name}'>hosts</a>"
          "<span class='status-head__middle' style='flex:1'>the hosts</span>"
-         "<span class='status-card__state'>ok</span></div>")
+         "<span class='node-controls' style='display:inline-flex;gap:3px'>"
+         "<span class='node-actions'>"
+         "<a class='node-action' style='{action}'>file</a></span>"
+         "<span class='status-card__state'>ok</span>"
+         "<span class='node-icons'><a class='node-icon'>x</a></span></span></div>")
+
+#: A head whose name broke onto a second line, its state on that line at the row's
+#: end, ``state`` pixels wide: inside the name's box at 100 but clear of its words,
+#: over them at 230.
+_BROKEN = ("<div class='status-card__head' data-path='/queue' style='display:flex;"
+           "width:240px;position:relative;font:16px/24px monospace'>"
+           "<a class='status-card__name' style='display:block;width:150px'>"
+           "aaaaaaaaaaaaaaa bb</a>"
+           "<span class='node-controls' style='display:inline-flex;align-items:center;"
+           "align-self:flex-start'>"
+           "<span class='node-icons'><a class='node-icon' style='display:inline-block;"
+           "width:24px'>x</a></span>"
+           "<span class='status-card__state' style='position:absolute;right:0;bottom:0;"
+           "width:{state}px'>ok</span></span></div>")
 
 #: A plot whose line ends at ``x``.
 _PLOT = ("<svg class='ls-curve__plot' viewBox='0 0 760 180' width='760' height='180'"
@@ -105,6 +128,100 @@ class WithoutABrowserTests(unittest.TestCase):
                       walk_gui.gallery([Step("desk-1440", "wall", "http://x/")]))
 
 
+#: The walk's demo, started and left as the walk does, in a child interpreter: the
+#: application starts once a process and stops once, and this suite's never starts.
+_DEMO_CHILD = """
+    import json, os, urllib.request
+    from tests import walk_gui
+    here = os.getcwd()
+    with walk_gui.demo() as base:
+        ran_in = os.getcwd()
+        served = urllib.request.urlopen(base + "/health", timeout=10).status
+    try:
+        urllib.request.urlopen(base + "/health", timeout=2)
+        after = "answered"
+    except OSError as error:
+        refused = isinstance(getattr(error, "reason", error), ConnectionRefusedError)
+        after = "refused" if refused else "unanswered"
+    print(json.dumps({"served": served, "after": after,
+                      "where": "back" if os.getcwd() == here else os.getcwd(),
+                      "directory": "kept" if os.path.exists(ran_in) else "gone"}))
+"""
+
+
+class TheDemoTests(unittest.TestCase):
+    def test_the_walk_leaves_the_demo_before_its_directory_goes(self) -> None:
+        # The demo runs in a directory of its own, and its instance keeps its state
+        # and its lease there: the server stops, then the instance — its one save,
+        # its lease let go — and the process goes back where it was, all while the
+        # directory is still there. The stop at exit came after the directory had
+        # gone, found no lease, and logged that the instance no longer saved.
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        environment = subprocess_env()
+        # the demo's own configuration roots and log, as a walk has them
+        for name in ("LITTLE_SISTER_CONFIG_DIR", "LITTLE_SISTER_ENGINE", "LOG_FILE",
+                     "LITTLE_SISTER_DEMO_DIR"):
+            environment.pop(name, None)
+        environment["PYTHONPATH"] = str(Path(__file__).resolve().parent.parent)
+        environment["LOG_LEVEL"] = "INFO"  # the engine's stop says what reached it
+        done = subprocess.run([sys.executable, "-c", textwrap.dedent(_DEMO_CHILD)],
+                              cwd=directory, env=environment, capture_output=True,
+                              text=True, timeout=120)
+        self.assertEqual(done.returncode, 0, done.stderr[-3000:])
+        self.assertEqual(json.loads(done.stdout.strip().splitlines()[-1]),
+                         {"served": 200, "after": "refused", "where": "back",
+                          "directory": "gone"})
+        self.assertIn("engine: stopped, reached by the walk's end", done.stderr)
+        self.assertNotIn("no longer saves", done.stderr)
+
+
+class _Stopped(Exception):
+    """Where the fake browser's page ends a walk: at its first use."""
+
+
+class TheWalksLooksTests(unittest.TestCase):
+    def test_the_walks_browser_chooses_the_card_it_raises(self) -> None:
+        # The walk rests on every card head's name, which raises the inspection
+        # card; the library's look keeps the card off since 2026-10-18, so the
+        # walk's browser chooses it on a pause, as a viewer does in the settings
+        # menu, and every other look stays the library's
+        cookies: list[dict[str, str]] = []
+
+        class Page:
+            def add_init_script(self, _script: str) -> None:
+                raise _Stopped
+
+        class Context:
+            def add_cookies(self, added: list[dict[str, str]]) -> None:
+                cookies.extend(added)
+
+            def new_page(self) -> Page:
+                return Page()
+
+        class Browser:
+            def new_context(self, **_drawn_in: Any) -> Context:
+                return Context()
+
+        base = "http://127.0.0.1:5123"
+        out = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        with self.assertRaises(_Stopped):
+            walk_gui.walk_demo(Browser(), base, out, [])
+        self.assertEqual([(cookie["name"], cookie["url"]) for cookie in cookies],
+                         [("ls_prefs", base)])
+        from little_sister import app as app_module
+        from little_sister.looks import LOOKS
+        with app_module.app.test_request_context():
+            never_chose = app_module._presentation()
+        with app_module.app.test_request_context(
+                headers={"Cookie": f"ls_prefs={cookies[0]['value']}"}):
+            drawn = app_module._presentation()
+        self.assertEqual(drawn["inspection_card"], "pause")
+        for look in LOOKS:
+            if look.key != "inspection_card":
+                with self.subTest(look=look.key):
+                    self.assertEqual(drawn[look.key], never_chose[look.key])
+
+
 class FactsInChromiumTests(unittest.TestCase):
     playwright: Any = None
     browser: Any = None
@@ -162,19 +279,30 @@ class FactsInChromiumTests(unittest.TestCase):
                                      card.format(left=850, hidden=" hidden")), [])
 
     def test_a_name_lying_over_a_title_is_marked(self) -> None:
-        self.assertEqual(self._found("head-overlap", _HEAD.format(name="")), [])
+        self.assertEqual(self._found("head-overlap", _HEAD.format(name="", action="")),
+                         [])
         found = self._found("head-overlap",
-                            _HEAD.format(name="margin-right:-30px"))
+                            _HEAD.format(name="margin-right:-30px", action=""))
         self.assertEqual(len(found), 1)
         self.assertRegex(found[0], r"\A/hosts: \.status-card__name and "
                                    r"\.status-head__middle overlap by \d+×\d+px\Z")
 
-    def test_a_pause_mark_on_the_states_seat_is_not(self) -> None:
-        seated = _HEAD.format(name="").replace(
-            "</div>", "<details class='maintenance-editor-disclosure' style='"
-                      "position:absolute;right:0;top:0'><summary>pause</summary>"
-                      "</details></div>")
-        self.assertEqual(self._found("head-overlap", seated), [])
+    def test_a_state_beside_a_broken_names_last_line_is_no_overlap(self) -> None:
+        # a name is its lines, not its box: the state may stand on its second line
+        # beside the words, and is marked only where it lies over them
+        self.assertEqual(self._found("head-overlap", _BROKEN.format(state=100)), [])
+        found = self._found("head-overlap", _BROKEN.format(state=230))
+        self.assertEqual(len(found), 1)
+        self.assertRegex(found[0], r"\A/queue: \.status-card__name and "
+                                   r"\.status-card__state overlap by \d+×\d+px\Z")
+
+    def test_an_action_lying_over_the_state_is_marked_too(self) -> None:
+        # the row's controls are parts of the fact as the name and the title are
+        found = self._found("head-overlap",
+                            _HEAD.format(name="", action="margin-right:-20px"))
+        self.assertEqual(len(found), 1)
+        self.assertRegex(found[0], r"\A/hosts: \.node-action and "
+                                   r"\.status-card__state overlap by \d+×\d+px\Z")
 
     def test_a_line_that_leaves_its_plot_is_marked(self) -> None:
         self.assertEqual(self._found("curve-in-plot", _PLOT.format(x=744)), [])

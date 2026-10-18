@@ -8,6 +8,529 @@ contract versions **separately** — see `docs/api/openapi.yaml` `info.version`.
 
 ## [Unreleased]
 
+## [0.3.21] - 2026-10-18
+
+**The wall becomes a tree a viewer opens and closes node by node, a deployment says how
+each node starts and re-words what a check's lines say, and the library's checks grade
+through one seam; upgrading asks three things of an installation.** A check
+configuration that writes `thresholds:`, a watched process's `warn_mb` or `error_mb`, or
+the `file` check's `max_age` with a level or its `stale_code` stops the start, naming
+the file and the keys to write instead: each level is a pair of the check's own keys —
+`max_disk_warn: 90%`, `max_rss_error: 1 GiB`, `max_age_error: 20m` — and a level is the
+last value that passes, so what warned at 90% warns above it: write 89% to keep a
+warning where it was
+([ADR-0131](docs/adr/0131-a-type-declares-what-it-grades-and-the-library-grades-it.md)).
+Where `settings.yaml` says nothing, the page draws in the cyberpunk theme, opens no
+hover card and answers the pointer with a wash; `theme: plain`, `inspection_card: pause`
+and `toggle_hover: outline` in it keep the theme, the card and the outline it had. And
+the band's *chips* switch and *depth* input are gone with their cookies, so a bookmark's
+`?dense=0` is ignored.
+
+### Removed
+
+- **`thresholds:` of `host-metrics`, `macos-memory` and `qnap-metrics`, a watched
+  process's `warn_mb` and `error_mb`, and the `file` check's `max_age` with a level and
+  `stale_code`.** Each is refused at start with the keys that replace it:
+  `thresholds.disk` is `max_disk_warn` and `max_disk_error`, with `max_memory`,
+  `max_cpu` and `max_load` beside it; `thresholds.swap` and `thresholds.compressor` are
+  `max_swap` and `max_compressor`; a process's bounds are `max_rss_warn` and
+  `max_rss_error` in its own entry; `thresholds.temperature` is `max_temperature`; and
+  the file's age is `max_age_warn` or `max_age_error`, or `max_age: null` where
+  `stale_code` was OK.
+- **The chips switch and the depth control, and their cookies.** A closed node is the
+  chip and opening a node is its depth, so the band's *chips* switch and *depth* input
+  go, and the `dense` and `depth` cookies they wrote are no longer read: the first
+  answer that finds one expires it. A `?dense=0` in a bookmark is ignored; a
+  `depth=N` in the address is still honoured, for one load, as the viewer's word
+  ([ADR-0127](docs/adr/0127-the-wall-is-a-tree-and-a-click-opens-or-closes-a-node.md)
+  decision 7).
+
+### Added
+
+- **A node opens and closes by a click, and the browser's find opens one where it
+  matches.** Every node on the wall is closed — a chip with its cue, its name and
+  what is beneath it counted — or open — its box — and a plain click on a chip, or
+  anywhere on an open node's head row but its icons and actions, changes which, in
+  its place: a chip opens where it stands in its run and the run closes up again
+  when it closes, a card closes to one line with its counts and no other card moves,
+  and the focus moves to the other face. Enter and Space do the same from the
+  keyboard; a click with a modifier, a middle click and a drag that selected the
+  head's text keep the link. A chip's counts are what is beneath it and in it — each
+  leaf by what it counts for itself, a stale one as a warning and a pinned one as
+  maintenance, and each branch that fails for itself, the chip's own node among them
+  — one total where they share a state, each state's glyph and count where they mix,
+  none on a leaf of one line, ‖ where a rule stands beneath, and the words as the
+  chip's tooltip and name: *2 errors, 1 warning, 119 ok*, *1 error, damped: 2 of 3
+  to escalate*, *1 running*; a failing chip, and a closed card that fails, is vivid.
+  A closed node's box is in the page, hidden until found, so the browser's find
+  reaches a name or a line beneath a chip: a match opens its node and every closed
+  node above it as a click would, and a reveal is provisional for two seconds — a
+  later match elsewhere within them closes again what a query typed letter by letter
+  passed, but for the nodes above the new match; a click or a key keeps it. What a
+  viewer opened or closed holds through every refresh and a reload of the tab, and a
+  close holds for its node's incident: once the node has been out of failure for ten
+  minutes of the server's clock, its next failure opens it again, and a shorter
+  recovery is a flicker. On the kiosk a tap toggles a node as anywhere, and its heads
+  carry no icons (ADR-0127 decisions 1, 2, 9, 10 and 11).
+- **Pages, fragments and envelopes are sent compressed.** A page, the fragment the
+  refresh fetches every ten seconds and a JSON envelope go gzipped where the request
+  takes gzip, which every browser's does: the tree's fragment, four to five times what
+  the wall's was, crosses the wire at a twentieth of its weight — a deployment's
+  recorded wall 26 KB for 574 KB. Nothing under a kilobyte and never a static file,
+  which the browser keeps by its hash; every such answer says `Vary:
+  Accept-Encoding`. A proxy that compressed already compresses nothing twice.
+- **The funnel and ▤ on every open head, and three buttons in the band.** Each open
+  head ends in its icons: ↗ to the node's page; the healthy fold's funnel, on every
+  node with a healthy child or line, which folds them behind *✓ +N ok* after the
+  rest — healthy being ok with nothing stale beneath and no rule on or beneath, so a
+  branch's own line stays while anything beneath it fails — and which, pressed by the
+  viewer, takes a child that claims `show_when_quiet` and a claiming node's own quiet
+  lines as well, the fold the configuration sets leaving them alone; and ▤, on every
+  node with children, pressed while all of them are chips, released while all are
+  open and half-washed between, a click folding or opening them all and a click on
+  one child afterwards changing that child alone. A dot on a button says the viewer
+  set it differently from the configured look. The band gains *Close all*, which
+  closes everything the configuration opened and keeps what the viewer opened with
+  the nodes above it; *As configured*, which brings the first look back; and *Open
+  all*, which opens everything, the healthy shown and every level's surplus unfolded;
+  the one in force is pressed and carries the count of what the viewer set in the
+  tab, and a click on it drops that (decisions 3, 4, 5 and 7). Where nothing says how a
+  node starts (below), the first look stays today's: a quiet leaf starts as a chip,
+  everything else open, a level's quiet nodes past `branch_cap` behind *+N more*.
+- **Three looks a browser chooses in the settings menu, with a deployment's
+  defaults.** *Chips*, aligned or wrapped, says how a run of chips is drawn (below);
+  *Hover card*, on a pause or off, whether a pause on a node's name opens its
+  inspection card; and *Under the pointer*, an outline or a wash, how a head's row and
+  a chip answer the pointer: the outline of their ink, as before, or a wash of it at
+  10 % in the outline's place, the outline standing under forced colors either way.
+  Each is a key of the presentation cookie and of `settings.yaml`,
+  `chip_runs: aligned | wrapped`, `inspection_card: pause | off` and
+  `toggle_hover: outline | wash`, and a browser that never chose one follows the
+  deployment's, so the cookie carries a look only once it is chosen
+  ([ADR-0029](docs/adr/0029-per-user-presentation-preferences.md)). The settings menu
+  grows by the three groups, and scrolls in a window too short for it.
+- **A run of chips lines up in columns.** A node's closed children that stand next to
+  each other share their level's column width, sized from what never changes with
+  status: its widest name, at most one and a half times its typical one, and room for
+  the largest count of leaves among its branches. The runs on either side of an open
+  child line up, each chip is stretched to its column with its counts at the right,
+  and no name is cut: one past the bound wraps inside its column where its words
+  meet, as a head's name does, and counts that do not fit beside a name stand beneath
+  it, so a chip only grows taller where it stands and never moves another sideways. A
+  run with room for one column only — most narrow boxes on a phone — wraps as it comes
+  instead, each chip at its own width, sharing lines: one column lines nothing up. The
+  column decides as the browser draws it, so a run near the line can change from one
+  to the other as the page's script measures its level's names. A click, a count and a
+  reload in another state leave the columns as they are; without script, and until the
+  script has measured them, the server's estimate sizes them — each character at 0.85
+  of the chip's `0`, a whole one in cyberpunk's monospace face, and the chip's padding,
+  border, cue and margins at their size — within a few pixels of what the script
+  measures. It costs room only where a level holds many columns: a workflow
+  runs' page is 7 % taller than with every run wrapped, and with a hundred repositories
+  14 %; the recorded wall is 3 % shorter at a desk and at 1,920 pixels and 4 % on a
+  phone, and a wall whose every leaf fails, its boxes open, is as it was
+  ([ADR-0127](docs/adr/0127-the-wall-is-a-tree-and-a-click-opens-or-closes-a-node.md)
+  decision 12). The runs wrapped as they come, each chip at its own width, as before,
+  are the look `chip_runs: wrapped`.
+- **A warning at startup for a node's *about* past 400 characters.** A node's *about*
+  is the short account of what it is, shown open on every view of the node (below),
+  and one past 400 characters, some four lines at a desk's width, is named on the
+  instance's startup record with its length — a warning on the instance's own node
+  until it is shortened — saying that the rest can stand behind a link. One a check's
+  run hands over is named when it first fills its node
+  ([ADR-0012](docs/adr/0012-node-metadata.md)).
+- **A warning at startup for a key a file does not know.** A misspelled key in any layer
+  of `settings.yaml` — a cap, a look — changed nothing and said nothing; the log now
+  names it, once per file, beside the keys that are read. So does `nodes.yaml`, for its
+  entries and their `children:`, and so does a check's file, for its `subnodes:` entries
+  and its `children:` blocks — the rest of its top level is its type's, which the
+  library does not judge — and a type's `subnode_defaults` and `node_defaults`, once for
+  each check of the type.
+- **`show_when_quiet` reaches a level a run names, under `children:`.** Written under
+  `children:` — at the top level of a check's file, in one of its `subnodes:` entries,
+  at a `nodes.yaml` path, or in a type's `subnode_defaults` entry and its new
+  `node_defaults` — it speaks for each child of that node whatever its name: every queue
+  or account a run names, which no name entry reaches and each run had to stamp. A
+  child's own entry beats it, and it beats what a run stamps; across the files
+  `nodes.yaml` first, then the check's file, then its type
+  ([ADR-0128](docs/adr/0128-where-a-nodes-first-look-comes-from.md)).
+- **A deployment says how each node starts: `chips`, `fold_ok` and `reason_cap`.**
+  `chips: true` starts a node's children as chips and `false` opens them all;
+  `fold_ok: true` folds its healthy children and lines behind *✓ +N ok* from the first
+  paint; `reason_cap` gives its box a line budget of its own, its failing lines first.
+  Each is said where the labels are said: at the top level of a check's file for the
+  check's own node, in a `subnodes:` entry for every node of that name, at a
+  `nodes.yaml` path — the one place a container no check writes gets a look — and in
+  `settings.yaml` for everything nobody spoke for; under `children:` it speaks for each
+  child of a node whatever its name, a level a run names among them. A check type may
+  propose them, in `subnode_defaults` and `node_defaults`, and a deployment's file
+  takes back what it proposes; the most specific statement wins, `nodes.yaml` first,
+  then the check's file, its type and `settings.yaml`. A value that is no boolean, or
+  a `reason_cap` that is no whole number, refuses the start, naming the file; in
+  `settings.yaml` it is said in the log and left unset. A node that claims
+  `show_when_quiet` starts open whatever its parent says and stays out of a fold the
+  configuration sets, and in each card the first three failures a chip would hide open
+  their way — errors before warnings, with the nodes above them — so a failure's
+  reason shows without a click; the others stay red chips with their counts. The
+  grid's layout prices the look as configured, a level of chips a few lines where its
+  boxes stood, and never what a failure opens, so no card moves sideways when one
+  does. A wall whose files say none of this starts as before
+  ([ADR-0128](docs/adr/0128-where-a-nodes-first-look-comes-from.md)).
+
+- **A check type can give an aspect a period of its own, and the engine releases it
+  on its own slot.** A type declares its units — `Unit`, on the check API: each a
+  key, a period, the node it answers for relative to the mount, and what one run of it
+  costs — through `Check.units()`, and reads one at a time through
+  `Check.measure_unit(key)`; a check that declares none is one unit with the check's
+  `frequency`, which is every check as it ran before. A unit's period is `frequency:`
+  in the block that configures it, defaulting to a cadence the type declares or to the
+  check's. The engine arms one slot per unit, runs a check's units one at a time, and
+  after each run grades the whole check over the newest reading of every unit and
+  writes the unit's own path — the mount, the containers down to the node it answers
+  for, and that node's subtree — leaving a sibling aspect what its own unit wrote,
+  stamp and all. A unit's node says its own period and goes stale by it, carries its
+  own run facts in the envelope (`run` may now stand on a node beneath a mount, as the
+  contract always allowed), takes its own retry episode and its own `late.<path>`
+  line, and sets the floor of a pin beneath it; a container between it and the mount
+  says the shortest period beneath it and the earliest slot armed there. A unit whose
+  measurement raises is an `ERROR` on its own node alone, its last reading kept. The
+  startup sum takes each unit's cost over its own period, and `/system` lists a
+  check's units beneath it, each with its period and its last run. None of the
+  library's own types declares units, so nothing on any surface moves until a package
+  adopts them; the check API's epoch stays 3
+  ([ADR-0130](docs/adr/0130-a-unit-has-a-period-of-its-own.md)).
+- **`parse_size` joins the check API beside `parse_duration`.** A size written with a
+  unit — `500 GB`, `2 TiB`, `64 KiB`, or a bare number of bytes — parsed into whole
+  bytes, the decimal prefixes (powers of a thousand) and the binary ones (powers of
+  1024) both, the unit read as written: `500 gb` is refused by name, and `500G` is
+  refused naming the two spellings it could have meant. A missing value is the
+  default a type passes. One grammar for every plugin's ceiling on a size, so that
+  no two types read `GB` differently; the check API's epoch stays 3.
+- **A line that carries a record can be written as a template over it, and a
+  deployment can re-word it.** A check type declares the sentences its grading says of
+  one reading as forms — each a name, one sentence and its default text — and the words
+  and the fields of its records a template may name, each with one sentence and an
+  example, passed to `Check.__init__` as `line_forms`, `line_words` and `line_fields`.
+  Its grading asks for a line with `Check.line(form, reading, …)`, which renders the
+  form over the reading's record and the words handed to the call — every value escaped,
+  a time in the configured zone, a value that is not there as `—`, a link's words left
+  plain where its target is none — and hands back the `Entry` with its record, its
+  subject and the form it was written from. A deployment re-words a form in the check's
+  own YAML, in a `display:` block keyed by the form's name, `{line.default}` standing
+  for the type's text: a team's routine for a kind of node added to what its lines say,
+  without a release of the type. The node's page shows the form beside a line, and
+  `/system/installed` lists the forms, words and fields of every type the configuration
+  runs. None of the library's own types writes its lines as forms, so nothing on any
+  surface moves until a package adopts; the check API's epoch stays 3
+  ([ADR-0126](docs/adr/0126-a-line-is-a-template-over-its-record.md)). A `display:` key
+  in a check's YAML, ignored until now, is read for every type, and one that names no
+  form of its type stops the start, naming the file.
+- **An entry in the JSON envelope names the form it was written from, and the grading
+  that decided its code.** `form` is the form its line's grading named — the key a
+  deployment's `display:` block re-words that line under — and null on a line its check
+  wrote as a sentence of its own; `grading` is the grading that decided the line's code
+  — the name whose keys a deployment writes to grade it differently (ADR-0131) — and
+  null on a line no grading decided. The contract moves to 2.8.0, additively, with
+  `schema_version` still 2, and the golden envelope carries a line written from a form
+  and one a grading decided beside lines that carry neither
+  ([`docs/api/README.md`](docs/api/README.md)).
+- **A check says how long its subject has gone without standing OK.**
+  `max_since_ok_warn` and `max_since_ok_error`, on any check that keeps a series
+  (`series_keep`), grade the time since the newest kept reading of a subject that stood
+  OK — each reading at its own time, a record's `at` where it gives one — and where it
+  went beyond, a line of its own on the node says *last stood OK 1d 3h ago (max 26h)*,
+  or *no reading kept stood OK, over …* where none did, at the level's code, with
+  `max_since_ok_reason` after it. The two lines are the library's forms
+  `since_ok.last` and `since_ok.none`, which a check's `display:` block re-words beside
+  its type's own. A level on a check that keeps nothing stops the start, naming the
+  file, and a level beyond what the check keeps is said once in the log at start
+  ([ADR-0131](docs/adr/0131-a-type-declares-what-it-grades-and-the-library-grades-it.md)
+  decisions 7 and 8).
+- **`/system/installed` lists what each type grades, and a line's page names the
+  grading that judged it.** A *Grading* card lists every value each type the
+  configuration runs grades — its sentence, its kind, the keys a check writes it
+  under, what it grades with where nothing is written, and whether a rule of its block
+  may write it — after the library's own on every check, `max_since_ok`; the *Lines*
+  card lists the window's two forms on every check; and the node's page says *graded
+  by* beside a line a grading decided, after the form it was written from.
+- **A check type can let a deployment write rules about part of what an aspect lists,
+  and the library reads them.** `little_sister.rules` joins the check API. A package
+  declares the axes its rules match along — a key on the rule each, or the one axis of
+  an aspect written on the rule itself — and, where its rules say more than `ignore:`,
+  the keys that are its own and a reader for them. `RuleList` reads a `rules:` list,
+  consulted in order with the first rule that matches deciding whole, compares a value
+  exactly — a name equal to it, a prefix it begins with, a regex matching it whole, case
+  folded only where a pattern says `(?i)` — and refuses at the start what no rule could
+  mean, naming the rule. The measuring half's `see` keeps the run's tally, and `report`
+  writes one `INFO` line per check and rule list naming the rules that matched nothing,
+  when that set changes, and beside each what it missed: the rule above it that decided
+  a value it matches, or else a near miss in case. `RULE_WORD` is the word `rule`, the
+  name of the rule that judged a line by a key of its own. None of the library's own
+  types takes rules, so nothing moves until a package adopts them; the check API's
+  epoch stays 3
+  ([ADR-0129](docs/adr/0129-a-rule-list-is-the-librarys-and-a-value-matches-it-exactly.md)).
+- **A check type declares what it grades, and the library grades it.** `gradings`,
+  passed to `Check.__init__` beside the forms, declares each value a type's grading
+  judges — a map from a word to a code, a pair of levels over a number in one unit, a
+  set of accepted values, or a judgment the type makes in its own code — and
+  `Check.verdict(name, reading, …)` answers the code a grading gives a value under what
+  the deployment wrote, with the sentence written for the grading where it fired, the
+  rule whose keys judged the value and what a value that did not pass was held
+  against. The library reads the check's own keys as the check is built and a block
+  wherever its type hands one over (`Check.grading_block`), refusing what does not fit
+  and naming the file; a `RuleList` handed the block reads what each rule writes of it
+  into `Rule.graded`; `Check.line(…, verdict=…)` takes a line's code from the verdict
+  and hands its forms the words `reason` and `rule`; and `Entry.grading` names the
+  grading that decided a line. `little_sister.grading` joins the check API with
+  `Graded`, `GradingBlock`, `Verdict` and `worst`, and `Check.grading_summary` writes
+  a grading for a configuration card; the check API's epoch stays 3
+  ([ADR-0131](docs/adr/0131-a-type-declares-what-it-grades-and-the-library-grades-it.md)).
+- **One spelling per kind for every grading a deployment writes.** A pair is
+  `<key>_warn` and `<key>_error` in the block of what it grades, each level written with
+  its unit — `26h`, `500 GB`, `80%` — and the last value that passes, `<key>_reason`
+  the sentence its line says when it fires and `<key>: null` switching it off; a map is
+  a mapping from a word to a code, merged over its type's words word by word, a word
+  matched with its case and the spaces around it folded, a key that names no word its
+  type declares said once in the log at start and graded as written, and a word no key
+  names graded WARN. The library's checks take the new keys: `max_disk`, `max_memory`,
+  `max_cpu` and `max_load` (`host-metrics`); `max_pressure`, `max_swap`,
+  `max_compressor` and a process's `max_rss` (`macos-memory`); `max_temperature` and
+  `smart_reason` (`qnap-metrics`); `max_age` (`file`); and `expected_status_reason`
+  (`http`). A Mac's memory pressure, graded by the kernel's own level until now, is a
+  pair whose defaults say what that level said.
+
+### Changed
+
+- **The page's defaults are the cyberpunk theme, no hover card, and a wash under the
+  pointer.** A browser that has chosen nothing in the settings menu, on a deployment
+  whose `settings.yaml` names none of them, draws in the cyberpunk theme, opens no
+  inspection card on a pause over a name, and answers the pointer on a head's row and a
+  chip with a wash of their ink: `theme: cyberpunk`, `inspection_card: off` and
+  `toggle_hover: wash`, each a key of `settings.yaml` where a deployment states its
+  own, and each a choice in the menu. The theme is a look like the others: written
+  into the browser's cookie only once it is chosen there, so a browser that never
+  chose follows the deployment's. The theme called `default` is `plain`, and a
+  browser whose cookie still names `default` draws the deployment's theme. Cyberpunk
+  is held to the contrast every theme owes, its muted ink lightened from `#5f8b9c` to
+  `#6593a5` ([ADR-0028](docs/adr/0028-design-tokens-and-themes.md),
+  [ADR-0029](docs/adr/0029-per-user-presentation-preferences.md),
+  [ADR-0019](docs/adr/0019-inspection-popover.md)).
+- **The library's checks grade at their levels, one step later at the boundary.** A
+  host's disk, memory, CPU and load, a Mac's swap, compressor and processes, and a
+  NAS's temperatures warn and err above their levels, where they did at them: the
+  defaults are the same numbers, so a disk at exactly 90% warns where it erred. A
+  check's configuration card says *warn above 80%, error above 90%*, and a line a
+  grading fired on ends with the sentence the deployment wrote for it. The `file` check
+  passed at its maximum already, and moves nothing.
+- **A plain click on a node's name opens or closes it where it opened its page.** The
+  page is ↗ in the head, or a click with a modifier, away; a chip stays a link to its
+  page for the keyboard and for a browser without script. A closed node's box rides
+  in every refresh beside its chip, hidden until found, so a click opens it without a
+  request: the refresh's fragment grows by what the hidden boxes weigh — four to five
+  times on a deployment's tree of 265 nodes, the status cues' and the icons' shapes
+  drawn once per page as sprites rather than in every head — and the swap's work in
+  the browser with it. On touch a tap toggles the node and the inspection card is not
+  offered (ADR-0127 decisions 1 and 11).
+- **A head's row is one line, its controls one toolbar.** The cue and the name; the
+  title, which gives way first, with an ellipsis; and at the end the head's
+  controls: the node's actions, then ⋯, then the state, then the head's own icons. An
+  action is shown always — one that names an icon as a square like the head's own
+  buttons, its label the tooltip and the accessible name, one without as the small
+  chip wearing its label, no longer faded until the pointer arrives — and nothing lies
+  over the title any more. Where a row has no room, actions fold from the last behind ⋯,
+  whose menu lists them by their labels, never one alone where the state's own line
+  keeps it in the row; where one alone would fold, or not even every action folded
+  leaves the name whole, the state takes a line of its own beneath the row,
+  right-aligned, and the actions get its room back; the name wraps last of all, where
+  its words meet — after an underscore, a dot or a hyphen, not inside a word, so
+  `code_scanning_security` breaks as `code_scanning_` over `security`, on a node's page
+  and in its trail as well, and copies whole — and where it breaks onto a second line
+  anyway, the state stands on that line beneath the icons rather than on a third of its
+  own — and `card_status_line: below` still gives every card's state that line from the
+  start. A title left less room than two letters is hidden
+  rather than shown as a clipped letter. The row is read
+  again as a box opens, when the width changes, when the pointer turns coarse or fine
+  and once the fonts have settled, and after a refresh only where the server drew it
+  otherwise or it stands at another width, the rest drawn as they were read — every
+  row at the width the planner gives its card — so a refresh that changes nothing
+  reads no row, and on a deployment's recorded wall takes a fifth less time. Tab
+  stops once in a head's toolbar, on the control last used there,
+  ←, →, Home and End walk the rest, and the stop is kept through a refresh; on a
+  touch screen the squares stand 8 pixels apart with their tap areas meeting in the
+  gap; each square's symbol is drawn at two thirds of it, 16 of its 24 pixels, where 12
+  left it small in a wide margin, and grows with it where a browser's font is set
+  larger. A box whose lines run past the budget ends them in *⌄ all N* beneath
+  the lines, in place of the chevron after the state word, which reads *⌃ less* once
+  they show, and a card's children stand 6 pixels below its own lines, as a nested
+  box's always did. An admin's wall on a phone is a little taller by this: ‖ is one
+  more square on every head, and a long name breaks where the squares end its first
+  line
+  ([ADR-0127](docs/adr/0127-the-wall-is-a-tree-and-a-click-opens-or-closes-a-node.md)
+  decision 3).
+- **A head's row says itself that a click opens or closes it.** The caret before a
+  head's cue is gone. Under the pointer the row wears an outline of its own surface's
+  ink, 3 pixels out, and pressed a wash of it — neither while the pointer is on one of
+  its controls, where a click does what the control does, and on a touch screen the
+  press alone. A chip does the same, its outline a pixel out and its press a wash
+  over its colour. Neither a head's name nor a chip's underlines under the pointer
+  any more; a chip or a head's name whose pause brings the node's card wears the help
+  cursor, and the rest of the row the pointer's.
+  The refresh's fragment is 2 to 3 % lighter for the caret it no longer carries
+  ([ADR-0127](docs/adr/0127-the-wall-is-a-tree-and-a-click-opens-or-closes-a-node.md)
+  decision 11).
+- **The inspection card opens on a pause on a node's name, and says how much more its
+  page has.** Where a browser has it on — *Hover card* in the settings menu, off by
+  default (above) — it answers a chip, the name in an open node's head and the status
+  strip's name once the pointer has rested there about two thirds of a second, every
+  movement starting the pause again — no longer the rest of a head's row, where it
+  opened on the way to a click — and no movement starts one while a click is under way
+  or just after it; the keyboard's focus on a name opens it at once, and on a touch
+  screen it is not offered. It heads with the node's name and its title as the head
+  draws them, then the first block of its *about* and, where more follows, a line to its
+  page that counts it: on one deployment a type's documentation made a card 1,920 pixels
+  tall, 387 with its first paragraph. Its map rides in every refresh, so a node a run
+  names after the load has its card and a changed *about* is current, for 2,450 bytes of
+  the recorded wall's fragment, 800 on the wire. A node's page's own head, its *about*
+  open above it, has none ([ADR-0019](docs/adr/0019-inspection-popover.md)).
+- **An admin's ‖ ends the icons of every open head without a pin, and clones the
+  page's one editor.** A card's head and a nested box's alike, where the pause mark
+  stood on a card's head only, quiet until hovered. A click clones the editor the page
+  carries once, outside the grid, into the node's box — a card's panel, a box after
+  its row — where the pin's block will stand, with the node's path and what the pin
+  covers filled in; the refresh waits for it as for any editor, Escape and Cancel
+  close it and take it away, and ‖ has the focus back. Without script ‖ is a link to
+  the node's page, whose head keeps *Set maintenance*. An admin's refresh no longer
+  carries an editor in every card: the fragment is lighter by them and heavier by the
+  mark on every head (decision 3).
+- **A node's page is framed, a leaf's as a branch's.** The page draws its node as an
+  open box with everything that is part of it, framed in the node's state: at the top
+  the node's own row — its cue, name and title, its actions, its state and its icons —
+  then the check's description, the pins acting on the node as the rows heading the
+  frame, the node's own lines, the damping counter in words, and the node's facts,
+  last in the frame. The frame is the border round every line a pin covers, so a pin
+  no longer draws a second one inside it. A leaf's page loses its status card —
+  *Status: warn* on a colored bar, and *Stale — last observed …* beneath the lines,
+  which the head's state and the Time card already say — and gains the funnel, which
+  folds its healthy lines and is remembered for the tab as on the wall. An admin's ‖ in
+  the head's row opens the editor for the node's pin, *Set maintenance* where there is
+  no script. The head stands on every node's page for every reader, and a branch's
+  page now says its check's description and its damping counter too. A node action's
+  filler sees a leaf page's head as `place` `frame`, its `surface` `check`
+  ([ADR-0127](docs/adr/0127-the-wall-is-a-tree-and-a-click-opens-or-closes-a-node.md)
+  decision 8, [ADR-0104](docs/adr/0104-a-pin-is-one-block-on-what-it-silences.md)).
+- **A node's *about* is shown open.** Every view of a node — Status, Series, History
+  and Copy — shows its *about* in the band beneath the trail and the title, its text
+  at a reading measure, where it was folded behind a line that named it and showed
+  how it began (ADR-0127 decision 8).
+- **A fold survives a reload of its tab.** What a viewer opens on the wall — a level's
+  *+N more*, a box's *⌄ all N* — stands through every ten-second refresh, as it
+  did, and now through a reload of the tab and every move between the wall and a
+  node's page: one script, `tree.js`, keeps the tab's map in its `sessionStorage`,
+  under one key, and puts it back on the new markup before anything paints. A reload
+  no longer flashes the first look before the folds come back. The keyboard's focus
+  returns to the same control of the same node after a refresh, without a scroll,
+  and an open inspection card stays on its node. A new tab starts as configured, and
+  nothing is written to a cookie or the server. On the kiosk the map lives in memory
+  alone, and five minutes without any input bring the first look back
+  ([ADR-0127](docs/adr/0127-the-wall-is-a-tree-and-a-click-opens-or-closes-a-node.md)
+  decisions 9 and 10). The two scripts that each kept a fold for the page's life,
+  `reasons.js` and `branches.js`, are retired into it; the refresh, the inspection
+  card, Escape and the sheet now name the editor they wait for by its own disclosure,
+  so nothing else can match it.
+- **New icons, rendered from one drawing.** The tab icon is little-sister's eye drawn
+  small — heavier lines, no lashes — with raspberry eyeshadow on its lid, so it reads at
+  16 pixels, and it still turns light on a dark tab strip. The icons a phone puts on its
+  home screen are the eye on rose paper, and no longer cut it off at the left edge. Every
+  one is rendered from the drawing the package now ships, `little_sister/brand/eye.svg`
+  and its small form `eye-small.svg`, the eyeshadow a layer of its own; the files keep the
+  names the pages link.
+- **The golden envelope carries every shape a client decodes field by field.**
+  `envelope-2.json`, which `little_sister.contract.golden_envelope()` returns, gains a
+  run that has never written — present, with a null `observed_at` — the `wall_seconds`
+  and `next_at` of a scheduled run, an entry whose work is `running` and one pinned on
+  its own, and `show_when_quiet` stated `true`; with them comes the `undefined` rule,
+  so the envelope names each of the four rules a `contribution` can carry. No field
+  came with it, and every new shape is one an instance already served at 2.7.0
+  ([`docs/api/README.md`](docs/api/README.md)).
+- **In the cyberpunk theme, the Events page and a node's History tab weigh their rows
+  by status.** The theme's near-black row tints lay so close to its canvas that only
+  their hues told a log's rows apart, an error's the faintest of all. On these two
+  pages a failure's row is lifted off the canvas and a recovery's sunk toward it, and
+  each row's status word is lit in its state's neon with the theme's glow — ok's in its
+  green, undefined's in its grey without the glow. The wall and a node's Status tab
+  keep the theme's tints.
+- **In the cyberpunk theme, a failing node is a neon tube.** A box or a card that
+  reports its own problem, a closed card that fails, a failing chip and the heartbeat
+  pill were lit fills — salmon, amber, blue and grey, a warning's words under 4.5:1 on
+  theirs — with nothing of the theme's glow. Each is now dark glass of its state's hue
+  under white-hot words, ringed and glowing in its state's neon, the color its words
+  wear everywhere else in the theme, with its name and state word haloed in it; the
+  words read at 13:1 or more. The pause mark on a parent's head keeps an edge in
+  maintenance's neon, and a measure's warned triangle stays amber.
+
+### Fixed
+
+- **In the cyberpunk theme a phone's page is no wider than its screen, and a box's
+  *⌄ all N* keeps its whole target.** In the theme's monospace face the engine's
+  banner held a module's dotted name past a phone of 360 pixels and widened every page
+  with it: an alert's long words break where they must now. And a link among the lines
+  a box's budget clips reached under a pixel into the *⌄ all N* button beneath them,
+  leaving it less than the 24 pixels a target needs; the button stands above them.
+- **The Series index keeps a curve's numbers on one line from 1500 pixels, in every
+  theme.** It kept them on one line from 1400, where the cyberpunk theme's monospace
+  face put an open fold's table up to 43 pixels past its box; between the two they wrap
+  beneath their curve now, as on a narrower window
+  ([ADR-0114](docs/adr/0114-a-curve-seen-small-and-the-series-tabs-count.md)
+  decision 3).
+- **A pinned box's and an undefined box's words read on their fill.** A node pinned to
+  maintenance and one that reports undefined wrote their name, state and lines in white
+  on their blue and grey fills, 3.32:1 and 2.64:1, under the 4.5:1 bar in every theme.
+  Both take a dark ink now, as an error's and a warning's did already: 6.06:1 on the
+  blue and 6.75:1 on the grey, and their state words, which stay quieter than a
+  failure's, 4.77 and 4.81:1. The pause mark on a parent's head is drawn in the same
+  dark ink.
+- **A branch's page polls on after a run names none of its children.** The refresh of
+  a node's page whose children had all left was answered with the leaf's page, which
+  the page's script read as a lost session — *session expired* over a page whose
+  session was fine. The refresh is answered with the grid for a node without children
+  now, saying *Nothing stands beneath ‹name› now.* where they stood, and the next load
+  of the address is the leaf's page, as it was.
+- **A box shows its failing lines first under its line budget.** Within `reason_cap` a
+  box drew its lines in the order its check wrote them, so a roster whose failing name
+  came eighth stood yellow with six green lines in view and the reason a click away. The
+  errors come first now, then the warnings, then the rest, each group in the check's
+  order and a pinned line among the rest, wherever the budget clamps a block — a card's
+  and a box's on the wall, and the cards of a node's page; a node's own lines on its
+  page and the Copy documents keep the check's order.
+- **`./start.sh` no longer refuses over a listener that has just gone.** `lsof` lists
+  the processes that held the port's socket a moment ago, and `ps` is asked about each
+  a moment later; a gunicorn whose worker keeps crashing — after a start on
+  incompatible versions, say — has a worker exiting every few seconds, and one that
+  exited in between had no command line to read, so it was judged a stranger on the
+  port and the start refused over a process that did not exist, printing nothing after
+  `PID <n>:`. A port's listeners are now the ones that still exist, a stranger is
+  judged alive at the moment of the verdict, the master of a set is never a PID that
+  is gone, and a refusal names a process gone meanwhile as `(gone)` — in `start.sh`,
+  `stop.sh` and `memory.sh`, through `lib.sh`, the same bytes in every checkout that
+  carries them.
+- **A tap on an action chip in a box follows it on the first try.** On a touch screen
+  the first tap on a node's row opens its inspection card and the second follows what
+  was tapped, and a line's Copy chip, a deployment's chip on a line and a node's own
+  chip stood in that row — a nested box's lines with their chips, and every head's
+  actions. In a browser that gives a link no focus for a tap, Safari among them, the
+  first tap on such a chip opened the card and only the second its link; in one that
+  does, the card came up over the chip while the link was followed. A chip is now a
+  control of its own, as a pin's are: one tap follows it, and neither a pointer nor
+  the focus on a chip asks for the node's card.
+- **The contract names `dependency` among the rules of `contribution.by`.** A node
+  reached through a failing dependency has published
+  `{"by": "dependency", "code": null}` since `shielded_by` arrived in 2.4.0, and
+  `docs/api/openapi.yaml` listed only `maintenance`, `undefined` and `damping`. It now
+  names the fourth, says on `shielded_by` what its node's contribution carries, and
+  says which rule is named where several apply: a pin first, then a node that has never
+  reported, then the shield, then damping. `info.version` did not move for it, since
+  what is served did not.
+
 ## [0.3.20] - 2026-10-10
 
 **The instance says what the machine has left and collects after a run that rose, its

@@ -68,10 +68,19 @@ def build_scene(tree: StatusTree) -> None:
                 config="checks/platform.yaml", about="what this watches",
                 title="Platform", order=3, show_when_quiet=False)
     # Addressable entries: a slug of its own, its own code, a subject and a record
-    # on one, and neither on the next — the two halves of ADR-0082.
+    # on one, and neither on the next — the two halves of ADR-0082. The failed line's
+    # job is running again: `running` is display only, so a red line whose job is
+    # re-running stays red, and a client tests that it reads the flag. And the node
+    # states `show_when_quiet: true` where `/platform` states `false` and every
+    # other node says nothing — the tri-state whole (ADR-0063).
     tree.upsert("/platform/actions", StatusCode.ERROR, [
         Entry("1001-workflow-42-main", "acme/api (main) / CI: failed (#128)",
-              code=StatusCode.ERROR, subject="1001",
+              code=StatusCode.ERROR, subject="1001", running=True,
+              # **The form it was written from** (2.8.0): its grading asked the
+              # library for the line (ADR-0126), so it names the key a deployment
+              # re-words it under. Every other line here wrote its own sentence,
+              # and carries a null.
+              form="actions.verdict",
               data={"repository": "acme/api", "workflow": "CI",
                     "branch": "main", "verdict": "failed",
                     # `at`, `started` and `ended` are the only typed keys of a
@@ -83,16 +92,23 @@ def build_scene(tree: StatusTree) -> None:
                             "conclusion": "failure",
                             "started": "2026-09-18T06:04:41Z",
                             "ended": "2026-09-18T06:12:04Z"}}),
+        # **The grading that decided its code** (2.8.0): a map of the type's
+        # words gave this one WARN (ADR-0131). It wrote its own sentence, so it
+        # names a grading and no form — the two are independent, and every other
+        # line here names no grading.
         Entry("1001-workflow-77", "acme/api / nightly: disabled manually",
-              code=StatusCode.WARN),
+              code=StatusCode.WARN, grading="actions.disabled_severity_map"),
         # **A refused record** (2.6.0): the line stands as its grading wrote it,
         # its record is null, and `refused` says why — the one shape of the field
         # that is not null.
         Entry("1001-workflow-9-main", "acme/api (main) / Deploy: passed (#12)",
               code=StatusCode.OK, subject="1001",
               refused="it is 2,811 bytes and the limit is 2,048"),
-    ])
-    # A branch that answers for nothing itself: `run` is absent here.
+    ], show_when_quiet=True)
+    # A leaf below the node with lines, three levels down: the tree is deeper than
+    # two levels, and `/platform/actions` carries entries and a child at once. It is
+    # written like any leaf, so its `run` is present; the nodes without one are the
+    # containers nothing answers for — the root, `/network` and `/services`.
     tree.upsert("/platform/actions/acme-api", StatusCode.OK)
     # **A damped node**, and it is the case the whole `contribution` field changed
     # shape for. Until damping, every rule at that boundary *withheld* a node and
@@ -124,6 +140,30 @@ def build_scene(tree: StatusTree) -> None:
     tree.set_maintenance("/services/db", "waiting on the vendor",
                          expires_at=datetime(2027, 1, 1, tzinfo=UTC),
                          set_by="lex")
+    # **A line pinned on its own** (ADR-0036): the nightly workflow somebody switched
+    # off, silenced while its siblings keep alarming, so the node still reads ERROR
+    # from the failed line. An entry carries its pin exactly as a node does, with an
+    # expiry of its own, and nothing above produces one.
+    tree.set_entry_maintenance("/platform/actions", "1001-workflow-77",
+                               "off until the migration lands",
+                               expires_at=datetime(2026, 12, 19, 12, 30,
+                                                   tzinfo=UTC),
+                               set_by="ada")
+    # **The run facts only an engine writes** (ADR-0044): the scheduled leaf's
+    # mount, with its last run's wall time and its armed next slot, set as the
+    # engine sets them after a run. The client asserts both on its scheduled run.
+    tree.set_check_mount("/services/api")
+    tree.set_run_facts("/services/api", wall_seconds=0.42,
+                       next_run_at=datetime(2026, 9, 19, 6, 17, 4, tzinfo=UTC))
+    # **A check that answers and has never written**: a mount with run facts and no
+    # reading on its node, so `run` is present with a null `observed_at` — the fact
+    # an absent `run` must never be mistaken for. Nothing has reported there, so the
+    # node is UNDEFINED and its contribution names the last of the four rules,
+    # `undefined`. With two mounts beneath them, `/services` and the root inherit
+    # neither's stamp, so their `run` stays absent.
+    tree.set_title("/services/backup", "Backup")
+    tree.set_check_mount("/services/backup")
+    tree.set_run_facts("/services/backup", wall_seconds=None, next_run_at=None)
 
 
 def envelope_from(tree: StatusTree) -> dict:
@@ -184,13 +224,19 @@ class GoldenEnvelopeTests(TestCase):
         self.assertTrue(any(not node["entries"]["addressable"]
                             and node["entries"]["items"] for node in nodes))
         self.assertTrue(any(node["report"] for node in nodes))
-        self.assertTrue(any(node["show_when_quiet"] is not None
-                            for node in nodes))
+        # All three states of the tri-state: stated true, stated false, and nobody
+        # said (ADR-0063).
+        self.assertEqual({node["show_when_quiet"] for node in nodes},
+                         {True, False, None})
         items = [item for node in nodes for item in node["entries"]["items"]]
         self.assertTrue(any(item["subject"] and item["data"] for item in items))
         self.assertTrue(any(not item["subject"] and not item["data"]
                             for item in items))
         self.assertTrue(any(item["code"] for item in items))
+        # A line's own work in flight, and a line's own pin beside lines without one.
+        self.assertTrue(any(item["running"] for item in items))
+        self.assertTrue(any(item["maintenance"] for item in items))
+        self.assertTrue(any(item["maintenance"] is None for item in items))
         # The two shapes the client tests field by field, and which nothing in the
         # scene produces unless it is asked for.
         self.assertTrue(any(node.get("maintenance") for node in nodes))
@@ -199,14 +245,25 @@ class GoldenEnvelopeTests(TestCase):
         self.assertTrue(any(run.get("frequency_seconds") for run in runs))
         self.assertTrue(any(run.get("stale_after_seconds") for run in runs))
         self.assertTrue(any("frequency_seconds" not in run for run in runs))
-        # The pin puts a `contribution` on its node, naming the rule that
-        # transformed the code. Its `code` is null — the *withheld* shape. A real
-        # code there is 2.2.0's addition and needs a damped node; when one joins
-        # this scene, assert it here and the artifact is complete.
+        # The run facts an engine writes — how long the run took, when the next is
+        # due — and the run that has never written: present with a null
+        # `observed_at`, which is not the absent block a container shows.
+        self.assertTrue(any(run["wall_seconds"] is not None for run in runs))
+        self.assertTrue(any(run["next_at"] is not None for run in runs))
+        never, = [node for node in nodes
+                  if node.get("run") and node["run"]["observed_at"] is None]
+        self.assertEqual(never["code"], "UNDEFINED")
+        # Every rule that names a contribution, each on a node of its own. Three
+        # *withhold* the node, with a null `code` — a pin, a shield, a node that has
+        # never reported — and one *transforms* it, with a real code: 2.2.0's two
+        # shapes of one field.
         rules = {node["contribution"]["by"]: node["contribution"]
                  for node in nodes if node["contribution"]}
-        # Withheld, and transformed: 2.2.0's two shapes of one field.
+        self.assertEqual(set(rules),
+                         {"maintenance", "dependency", "undefined", "damping"})
         self.assertIsNone(rules["maintenance"]["code"])
+        self.assertIsNone(rules["dependency"]["code"])
+        self.assertIsNone(rules["undefined"]["code"])
         self.assertIsNotNone(rules["damping"]["code"])
         damped, = [node for node in nodes
                    if (node["contribution"] or {}).get("by") == "damping"]
@@ -232,6 +289,18 @@ class GoldenEnvelopeTests(TestCase):
         self.assertIsNone(refused["data"])
         self.assertTrue(refused["subject"])
         self.assertTrue(any(item["refused"] is None for item in items))
+        # 2.8.0's `form`: a line written from a form names it, and a line its check
+        # wrote as a sentence of its own carries null (ADR-0126).
+        formed, = [item for item in items if item["form"]]
+        self.assertEqual(formed["form"], "actions.verdict")
+        self.assertTrue(formed["data"])
+        self.assertTrue(any(item["form"] is None for item in items))
+        # 2.8.0's `grading`: a line a grading decided names it, whether or not it
+        # was written from a form, and every other line carries null (ADR-0131).
+        graded, = [item for item in items if item["grading"]]
+        self.assertEqual((graded["grading"], graded["code"], graded["form"]),
+                         ("actions.disabled_severity_map", "WARN", None))
+        self.assertTrue(any(item["grading"] is None for item in items))
         # The typed keys of a record, at any depth.
         record, = [item["data"] for item in items if item["data"]]
         self.assertIn("at", record)
@@ -321,7 +390,7 @@ def build_series_scene(tree: StatusTree, directory: Path) -> Engine:
     # A series that declares no measure: what it keeps is a time.
     beat = FileFreshnessCheck.from_config(
         {"type": "file", "path": "/hosts/alpha/beat", "file": "/var/run/beat",
-         "max_age": "5m", "frequency": "3m", "series_keep": 480}, directory)
+         "max_age_error": "5m", "frequency": "3m", "series_keep": 480}, directory)
     # A check that keeps its own state and a run of each job name, and declares one
     # measure for all of them, with no end to its axis.
     jobs = _Jobs(path="/batch", subject="queue/live", series_keep=30,

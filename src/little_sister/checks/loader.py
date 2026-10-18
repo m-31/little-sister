@@ -2,11 +2,17 @@
 and instantiate the checks."""
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import yaml
 
 from little_sister.checks.base import CHECK_TYPES, Check, CheckError
+from little_sister.checks.metadata import (
+    CHILDREN_KEYS,
+    SUBNODE_KEYS,
+    unknown_check_keys,
+)
 from little_sister.config_dir import (
     CONFIG_DIR_ENV,
     aspect_files,
@@ -14,6 +20,8 @@ from little_sister.config_dir import (
     fatal,
 )
 from little_sister.status import HEARTBEAT_PATH, on_same_line
+
+logger = logging.getLogger(__name__)
 
 # The aspect this module reads (ADR-0031). Always a directory: the unit of data is
 # the file — one check per *.yaml — so there is no single document to hold it.
@@ -91,9 +99,19 @@ def _load_one(config_path: Path) -> Check:
             f"{config_path.name}: unknown or missing check 'type' "
             f"{config.get('type')!r} (known: {known})")
     try:
-        return check_cls.from_config(config, config_path.parent)
+        check = check_cls.from_config(config, config_path.parent)
     except CheckError as error:
         raise CheckError(f"{config_path.name}: {error}") from error
+    # One line for the file, for the keys the library reads that it does not know
+    # (ADR-0128): a misspelt `chip:` would otherwise do nothing, in silence. The
+    # rest of the top level is the type's, which the library cannot judge.
+    unknown = unknown_check_keys(config)
+    if unknown:
+        logger.warning("checks: %s: unknown key(s) %s, not read (a subnodes: entry "
+                       "knows %s; a children: block %s)", config_path,
+                       ", ".join(unknown), ", ".join(SUBNODE_KEYS),
+                       ", ".join(CHILDREN_KEYS))
+    return check
 
 
 def _reject_reserved_paths(loaded: list[tuple[Check, Path]]) -> None:
