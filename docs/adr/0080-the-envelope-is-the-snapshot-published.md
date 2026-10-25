@@ -1,13 +1,8 @@
-# ADR-0080 — The envelope is the snapshot, published: `schema_version` 2
+# ADR-0080 — The envelope is the snapshot, published: `schema_version` 3
 
 - **Status:** Accepted
-- **Date:** 2026-10-04 (accepted 2026-09-06)
-- **Supersedes:** [ADR-0008](0008-json-output-api.md) wholly (accepted 2026-06-27,
-  rewritten 2026-08-23). Everything that record decided and this one keeps is
-  restated below with its original reasoning, so nothing has to be read out of a
-  superseded record: the unversioned routes and content negotiation, the top-level
-  envelope object, Problem JSON, the bearer token, the single OpenAPI document, and
-  read-only. What changes is the **node**, and one rule about how it may change again.
+- **Date:** 2026-10-25 (accepted 2026-09-06; decision 8 and the minor-version rule of
+  decision 1 accepted 2026-06-27, rewritten 2026-08-23)
 - **Related:** [ADR-0002](0002-rlock-snapshot-synchronization.md) (the snapshot this
   publishes), [ADR-0032](0032-status-contribution-boundary.md) (the three statuses and
   the fourth this names for the first time),
@@ -21,9 +16,26 @@
   now follow), [ADR-0079](0079-freshness-is-a-stated-tolerance.md) (the tolerance
   beside the verdict), [ADR-0005](0005-dashboard-freshness-and-self-monitoring.md)
   (`stale`), [ADR-0039](0039-status-rollup-semantics.md) (the roll-up),
-  [ADR-0003](0003-config-and-secrets-via-env-file.md) (the token),
+  [ADR-0083](0083-a-node-may-wait-before-it-escalates.md) and
+  [ADR-0084](0084-a-check-may-be-reached-through-another.md) (damping and the shield,
+  two of the rules a `contribution` names),
+  [ADR-0047](0047-node-notes-and-their-retention.md) (a pin's text, `note` in the model
+  as in the envelope), [ADR-0003](0003-config-and-secrets-via-env-file.md) (the token),
   [ADR-0120](0120-every-stored-time-is-an-instant.md) (the instants the date-times are
-  spelled from)
+  spelled from), [ADR-0130](0130-a-unit-has-a-period-of-its-own.md) (a unit's own
+  node and period, which `run` says without a key of its own),
+  [ADR-0132](0132-a-branch-keeps-the-period-of-what-it-shows-beside-the-log.md) (a
+  node's periods, `own_period` and `period` — 2.9.0),
+  [ADR-0133](0133-a-node-says-what-it-is-in-a-card-and-at-length-in-a-handbook.md) (a
+  node's `handbook` and `details`, and what a text's links and statuses mean — 2.10.0),
+  [ADR-0137](0137-a-deployment-says-in-a-table-how-a-part-counts-above-it.md)
+  (`aggregation`, and an entry's `contribution` — 2.11.0),
+  [ADR-0139](0139-a-node-carries-every-tag-written-for-it-or-above-it.md) (a node's
+  `tags` — 2.12.0),
+  [ADR-0141](0141-every-pin-is-one-thing-with-a-kind-and-the-envelope-lists-what-handles-a-part.md)
+  (`handled`, `contribution.rule` and `maintenance` gone — `schema_version` 3),
+  [ADR-0142](0142-a-failure-marked-seen-counts-as-ok-above-until-it-changes.md) (`seen`,
+  a second kind of pin in `handled`)
 - **Register:** [`../decisions.md`](../decisions.md)
 - **Contract:** [`../api/openapi.yaml`](../api/openapi.yaml) — the normative schema.
 
@@ -62,27 +74,32 @@ the envelope holds the same facts and no others, so that *what a client can show
 never a second question beside *what the page can show*.
 
 The rule that keeps it closed: **a field added to the snapshot is added to the envelope
-in the same change.** Such an addition is compatible — `schema_version` stays 2 and the
-spec's `info.version` moves a minor, ADR-0008 decision 6's rule kept — so the cost is a
+in the same change.** Such an addition is compatible — `schema_version` stays and the
+spec's `info.version` moves a minor, the rule of 2026-06-27 kept — so the cost is a
 line of serialization and a line of schema, paid by whoever adds the field rather than
-by whoever notices the gap two releases later. It is also what makes a `schema_version`
-3 unlikely: a major version is now only for a field that **changes meaning** or goes.
+by whoever notices the gap two releases later. It is also what keeps a major version
+rare: one is only for a field that **changes meaning** or goes, as `maintenance` went
+when every rule on a part became one list, `handled` — `schema_version` 3, the spec
+3.0.0 (decision 4).
 
 The rule cuts both ways, and the second edge is the one that needs saying: **the
 envelope does not publish what the snapshot cannot produce.** A field declared in the
 schema and never emitted is a promise no test can check and no reader can trust. So the
-entry keeps `slug`, `text`, `code`, `running` and `maintenance` here, and `subject`,
+entry keeps `slug`, `text`, `code`, `running` and `handled` here, and `subject`,
 `observed_at` and `data` join it in the change that adds them to the snapshot — a minor
-under this rule, invisible to a client that does not want them. Tags are the same case
-and were always going to be: nothing is reserved for them here.
+under this rule, invisible to a client that does not want them. Tags are the same case:
+nothing is reserved for them here.
 
 `subject` and `data` took exactly that route: they joined the entry with the change
 that put them in the snapshot, `schema_version` stayed 2 and the spec moved to 2.1.0
-([ADR-0082](0082-a-line-carries-what-it-is-about-and-what-it-read.md)). `observed_at`
-is still unpublished, for the reason above — nothing can emit it yet.
+([ADR-0082](0082-a-line-carries-what-it-is-about-and-what-it-read.md)). So did a node's
+periods (2.9.0) and every entry's `contribution` (2.11.0), which decision 2 says, and a
+node's `handbook` and `details` (2.10.0) and its `tags` (2.12.0), which decision 10
+says. `observed_at` is still unpublished, for the reason above — nothing can emit it
+yet.
 
 **The rule has a second half, and it is an obligation rather than a rule.** One
-envelope is written down — `src/little_sister/contract/envelope-2.json`, generated from
+envelope is written down — `src/little_sister/contract/envelope-3.json`, generated from
 this API, shipped in the wheel and shared with the client, so both sides test one
 artifact instead of two hand-written ones. A field added to the snapshot is therefore
 added to the contract **and the artifact regenerated**, all in the same change:
@@ -105,17 +122,42 @@ statuses under their own names. `own_code` is renamed `own` and `reported` is pu
 for the first time; a display client still reads `code`, and a federating parent still
 grafts `own` plus `children` and re-rolls locally rather than double-aggregating.
 
+Two of them say since when: `own_period` beside `own`, when the node's own status
+began, and `period` beside `code`, since when the node has shown it
+([ADR-0132](0132-a-branch-keeps-the-period-of-what-it-shows-beside-the-log.md)). Each
+carries `since`, `before` where the beginning is a bound, `was` and `cause`, and
+`period` also `by`, the node whose change began it. Each is absent where the node has
+no such period, as `run` is (decision 5), and `period` also where it is not of the
+`code` beside it.
+
 `contribution` is the fourth value that record defines and no surface has ever
 published: what this node's **parent accumulated**, and the rule that made it so.
 
 - It is **null** when the parent counted the node's `code` — which is the ordinary
   case, so the field costs nothing on a healthy tree.
-- Otherwise it is `{"code": …, "by": …}`. `code` is what the parent counted, and
-  **null means the node was not counted at all** — which is what *contributes nothing*
-  has always meant for `MAINTENANCE` and `UNDEFINED` (ADR-0004 §2/§3, restated from
-  the node's side by ADR-0032 decision 2). `by` names the rule: `maintenance` and
-  `undefined` today, a shield or a cap or a damping counter when those land, each an
-  added enum value and therefore a compatible change.
+- Otherwise it is `{"code": …, "by": …, "rule": …}`. `code` is what the parent counted,
+  and **null means the node was not counted at all** — which is what *contributes
+  nothing* has always meant for `MAINTENANCE` and `UNDEFINED` (ADR-0039 rules 2 and 3,
+  restated from the node's side by ADR-0032 decision 2). `by` names the rule —
+  `maintenance`, `undefined`, `dependency` for a shield
+  ([ADR-0084](0084-a-check-may-be-reached-through-another.md)), `damping`
+  ([ADR-0083](0083-a-node-may-wait-before-it-escalates.md)), `seen` for a failure a
+  person accepted as it stands, which the parent counts as OK
+  ([ADR-0142](0142-a-failure-marked-seen-counts-as-ok-above-until-it-changes.md)
+  decision 8), and `aggregation` for a rule the deployment configured, its code what
+  the parent counts or null where it counts nothing
+  ([ADR-0137](0137-a-deployment-says-in-a-table-how-a-part-counts-above-it.md)
+  decision 12) — and a further rule is a further name, an added enum value and
+  therefore a compatible change. `rule` is the `id` of the item of `handled` that
+  decided (decision 4), and null for a mechanism — damping, a shield, a node not yet
+  reported — and for a node that is maintenance because every one of its entries is
+  pinned or its check said so.
+
+Every entry carries `contribution` too, the same object, saying what its node counted
+of it — `maintenance` with a null code where the entry is pinned, `seen` where a person
+accepted its failure, `aggregation` where a configured rule on the node's lines changes
+how it counts, and null on the rest — so that the virtual children read as the real
+ones do. A node's and an entry's own `code` stay what they read.
 
 This is [ADR-0032](0032-status-contribution-boundary.md) rule 5 — *a transformed
 contribution is visible and attributable* — reaching the API at last, and it is what
@@ -130,7 +172,7 @@ An object, not an array, because prose and members are different things
 "entries": {
   "addressable": true,
   "items": [{"slug": "stress-api-pr-42", "text": "PR #42 waiting 6d",
-             "code": "WARN", "running": false, "maintenance": null}]
+             "code": "WARN", "running": false, "handled": []}]
 }
 ```
 
@@ -139,25 +181,37 @@ one. Each item is the `ReasonLine` the snapshot already holds — `slug` the key
 ([ADR-0036](0036-addressable-reasons.md)), `text` raw Markdown as before, `code` the
 entry's own where the check declared one and **null** where it carries the node's
 ([ADR-0042](0042-entries-carry-their-own-code.md)), `running` display-only work in
-flight, `maintenance` the pin on this entry or null. Order is the check's order and is
-never sorted. The bare string array goes; a client that wants the old shape reads
+flight, `handled` what handles this entry (decision 4). Order is the check's order and
+is never sorted. The bare string array goes; a client that wants the old shape reads
 `items[].text`.
 
-### 4. `maintenance` is one object or null
+### 4. What handles a part is one list, `handled`
 
 The bool and `maintenance_details` were one fact in two fields, and the bool is the
-half that cannot say anything. One nullable object takes both slots — the node's and
-the entry's — carrying `note`, `set_by`, `set_at`, `expires_at`, `created_by` and
-`created_at`. Both dates always ship, because both are always kept: an entry whose
-creation was never recorded reads its set, so there is no absent case to describe
-([ADR-0014](0014-maintenance-persistence.md)). *Pinned* is `maintenance !== null`.
+half that cannot say anything. One list takes both slots — the node's and the entry's —
+`handled`, what handles the part now
+([ADR-0141](0141-every-pin-is-one-thing-with-a-kind-and-the-envelope-lists-what-handles-a-part.md)
+decision 3): a person's pin while it stands, and a configured rule while it changes
+what counts. Each item carries its `id`, its `kind` — the word `contribution.by` says
+it in — its `source`, `person` or `configuration`, its `note` and `counts_as`. A pin
+adds who set it and when, who first did and when, and when it ends; a configured rule
+its file, its date, its level and the lines or children it names. A pin's two dates
+always ship, because both are always kept: a pin whose creation was never recorded
+reads its set, so there is no absent case to describe
+([ADR-0014](0014-maintenance-persistence.md)). *Pinned* is a `maintenance` item in
+`handled`.
 
-**The text is `note` and the model still calls it `reason`**, which is the one place
-this record lets the two names differ. [ADR-0047](0047-node-notes-and-their-retention.md)
-renames the field when the note history is built, and a rename is a *breaking* change
-to this contract — so publishing `reason` today would buy a second major version for
-one word. This is the release in which changing it costs nothing, so it is changed
-here: the value is what it always was, and the name is the one that will be true.
+A pin of the kind `seen` is a failure a person accepted as it stands
+([ADR-0142](0142-a-failure-marked-seen-counts-as-ok-above-until-it-changes.md)
+decision 8): its part keeps its `code`, its item says the `status` it was set at and
+the `occurrence` it is bound to, and its `expires_at` is null where it was given no
+end.
+
+**The text is `note`**, in the envelope as in the model
+([ADR-0047](0047-node-notes-and-their-retention.md) decision 1). The envelope took the
+name before the model did, because a rename is a *breaking* change to this contract:
+publishing `reason` would have bought a second major version for one word. The value
+is what it always was.
 
 ### 5. `run` replaces `timestamp` and `frequency_seconds`
 
@@ -181,22 +235,22 @@ confidently wrong exactly when somebody is watching a failure.
 `stale_after_seconds` is the tolerance freshness actually applied, whichever rule
 produced it ([ADR-0079](0079-freshness-is-a-stated-tolerance.md)), and is absent
 together with `frequency_seconds` where the node is read on no schedule and can
-therefore never be stale by its own stamp. The `unit` key
-[ADR-0078](0078-the-unit-is-what-the-engine-releases.md) decision 5 names arrives with
-the units themselves, by decision 1 above: nothing can produce a unit name until the
-scheduler releases units, and a key that is null in every response of every release
-until then is exactly the promise this record declines to make. What that decision
-owed *this* round is not the key but the **rule** — that `run` may appear below the
-node a check is mounted at — and the rule is in the sentence above and in the schema,
-where a client reads it.
+therefore never be stale by its own stamp. No key names the unit: a unit's `run`
+stands on the node it answers for, and `frequency_seconds` and `stale_after_seconds`
+are per node already, so the envelope needs no field of its own for it
+([ADR-0130](0130-a-unit-has-a-period-of-its-own.md) decision 5). What
+[ADR-0078](0078-the-unit-is-what-the-engine-releases.md) decision 5 owed *this* round
+is not a key but the **rule** — that `run` may appear below the node a check is mounted
+at — and the rule is in the sentence above and in the schema, where a client reads it.
 
 **Absent, not null, is the point**, and it buys a distinction the old shape could not
 draw. The block is **absent** where nothing answers for the node; it is **present with
 a null `observed_at`** where something answers and has never written — a check pinned
 by an unresolvable secret, which never runs and still has an armed slot
 ([ADR-0023](0023-secret-references.md)), or one that has simply not run yet. Those
-were one null before this version, which is ADR-0008's own rule broken under pressure
-([ADR-0027](0027-observation-timestamp-semantics.md) said so when it made the change),
+were one null before this version, which is the contract's own versioning rule broken
+under pressure ([ADR-0027](0027-observation-timestamp-semantics.md) said so when it
+made the change),
 and the cost was concrete: a client that guessed read a container's inherited stamp as
 its own data age. Inside the block a null stays a fact of its own — `wall_seconds` for
 a check that never ran, `next_at` for a one-shot with no live schedule.
@@ -225,12 +279,12 @@ are the two facts `/health` deliberately withholds from an ungated caller
 token, where the reader has already said who they are. Per envelope, never per node:
 one response is one instance's answer.
 
-### 8. What ADR-0008 decided and this record keeps
+### 8. How the API is reached and spelled — decided 2026-06-27
 
-Restated so the superseded record never has to be read: **content negotiation on the
-unversioned resources** — `GET /status` and `GET /status/<node_path>` stay the
-canonical URLs and `Accept` chooses the representation; the URL identifies the
-resource, not the format. **A top-level object** carrying `schema_version` and
+**Content negotiation on the unversioned resources** — `GET /status` and
+`GET /status/<node_path>` stay the canonical URLs and `Accept` chooses the
+representation; the URL identifies the resource, not the format. **A top-level object**
+carrying `schema_version` and
 `generated_at`. **`snake_case` properties**, **`UPPER_SNAKE_CASE` code enums**, **RFC
 3339 UTC date-times** with `T`/`Z`, spelled at serialization from what the tree stores:
 instants, and not the machine's clock without a zone
@@ -243,18 +297,56 @@ per-token scopes in this slice. **Children in `(rank, name)` order** — declare
 first, then natural case-insensitive name ([ADR-0055](0055-sibling-order.md)). **One
 response, no pagination**, and an inbound `X-Flow-Id` echoed but never required.
 
+**Why.** The API follows the Zalando RESTful API Guidelines and says where it departs
+from them. The URL names the resource and never a version (Zalando #115), so one
+canonical address serves both representations. A code is a string (#240), never the
+number the model counts with, which is brittle and is not the severity order. An error
+is Problem JSON (#176), never an ad-hoc `{"error": …}` body. A machine client sends a
+bearer token and never the session cookie, which would tie a browser's concern to a
+reader that is no browser. The token is static and one per client, where the guidelines
+assume an OAuth2 provider: the doors that sign a person in
+([ADR-0069](0069-identity-comes-from-outside-and-one-account-does-not.md)) leave the
+API's tokens alone, and its reader is a machine none of them serves, so a token
+provisioned per client beside the instance is still the proportionate answer — in the
+`Authorization: Bearer` shape, so that a move to OAuth2 later breaks nothing.
+`X-Flow-Id` (#233) correlates the requests of a distributed system, and this is one
+process, so it is echoed and never demanded or made.
+
 ### 9. No versioned media type, and no compatibility window
 
-ADR-0008 decision 6 said a breaking change would be offered through a custom
+The rule of 2026-06-27 offered a breaking change through a custom
 `application/…+json` type negotiated by `Accept`. This is the first breaking change and
-it does **not** do that, deliberately. A versioned media type buys one thing — two
-shapes served at once while consumers migrate — and there is no consumer to migrate:
-the client and the packages are ours and are released with the server. Two shapes would
-mean two serializers, two sets of fixtures and two truths about what a node is, which
-is the condition this record exists to end. `schema_version` remains the lever, and a
-client that meets a version it does not know says so and stops, which the macOS client
-already does. Should there ever be a consumer we cannot release with, the media type is
-still available and adding it breaks nothing.
+it does **not** do that, deliberately, nor does `schema_version` 3 after it. A
+versioned media type buys one thing — two shapes served at once while consumers
+migrate — and there is no consumer to migrate: the client and the packages are ours and
+are released with the server. Two shapes would mean two serializers, two sets of
+fixtures and two truths about what a node is, which is the condition this record exists
+to end. `schema_version` remains the lever, and a client that meets a version it does
+not know says so and stops, which the macOS client already does. Should there ever be a
+consumer we cannot release with, the media type is still available and adding it breaks
+nothing.
+
+### 10. What a node says of itself rides with it: `handbook`, `details` and `tags`
+
+A node carries `handbook`, the absolute address of its handbook where it has one, as
+the request reached the server, and `details`, its own as the snapshot holds them, each
+key with its Markdown and who gave it, `type` or `deployment`, in their order — the
+type's first, each as given
+([ADR-0133](0133-a-node-says-what-it-is-in-a-card-and-at-length-in-a-handbook.md)). A
+handbook's text is no field of the node, and the envelope, which carries what the
+snapshot holds (decision 1), carries none, nor a card's resolved rows. A text keeps its
+Markdown raw, a link written `handbook#<section>` and a status written `{error}` among
+it, and the contract says what they mean — the handbook the node's `handbook` names,
+and its section; the status of that name, as `code` spells it — and that what the
+deployment gives holds for every node beneath its own, key by key, the nearest winning,
+where the type's stand first on their own node, so that a client draws the card as the
+dashboard does.
+
+A node's `tags` are every tag it carries — those its deployment writes for it and for
+every node above it, added up — as text, in the order its card lists them
+([ADR-0139](0139-a-node-carries-every-tag-written-for-it-or-above-it.md) decision 6):
+the node's whole set, so that a subtree fetched by its path says them of its root too.
+Each of the three is absent where the node has none, as `run` is.
 
 ## Consequences
 
@@ -262,7 +354,9 @@ still available and adding it breaks nothing.
   `reasons: [String]`, `timestamp`, `frequency_seconds` and the `maintenance` bool, all
   of which go, and it refuses any `schema_version` but the one it knows — which is the
   behavior a coordinated release wants. The two ship as one round: a library version
-  and a client version that name each other in their notes.
+  and a client version that name each other in their notes. `schema_version` 3 is the
+  same: where `maintenance` gives way to `handled`, the client takes 3 in the same
+  release.
 - **Nothing else consumes the envelope.** The four packages extend the *check* surface,
   not this one; the deployments render HTML. So the blast radius of a breaking change
   here is exactly one repository, which will not be true forever and is the reason to
@@ -277,7 +371,7 @@ still available and adding it breaks nothing.
   rides this round; each now says where it went. A reader who
   arrives at one of them from a code comment is not sent to a promise with no date.
 - **`docs/api/README.md` and the client's byte-identical copy of the spec move with
-  it**, the one-way sync ADR-0008 established.
+  it**, the standing one-way sync.
 
 ## Alternatives considered
 
@@ -291,9 +385,9 @@ still available and adding it breaks nothing.
   established as internal: it would carry two spellings of the reason list for as long
   as either client lived, and it cannot express *absent* at all, since adding a field
   can only ever add null.
-- **Keep the `maintenance` bool beside the object** for the clients that read it.
-  Rejected: the bool is `maintenance !== null` with a second chance to disagree, and
-  two fields that must agree eventually will not.
+- **Keep the `maintenance` bool beside the pin** for the clients that read it.
+  Rejected: the bool says again whether a maintenance pin stands, with a second chance
+  to disagree, and two fields that must agree eventually will not.
 - **Publish `subject`, `observed_at` and `data` on the entry now**, so the client is
   written once. Rejected by decision 1's second edge — they are not in the snapshot
   yet, so the schema would promise what no code can emit and no test can check. They

@@ -9,12 +9,13 @@
  * and beside a close `ok_since` and `ok_held`, the server's time of the first render
  * since the close that drew the node out of failure and whether a render six hundred
  * seconds or more after it still did (the close gives way to the next failure once it
- * has); `chips`, its ▤; `ok`, its healthy fold; `lines`, its reason lines shown past
- * their budget; and, until stage 4 of backlog #91, `more`, a level's surplus boxes
- * shown, keyed by the level's `data-branch`. The map is read once on a load and
- * written on every change; storage that is missing, unreadable or full leaves it in
- * memory for the page's life, never an error. A new tab starts as configured, since
- * `sessionStorage` is the tab's; nothing is written to a cookie.
+ * has); `chips`, its ▤; `ok`, its healthy fold; and `lines`, its reason lines shown
+ * past their budget. An entry of a kind this script no longer writes — `more`, a
+ * level's surplus boxes shown, until the interactive wall's flip took *+N more* away —
+ * is read by nothing. The map is read once on a load and written on every change;
+ * storage that is missing, unreadable or full leaves it in memory for the page's
+ * life, never an error. A new tab starts as configured, since `sessionStorage` is the
+ * tab's; nothing is written to a cookie.
  *
  * How a node looks is worked out from the server's markers alone (`data-state`,
  * `data-chips`, `data-ok`, `data-swq`, `data-budget`, `data-failing`,
@@ -34,11 +35,13 @@
  * Around each swap `poll.js` calls `before(container)` just before it replaces the
  * grid and `apply(container)` directly after, before anything paints: the map is put
  * back on the new markup, the keyboard's focus goes back to the same control of the
- * same node — `[data-control]` names the control, its `[data-path]` or, for "+N more",
- * its level's `data-branch` the node — without scrolling, and the open inspection card
- * finds its node's new element by itself (`inspect.js`). One MutationObserver stays as
- * a fallback for a swap `poll.js` did not make. On a load `tree-pending.js` has hidden
- * the grid while the map holds anything; the first apply shows it.
+ * same node — `[data-control]` names the control and its `[data-path]` the node —
+ * without scrolling, the window scrolls by what
+ * the node nearest its top moved, so that it shows what it showed, and the open
+ * inspection card finds its node's new element by itself (`inspect.js`). One
+ * MutationObserver stays as a fallback for a swap `poll.js` did not make. On a load
+ * `tree-pending.js` has hidden the grid while the map holds anything; the first apply
+ * shows it.
  *
  * The head's row (decision 3) is measured here: a box shown — after a swap, by a click,
  * a find or the map, on a resize and once the fonts have settled — gets its lines'
@@ -46,16 +49,23 @@
  * with the title gone, from which the node's actions the row has no room for fold
  * behind ⋯ — never one alone where the state's line keeps it in the row — and, where
  * the name would still be cut or one action fold alone, the state cluster goes beneath
- * the icons (`.is-state-below`): beside the name's last line where the name broke
- * anyway and the state touches neither it nor the icons (`.is-state-beside`), on a line
- * of its own where it would. The grid is planned first (`dashboard-layout.js`), so a
- * row is read at the width its card is drawn at; and a refresh reads only a row the
- * server drew otherwise, or that stands at another width, than one read before — the
- * rest are drawn from what was read of them. A head's controls — its actions, ⋯ and its
- * icons — are one toolbar with one tab stop, walked with the arrow keys; which control
- * holds the stop is kept by node in memory, never in the map, and given back after a
- * swap. An admin's ‖ clones the page's one `template#pin-editor` into the node's box,
- * where the pin's block will stand, and Cancel or Escape take the clone away again.
+ * the row (`.is-state-below`): beside the name's last line where the name broke anyway
+ * and the state touches neither it nor the toolbar (`.is-state-beside`), on a line of
+ * its own where it would. The grid is planned first (`dashboard-layout.js`), so a row
+ * is read at the width its card is drawn at; and a refresh reads only a row the server
+ * drew otherwise, or that stands at another width, than one read before — the rest are
+ * drawn from what was read of them. A head's controls — its icons, ↗ first, then its
+ * actions and ⋯ — are one toolbar with one tab stop, walked with the arrow keys, which
+ * the look `head_buttons` places (ADR-0029): right after the name; on a line of its own
+ * beneath the row, which wraps there, so that no row is read; at the row's end, where
+ * the pointer's click on an open head's name follows its link to the node's page and
+ * the keyboard's Enter opens and closes the node as before; or right after the name
+ * with the name a link as at the end (`pointer-name`). Which control holds the stop
+ * is kept by node in memory, never in the map, and given back after a swap. An
+ * admin's ‖ clones the page's one `template#pin-editor` into the node's box, where the
+ * pin's block will stand, and Cancel or Escape take the clone away again; the ringed
+ * check clones `template#ack-editor` the same way, with the digest of the failures
+ * it marks seen (ADR-0142).
  *
  * On the kiosk (`<body data-ls-layout="kiosk">`) the map lives in memory and never in
  * `sessionStorage`: five minutes after the last pointer, touch, key or wheel it is
@@ -82,6 +92,10 @@
     // configured fold folds (`data-fold-drawn`, ADR-0128), so it stands from the first
     // paint; from then on this script folds and shows it, a viewer's word among it.
     var READY = "ls-tree-ready";
+    // Put there with it: under the look `boxes: packed` (ADR-0138) the stylesheet
+    // hides the wall until the boxes have taken their columns, so that the first paint
+    // never stands them in rows for the packing to move.
+    var DRAWN = "ls-boxes-drawn";
     var KIOSK = document.body.getAttribute("data-ls-layout") === "kiosk";
     // How long a kiosk keeps what somebody touched, from the last input.
     var KIOSK_IDLE_MS = 5 * 60 * 1000;
@@ -101,9 +115,10 @@
     // The controls in a head that are not the head: a click on them never toggles.
     // The state cluster among them is the head — a click on its word toggles.
     var OWN_CONTROLS = ".node-icons, .node-actions, .node-more, .node-actions-menu, "
-        + ".maintenance-pip, .pin-setter, .rule-setter, .rule-block, .reason-pin, "
-        + ".reason-block, .reason-more, .own-lines, .reason-quiet-count, .branch-more, "
-        + ".tree-ok, details, form";
+        + ".maintenance-pip, .pin-setter, .rule-setter, .ack-setter, .rule-block, "
+        + ".reason-pin, .reason-ack, "
+        + ".reason-block, .reason-more, .own-lines, .reason-quiet-count, .tree-ok, "
+        + "details, form";
     // A head's controls, in the toolbar's order: what the arrow keys walk and the
     // keyboard's one stop is among.
     var TOOLBAR_CONTROLS = ".node-actions > a, .node-actions > button, .node-actions > form button, "
@@ -496,7 +511,6 @@
         var at = 0;
         for (var i = 0; i < level.children.length; i++) {
             var item = level.children[i];
-            if (item.classList.contains("branch-more")) { continue; }
             var group = want[at++];
             if (!group) { return false; }
             if (item.classList.contains("tree-node")) {
@@ -548,7 +562,6 @@
         if (!level.classList.contains("tree-kids")) { return; }
         var want = groupsOf(childrenOf(level).sort(byOrder));
         if (sameShape(level, want)) { return; }
-        var more = moreButton(level);
         var anchor = null;
         var at = -1;
         if (pivot && levelOf(pivot) === level) {
@@ -599,7 +612,7 @@
         // what is left in the level — emptied wrappers, nothing else — goes
         var items = Array.prototype.slice.call(level.children);
         for (var x = 0; x < items.length; x++) {
-            if (items[x] !== anchor && items[x] !== more && items[x].parentElement === level) {
+            if (items[x] !== anchor && items[x].parentElement === level) {
                 level.removeChild(items[x]);
             }
         }
@@ -609,34 +622,6 @@
             else { level.appendChild(after); }
         } else {
             level.appendChild(before);
-        }
-        if (more) { level.appendChild(more); }
-    }
-
-    // --- "+N more": a level's surplus quiet boxes -------------------------------------
-
-    // The reveal button is the level's own direct child. A nested level's button sorts
-    // earlier in the DOM, so a plain querySelector would find the wrong one — scan the
-    // immediate children instead.
-    function moreButton(level) {
-        var kids = level.children;
-        for (var i = 0; i < kids.length; i++) {
-            if (kids[i].classList && kids[i].classList.contains("branch-more")) {
-                return kids[i];
-            }
-        }
-        return null;
-    }
-
-    // Under *Open all* every level's surplus is shown too, and the button has no job.
-    function applyMore(level) {
-        var all = map.mode === "open";
-        var open = all || held(level.getAttribute("data-branch"), "more");
-        level.classList.toggle("is-expanded", open);
-        var button = moreButton(level);
-        if (button) {
-            button.setAttribute("aria-expanded", open ? "true" : "false");
-            if (all) { button.setAttribute("hidden", ""); } else { button.removeAttribute("hidden"); }
         }
     }
 
@@ -666,6 +651,60 @@
         return previous && previous.classList.contains("reason-block") ? previous : null;
     }
 
+    // Where each open block stands scrolled, by its node's path, for the tab's life. The
+    // lines *⌄ all N* opens scroll inside a box no taller than about half a window
+    // (backlog #91); the swap draws them anew, at their first line, and this puts each
+    // back where its viewer left it, as poll.js does a table's left edge. A reload
+    // starts them at the top, as it does a table.
+    var scrolled = {};
+
+    document.addEventListener("scroll", function (e) {
+        var block = e.target;
+        if (!block.classList || !block.classList.contains("reason-block")
+                || !block.classList.contains("is-open")) { return; }
+        scrolled[block.getAttribute("data-reason-node")] = block.scrollTop;
+    }, { capture: true, passive: true });
+
+    // The name a block's region is called by: its box's, as the head shows it.
+    function linesOf(block) {
+        var box = block.closest(".tree-box, .status-card");
+        var name = box ? box.querySelector(".status-node__name, .status-card__name") : null;
+        var said = name ? name.textContent.replace(/\s+/g, " ").trim() : "";
+        if (said) { return said; }
+        var path = block.getAttribute("data-reason-node") || "";
+        return path.slice(path.lastIndexOf("/") + 1);
+    }
+
+    // An open block whose lines pass its height scrolls inside itself: a region the
+    // keyboard reaches and a screen reader names. Any other block is neither, and a
+    // closed one stands at its first line again, which is what its budget shows. Only
+    // writes, and no read: the blocks are drawn in one pass after one measure.
+    function scrollArea(block, open, scrolls) {
+        var path = block.getAttribute("data-reason-node");
+        if (open && scrolls) {
+            block.setAttribute("role", "region");
+            block.setAttribute("tabindex", "0");
+            block.setAttribute("aria-label", "All " + (block.getAttribute("data-reason-total")
+                || "") + " lines of " + linesOf(block));
+            return;
+        }
+        block.removeAttribute("role");
+        block.removeAttribute("tabindex");
+        block.removeAttribute("aria-label");
+        if (!open && Object.prototype.hasOwnProperty.call(scrolled, path)) {
+            delete scrolled[path];
+            block.scrollTop = 0;
+        }
+    }
+
+    // An open block back where its viewer left it, once every block is drawn.
+    function scrollBack(block) {
+        var path = block.getAttribute("data-reason-node");
+        if (block.classList.contains("is-open") && scrolled[path]) {
+            block.scrollTop = scrolled[path];
+        }
+    }
+
     // A block inside a closed node's wrapper has no layout to measure, and a box
     // hidden at the swap measures nothing (backlog #91 §7.4): it is measured once
     // the box is shown.
@@ -680,8 +719,10 @@
         block.classList.toggle("is-open", open);
         // Whether the lines overflow their budget is only measurable here (the clamp
         // is CSS). Measured while folded; an open block keeps its button so it can
-        // be folded again.
-        drawLines(block, open, !open && block.scrollHeight - block.clientHeight > CLIP_SLOP);
+        // be folded again, and scrolls where its lines pass its height.
+        var over = block.scrollHeight - block.clientHeight;
+        drawLines(block, open, !open && over > CLIP_SLOP, open && over > 1);
+        scrollBack(block);
     }
 
     // Every shown block at once: the writes first, then every measure in one pass,
@@ -697,16 +738,22 @@
         }
         for (i = 0; i < pending.length; i++) {
             var block = pending[i].block;
-            pending[i].clipped = !pending[i].open
-                && block.scrollHeight - block.clientHeight > CLIP_SLOP;
+            var over = block.scrollHeight - block.clientHeight;
+            pending[i].clipped = !pending[i].open && over > CLIP_SLOP;
+            pending[i].scrolls = pending[i].open && over > 1;
         }
         for (i = 0; i < pending.length; i++) {
-            drawLines(pending[i].block, pending[i].open, pending[i].clipped);
+            drawLines(pending[i].block, pending[i].open, pending[i].clipped,
+                      pending[i].scrolls);
+        }
+        for (i = 0; i < pending.length; i++) {
+            if (pending[i].scrolls) { scrollBack(pending[i].block); }
         }
     }
 
-    function drawLines(block, open, clipped) {
+    function drawLines(block, open, clipped, scrolls) {
         block.classList.toggle("is-clipped", clipped);
+        scrollArea(block, open, scrolls);
         var button = moreOf(block, open || clipped);
         if (!button) { return; }
         if (open || clipped) {
@@ -750,9 +797,24 @@
         return p ? own(p, "node-more") : null;
     }
 
+    // The state cluster, which stands in the row after the toolbar's place, outside
+    // it (`node_controls`).
     function stateOf(head) {
-        var p = own(head, "node-controls");
-        return p ? (own(p, "status-card__state") || own(p, "status-node__state")) : null;
+        return own(head, "status-card__state") || own(head, "status-node__state");
+    }
+
+    // Where the head keeps its buttons, the look `head_buttons` (ADR-0029): right
+    // after the name, `pointer`; on a line of their own beneath the row, `line`; at the
+    // row's end, `name`; right after the name, the name a link, `pointer-name`.
+    function headButtons() {
+        return document.body.getAttribute("data-ls-head-buttons") || "pointer";
+    }
+
+    // Whether the pointer's click on an open head's name follows its link to the
+    // node's page, ↗ being the keyboard's alone: under `name` and `pointer-name`.
+    function nameOpensPage() {
+        var look = headButtons();
+        return look === "name" || look === "pointer-name";
     }
 
     // Whether a head's state cluster stands beneath the row on its own, by the
@@ -822,10 +884,16 @@
         var seen = [];
         var pending = [];
         var i, j, it;
+        // Under the look `line` the buttons have a line of their own and the row wraps
+        // its state beneath where it has no room for it, as a closed card's does, so
+        // no row is read.
+        var reads = headButtons() !== "line";
         for (i = 0; i < heads.length; i++) {
             var head = heads[i];
-            if (!shown(head) || head.closest(".status-card.is-closed")) {
-                head.classList.remove("is-state-below", "is-state-beside");
+            if (!reads || !shown(head) || head.closest(".status-card.is-closed")) {
+                head.classList.remove("is-state-below", "is-state-beside",
+                                      "is-crowded");
+                giveRoom(head, 0);
                 continue;
             }
             it = { head: head, fresh: !drawnRows.has(head) };
@@ -841,10 +909,13 @@
             it = seen[i];
             var was = it.fresh ? rows.get(it.key) : null;
             if (was && was.drawn === it.drawn && Math.abs(was.width - it.width) < 0.05) {
-                drawRow(it.head, was.folded, was.below);
+                drawRow(it.head, was.folded, was.below, was.crowded);
                 it.head.classList.toggle("is-state-beside", was.beside);
+                giveRoom(it.head, was.room);
             } else {
-                it.head.classList.remove("is-state-below", "is-state-beside");
+                it.head.classList.remove("is-state-below", "is-state-beside",
+                                         "is-crowded");
+                giveRoom(it.head, 0);
                 it.head.classList.add("is-measuring");
                 pending.push(it);
             }
@@ -887,14 +958,44 @@
         for (i = 0; i < misses.length; i++) {
             misses[i].classList.remove("is-state-beside");
         }
+        // A state at the head's foot that its line is too narrow for breaks between
+        // its parts (`overview.css`), and the head makes room for every line it takes:
+        // all read in one layout, then each head given its room.
+        for (i = 0; i < pending.length; i++) {
+            pending[i].room = roomNeeded(pending[i].head);
+        }
+        for (i = 0; i < pending.length; i++) {
+            giveRoom(pending[i].head, pending[i].room);
+        }
         // what each row as the server drew it was read as, for the next refresh
         for (i = 0; i < pending.length; i++) {
             it = pending[i];
             if (!it.fresh) { continue; }
             rows.set(it.key, { drawn: it.drawn, width: it.width, folded: it.folded,
+                               crowded: it.crowded,
                                below: it.head.classList.contains("is-state-below"),
-                               beside: it.head.classList.contains("is-state-beside") });
+                               beside: it.head.classList.contains("is-state-beside"),
+                               room: it.room });
         }
+    }
+
+    // The room a head keeps beneath its row for a state at its foot that breaks onto
+    // more lines than the one the head keeps for it, in pixels: none where one line
+    // holds it, or where the state stands in the row or beside the name.
+    function roomNeeded(head) {
+        var state = stateOf(head);
+        if (!state || head.classList.contains("is-state-beside")
+                || !(head.classList.contains("is-state-below") || belowByDefault(head))) {
+            return 0;
+        }
+        var tall = state.getBoundingClientRect().height;
+        var kept = parseFloat(getComputedStyle(head).paddingBottom) || 0;
+        return tall > kept + 0.5 ? Math.ceil(tall) : 0;
+    }
+
+    function giveRoom(head, room) {
+        if (room) { head.style.setProperty("--ls-state-room", room + "px"); }
+        else { head.style.removeProperty("--ls-state-room"); }
     }
 
     // Whether a head's state, at its foot with no line of its own, stands clear of
@@ -915,13 +1016,24 @@
             var range = document.createRange();
             range.selectNodeContents(name);
             var lines = range.getClientRects();
+            // the state's place is the name's second line: a name of one line has none,
+            // whatever room the row's end may have where the look keeps the toolbar
+            // after the name
+            var first = null;
+            var broke = false;
             for (var i = 0; i < lines.length; i++) {
                 if (hits(lines[i])) { return false; }
+                if (!lines[i].width) { continue; }
+                if (first === null) { first = lines[i].top; }
+                else if (Math.abs(lines[i].top - first) > 1) { broke = true; }
             }
+            if (!broke) { return false; }
         }
-        var bar = state.parentElement.children;
+        // and of the toolbar's items
+        var toolbar = own(head, "node-controls");
+        var bar = toolbar ? toolbar.children : [];
         for (var j = 0; j < bar.length; j++) {
-            if (bar[j] !== state && hits(bar[j].getBoundingClientRect())) { return false; }
+            if (hits(bar[j].getBoundingClientRect())) { return false; }
         }
         return true;
     }
@@ -967,31 +1079,40 @@
         var excess = it.excess > 0 ? it.excess + SLACK_PX : it.excess;
         var below = false;
         var folded = 0;
+        // Whether the name gives way, as the row still overruns with every action
+        // folded and the state beneath: the toolbar keeps its room in the row there,
+        // so that the name breaks beside it, where elsewhere it takes none under the
+        // pointer's looks and lies over the title when shown (`overview.css`).
+        var crowded = false;
         if (excess > spare) {
             var fit = fitting(it, excess);
             folded = fit.folded;
+            crowded = fit.left > 0;
             if (it.stateWidth && (fit.left > 0 || folded === 1)) {
                 // The state goes beneath, and the actions get its room back, where
                 // not even every action folded leaves the name whole; and where one
                 // action would fold alone, if its line keeps that action in the row —
-                // ⋯ never holds a lone action the state's line makes room for (Lex's
-                // word of 2026-10-17). Where it does not, the state keeps its place.
+                // ⋯ never holds a lone action the state's line makes room for. Where it
+                // does not, the state keeps its place.
                 var rest = excess - it.stateWidth - it.gap;
-                var beneath = rest > spare ? fitting(it, rest).folded : 0;
-                if (fit.left > 0 || beneath === 0) {
+                var beneath = rest > spare ? fitting(it, rest) : null;
+                if (fit.left > 0 || !beneath || beneath.folded === 0) {
                     below = true;
-                    folded = beneath;
+                    folded = beneath ? beneath.folded : 0;
+                    crowded = beneath !== null && beneath.left > 0;
                 }
             }
         }
         it.folded = folded;
-        drawRow(it.head, folded, below);
+        it.crowded = crowded;
+        drawRow(it.head, folded, below, crowded);
         it.head.classList.remove("is-measuring");
     }
 
-    // A row as read: its last `folded` actions behind ⋯, ⋯ shown where any are, and
-    // the state beneath where `below` — written only where it differs.
-    function drawRow(head, folded, below) {
+    // A row as read: its last `folded` actions behind ⋯, ⋯ shown where any are, the
+    // state beneath where `below`, and the toolbar's room kept where the name gives
+    // way, `crowded` — written only where it differs.
+    function drawRow(head, folded, below, crowded) {
         var actions = actionsOf(head);
         for (var j = 0; j < actions.length; j++) {
             actions[j].classList.toggle("is-folded", j >= actions.length - folded);
@@ -1005,6 +1126,7 @@
             }
         }
         head.classList.toggle("is-state-below", below);
+        head.classList.toggle("is-crowded", !!crowded);
     }
 
     // The heads beneath a node's wrapper, its own first, shown or not.
@@ -1063,9 +1185,12 @@
             if (controls[i].getAttribute("tabindex") !== want) {
                 controls[i].setAttribute("tabindex", want);
             }
-            // ‖ is a link until the script makes it the editor's control: it says
-            // here that it opens one, which the server leaves off every head
-            if (keyOf(controls[i]) === "pin" && !controls[i].hasAttribute("aria-expanded")) {
+            // ‖ and the ringed check are links until the script makes them their
+            // editors' controls: each says here that it opens one, which the server
+            // leaves off every head
+            var key = keyOf(controls[i]);
+            if ((key === "pin" || key === "ack")
+                    && !controls[i].hasAttribute("aria-expanded")) {
                 controls[i].setAttribute("aria-expanded", "false");
             }
         }
@@ -1204,35 +1329,50 @@
         closeMenu();
     }, true);
 
-    // --- ‖: the page's one editor of a pin, cloned into the box ----------------------------
+    // --- ‖ and the ringed check: the page's one editor of each, cloned into the box ----
 
-    // The open clone, if any: one at a time, as a line's editors are.
+    // The open clone, if any: one at a time, as a line's editors are — ‖'s or the
+    // ringed check's.
     function pinClone() {
-        return grid.querySelector("details.pin-setter.is-clone");
+        return grid.querySelector("details.pin-setter.is-clone, details.ack-setter.is-clone");
     }
 
     function removeClone(clone, refocus) {
         var node = nodeOf(clone);
+        var kind = clone.classList.contains("ack-setter") ? "ack" : "pin";
         quietly(function () { clone.remove(); });
         if (!node) { return; }
-        var button = iconOf(node, "pin");
+        var button = iconOf(node, kind);
         if (button) {
             button.setAttribute("aria-expanded", "false");
             if (refocus) { try { button.focus({ preventScroll: true }); } catch (e) { button.focus(); } }
         }
     }
 
-    // Clone the page's editor into the node's box, where the pin's block will stand
-    // — a card's panel's start, a box after its head's row — with the node's path and
-    // what the pin would cover filled in, and open it; the open editor holds the
-    // refresh (poll.js), and Cancel or Escape close it (maintenance-edit.js), which
-    // takes the clone away again (the `toggle` below).
-    function openPin(node, button) {
-        var template = document.getElementById("pin-editor");
+    // What a ringed check marks, in its editor's words: the one failure at or
+    // beneath the node, or how many, each its own (ADR-0142).
+    function marked(button, name) {
+        var count = parseInt(button.getAttribute("data-ack-count") || "1", 10);
+        return count === 1 ? "the one failure at " + name
+                           : "the " + count + " failures at and beneath " + name
+                             + ", each its own";
+    }
+
+    // Clone the page's editor into the node's box, where the block will stand — a
+    // card's panel's start, a box after its head's row — with the node's path and
+    // what it would cover filled in, and open it; the open editor holds the refresh
+    // (poll.js), and Cancel or Escape close it (maintenance-edit.js), which takes the
+    // clone away again (the `toggle` below). ‖'s says what the pin would cover; the
+    // ringed check's what it marks seen, and carries the digest of those failures,
+    // which the write compares with what fails there then.
+    function openPin(node, button, kind) {
+        var ack = kind === "ack";
+        var template = document.getElementById(ack ? "ack-editor" : "pin-editor");
         if (!template || !template.content) { return false; }
         var standing = pinClone();
         if (standing) {
-            var same = nodeOf(standing) === node;
+            var same = nodeOf(standing) === node
+                && standing.classList.contains("ack-setter") === ack;
             removeClone(standing, false);
             if (same) { return true; }
         }
@@ -1241,12 +1381,19 @@
         var path = pathOf(node);
         var field = clone.querySelector("input[name=\"path\"]");
         if (field) { field.value = path; }
-        var what = clone.querySelector(".pin-editor__what");
-        if (what) {
-            var toggle = toggleOf(node);
-            var name = toggle ? toggle.textContent.trim() : path;
-            what.textContent = name + (button.hasAttribute("data-beneath")
-                                       ? " and everything beneath it" : "");
+        var toggle = toggleOf(node);
+        var name = toggle ? toggle.textContent.trim() : path;
+        if (ack) {
+            var parts = clone.querySelector("input[name=\"parts\"]");
+            if (parts) { parts.value = button.getAttribute("data-ack-parts") || ""; }
+            var marks = clone.querySelector(".ack-editor__what");
+            if (marks) { marks.textContent = marked(button, name); }
+        } else {
+            var what = clone.querySelector(".pin-editor__what");
+            if (what) {
+                what.textContent = name + (button.hasAttribute("data-beneath")
+                                           ? " and everything beneath it" : "");
+            }
         }
         var p = partsOf(node);
         if (!p.box) { return false; }
@@ -1276,23 +1423,28 @@
     // #91 §3.7): its *Set maintenance* is the browser's disclosure. With script the
     // head's ‖ opens it, as ‖ opens an editor on every head, and the disclosure is
     // kept out of sight while it is closed (`.is-in-row`).
-    function setterOf(node) {
+    // The head's own editor of a kind: ‖'s *Set maintenance*, or the ringed check's
+    // *Mark seen* (ADR-0142).
+    function setterOf(node, kind) {
         var lead = partsOf(node).lead;
-        return lead ? own(lead, "rule-setter") : null;
+        return lead ? own(lead, kind === "ack" ? "ack-setter" : "rule-setter") : null;
     }
 
     function drawSetter(node) {
-        var button = iconOf(node, "pin");
-        var setter = setterOf(node);
-        if (!button || !setter) { return; }
-        setter.classList.add("is-in-row");
-        button.removeAttribute("hidden");
-        button.setAttribute("aria-expanded", setter.open ? "true" : "false");
+        ["pin", "ack"].forEach(function (kind) {
+            var button = iconOf(node, kind);
+            var setter = setterOf(node, kind);
+            if (!button || !setter) { return; }
+            setter.classList.add("is-in-row");
+            button.removeAttribute("hidden");
+            button.setAttribute("aria-expanded", setter.open ? "true" : "false");
+        });
     }
 
     function setterToggled(setter) {
         var node = nodeOf(setter);
-        var button = node ? iconOf(node, "pin") : null;
+        var button = node ? iconOf(node, setter.classList.contains("ack-setter")
+                                         ? "ack" : "pin") : null;
         if (!button) { return; }
         button.setAttribute("aria-expanded", setter.open ? "true" : "false");
         // closed by Cancel or Escape, whose own focus went to a summary out of sight
@@ -1560,8 +1712,8 @@
 
     // Every node's face from the markers and the map, parents before children (the
     // document's order), then each level's runs, then the heads' buttons, the folds,
-    // the levels' "+N more", the heads' rows and the boxes' lines — the last two
-    // measured once the boxes are shown — and each toolbar's stop.
+    // the heads' rows and the boxes' lines — the last two measured once the boxes are
+    // shown — and each toolbar's stop.
     function applyAll(root, pivot) {
         if (observer) { observer.disconnect(); }
         parts = new Map();
@@ -1581,8 +1733,6 @@
             drawFold(nodes[i]);
             if (isPageRoot(nodes[i])) { drawSetter(nodes[i]); }
         }
-        var more = root.querySelectorAll(".node-children[data-branch]");
-        for (i = 0; i < more.length; i++) { applyMore(more[i]); }
         var heads = root.querySelectorAll(".status-node__self, .status-card__head");
         applyAllHeads(heads);
         applyAllLines(root.querySelectorAll(".reason-block"));
@@ -1606,6 +1756,7 @@
         drawFold(node);
         if (look.open) { measure(node); }
         drawBand();
+        packed();
         if (observer) { observer.observe(grid, { childList: true, subtree: true }); }
         return look.open;
     }
@@ -1614,8 +1765,7 @@
 
     var kept = null;
 
-    // The control the focus is on, and the node it belongs to: its `[data-path]`, or
-    // for "+N more", which stands outside every `[data-path]`, its level's branch; a
+    // The control the focus is on, and the node it belongs to: its `[data-path]`; a
     // node's action, which has no `data-control`, by its place in the rail.
     function noteFocus(root) {
         kept = null;
@@ -1626,20 +1776,13 @@
         if (!control) { return; }
         var kind = control.getAttribute("data-control")
             || (control.classList.contains("tree-chip") ? "toggle" : keyOf(active) || "toggle");
-        var owner = kind === "more"
-            ? control.closest("[data-branch]") : control.closest("[data-path], .tree-node");
+        var owner = control.closest("[data-path], .tree-node");
         if (!owner) { return; }
         kept = { kind: kind, path: owner.getAttribute(
-            kind === "more" ? "data-branch"
-            : owner.hasAttribute("data-path") ? "data-path" : "data-node") };
+            owner.hasAttribute("data-path") ? "data-path" : "data-node") };
     }
 
     function sameControl(root, want) {
-        if (want.kind === "more") {
-            var level = root.querySelector(
-                ".node-children[data-branch=" + quoted(want.path) + "]");
-            return level ? moreButton(level) : null;
-        }
         var node = root.querySelector(".tree-node[data-node=" + quoted(want.path) + "]");
         if (!node) {
             var row = root.querySelector("[data-path=" + quoted(want.path) + "]");
@@ -1683,21 +1826,81 @@
         try { target.focus({ preventScroll: true }); } catch (e) { target.focus(); }
     }
 
+    // --- where the window stands -------------------------------------------------------
+    //
+    // A swap replaces every element the browser's own scroll anchoring holds on to, and
+    // the layouts in between — the map put back on the server's look, the grid planned —
+    // move what it holds on to next, so a wall scrolled down stood hundreds of pixels
+    // higher after a refresh. So `before` notes the nodes the window shows nearest its
+    // top, above it or below, and where each stood, and `apply` scrolls by what the
+    // nearest of them still shown moved once the new markup is laid out: the window shows
+    // what it showed, a line added above it or not. A window at the page's top stays
+    // there, whatever comes to stand at the head of the wall.
+    var STOOD = 4;
+    var stood = [];
+
+    function noteWhere(root) {
+        stood = [];
+        if (window.scrollY <= 0) { return; }
+        var nodes = root.querySelectorAll(".tree-node[data-node]");
+        var reach = window.innerHeight;
+        for (var i = 0; i < nodes.length; i++) {
+            var box = nodes[i].getBoundingClientRect();
+            if (!box.height || box.bottom <= 0 || box.top >= reach) { continue; }
+            stood.push({ path: nodes[i].getAttribute("data-node"), top: box.top });
+        }
+        stood.sort(function (a, b) { return Math.abs(a.top) - Math.abs(b.top); });
+        stood.length = Math.min(stood.length, STOOD);
+    }
+
+    function restoreWhere(root) {
+        var was = stood;
+        stood = [];
+        for (var i = 0; i < was.length; i++) {
+            var node = root.querySelector(".tree-node[data-node=" + quoted(was[i].path) + "]");
+            var box = node ? node.getBoundingClientRect() : null;
+            if (!box || !box.height) { continue; }
+            var by = box.top - was[i].top;
+            if (Math.abs(by) < 0.5) { return; }
+            // at once, whatever the page's `scroll-behavior` says: a refresh never glides
+            var html = document.documentElement;
+            var behavior = html.style.scrollBehavior;
+            html.style.scrollBehavior = "auto";
+            window.scrollBy(0, by);
+            html.style.scrollBehavior = behavior;
+            return;
+        }
+    }
+
     // --- around each swap ------------------------------------------------------------
 
     function before(container) {
         swapping = true;
         closeMenu();
         noteFocus(container || grid);
+        noteWhere(container || grid);
     }
 
-    function apply(container) {
+    // Under the look `boxes: packed` the boxes take their columns once their heads are
+    // drawn, before the window is put back where it stood (`dashboard-layout.js`,
+    // ADR-0138): anew when the page is drawn, and in the columns they stand in after a
+    // refresh or a click.
+    function packed(drawn) {
+        var layout = window.lsLayout;
+        if (!layout || !layout.pack) { return; }
+        if (drawn && layout.draw) { layout.draw(); } else { layout.pack(); }
+    }
+
+    // `drawn` on a load, which packs the boxes anew; a swap keeps their columns.
+    function apply(container, drawn) {
         var root = container || grid;
         applyAll(root);
+        packed(drawn);
         restoreFocus(root);
+        restoreWhere(root);
         swapping = false;
         document.documentElement.classList.remove(PENDING);
-        document.documentElement.classList.add(READY);
+        document.documentElement.classList.add(READY, DRAWN);
     }
 
     window.lsTree = { before: before, apply: apply };
@@ -1731,7 +1934,11 @@
 
     // ▤: pressed opens every child; released or mixed folds every child to a chip.
     // Pressing it sets every child: the children's entries go, and one whose own
-    // look would not follow gets an entry of its own (decision 5).
+    // look would not follow gets an entry of its own (decision 5). A fold gives every
+    // failing child one too, whatever this view draws it as: another of the tab's
+    // views may open it by its own failure budget — the wall, where a node's page's
+    // cards stand inside one card and share its three — and its close holds for its
+    // incident there as here (§3.8).
     function pressChips(node) {
         var button = iconOf(node, "chips");
         var wantClosed = button.getAttribute("aria-pressed") !== "true";
@@ -1748,7 +1955,8 @@
             delete kid.open; delete kid.ok_since; delete kid.ok_held;
             if (Object.keys(kid).length) { map.nodes[pathOf(kids[i])] = kid; }
             else { delete map.nodes[pathOf(kids[i])]; }
-            if (lookOf(kids[i]).open === wantClosed) {
+            if (lookOf(kids[i]).open === wantClosed
+                    || (wantClosed && kids[i].hasAttribute("data-failing"))) {
                 kid = map.nodes[pathOf(kids[i])] || {};
                 kid.open = !wantClosed;
                 map.nodes[pathOf(kids[i])] = kid;
@@ -1810,25 +2018,6 @@
 
     grid.addEventListener("click", function (e) {
         if (!e.target.closest) { return; }
-        var more = e.target.closest(".branch-more");
-        if (more) {
-            // A control, not navigation — keep the click off the card link and the
-            // popover's touch handler.
-            e.preventDefault();
-            e.stopPropagation();
-            var level = more.closest(".node-children");
-            if (!level) { return; }
-            var branch = level.getAttribute("data-branch");
-            hold(branch, "more", held(branch, "more") ? undefined : true);
-            applyMore(level);
-            // the boxes just shown had no height to measure their lines by, nor a
-            // width for their rows
-            var shownHeads = level.querySelectorAll(".status-node__self");
-            applyAllHeads(shownHeads);
-            applyAllLines(level.querySelectorAll(".reason-block"));
-            applyToolbars(shownHeads);
-            return;
-        }
         var lines = e.target.closest(".reason-more");
         if (lines) {
             e.preventDefault();
@@ -1858,20 +2047,20 @@
             if (kind === "page") { return; }                 // the link's own meaning
             var owner = nodeOf(icon);
             if (!owner) { return; }
-            if (kind === "pin" && isPageRoot(owner)) {
+            if ((kind === "pin" || kind === "ack") && isPageRoot(owner)) {
                 // a page's own head opens the editor it keeps
-                var setter = setterOf(owner);
+                var setter = setterOf(owner, kind);
                 if (!setter) { return; }
                 e.preventDefault();
                 e.stopPropagation();
                 setter.open = !setter.open;
                 return;
             }
-            if (kind === "pin") {
+            if (kind === "pin" || kind === "ack") {
                 // a click with a modifier, and a middle click, keep the link's own
                 // meaning; without the page's editor the link is followed
                 if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) { return; }
-                if (!openPin(owner, icon)) { return; }
+                if (!openPin(owner, icon, kind)) { return; }
                 e.preventDefault();
                 e.stopPropagation();
                 return;
@@ -1901,6 +2090,13 @@
         // a click with a modifier, and a middle click, keep the link's own meaning
         if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) { return; }
         if (chip && chip.hasAttribute("hidden")) { return; }
+        // under the looks `name` and `pointer-name` the pointer's click on an open
+        // head's name follows its link to the node's page; the keyboard's Enter, a
+        // click with no pointer (`detail` 0), opens and closes the node as Space does
+        // (ADR-0029)
+        if (!chip && e.detail !== 0 && nameOpensPage()
+                && e.target.closest(".status-card__name, .status-node__name")
+                && !node.classList.contains("is-closed")) { return; }
         // a click that ends a drag — the pointer travelled, selecting the head's text
         // — keeps the selection; the keyboard's click (Enter) has no pointer and is
         // never one (a drag that starts on the name, a link, is the browser's own
@@ -2024,7 +2220,7 @@
     observer = new MutationObserver(function () {
         if (!swapping) { applyAll(grid); }
     });
-    apply(grid);
+    apply(grid, true);
     // what was read is written back once: a map of another version is gone for good
     write();
 })();

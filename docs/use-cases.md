@@ -64,15 +64,15 @@ and the ticket, and everyone's looking at the same picture.
 
 ## 6. The shared toolbox, one click away
 
-Mid-incident, Robin reaches for the load-test console. Not a runbook for the thing
-that is broken — that one is already on the node, in its `about`, right where they
-drilled in. What is missing is everything *around* the failure: the team Grafana,
-the ticket queue, the URL shortener, the big red stop button for the load
-generator. Robin clicks **Links** and finds them in a handful of curated
-categories, each entry wearing a mark so the row is recognizable before it is
-read; typing "grafana" narrows the page to the ones that matter. (The team
-affectionately calls whoever's on call "the capybara of the day," and this page
-exists to help that person move fast.)
+Mid-incident, Robin reaches for the load-test console. Not a runbook for the thing that
+is broken — that one is already on the node, on its *Handbook* tab, one click from where
+they drilled in, its *About* card saying in a sentence what to do first. What is missing
+is everything *around* the failure: the team Grafana, the ticket queue, the URL
+shortener, the big red stop button for the load generator. Robin clicks **Links** and
+finds them in a handful of curated categories, each entry wearing a mark so the row is
+recognizable before it is read; typing "grafana" narrows the page to the ones that
+matter. (The team affectionately calls whoever's on call "the capybara of the day," and
+this page exists to help that person move fast.)
 
 ## 7. Custom link curation
 

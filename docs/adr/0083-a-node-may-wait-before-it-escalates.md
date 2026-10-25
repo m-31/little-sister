@@ -1,7 +1,7 @@
 # ADR-0083 — A node may wait before it escalates
 
 - **Status:** Accepted
-- **Date:** 2026-10-04 (accepted 2026-09-19)
+- **Date:** 2026-10-25 (accepted 2026-09-19)
 - **Related:** [ADR-0032](0032-status-contribution-boundary.md) (the contribution
   boundary this is the second rule at, and rules 5–7 which bind it),
   [ADR-0039](0039-status-rollup-semantics.md) (the roll-up, unchanged),
@@ -20,7 +20,13 @@
   [ADR-0110](0110-what-every-node-last-showed-is-kept-beside-the-log.md) (decision 1,
   what a node's first reading in a process is counted from),
   [ADR-0119](0119-a-wait-that-ends-by-its-count-writes-a-row.md) (the row that ends a
-  wait by its count, and the wait a restart resumes)
+  wait by its count, and the wait a restart resumes),
+  [ADR-0137](0137-a-deployment-says-in-a-table-how-a-part-counts-above-it.md)
+  (decision 5, a configured rule's table, which maps what damping publishes),
+  [ADR-0084](0084-a-check-may-be-reached-through-another.md) (the dependency shield,
+  which keeps a node's own state and answers to staleness too),
+  [ADR-0135](0135-a-handled-part-keeps-its-true-color-and-every-surface-says-by-what.md)
+  (decision 2, maintenance's own words, which the decisions here take)
 - **Register:** [`../decisions.md`](../decisions.md)
 - **Contract:** [`../api/openapi.yaml`](../api/openapi.yaml) — `Contribution`, from
   2.2.0.
@@ -63,9 +69,9 @@ a node shows that a pin made is published at once, so only a reading starts a wa
 Not `OK`, and not nothing. A node that was already `WARN` and now reads `ERROR`
 publishes `WARN` while it holds: publishing `OK` would invent a reading nobody made,
 and publishing nothing would drop the node out of its parent's count entirely, which
-is what [ADR-0039](0039-status-rollup-semantics.md) reserves for *silenced* and *not
-yet reported*. Neither is true of a node that has read something and is waiting to be
-believed.
+is what [ADR-0039](0039-status-rollup-semantics.md) reserves for *in maintenance* and
+*not yet reported*. Neither is true of a node that has read something and is waiting to
+be believed.
 
 This makes it the first rule at this boundary that **transforms** a contribution
 rather than withholding one, which is the case
@@ -75,6 +81,13 @@ The snapshot now carries that value as a field rather than leaving the API to in
 from the node's code — an inference that worked only as long as every rule withheld,
 because a transformed contribution is by definition not derivable from the value that
 was not counted.
+
+A rule a deployment configures on the node maps what damping publishes
+([ADR-0137](0137-a-deployment-says-in-a-table-how-a-part-counts-above-it.md)
+decision 5): its table comes last at the node's boundary, and `contribution.by` names
+the first rule whose change still reaches the parent — an `ERROR` held at `WARN`
+counts `OK` under healing by `damping`, since without the hold it would count `ERROR`,
+and `WARN` under the cap by `aggregation`, which would count `WARN` without the hold.
 
 ### 3. Three ways out of the count, and only one of them is the count
 
@@ -102,7 +115,9 @@ here — and the shape it already had does the work, because a stale node gives 
 parent its degraded **raw** code rather than anything derived.
 
 That is invariant 1 of this boundary, met for the second time: the pin's own
-exemption was removed for it, and the dependency shield will answer to it next.
+exemption was removed for it, and the dependency shield answers to it as well — a stale
+dependent is not shielded ([ADR-0084](0084-a-check-may-be-reached-through-another.md)
+decision 5).
 
 ### 5. It has to be visible or it reads as a bug
 
@@ -110,9 +125,9 @@ A red leaf under a green parent is exactly what a broken roll-up looks like. So 
 node says how far the count has got — `1 of 3 to escalate` on its card, and on its own
 page a sentence naming what it is showing, how many readings are in, and what the
 level above is counting meanwhile. It takes the **same slot and the same ink** as the
-maintenance suffix that already says *we are silencing an error*, because they are one
-idea — this node is transforming what it publishes — and three features inventing three
-treatments is the outcome that boundary exists to prevent.
+maintenance suffix that already says *an error is held in maintenance*, because they are
+one idea — this node is transforming what it publishes — and three features inventing
+three treatments is the outcome that boundary exists to prevent.
 
 The event log stays honest: the leaf's transition is recorded when it happens, marked
 `damping` in `suppressed_by`, so the delay is visible in the history rather than hidden
@@ -124,8 +139,12 @@ underneath a pin does not chop one maintenance window into phantom periods — a
 test for that was *was this suppressed at all*. A damped transition answers yes to that
 question and is the opposite case: the node did change what it showed, immediately, and
 only its parent's count waited. So the filter turns on which rules hide the **reading**,
-not on whether a rule acted; today that is maintenance alone, and a dependency shield
-will sit on this side too, since it keeps the node's own state and marks it.
+not on whether a rule acted: maintenance does, and a dependency shield sits on this
+side with damping, since it keeps the node's own state and marks it
+([ADR-0084](0084-a-check-may-be-reached-through-another.md)). A configured rule's row
+says which side it is on — with damping where the rule changes what a node passes up,
+with a line's pin where it changes what the node shows
+([ADR-0137](0137-a-deployment-says-in-a-table-how-a-part-counts-above-it.md)).
 
 The reading that completes a node's count writes a row of its own, unmarked
 ([ADR-0119](0119-a-wait-that-ends-by-its-count-writes-a-row.md)), so the log says when
@@ -209,12 +228,16 @@ whole tree is the events page's job and it already does it.
 
 - **`N` of the last `M`.** Catches flap, which consecutive does not, at the cost of a
   rule that is harder to explain and a marker that cannot be a count. Deferred with
-  its hole named above.
+  its hole named above, and to come with a hold on the way down as one opt-in rule on
+  this setting: a failure reaching the parent at N failing readings among the last M,
+  a published one clearing after K `OK` readings in a row, N of N and K of one by
+  default.
 - **Damping inside the check**, so the leaf itself stays green until it is sure.
   Rejected: it lies to the one reader who came to look at that specific thing, and it
   is the formulation this project rejected when the question was first written down.
-- **Symmetric recovery**, a hold in both directions. Defensible and rejected: it makes
-  a parent lag on the way down as well, which is the half nobody is asking for.
+- **Symmetric recovery**, a hold in both directions. Defensible and rejected as the
+  rule: it makes a parent lag on the way down as well, which is the half nobody is
+  asking for. As the opt-in half of *N of the last M* above, it comes with that rule.
 - **Do it in a notifier.** The rolled-up code is what every client consumes, so
   suppressing only the notification suppresses nothing — and there is no notifier.
 - **Leave the contribution derivable from the code**, as the API did. That works only

@@ -1,12 +1,13 @@
 # ADR-0088 — A stop ends at its save: the engine stops when the worker leaves, and abandons what is in flight
 
 - **Status:** Accepted
-- **Date:** 2026-09-26
+- **Date:** 2026-10-24 (accepted 2026-09-26)
 - **Related:** [ADR-0001](0001-in-process-threaded-engine.md) (the daemon check threads
   and the stop signal this makes true), [ADR-0071](0071-what-a-restart-keeps-is-a-directory-of-files.md)
   (the graceful-shutdown write, which becomes the stop's one save),
-  [ADR-0030](0030-curated-links.md) (the links probe's abandonment, which the stop
-  reuses), [ADR-0067](0067-the-run-scripts-can-serve-tls.md) (the run scripts),
+  [ADR-0030](0030-curated-links.md) (the links page, which probes nothing, so
+  nothing of it holds the exit), [ADR-0067](0067-the-run-scripts-can-serve-tls.md) (the
+  run scripts),
   [ADR-0072](0072-the-instance-reports-on-itself.md) (the runtime line a failed tick
   wrote), [ADR-0089](0089-a-process-a-check-starts-ends-with-it.md) (what a run started
   ends with the stop), [ADR-0090](0090-one-state-directory-one-writer.md) (the lease the
@@ -108,10 +109,9 @@ last write, and nothing a check started — here or on a remote host — outlive
    - **The stop is safe to reach twice**, and the second call says nothing.
    - **A deployment that runs gunicorn itself takes the flag**; the release notes say
      so, and name the flag.
-6. **The links probe stops holding the exit.** At the stop, its pass is abandoned the
-   way it abandons at its own deadline ([ADR-0030](0030-curated-links.md) decision 11),
-   on a pool the interpreter does not join. What it learns lives in memory only, and the
-   save has already happened.
+6. **Nothing but the engine holds the exit.** The links page probes nothing
+   ([ADR-0030](0030-curated-links.md)), so the stop is the engine's alone: no pass of a
+   probe is in flight to abandon, and no pool of one to join.
 7. **Keep-alive is off.** Every gunicorn line the family runs passes `--keep-alive 0`,
    so gunicorn answers each request with `Connection: close` and only a request that is
    still running holds the save. It costs a connection per request — a TLS handshake each
@@ -126,11 +126,10 @@ last write, and nothing a check started — here or on a remote host — outlive
    `instance.sh` or the environment, the way `WORKER_TIMEOUT` is. `start.sh`, and a
    container's entrypoint that runs gunicorn itself, pass it as `--graceful-timeout`. It
    is what a request still running at the TERM may take before the master's KILL, and
-   the routes that wait on somebody else are bounded below it: *check now* on the links
-   page waits for its pass up to 10 s, an action a package offers makes calls its client
-   bounds, and a login door's callback waits on its identity provider — one deployment's
-   for up to 25 s, and 35 s when its discovery has not worked yet, the one route that can
-   outlast the grace.
+   the routes that wait on somebody else are bounded below it: an action a package
+   offers makes calls its client bounds, and a login door's callback waits on its
+   identity provider — one deployment's for up to 25 s, and 35 s when its discovery has
+   not worked yet, the one route that can outlast the grace.
 9. **`stop.sh` waits for every process it read before the TERM.** It reads the master
    and its workers while they still listen, sends TERM to the master, and waits on those
    pids for the grace and 5 s — the margin the master needs to reap its worker and exit
@@ -153,7 +152,6 @@ last write, and nothing a check started — here or on a remote host — outlive
 - [ADR-0001](0001-in-process-threaded-engine.md)'s daemon check threads and its stop
   signal are true, and [ADR-0071](0071-what-a-restart-keeps-is-a-directory-of-files.md)'s
   graceful-shutdown write is a single, last write; both are updated.
-  [ADR-0030](0030-curated-links.md)'s abandonment reaches the stop, and is updated.
 - What a stop loses is the runs in flight. Their checks run again at the next start, at
   once, and a node's history shows the gap between the two runs as what it was.
 - Every gunicorn line the family runs carries two flags it did not: the hooks module and

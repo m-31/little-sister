@@ -1,7 +1,7 @@
 # ADR-0109 — A node says its children are complete, and one it no longer returns is removed
 
 - **Status:** Accepted
-- **Date:** 2026-10-03
+- **Date:** 2026-10-25 (accepted 2026-10-03)
 - **Related:** [ADR-0007](0007-check-result-branches.md) (children are not pruned: the
   deferral this ends, and which this amends), [ADR-0060](0060-a-line-makes-no-claim.md)
   (decision 3: a child left out could not be read, which holds where nothing is said),
@@ -20,7 +20,11 @@
   it declined), [ADR-0032](0032-status-contribution-boundary.md) (rule 6, the backstop
   beneath a pin), [ADR-0101](0101-the-events-page-is-filtered-by-its-url.md) (the Events
   page's switches), [ADR-0104](0104-a-pin-is-one-block-on-what-it-silences.md) (decision
-  6, the Maintenance page),
+  6, the page that lists every pin),
+  [ADR-0135](0135-a-handled-part-keeps-its-true-color-and-every-surface-says-by-what.md)
+  (decision 8: that page is *Handled*),
+  [ADR-0142](0142-a-failure-marked-seen-counts-as-ok-above-until-it-changes.md)
+  (decision 4: a failure marked seen ends when its part is no longer reported),
   [ADR-0110](0110-what-every-node-last-showed-is-kept-beside-the-log.md) (what is kept
   of a node beside the log),
   [ADR-0116](0116-a-path-with-no-node-says-what-is-known-of-it.md) (what a removed
@@ -107,19 +111,24 @@ run, with everything it had.
 ### 4. Absence suspends a pin, and only its expiry disposes of it
 
 A pin on a removed node stays, and so does one on any of its lines and on the nodes
-beneath it. The Maintenance page lists it as a pin whose node is *not reported at
-present*; it holds again the moment a node returns at its path; and it ends by its own
-expiry, as every pin does ([ADR-0014](0014-maintenance-persistence.md)). This is the
+beneath it. *Handled* lists it as a pin whose node is *not reported at present*
+([ADR-0135](0135-a-handled-part-keeps-its-true-color-and-every-surface-says-by-what.md)
+decision 8); it holds again the moment a node returns at its path; and it ends by its
+own expiry, as every pin does ([ADR-0014](0014-maintenance-persistence.md)). This is the
 rule a line's pin has ([ADR-0036](0036-addressable-reasons.md) decision 6), one level
 up, and a pin set for a migration survives its subject leaving and returning during it.
+A failure marked seen is the one exception, since the failure it accepted is gone: it
+ends with its node, its row before the removal's
+([ADR-0142](0142-a-failure-marked-seen-counts-as-ok-above-until-it-changes.md) decision
+4).
 
 **A pin makes no node.** It is held against its path, whether it is set, replayed at a
 start or adopted, and a node the tree makes at that path takes it. The rule is one for
 every pin and not for a removed node's alone, and it amends
 [ADR-0014](0014-maintenance-persistence.md) decision 3. A pin whose node was removed
 writes its set, its edit and its end as rows that change nothing. *Not reported at
-present* is also true of a pinned node no check has written yet since a start, which the
-Maintenance page lists the same way until its first reading.
+present* is also true of a pinned node no check has written yet since a start, which
+*Handled* lists the same way until its first reading.
 
 ### 5. A removal is an event, one for each node removed
 
@@ -193,10 +202,11 @@ is unread; decision 2 can gain that without changing.
   ([ADR-0087](0087-a-check-keeps-its-subjects-readings.md) decision 10): a deployment
   near it loses the readings of an archived repository before those of any that still
   reports.
-- **A pin without a node** is a state the Maintenance page shows and the store keeps,
-  and a restart that brings the pins back no longer brings back a node for each.
-- **`implementing-checks.md` says the rule** when this is built: say that the children
-  are complete where the run read all of them, and leave it unsaid where it could not.
+- **A pin without a node** is a state *Handled* shows and the store keeps, and a
+  restart that brings the pins back no longer brings back a node for each.
+- **`implementing-checks.md` says the rule**, as `children_complete`: say that the
+  children are complete where the run read all of them, and leave it unsaid where it
+  could not.
 
 ## Alternatives considered
 

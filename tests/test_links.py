@@ -7,8 +7,6 @@ from unittest import TestCase
 from little_sister.config_dir import ASPECTS, aspect_in
 from little_sister.icons import BUILTIN_PACKAGE, Icon, IconFile
 from little_sister.links import (
-    DEFAULT_ALIVE,
-    DEFAULT_PROBE_INTERVAL,
     Group,
     Link,
     LinksConfig,
@@ -26,7 +24,6 @@ groups:
       - title: Cyber Chef
         url: https://gchq.github.io/CyberChef/
         icon: sonar
-        check: true
         note: offline-capable, safe for production data
       - title: Grafana
         url: https://grafana.example.org/
@@ -63,9 +60,8 @@ class LoadLinksTests(TestCase):
             self.assertEqual(group.title, "Toolbox")
             self.assertEqual(group.links[0], Link(
                 title="Cyber Chef", url="https://gchq.github.io/CyberChef/",
-                icon="sonar", check=True,
+                icon="sonar",
                 note="offline-capable, safe for production data"))
-            self.assertFalse(group.links[1].check)
             self.assertFalse(config.is_empty())
 
     def test_entry_order_is_never_sorted(self):
@@ -648,39 +644,25 @@ groups:
             self.assertEqual(links_policy_sources(load_links(Path(directory))), ())
 
 
-class ProbeSettingsTests(TestCase):
-    def test_defaults_when_nothing_is_declared(self):
-        with tempfile.TemporaryDirectory() as directory:
-            probe = load_links(Path(directory)).probe
-            self.assertTrue(probe.icons)
-            self.assertFalse(probe.links)
-            self.assertEqual(probe.interval, DEFAULT_PROBE_INTERVAL)
-            self.assertEqual(probe.alive, DEFAULT_ALIVE)
+class RetiredCheckKeyTests(TestCase):
+    """The page probes nothing (ADR-0030), so a `check:` block, or an entry's
+    `check:`, is a key the file does not have — reported as any other is, and the
+    entry it sits on still shown."""
 
-    def test_read_and_merged_per_key_across_roots(self):
-        with tempfile.TemporaryDirectory() as d1, tempfile.TemporaryDirectory() as d2:
-            write(d1, "check:\n  links: true\n  interval: 30m\n"
-                      "  alive: [200, 418]\n")
-            write(d2, "check:\n  icons: false\n")
-            probe = load_links(f"{d1}{os.pathsep}{d2}").probe
-            self.assertFalse(probe.icons)          # the later root
-            self.assertTrue(probe.links)           # kept from the earlier one
-            self.assertEqual(probe.interval, "30m")
-            self.assertEqual(probe.alive, (200, 418))
-
-    def test_a_junk_status_code_is_reported(self):
+    def test_a_check_block_is_an_unknown_key(self):
         with tempfile.TemporaryDirectory() as directory:
-            write(directory, "check:\n  alive: [200, oops]\n")
+            write(directory, "check:\n  icons: true\n  interval: 6h\n")
             config = load_links(Path(directory))
-            self.assertEqual(config.probe.alive, (200,))
-            self.assertTrue(problems_matching(config, "whole number"))
+            self.assertTrue(problems_matching(config, "unknown key(s) check"))
 
-    def test_check_must_be_a_mapping(self):
+    def test_an_entry_that_asks_to_be_checked_is_still_shown(self):
         with tempfile.TemporaryDirectory() as directory:
-            write(directory, "check: true\n")
+            write(directory, "groups:\n  - title: T\n    links:\n      - title: A\n"
+                             "        url: https://a.example.org/\n"
+                             "        check: true\n")
             config = load_links(Path(directory))
-            self.assertEqual(config.probe.interval, DEFAULT_PROBE_INTERVAL)
-            self.assertTrue(problems_matching(config, "'check' must be a mapping"))
+            self.assertEqual([link.title for link in config.groups[0].links], ["A"])
+            self.assertTrue(problems_matching(config, "unknown key(s) check"))
 
 
 class DirectoryFormTests(TestCase):

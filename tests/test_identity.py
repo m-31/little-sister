@@ -25,13 +25,14 @@ from little_sister import identity, local_login
 #: the value of this file is that adding a route makes a test fail until somebody has
 #: said which of the three sets it belongs in.
 GATED_ENDPOINTS = frozenset({
-    "about", "copy", "events", "extension_asset", "history", "link_icon", "links",
-    "links_check", "maintenance", "maintenance_overview", "preferences",
-    "self_report_action", "system", "system_installed", "user_avatar",
+    "about", "copy", "events", "extension_asset", "handbook", "handled", "help_page",
+    "history", "link_icon", "links", "maintenance", "maintenance_overview", "notes",
+    "preferences", "seen", "self_report_action", "system", "system_installed",
+    "user_avatar",
 })
 
 #: The one method each endpoint is exercised with, where GET is not it.
-POST_ENDPOINTS = frozenset({"preferences", "maintenance", "links_check", "csp_report",
+POST_ENDPOINTS = frozenset({"preferences", "maintenance", "seen", "csp_report",
                             "self_report_action"})
 
 
@@ -173,12 +174,35 @@ class IdentityTests(TestCase):
                                          "password": "pw", "admin": False}}):
             self.client.post("/login", data={"username": "viewer", "password": "pw"})
             self.assertEqual(self.client.get("/system").status_code, 403)
-            self.assertEqual(self.client.post("/maintenance").status_code, 403)
+            self.assertEqual(self.client.post("/pins/maintenance").status_code, 403)
 
     def test_an_admin_is_not_refused_them(self):
         self.client.post("/login",
                          data={"username": "pan", "password": "12345678"})
         self.assertEqual(self.client.get("/system").status_code, 200)
+
+
+class PermissionTests(TestCase):
+    """What a request may do is asked by the act's name (ADR-0141 decision 4): every
+    act is an admin's until roles map onto them, and a name no act has is a typo in a
+    route, which raises rather than answering *no* to everybody."""
+
+    def test_every_act_is_an_admins(self):
+        admin = identity.Identity(name="ada", firstname="", lastname="", admin=True)
+        viewer = identity.Identity(name="viv", firstname="", lastname="", admin=False)
+        for permission in sorted(identity.PERMISSIONS):
+            with self.subTest(permission):
+                self.assertTrue(admin.may(permission))
+                self.assertFalse(viewer.may(permission))
+
+    def test_the_acts_are_named_for_the_kinds_they_set(self):
+        from little_sister.pins import KINDS
+        self.assertEqual(identity.PERMISSIONS, KINDS)
+
+    def test_a_name_no_act_has_raises(self):
+        admin = identity.Identity(name="ada", firstname="", lastname="", admin=True)
+        with self.assertRaisesRegex(ValueError, "no act is called 'admin'"):
+            admin.may("admin")
 
 
 class NavRoleTests(TestCase):

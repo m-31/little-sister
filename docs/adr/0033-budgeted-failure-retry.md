@@ -6,7 +6,7 @@
   bounded worker pool this leans on),
   [ADR-0005](0005-dashboard-freshness-and-self-monitoring.md) (freshness, which
   deliberately keeps judging by the nominal frequency),
-  [ADR-0004](0004-status-aggregation-semantics.md) (what a failing run means),
+  [ADR-0040](0040-what-a-failing-check-becomes.md) (what a failing run means),
   [ADR-0023](0023-secret-references.md) (the pinned checks this never touches),
   [ADR-0031](0031-deployment-config-directory.md) (where the settings live),
   [ADR-0125](0125-the-failure-retry-reads-what-a-run-rolls-up-to.md) (what a run is

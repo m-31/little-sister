@@ -22,6 +22,7 @@ from pathlib import Path
 from little_sister import instants
 from little_sister.lease import Lease
 from tests.running import subprocess_env
+from tests.state_files import on_disk
 
 #: A mark for a holder the test stands in for; the child must name it.
 HOLDER = "beside:4242:20260926T000000Z:0b5e55ed"
@@ -219,8 +220,7 @@ class StartTests(unittest.TestCase):
         """)
         self.assertEqual(first.returncode, 0, first.stderr[-3000:])
         self.assertEqual(_last_json(first), {"beat": True})
-        saved = json.loads((self.var / "state" / "events.json").read_text(
-            encoding="utf-8"))
+        saved = on_disk(self.var / "state" / "events.json.gz")
         stopped = saved["stopped_at"]
         second = _child(self.directory, """
             import json, time

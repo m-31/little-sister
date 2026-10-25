@@ -1,7 +1,7 @@
-# ADR-0124 — A node whose lines are all silenced still counts the nodes beneath it
+# ADR-0124 — A node whose lines are all in maintenance still counts the nodes beneath it
 
 - **Status:** Accepted
-- **Date:** 2026-10-10
+- **Date:** 2026-10-25 (accepted 2026-10-10)
 - **Related:** [ADR-0036](0036-addressable-reasons.md) (decision 7, a node's lines
   are its virtual children, which this amends for a node above others; decision 10,
   quiet is visible; decision 12, a line is pinned on a leaf's page),
@@ -16,7 +16,9 @@
   what a node says and whose it is),
   [ADR-0115](0115-a-copy-document-says-where-it-is-from-and-since-when.md) (decision
   5, a branch's document, which this amends),
-  [ADR-0032](0032-status-contribution-boundary.md) (rule 5, a transform stays visible)
+  [ADR-0032](0032-status-contribution-boundary.md) (rule 5, a transform stays visible),
+  [ADR-0135](0135-a-handled-part-keeps-its-true-color-and-every-surface-says-by-what.md) (decision 2, maintenance's own
+  words, which this record takes)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -45,27 +47,27 @@ it stood; none of the deployments' saved states held such a pin when they were r
 
 ## Decision
 
-### 1. A node's silenced lines silence its own part, and nothing beneath it
+### 1. A node's lines in maintenance hold its own part, and nothing beneath it
 
-A node whose lines are all silenced has an own status of `MAINTENANCE`, as ADR-0036
+A node whose lines are all in maintenance has an own status of `MAINTENANCE`, as ADR-0036
 decision 7 has it, and that counts nothing and cancels nothing: its lines are skipped as
-a silenced child is, the nodes beneath it count as they would without them, and the
+a child in maintenance is, the nodes beneath it count as they would without them, and the
 node shows what they roll up to. It shows `MAINTENANCE` whole only where nothing
 beneath it counts either — ADR-0039 rule 5, which is also what a node with every line
 pinned and nothing beneath it reads, as it did.
 
 What cancels what is beneath a node is a pin on the node, or its check's word for the
 node: a reported `MAINTENANCE`, the lines that declare no code of their own and carry it
-included. A line cannot say `MAINTENANCE` of itself (ADR-0042), so a line is silenced by
-its pin alone — and a pin on a line is for that line, wherever its node stands in the
-tree when the pin applies.
+included. A line cannot say `MAINTENANCE` of itself (ADR-0042), so a line is in
+maintenance by its pin alone — and a pin on a line is for that line, wherever its node
+stands in the tree when the pin applies.
 
 ### 2. Whether a node cancels what is beneath it is said once
 
 One expression decides whether what a node counts for itself cancels what is beneath
 it, and the roll-up reads it. The snapshot reads it again of the fields it was given:
 for whether the node counts the nodes beneath it (ADR-0123 decision 3), and for whether
-its lines are all silenced, which a surface asks before it says where what the node
+its lines are all in maintenance, which a surface asks before it says where what the node
 shows comes from. So no surface can say that a node counts what is beneath it where the
 roll-up did not.
 
@@ -74,7 +76,7 @@ something else: a node pinned whose own reading has gone stale counts that readi
 degraded (ADR-0041 decision 5), which cancels nothing, and the nodes beneath it have
 counted since that record. Its Time card names its period its own too.
 
-### 3. The surfaces say what it shows, and that its lines are silenced
+### 3. The surfaces say what it shows, and that its lines are in maintenance
 
 Its head, its card and its box say what it rolls up to, pale where that is derived
 (ADR-0123 decisions 1 and 2). The reading a *maintenance* stands over — *· ok* beside
@@ -82,8 +84,8 @@ the word — is added only where the node shows *maintenance*. Its Time card say
 what it shows comes from — *Status error, from load-fixtures beneath it, error since …*
 — and *Its own status maintenance since …* (ADR-0123 decision 3). Its Copy document
 says where what it shows comes from: *Shown as: error ⛔
-— rolled up from the 3 nodes beneath it. Every line of its own is silenced.* Its lines
-keep their maintenance tint and their count (ADR-0036 decision 10), and an outline
+— rolled up from the 3 nodes beneath it. Every line of its own is in maintenance.* Its
+lines keep their maintenance tint and their count (ADR-0036 decision 10), and an outline
 lists its own part as *maintenance*, as it did.
 
 ## Consequences
@@ -100,8 +102,8 @@ lists its own part as *maintenance*, as it did.
 - **A pinned node whose own reading went stale** reads *Its own status maintenance
   since …* where it read *Status maintenance since …*, and its head no longer adds the
   reported reading beside the degraded one it shows.
-- **ADR-0036 decision 7, ADR-0039 rule 3 and ADR-0115 decision 5 carry an update**,
-  and ADR-0123, which has not shipped, says it in place.
+- **ADR-0036 decision 7, ADR-0039 rule 3, ADR-0115 decision 5 and ADR-0123 say
+  so.**
 - **One test file reads the node on every surface** with its one line pinned above a
   node that fails, and the tree's tests hold what still cancels.
 

@@ -1,7 +1,7 @@
 # ADR-0122 — A series is read over the API as it stands: its node, its key, its measures as drawn, its readings
 
 - **Status:** Accepted
-- **Date:** 2026-10-04
+- **Date:** 2026-10-25 (accepted 2026-10-04)
 - **Related:** [ADR-0106](0106-a-subject-with-a-history-has-a-node-of-its-own.md)
   (decision 6, the read at the Series view's own URL, which this builds and whose open
   half it settles; decisions 2 and 4, the node a series is shown on),
@@ -22,7 +22,9 @@
   choose their own credential),
   [ADR-0116](0116-a-path-with-no-node-says-what-is-known-of-it.md) (a path no node
   stands at), [ADR-0120](0120-every-stored-time-is-an-instant.md) (how an instant is
-  spelled), [ADR-0067](0067-the-run-scripts-can-serve-tls.md) (the run scripts)
+  spelled), [ADR-0067](0067-the-run-scripts-can-serve-tls.md) (the run scripts),
+  [ADR-0141](0141-every-pin-is-one-thing-with-a-kind-and-the-envelope-lists-what-handles-a-part.md)
+  (`schema_version` 3, which the series read moves to with the status read)
 - **Register:** [`../decisions.md`](../decisions.md)
 - **Contract:** [`../api/openapi.yaml`](../api/openapi.yaml) — the normative schema.
 
@@ -34,7 +36,7 @@ node it stands on, the key it is kept under, the measures its check declares, an
 readings in the window. It built nothing, because nothing read a series, and it left to
 the build everything a reader then holds for good: the names, what a measure looks like,
 what a node without series answers, the root, the refusals. Once a reader holds a name,
-changing it is a `schema_version` 3
+changing it moves `schema_version`
 ([ADR-0080](0080-the-envelope-is-the-snapshot-published.md) decision 1).
 
 What reads a series is now named, and it is neither of the readers the family had in
@@ -174,7 +176,7 @@ ways. Behind the gate a script with a valid token was redirected to the login pa
 
 ### 9. One answer is written down, in the package
 
-`series-2.json` stands beside the golden envelope in `little_sister.contract`, read as
+`series-3.json` stands beside the golden envelope in `little_sister.contract`, read as
 `contract.golden_series()`: one answer that holds every shape the read has — a series
 on its check's node and one on its subject's, a measure a `*` expanded and one with no
 `axis_to`, a series without measures, a reading that failed, a run with its own time, a
@@ -185,11 +187,15 @@ every time in it is a value a reader decodes, and a test holds the server to it
 the wheel. It is not a shared file of the family while the macOS client reads no
 series.
 
-### 10. The contract moves a minor
+### 10. The contract moves a minor, and the read says the version every read says
 
 The read is additive under `schema_version` 2: `info.version` 2.7.0, in the one OpenAPI
 document, with its paragraph in the guide beside it
-([ADR-0080](0080-the-envelope-is-the-snapshot-published.md) decisions 1 and 8).
+([ADR-0080](0080-the-envelope-is-the-snapshot-published.md) decisions 1 and 8). Its
+`schema_version` is the one every read says, so the status read's break moves the series
+read with it, its series unchanged: under `schema_version` 3 the contract is 3.0.0
+([ADR-0141](0141-every-pin-is-one-thing-with-a-kind-and-the-envelope-lists-what-handles-a-part.md)
+decision 3), and the written answer is `series-3.json` (decision 9).
 
 ### 11. `test_api.sh` takes a path, and is the first reader
 

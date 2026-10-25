@@ -13,17 +13,6 @@
 #
 # Dev-only: lives under tests/ and never ships in the package.
 
-# Reachability, so the harness has something to draw. A pass starts when somebody
-# opens the page and the newest answer is older than `interval:` — never on a timer
-# (ADR-0030 §9). Links are switched **on** here, which they are not by default; the
-# entries opt in one at a time below. Nothing in this file resolves, so what the
-# harness shows is a failure — which is the only thing the page draws, a healthy
-# row being deliberately undecorated.
-check:
-  icons: true
-  links: true
-  interval: 6h
-
 icons:
   # A deployment's own file, beside this document — one file, so it rides the
   # theme-invariant chip.
@@ -44,8 +33,6 @@ groups:
       - title: EMERGENCY STOP
         url: https://stop.example.org/loadtest
         icon: argo
-        # Opted into probing: the one entry nobody may click to find out.
-        check: true
         note: pulls the generators off **live** — tell the channel first
       - title: Console
         url: https://console.example.org/loadtest
@@ -65,7 +52,6 @@ groups:
       - title: Kibana
         url: https://kibana.example.org/
         icon: kibana
-        check: true
         note: log retention is 14 days
       - title: Phoenix
         url: https://phoenix.example.org/

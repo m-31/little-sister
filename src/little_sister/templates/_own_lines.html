@@ -35,23 +35,30 @@
     record and a refusal take their line's ink, never Bootstrap's muted gray
     (`_record_list.html`). ``covered`` counts the pins above
     the node, which silence it and every line with it: a line's pin is then, as under
-    the node's own, for the day those end (ADR-0104 decision 2). -#}
-{% from '_rule_block.html' import pin_block, pin_new, rule_mark with context %}
+    the node's own, for the day those end (ADR-0104 decision 2).
+
+    **A line that fails now takes a ringed check beside its pause mark** (ADR-0142),
+    where the reader may mark it seen, nothing holds it in maintenance and nobody has
+    yet: it opens the line's own editor beneath it, as the pause mark does, and the
+    line marked seen keeps its color with the ringed check before its words, its block
+    beneath it — who marked it, at which failure, until it changes, its note, *Edit*
+    and *Clear*. -#}
+{% from '_rule_block.html' import pin_block, pin_new, rule_mark, line_rule_mark, line_ack_mark, ack_new with context %}
 {% from '_status_cue.html' import status_cue %}
 {% from '_record_list.html' import record_list %}
 {% macro own_lines(node, path, may, focus='', focus_orphan=none, beneath=false,
                    back='', surface='check', prefix='reason-maintenance-',
                    covered=0, folded=false) -%}
 {%- set pin = node.maintenance_entry %}
-{#- What a line's pin leaves alarming beside it. A line that is silenced already is
+{#- What a line's pin leaves alarming beside it. A line that is pinned already is
     not one that keeps alarming, and under the node's pin nothing alarms at all —
     there a line's pin is for the day the node's ends. -#}
 {%- set others = node.reasons | rejectattr('quiet') | list | length - 1 %}
 {%- set line_covers %}
     {%- if pin -%}
-        It stays silenced when the node's pin ends.
+        It stays in maintenance when the node's pin ends.
     {%- elif covered -%}
-        It stays silenced when the {{ 'pin' if covered == 1 else 'pins' }} above the node {{ 'ends' if covered == 1 else 'end' }}.
+        It stays in maintenance when the {{ 'pin' if covered == 1 else 'pins' }} above the node {{ 'ends' if covered == 1 else 'end' }}.
     {%- elif others > 1 -%}
         The other {{ others }} keep alarming.
     {%- elif others == 1 -%}
@@ -75,11 +82,15 @@
         was set on is <strong>no longer reported</strong> by this
         check. The pin is still here and still expires
         {{ focus_orphan.expires_at | localtime }}; if the line comes
-        back, it comes back silenced.</div>
+        back, it comes back in maintenance.</div>
 {%- endif %}
 {% for line in node.reasons %}
     {%- set focused = focus and line.slug == focus %}
     {%- set settable = may and node.members and not line.quiet %}
+    {%- set reads = line.code if line.code is not none else node.reported_code %}
+    {%- set acceptable = settable and not line.acknowledgment and not pin and not covered
+                         and node.reported_code.name != 'MAINTENANCE'
+                         and reads.name in ('WARN', 'ERROR') %}
     {%- set next = back | at_line(line.slug) if back else '' %}
     {#- A coded line carries its own claim (ADR-0042): state class, its state's own
         tint, and a labeled cue as its accessible name; quiet keeps the maintenance
@@ -89,14 +100,14 @@
         never clamped and keep the check's order (backlog #91 §3.3) — and
         `data-fold-drawn` beside it what the node's configured fold folds from the
         first paint (`folded`, ADR-0128), until `tree.js` folds it itself. -#}
-    <div {% if focused %}id="pinned-reason" {% endif %}class="small check-reason{% if line.code %} is-coded s-{{ line.code | status_slug }}{% endif %}{% if line.running %} is-running{% endif %}{% if line.quiet %} is-quiet{% endif %}{% if focused %} is-focused{% endif %}"{% if line_healthy(node, line) %} data-healthy{% if folded %} data-fold-drawn{% endif %}{% endif %}>
+    <div {% if focused %}id="pinned-reason" {% endif %}class="small check-reason{% if line.code %} is-coded s-{{ line.code | status_slug }}{% endif %}{% if line.running %} is-running{% endif %}{% if line.quiet %} is-quiet{% endif %}{% if line.rule and line.rule.changes %} is-ruled{% endif %}{% if focused %} is-focused{% endif %}"{% if line_healthy(node, line) %} data-healthy{% if folded %} data-fold-drawn{% endif %}{% endif %}>
         {#- The box the pause mark is placed in: the line's own paddings differ with
             its state, and the mark has to sit where the rail does. -#}
         <div class="check-reason__box">
-        <div class="check-reason__rail{% if settable %} check-reason__rail--seat{% endif %}">
+        <div class="check-reason__rail{% if settable %} check-reason__rail--seat{% endif %}{% if acceptable %} check-reason__rail--seats{% endif %}">
             <span class="reason-actions">{{ slot('reason.actions', node=node, reason=line.text, line=line, index=loop.index0, surface=surface) }}</span>
         </div>
-        <div class="md-body check-reason__body">{% if line.code %}{{ status_cue(line.code, labeled=true) }}{% endif %}{{ line.text | markdown }}</div>
+        <div class="md-body check-reason__body">{% if line.code %}{{ status_cue(line.code, labeled=true) }}{% endif %}{% if line.accepted %}{{ line_ack_mark(line) }}{% endif %}{% if line.rule and line.rule.changes %}{{ line_rule_mark(line.rule) }}{% endif %}{{ line.text | markdown(node=node.path) }}</div>
         {#- The form the line was written from (ADR-0126), where its grading named
             one: the key a check's `display:` block re-words this line under, so the
             reader who wants the line to say more learns here what to write — and the
@@ -130,10 +141,24 @@
                 column of their own. -#}
             <details class="reason-pin">
                 <summary class="reason-action reason-pin__toggle" title="Set maintenance for this line">{{ rule_mark('maintenance') }}<span class="visually-hidden">Set maintenance for this line</span></summary>
-                {{ pin_new('line', line_covers, path, line.slug, prefix ~ loop.index, next=next) }}
+                {#- A line's note is written from the line too, as its pin is set
+                    (ADR-0140 decision 3): the node's Notes view, the line chosen. -#}
+                {{ pin_new('line', line_covers, path, line.slug, prefix ~ loop.index, next=next,
+                           notes=url_for('notes', path=path | url_branch, reason=line.slug) ~ '#add-note') }}
             </details>
         {%- elif line.quiet %}
             {{ pin_block(line.maintenance, 'line', path, line.slug, prefix ~ loop.index, may, also=pin is not none or covered, next=next) }}
+        {%- endif %}
+        {%- if acceptable %}
+            {#- The ringed check, on its seat beside the pause mark: marks this line
+                seen, as it stands (ADR-0142). -#}
+            <details class="reason-ack">
+                <summary class="reason-action reason-ack__toggle" title="Mark this line seen">{{ rule_mark('seen') }}<span class="visually-hidden">Mark this line seen</span></summary>
+                {{ ack_new('line', path, line.slug, prefix ~ 'seen-' ~ loop.index, next=next) }}
+            </details>
+        {%- endif %}
+        {%- if line.acknowledgment %}
+            {{ pin_block(line.acknowledgment, 'line', path, line.slug, prefix ~ 'seen-' ~ loop.index, may, next=next) }}
         {%- endif %}
         </div>
     </div>

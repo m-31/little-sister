@@ -269,6 +269,14 @@ class Entry:
     under, beside the form it re-words it under. Empty on every line no grading of
     the seam decided.
 
+    ``occurrence`` is what tells this line's failure from the next one (ADR-0142):
+    the field its type names for it (``Check(occurrence=…)``), else the identity of
+    the reading the line was written from — a run's id and attempt — and empty where
+    nothing does, where a failure is the failing stretch it stands in. A *seen* on
+    the line is bound to it, and a new one ends that. ``Check.line`` fills it; a line
+    a check writes as a sentence of its own carries none unless it says one, and it
+    is bounded and free of control characters as a subject is.
+
     ``code`` is the entry's **own status** — the verdict of the workflow this line
     stands for, the severity of this finding. ``None`` (the default) means the
     entry carries its node's code, which is every entry that existed before
@@ -291,9 +299,11 @@ class Entry:
     refused: str = ""
     form: str = ""
     grading: str = ""
+    occurrence: str = ""
 
     def __post_init__(self) -> None:
         check_subject(self.subject, "an entry's subject")
+        check_subject(self.occurrence, "an entry's occurrence")
         if self.code is not None and self.code not in ENTRY_CODES:
             raise ReasonError(
                 f"an entry may not declare {self.code.name}: a pin is recorded "
@@ -336,17 +346,32 @@ ReasonInput = (
 # escape noise.
 _MD_ESCAPE = {ord(ch): f"\\{ch}" for ch in "\\`*[]"}
 _WEB_URL_SCHEME = re.compile(r"\bhttps?://", re.IGNORECASE)
+# A status placeholder, `{error}` and the other four in either case, which the page
+# draws as the status's sign in every text (ADR-0133 decision 5): ``plain`` escapes its
+# brace alone, as it breaks a web scheme alone, so that a captured one stays the text
+# it was and every other brace — JSON, a format string — stays clean.
+_STATUS_PLACEHOLDER = re.compile(
+    r"\{(?=(?:" + "|".join(code.name.lower() for code in StatusCode) + r")\})",
+    re.IGNORECASE | re.ASCII)
+# A run of two or more tildes, which opens or closes GitHub's strikethrough (ADR-0018
+# decision 14): ``plain`` escapes each tilde of a run, and a lone one — a home
+# directory's ``~/`` — stays clean. A table needs a delimiter row of a line of its own,
+# which a one-line text cannot hold and multi-line output does not reach through
+# ``code``, so a pipe is left alone, as the block markers are.
+_TILDE_RUN = re.compile(r"~{2,}")
 
 
 def plain(text: object) -> str:
     """Escape inline Markdown so untrusted text — a path, an error, a captured
-    line — renders **literally** in an entry (ADR-0018). Use it when folding
-    external output into a line, a check's reason or the instance's own report
-    alike; for multi-line / log output prefer :func:`little_sister.checks.code`.
-    Here rather than in the check layer because the modules beneath it — a
-    configuration loader, the identity doors — fold paths and errors into
-    self-report lines too."""
-    escaped = str(text).translate(_MD_ESCAPE)
+    line — renders **literally** wherever the page shows it (ADR-0018): no emphasis,
+    code span, link, strikethrough or status sign (ADR-0133) it did not mean. Use it
+    when folding external output into a line, a check's reason or the instance's own
+    report alike; for multi-line / log output prefer
+    :func:`little_sister.checks.code`. Here rather than in the check layer because the
+    modules beneath it — a configuration loader, the identity doors — fold paths and
+    errors into self-report lines too."""
+    escaped = _STATUS_PLACEHOLDER.sub(r"\\{", str(text).translate(_MD_ESCAPE))
+    escaped = _TILDE_RUN.sub(lambda run: "\\~" * len(run.group()), escaped)
     return _WEB_URL_SCHEME.sub(
         lambda match: match.group().replace(":", r"\:"), escaped)
 
@@ -457,8 +482,8 @@ def clip(text: str, *, chars: int, budget: int, keep: str = "head") -> str:
     output it asked to see. ``budget`` is the record's, in the **bytes the seam
     measures**, and it is the one that is easy to get wrong: a record is weighed
     as ``json.dumps`` writes it, which escapes to ASCII, so one character is one
-    byte only while the text is ASCII. Measured against a 2 KB ``record_limit``,
-    1000 characters come to 1014 bytes of ASCII, 2014 when every one of them is a
+    byte only while the text is ASCII. Measured against a record of 2 KB, 1000
+    characters come to 1014 bytes of ASCII, 2014 when every one of them is a
     newline, and 6014 in umlauts or CJK — three times over. A check that clipped
     by characters alone would therefore be refused at the seam on every run the
     moment a log line carried an accent, which is the failure a declaration is

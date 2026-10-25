@@ -22,7 +22,7 @@ os.environ.setdefault("SECRET_KEY", "test-key")
 
 from little_sister import app as app_module
 from little_sister.checks import Unit
-from little_sister.maintenance import MaintenanceEntry
+from little_sister.pins import MAINTENANCE, Pin
 from little_sister.status import StatusCode
 from little_sister.tree import StatusTree
 from tests.page_tree import Element, css_rule, css_rules_naming, parse
@@ -92,7 +92,7 @@ class _LeafCase(TestCase):
 
     def _pin_node(self, note: str | None = NOTE, by: str = "lex",
                   left: timedelta = timedelta(days=1, hours=23, minutes=30),
-                  ) -> MaintenanceEntry:
+                  ) -> Pin:
         write = self.tree.set_maintenance(
             PATH, note, expires_at=datetime.now(UTC) + left, set_by=by)
         assert write.current is not None
@@ -101,7 +101,7 @@ class _LeafCase(TestCase):
     def _pin_line(self, slug: str = "mobile-build", note: str = LINE_NOTE,
                   by: str = "anna",
                   left: timedelta = timedelta(hours=5, minutes=30),
-                  ) -> MaintenanceEntry:
+                  ) -> Pin:
         write = self.tree.set_entry_maintenance(
             PATH, slug, note, expires_at=datetime.now(UTC) + left, set_by=by)
         assert write.current is not None
@@ -170,7 +170,7 @@ class _LeafCase(TestCase):
     def _post(self, **fields: str):
         """A set, addressed as the page's forms address it."""
         return self.client.post(
-            "/maintenance",
+            "/pins/maintenance",
             data={"path": FORM_PATH, "action": "set", **fields})
 
 
@@ -192,14 +192,16 @@ class PinBlockTests(_LeafCase):
         until = app_module._localtime(entry.expires_at)
         self.assertEqual(
             block.one("rule-block__what").text(),
-            f"This node is silenced by lex until {until} · 1d 23h left")
+            f"This node is in maintenance by lex until {until} · 1d 23h left")
         # at the head: under the head's row and above the first line
         self.assertLess(self._row(page).order, block.order)
         self.assertLess(block.order, card.all("check-reason")[0].order)
         # and stated once: neither the strip nor the card at the foot says it again
         self.assertNotIn("pin-banner", raw)
-        self.assertNotIn("This node is in maintenance", raw)
-        self.assertEqual(raw.count("silenced by"), 1)
+        self.assertEqual(raw.count("is in maintenance by"), 1)
+        # and maintenance says its own words, *silenced* being a later kind's
+        # (ADR-0135 decision 2)
+        self.assertNotIn("silenced by", raw)
 
     def test_the_note_stands_in_full(self):
         # the strip it replaces was cut off after two lines
@@ -235,7 +237,7 @@ class PinBlockTests(_LeafCase):
         until = app_module._localtime(entry.expires_at)
         self.assertEqual(
             self._stated(self._page())[0].one("rule-block__what").text(),
-            f"This node is silenced by lex until {until} · expired")
+            f"This node is in maintenance by lex until {until} · expired")
 
     @staticmethod
     def _whole(said: Element) -> list[str]:
@@ -277,7 +279,8 @@ class PinBlockTests(_LeafCase):
         self.assertEqual(len(words), 4)
         self.assertEqual(self._whole(said), [*words, "· 1d 23h left"])
         self.assertEqual(
-            said.text(), f"This node is silenced by lex until {until} · 1d 23h left")
+            said.text(),
+            f"This node is in maintenance by lex until {until} · 1d 23h left")
 
     def test_the_nodes_block_frames_every_line(self):
         # the page's frame is the border running round every line the pin covers:
@@ -327,10 +330,10 @@ class PinBlockTests(_LeafCase):
         until = app_module._localtime(entry.expires_at)
         self.assertEqual(
             block.one("rule-block__what").text(),
-            f"This line is silenced by anna until {until} · 5h 29m left")
+            f"This line is in maintenance by anna until {until} · 5h 29m left")
         self.assertEqual(block.one("rule-block__note").text(), LINE_NOTE)
 
-    def test_under_a_nodes_pin_a_line_says_it_is_also_silenced_on_its_own(self):
+    def test_under_a_nodes_pin_a_line_says_it_is_also_in_maintenance_on_its_own(self):
         # it stays quiet when the node's pin ends, which is why it says so
         self._workflows()
         self._pin_node()
@@ -339,7 +342,7 @@ class PinBlockTests(_LeafCase):
         until = app_module._localtime(entry.expires_at)
         self.assertEqual(
             self._stated(page, "line")[0].one("rule-block__what").text(),
-            f"This line is also silenced on its own by anna until {until} "
+            f"This line is also in maintenance on its own by anna until {until} "
             f"· 5h 29m left")
         self.assertNotIn(
             "also", self._stated(page, "node")[0].one("rule-block__what").text())
@@ -376,7 +379,7 @@ class PinBlockTests(_LeafCase):
         self.assertEqual(len(page.all("rule-block")), 2)   # and no editor of one
         for block in blocks:
             self.assertRegex(block.one("rule-block__what").text(),
-                             r"^This (node|line) is (also )?silenced")
+                             r"^This (node|line) is (also )?in maintenance")
             self.assertTrue(block.all("rule-block__note"))
             self.assertEqual(block.all(tag="form") + block.all(tag="details")
                              + block.all(tag="button"), [])
@@ -434,17 +437,17 @@ class SetControlTests(_LeafCase):
         self.assertTrue(said.has("rule-block__scope"))
         self.assertEqual(
             said.text(),
-            "Maintenance for this node. Silences all 6 lines and any that "
-            "appear; the check keeps running and counts again when the pin "
-            "clears.")
+            "Maintenance for this node. Puts all 6 lines and any that "
+            "appear in maintenance; the check keeps running and counts again when "
+            "the pin clears.")
 
     def test_the_nodes_sentence_counts_the_lines_the_node_has(self):
         self._workflows({"only": "one finding"})
         self.assertEqual(
             self._page().one("rule-setter").one("rule-block__scope").text(),
-            "Maintenance for this node. Silences its one line and any that "
-            "appear; the check keeps running and counts again when the pin "
-            "clears.")
+            "Maintenance for this node. Puts its one line and any that "
+            "appear in maintenance; the check keeps running and counts again when "
+            "the pin clears.")
 
     def test_a_node_whose_lines_cannot_be_pinned_is_not_counted_in_lines(self):
         # prose is one condition in several sentences, not several findings
@@ -521,7 +524,8 @@ class SetControlTests(_LeafCase):
 
     def test_a_lines_editor_says_first_what_it_covers(self):
         self._workflows()
-        block = self._line(self._page(), "web-build").one("rule-block")
+        block = self._line(self._page(), "web-build").one("reason-pin").one(
+            "rule-block")
         said = block.first()
         self.assertTrue(said.has("rule-block__scope"))
         self.assertEqual(
@@ -534,7 +538,7 @@ class SetControlTests(_LeafCase):
         def said() -> str:
             for line in self._page().all("check-reason"):
                 if line.one("check-reason__body").text() == lines["first"]:
-                    return line.one("rule-block__scope").text()
+                    return line.one("reason-pin").one("rule-block__scope").text()
             raise AssertionError("the first line is gone")
 
         self._workflows(lines)
@@ -549,7 +553,7 @@ class SetControlTests(_LeafCase):
         # and under the node's pin nothing alarms, so it says what the pin is for
         self._pin_node()
         self.assertEqual(
-            said(), "Maintenance for this line only. It stays silenced when "
+            said(), "Maintenance for this line only. It stays in maintenance when "
                     "the node's pin ends.")
 
     def test_prose_and_a_viewer_get_no_mark(self):
@@ -572,7 +576,7 @@ class PinAboveTests(_LeafCase):
 
     def _pin_at(self, path: str, note: str | None = NOTE, by: str = "lex",
                 left: timedelta = timedelta(days=1, hours=23, minutes=30),
-                ) -> MaintenanceEntry:
+                ) -> Pin:
         write = self.tree.set_maintenance(
             path, note, expires_at=datetime.now(UTC) + left, set_by=by)
         assert write.current is not None
@@ -584,7 +588,7 @@ class PinAboveTests(_LeafCase):
         return [child for child in page.one("viewed-head").one("rule-list").children
                 if isinstance(child, Element)]
 
-    def _until(self, entry: MaintenanceEntry) -> str:
+    def _until(self, entry: Pin) -> str:
         return str(app_module._localtime(entry.expires_at))
 
     def test_a_pin_above_is_stated_as_its_block_where_it_acts(self):
@@ -597,7 +601,7 @@ class PinAboveTests(_LeafCase):
         what = row.one("rule-block__what")
         self.assertEqual(
             what.text(),
-            f"This node is silenced from /ci by lex until {self._until(entry)} "
+            f"This node is in maintenance from /ci by lex until {self._until(entry)} "
             "· 1d 23h left")
         # linked to where it stands, which is where it is edited
         link, = what.all(tag="a")
@@ -619,47 +623,47 @@ class PinAboveTests(_LeafCase):
         rows = self._rows(self._page("/ci/fleet/runner7"))
         self.assertEqual(
             [row.one("rule-block__what").text() for row in rows],
-            [f"This node is silenced from /ci by anna until {self._until(outer)} "
+            [f"This node is in maintenance from /ci by anna until {self._until(outer)} "
              "· 1d 23h left",
-             f"This node is silenced from /ci/fleet by lex until "
+             f"This node is in maintenance from /ci/fleet by lex until "
              f"{self._until(inner)} · 1d 23h left"])
 
-    def test_the_nodes_own_pin_under_one_is_also_silenced_on_its_own(self):
+    def test_the_nodes_own_pin_under_one_is_also_in_maintenance_on_its_own(self):
         # it stays quiet when the pin above ends, as a line's does under its node's
         self._workflows()
         self._pin_at("/ci", by="anna")
         own = self._pin_node()
         above, mine = self._rows(self._page())
-        self.assertIn("silenced from /ci", above.one("rule-block__what").text())
+        self.assertIn("in maintenance from /ci", above.one("rule-block__what").text())
         self.assertEqual(
             mine.one("rule-block__what").text(),
-            f"This node is also silenced on its own by lex until "
+            f"This node is also in maintenance on its own by lex until "
             f"{self._until(own)} · 1d 23h left")
         # the node's own is edited here, as ever
         self.assertTrue(mine.all("rule-block__edit"))
         self.assertTrue(mine.all("rule-block__clear"))
 
-    def test_a_lines_pin_under_one_is_also_silenced_on_its_own(self):
+    def test_a_lines_pin_under_one_is_also_in_maintenance_on_its_own(self):
         self._workflows()
         self._pin_at("/ci", by="anna")
         entry = self._pin_line()
         page = self._page()
         self.assertEqual(
             self._stated(page, "line")[0].one("rule-block__what").text(),
-            f"This line is also silenced on its own by anna until "
+            f"This line is also in maintenance on its own by anna until "
             f"{self._until(entry)} · 5h 29m left")
         # and a line's editor says what its pin is for under it
         self.assertEqual(
             self._line(page, "web-build").one("rule-block__scope").text(),
-            "Maintenance for this line only. It stays silenced when the pin above "
-            "the node ends.")
+            "Maintenance for this line only. It stays in maintenance when the pin "
+            "above the node ends.")
 
     def test_the_nodes_editor_says_its_pin_outlasts_the_one_above(self):
         self._workflows()
         self._pin_at("/ci")
         self.assertEqual(
             self._page().one("rule-setter").one("rule-block__scope").text(),
-            "Maintenance for this node. It stays silenced when the pin above it "
+            "Maintenance for this node. It stays in maintenance when the pin above it "
             "ends; the check keeps running and counts again when every pin on it "
             "has cleared.")
 
@@ -670,7 +674,8 @@ class PinAboveTests(_LeafCase):
         raw = self._body()
         page = parse(raw)
         row, = self._rows(page)
-        self.assertIn("silenced from /ci by lex", row.one("rule-block__what").text())
+        self.assertIn("in maintenance from /ci by lex",
+                      row.one("rule-block__what").text())
         self.assertTrue(row.all("rule-block__note"))
         self.assertNotIn('name="set_at"', raw)
 
@@ -744,7 +749,7 @@ class EditorTests(_LeafCase):
         pinned = app_module._localtime(entry.created_at)
         self.assertEqual(record(), f"Pinned by ada {pinned}.")
         # after somebody else's edit it names both, as the card at the foot did
-        self._post(reason="longer", duration="3d", set_at=entry.token)
+        self._post(note="longer", duration="3d", set_at=entry.token)
         after = self.tree.maintenance_entry(PATH)
         assert after is not None
         changed = app_module._localtime(after.set_at)
@@ -753,7 +758,7 @@ class EditorTests(_LeafCase):
         # and the block's own sentence names the last writer: the note it shows
         # and the expiry it states are theirs
         self.assertIn(
-            "is silenced by pan until",
+            "is in maintenance by pan until",
             self._stated(self._page())[0].one("rule-block__what").text())
 
     def test_the_record_keeps_its_instants_whole(self):
@@ -762,8 +767,8 @@ class EditorTests(_LeafCase):
         self._workflows()
         now = datetime.now(UTC)
         pinned, changed = now - timedelta(days=2), now - timedelta(hours=1)
-        self.tree.restore_maintenance({PATH: MaintenanceEntry(
-            reason=NOTE, set_at=changed, set_by="pan",
+        self.tree.restore_maintenance({PATH: Pin(MAINTENANCE,
+            note=NOTE, set_at=changed, set_by="pan",
             expires_at=now + timedelta(days=1),
             created_at=pinned, created_by="ada")})
         block = self._stated(self._page())[0]
@@ -820,14 +825,14 @@ class EditorTests(_LeafCase):
         labels = [label.text() for label in form.all(tag="label")
                   if label.attrs.get("for") == box.attrs["id"]]
         self.assertEqual(labels, ["Note"])
-        self.assertEqual(box.attrs.get("name"), "reason")   # the route's field
+        self.assertEqual(box.attrs.get("name"), "note")     # the route's field
         self.assertNotIn(">Reason</label>", raw)
 
     def test_a_pin_without_a_note_shows_none_and_edits_an_empty_field(self):
         # the stored placeholder is not a note anybody wrote
         self._workflows()
         entry = self._pin_node(note=None)
-        self.assertEqual(entry.reason, "maintenance")
+        self.assertEqual(entry.note, "maintenance")
         block = self._stated(self._page())[0]
         self.assertEqual(block.all("rule-block__note"), [])
         self.assertEqual(
@@ -868,7 +873,7 @@ class EditorTests(_LeafCase):
         script = self.client.get(
             "/static/js/maintenance-edit.js").get_data(as_text=True)
         self.assertIn('document.addEventListener("toggle"', script)
-        self.assertIn('textarea[name="reason"]', script)
+        self.assertIn('textarea[name="note"]', script)
 
 
 class KeptExpiryTests(_LeafCase):
@@ -911,10 +916,17 @@ class KeptExpiryTests(_LeafCase):
         raw = self._body()
         self.assertNotIn('name="expiry_was"', raw)
         self.assertNotIn("the pin keeps this expiry", raw)
-        fields = [box for box in parse(raw).all(tag="input")
-                  if box.attrs.get("name") == "duration"]
-        self.assertEqual(len(fields), 1 + len(LINES))    # the node's, and a line's each
-        for box in fields:
+        fields: dict[str, list[Element]] = {}
+        for form in parse(raw).all(tag="form"):
+            for box in form.all(tag="input"):
+                if box.attrs.get("name") == "duration":
+                    fields.setdefault(form.attrs.get("action", ""), []).append(box)
+        # the node's, and a line's each — maintenance's, and seen's, every line
+        # failing
+        self.assertEqual({action: len(boxes) for action, boxes in fields.items()},
+                         {"/pins/maintenance": 1 + len(LINES),
+                          "/pins/seen": 1 + len(LINES)})
+        for box in [box for boxes in fields.values() for box in boxes]:
             self.assertEqual(box.attrs.get("value"), "")
 
     def test_a_field_left_as_it_was_filled_keeps_the_instant_exactly(self):
@@ -924,7 +936,7 @@ class KeptExpiryTests(_LeafCase):
             PATH, "the first words", expires_at=expires, set_by="ada").current
         assert entry is not None
         was = self._expiry_field(self._form()).attrs["value"]
-        response = self._post(reason="reworded", duration=was, expiry_was=was,
+        response = self._post(note="reworded", duration=was, expiry_was=was,
                               set_at=entry.token)
         self.assertEqual(response.status_code, 302)
         after = self.tree.maintenance_entry(PATH)
@@ -932,7 +944,7 @@ class KeptExpiryTests(_LeafCase):
         # to the microsecond: the field's text is not read again
         self.assertEqual(after.expires_at, entry.expires_at)
         self.assertEqual(after.expires_at.microsecond, 123456)
-        self.assertEqual((after.reason, after.set_by, after.created_by),
+        self.assertEqual((after.note, after.set_by, after.created_by),
                          ("reworded", "pan", "ada"))
         self.assertNotEqual(after.set_at, entry.set_at)      # it was a write
 
@@ -949,16 +961,16 @@ class KeptExpiryTests(_LeafCase):
             set_by="ada").current
         assert entry is not None
         was = app_module._expiry_input(entry.expires_at)
-        kept = self._post(reason="reworded", duration=was, expiry_was=was,
+        kept = self._post(note="reworded", duration=was, expiry_was=was,
                           set_at=entry.token)
         self.assertEqual(kept.status_code, 302)
         after = self.tree.maintenance_entry(PATH)
         assert after is not None
-        self.assertEqual((after.reason, after.expires_at),
+        self.assertEqual((after.note, after.expires_at),
                          ("reworded", entry.expires_at))
         # the same text typed — nothing says the field was filled with it — is
         # an expiry like any other, and meets the floor
-        typed = self._post(reason="again", duration=was, set_at=after.token)
+        typed = self._post(note="again", duration=was, set_at=after.token)
         self.assertEqual(typed.status_code, 200)
         self.assertIn(f"ends before {PATH} (every 300d) runs again",
                       typed.get_data(as_text=True))
@@ -979,14 +991,14 @@ class KeptExpiryTests(_LeafCase):
                 replace(app_module.config, timezone="Europe/Berlin")):
             was = app_module._expiry_input(entry.expires_at)
             self.assertEqual(was, "2026-10-25 02:30:00")
-            kept = self._post(reason="reworded", duration=was, expiry_was=was,
+            kept = self._post(note="reworded", duration=was, expiry_was=was,
                               set_at=entry.token)
             after = self.tree.maintenance_entry(PATH)
             assert after is not None
-            typed = self._post(reason="again", duration=was,
+            typed = self._post(note="again", duration=was,
                                set_at=after.token)
         self.assertEqual(kept.status_code, 302)
-        self.assertEqual((after.reason, after.expires_at),
+        self.assertEqual((after.note, after.expires_at),
                          ("reworded", entry.expires_at))
         self.assertIn("is not an unambiguous local time",
                       typed.get_data(as_text=True))
@@ -996,21 +1008,21 @@ class KeptExpiryTests(_LeafCase):
         entry = self._pin_node(left=timedelta(hours=3))
         was = app_module._expiry_input(entry.expires_at)
         before = datetime.now(UTC)
-        response = self._post(reason="", duration="", expiry_was=was,
+        response = self._post(note="", duration="", expiry_was=was,
                               set_at=entry.token)
         self.assertEqual(response.status_code, 302)
         after = self.tree.maintenance_entry(PATH)
         assert after is not None
         window = after.expires_at - before
         self.assertLess(abs(window - timedelta(days=7)), timedelta(minutes=1))
-        self.assertEqual(after.reason, NOTE)        # a blank note still keeps
+        self.assertEqual(after.note, NOTE)        # a blank note still keeps
 
     def test_a_changed_field_is_read_as_it_is_typed(self):
         self._workflows()
         entry = self._pin_node(left=timedelta(hours=3))
         was = app_module._expiry_input(entry.expires_at)
         before = datetime.now(UTC)
-        response = self._post(reason="", duration="3d", expiry_was=was,
+        response = self._post(note="", duration="3d", expiry_was=was,
                               set_at=entry.token)
         self.assertEqual(response.status_code, 302)
         after = self.tree.maintenance_entry(PATH)
@@ -1030,7 +1042,7 @@ class KeptExpiryTests(_LeafCase):
         was = app_module._expiry_input(stale.expires_at)
         now = app_module._expiry_input(fresh.expires_at)
         self.assertNotEqual(was, now)
-        response = self._post(reason="pan wrote this", duration=was,
+        response = self._post(note="pan wrote this", duration=was,
                               expiry_was=was, set_at=stale.token)
         self.assertEqual(response.status_code, 200)
         raw = response.get_data(as_text=True)
@@ -1045,12 +1057,12 @@ class KeptExpiryTests(_LeafCase):
         # there is no expiry of the admin's own to carry over the stored note
         self.assertNotIn("use my expiry", raw)
         # and saving from there keeps the pin's expiry as it stands
-        saved = self._post(reason="pan wrote this", duration=now,
+        saved = self._post(note="pan wrote this", duration=now,
                            expiry_was=now, set_at=fresh.token)
         self.assertEqual(saved.status_code, 302)
         after = self.tree.maintenance_entry(PATH)
         assert after is not None
-        self.assertEqual((after.reason, after.expires_at),
+        self.assertEqual((after.note, after.expires_at),
                          ("pan wrote this", fresh.expires_at))
 
     def test_a_typed_expiry_on_a_stale_form_stays_the_admins(self):
@@ -1058,7 +1070,7 @@ class KeptExpiryTests(_LeafCase):
         stale = self._pin_node(note="ada wrote this", by="ada")
         self._pin_node(note="ben wrote this", by="ben", left=timedelta(days=5))
         was = app_module._expiry_input(stale.expires_at)
-        raw = self._post(reason="mine", duration="2h", expiry_was=was,
+        raw = self._post(note="mine", duration="2h", expiry_was=was,
                          set_at=stale.token).get_data(as_text=True)
         self.assertIn("Nothing was saved", raw)
         self.assertEqual(raw.count('name="duration" value="2h"'), 2)
@@ -1075,7 +1087,7 @@ class KeptExpiryTests(_LeafCase):
         entry = self._pin_node()
         was = app_module._expiry_input(entry.expires_at)
         self.tree.clear_maintenance(PATH)
-        response = self._post(reason="mine", duration=was, expiry_was=was,
+        response = self._post(note="mine", duration=was, expiry_was=was,
                               set_at=entry.token)
         self.assertEqual(response.status_code, 200)
         raw = response.get_data(as_text=True)
@@ -1093,7 +1105,7 @@ class KeptExpiryTests(_LeafCase):
         self._workflows()
         entry = self._pin_node()
         was = app_module._expiry_input(entry.expires_at)
-        raw = self._post(reason="mine", duration="32", expiry_was=was,
+        raw = self._post(note="mine", duration="32", expiry_was=was,
                          set_at=entry.token).get_data(as_text=True)
         self.assertIn("is not a duration or expiry", raw)
         form = self._note_form(parse(raw))
@@ -1114,7 +1126,7 @@ class KeptExpiryTests(_LeafCase):
         assert entry is not None
         was = app_module._expiry_input(entry.expires_at)
         self.tree.clear_maintenance(PATH)
-        response = self._post(reason="new", duration=was, expiry_was=was,
+        response = self._post(note="new", duration=was, expiry_was=was,
                               set_at="")
         self.assertEqual(response.status_code, 302)
         after = self.tree.maintenance_entry(PATH)
@@ -1140,12 +1152,12 @@ class EveryEditorTests(_LeafCase):
         form = block.one("rule-block__edit").one(tag="form")
         self.assertEqual(self._expiry_field(form).attrs.get("value"), was)
         self.assertEqual(self._hidden(form)["expiry_was"], was)
-        response = self._post(slug="mobile-build", reason="reworded",
+        response = self._post(slug="mobile-build", note="reworded",
                               duration=was, expiry_was=was, set_at=entry.token)
         self.assertEqual(response.status_code, 302)
         after = self.tree.entry_maintenance(PATH, "mobile-build")
         assert after is not None
-        self.assertEqual((after.reason, after.expires_at),
+        self.assertEqual((after.note, after.expires_at),
                          ("reworded", entry.expires_at))
         # and the node, which has no pin, got none
         self.assertIsNone(self.tree.maintenance_entry(PATH))
@@ -1156,7 +1168,7 @@ class EveryEditorTests(_LeafCase):
         fresh = self._pin_line("mobile-build", note="ben wrote this", by="ben",
                                left=timedelta(days=4))
         was = app_module._expiry_input(stale.expires_at)
-        response = self._post(slug="mobile-build", reason="mine", duration=was,
+        response = self._post(slug="mobile-build", note="mine", duration=was,
                               expiry_was=was, set_at=stale.token)
         self.assertEqual(response.status_code, 200)
         raw = response.get_data(as_text=True)

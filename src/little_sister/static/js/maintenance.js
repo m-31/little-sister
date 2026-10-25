@@ -1,13 +1,13 @@
 /* Maintenance click-popover (ADR-0019 machinery, ADR-0014 data).
  *
  * Two triggers open the same #maintenance-card popover, each cloning a hidden
- * <template class="maintenance-pop-src"> keyed by data-pop-for: a card's "contains
- * maintenance" **pip** (keyed to its card path -> that subtree's pins), and the strip
- * **pill** (keyed "__all__" -> the whole capped set, with a "+N more" to /maintenance).
+ * <template class="maintenance-pop-src"> keyed by data-pop-for: a card's **pip**, the
+ * ringed diamond (keyed to its card path -> that subtree's pins), and the strip
+ * **pill** (keyed "__all__" -> the whole capped set, with a "+N more" to /handled).
  * Bound once via event delegation on #status-grid, so it survives the ~10s grid
  * innerHTML swaps; positioned with Floating UI. Click the trigger again, click outside,
  * or Escape to close. A deliberate click, not a hover: an ambient reminder, opt-in
- * detail. The pill is an <a href="/maintenance">, so with no JS — or no Floating UI,
+ * detail. The pill is an <a href="/handled">, so with no JS — or no Floating UI,
  * when this script early-returns below — it still reaches the full page; here a plain
  * click is upgraded to the popover, a modified click (new tab) left to the browser.
  */
@@ -75,7 +75,7 @@
         var trigger = e.target.closest
             ? e.target.closest(".maintenance-pip, .maintenance-pill") : null;
         if (!trigger) { return; }
-        // The pill is a link to /maintenance; leave a modified click (new tab/window)
+        // The pill is a link to /handled; leave a modified click (new tab/window)
         // to the browser so the full page still opens.
         if (e.metaKey || e.ctrlKey || e.shiftKey) { return; }
         e.preventDefault();

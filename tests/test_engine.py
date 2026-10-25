@@ -27,9 +27,11 @@ from little_sister.engine import (
 from little_sister.limits import Limits
 from little_sister.nodes import NodeMeta
 from little_sister.reasons import Entry
+from little_sister.state import EVENTS_FILE
 from little_sister.status import HEARTBEAT_PATH, StatusCode
 from little_sister.tree import StatusTree
 from tests.running import subprocess_env
+from tests.state_files import on_disk
 
 
 class _FakeCheck(Check):
@@ -722,6 +724,54 @@ class EngineTests(TestCase):
             Engine([_FakeCheck(path="/host", result=result)], tree))
         self.assertEqual((calls, lines), ([], []))
 
+    def _long_description_notes(self, engine, runs=1):
+        """The startup record's notes of a long description across ``runs`` runs,
+        and every call that made one."""
+        with patch.object(self_report.startup, "note",
+                          wraps=self_report.startup.note) as noted:
+            for _ in range(runs):
+                engine.run_once()
+        calls = [call for call in noted.call_args_list
+                 if call.args[0].startswith("nodes-long-description")]
+        lines = [line for line in self_report.startup.lines()
+                 if line.slug.startswith("nodes-long-description")]
+        return calls, lines
+
+    def test_a_childs_description_past_160_is_noted_once(self):
+        # A run hands a child its description on every run (write-through), and
+        # one past about 160 characters is named as the startup pass names a
+        # check's own (ADR-0133 decision 2): once, however many runs hand it over.
+        self_report.startup.forget()
+        self.addCleanup(self_report.startup.forget)
+        result = CheckResult(StatusCode.OK, children=(
+            CheckResult(StatusCode.OK, name="disk", description="d" * 170),))
+        engine = Engine([_FakeCheck(path="/host", result=result)], StatusTree())
+        calls, lines = self._long_description_notes(engine, runs=3)
+        self.assertEqual(len(calls), 1)
+        (line,) = lines
+        self.assertEqual(line.slug, "nodes-long-description-host-disk")
+        self.assertIn("'/host/disk'", line.text)
+        self.assertIn("170 characters", line.text)
+
+    def test_a_checks_own_description_is_the_startup_passs(self):
+        # the root's description is the check's, configuration the startup pass
+        # names; the engine names only what a run hands a node beneath it
+        self_report.startup.forget()
+        self.addCleanup(self_report.startup.forget)
+        engine = Engine([_FakeCheck(path="/host", description="d" * 170)],
+                        StatusTree())
+        calls, lines = self._long_description_notes(engine)
+        self.assertEqual((calls, lines), ([], []))
+
+    def test_a_childs_description_of_160_is_not_noted(self):
+        self_report.startup.forget()
+        self.addCleanup(self_report.startup.forget)
+        result = CheckResult(StatusCode.OK, children=(
+            CheckResult(StatusCode.OK, name="disk", description="d" * 160),))
+        calls, lines = self._long_description_notes(
+            Engine([_FakeCheck(path="/host", result=result)], StatusTree()))
+        self.assertEqual((calls, lines), ([], []))
+
     def test_a_childs_about_of_400_is_not_noted(self):
         self_report.startup.forget()
         self.addCleanup(self_report.startup.forget)
@@ -1340,7 +1390,8 @@ class EngineTests(TestCase):
 
     def test_heartbeat_carries_a_default_about(self):
         # The dashboard strip's hover card explains the self-monitor out of
-        # the box (ADR-0024); a later seed (the startup nodes.yaml pass) overrides.
+        # the box (architecture.md §6); a later seed (the startup nodes.yaml
+        # pass) overrides.
         from little_sister.engine import HEARTBEAT_ABOUT, HEARTBEAT_PATH
         tree = StatusTree()
         Engine([_FakeCheck(path="/x")], tree)
@@ -1601,7 +1652,7 @@ class SelfReportOnTheBeatTests(TestCase):
         from little_sister.reasons import Entry
         from little_sister.self_report import register_contributor
         register_contributor("state", lambda: [
-            Entry("load.maintenance.json", "not in force", code=StatusCode.ERROR),
+            Entry("load.pins.json", "not in force", code=StatusCode.ERROR),
             Entry("save.events.json", "behind", code=StatusCode.WARN)],
             title="State", about="what a restart keeps")
         tree = StatusTree()
@@ -1609,7 +1660,7 @@ class SelfReportOnTheBeatTests(TestCase):
         child = self._child(tree, "state")
         self.assertTrue(child.members)
         self.assertEqual([line.slug for line in child.reasons],
-                         ["load.maintenance.json", "save.events.json"])
+                         ["load.pins.json", "save.events.json"])
         self.assertEqual([line.code for line in child.reasons],
                          [StatusCode.ERROR, StatusCode.WARN])
         self.assertEqual(child.own_code, StatusCode.ERROR)
@@ -1740,12 +1791,12 @@ class SelfReportOnTheBeatTests(TestCase):
         from little_sister.reasons import Entry
         from little_sister.self_report import register_contributor
         register_contributor("state", lambda: [
-            Entry("load.maintenance.json", "not in force", code=StatusCode.ERROR)])
+            Entry("load.pins.json", "not in force", code=StatusCode.ERROR)])
         tree = StatusTree()
         self._beat(Engine([_FakeCheck(path="/x")], tree), tree)
         child_path = f"{HEARTBEAT_PATH}/state"
         self.assertEqual(tree.snapshot(child_path).own_code, StatusCode.ERROR)
-        tree.set_entry_maintenance(child_path, "load.maintenance.json",
+        tree.set_entry_maintenance(child_path, "load.pins.json",
                                    "re-pinned by hand",
                                    expires_at=datetime.now(UTC) + timedelta(days=1),
                                    set_by="ada")
@@ -2135,16 +2186,15 @@ class StateOnTheTickTests(TestCase):
         with tempfile.TemporaryDirectory() as directory:
             state = StateLayer(directory, interval_seconds=3600)
             payload = {"events": []}
-            state.keep("events.json", lambda: payload)
+            state.keep(EVENTS_FILE, lambda: payload)
             tree = StatusTree()
             engine = Engine([_FakeCheck(path="/x")], tree, state=state)
             engine.start()
             self.assertTrue(_wait_for(lambda: engine.info().started_at is not None))
             payload["events"].append({"path": "/x"})
             engine.stop()
-            self.assertEqual(
-                json.loads(state.path("events.json").read_text()),
-                {"events": [{"path": "/x"}]})
+            self.assertEqual(on_disk(state.path(EVENTS_FILE)),
+                             {"events": [{"path": "/x"}]})
 
 
 class CheckOutcomesTests(TestCase):

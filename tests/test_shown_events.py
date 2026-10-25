@@ -27,7 +27,8 @@ os.environ.setdefault("SECRET_KEY", "test-key")
 
 from little_sister import app as app_module
 from little_sister.copy_status import TimeStyle
-from little_sister.maintenance import MaintenanceEntry
+from little_sister.pins import MAINTENANCE as PIN_MAINTENANCE
+from little_sister.pins import Pin
 from little_sister.reasons import Entry
 from little_sister.status import StatusCode, worst_of
 from little_sister.tree import Event, StatusTree, events_from_payload
@@ -44,23 +45,24 @@ class _Kept:
     """The pins file, as a store that remembers the last table saved."""
 
     def __init__(self) -> None:
-        self.nodes: dict[str, MaintenanceEntry] = {}
-        self.lines: dict[tuple[str, str], MaintenanceEntry] = {}
+        self.nodes: dict[str, Pin] = {}
+        self.lines: dict[tuple[str, str], Pin] = {}
 
-    def load(self) -> dict[str, MaintenanceEntry]:
+    def load(self) -> dict[str, Pin]:
         return {}
 
-    def load_entries(self) -> dict[tuple[str, str], MaintenanceEntry]:
+    def load_entries(self) -> dict[tuple[str, str], Pin]:
         return {}
 
-    def save(self, entries, entry_pins=None) -> None:
+    def save(self, entries, entry_pins=None, acknowledged=None,
+             lines_acknowledged=None) -> None:
         self.nodes = dict(entries)
         self.lines = dict(entry_pins or {})
 
 
 def _tree() -> tuple[StatusTree, _Kept]:
     kept = _Kept()
-    return StatusTree(maintenance_store=kept), kept
+    return StatusTree(pin_store=kept), kept
 
 
 def _write(tree: StatusTree, path: str = PATH, **codes: StatusCode) -> bool:
@@ -225,7 +227,7 @@ class NodePinTests(TestCase):
         _pin(self.tree, "deploy")
 
     def test_it_is_set_from_what_the_node_showed(self):
-        # the node showed ok, its failing line silenced; its check reports error
+        # the node showed ok, its failing line pinned; its check reports error
         self.tree.set_maintenance(PATH, "runner fleet replaced",
                                   expires_at=datetime.now(UTC) + _SOON)
         self.assertEqual(_moved(_events(self.tree)[-1]), (OK, MAINTENANCE))
@@ -620,7 +622,7 @@ class RestartTests(TestCase):
         # the pins file names a node the kept log says nothing of
         now = datetime.now(UTC)
         new = StatusTree()
-        new.restore_maintenance({"/hosts/a": MaintenanceEntry(
+        new.restore_maintenance({"/hosts/a": Pin(PIN_MAINTENANCE,
             "kernel", now - timedelta(hours=3),
             now - timedelta(hours=1))})
         self.assertEqual(new.recent_events(), ())
@@ -737,7 +739,7 @@ class RestartTests(TestCase):
         # an admin's pin, written before the fields: the reading is the one its set
         # left under it, and a change of it across the restart is held back
         now = datetime.now(UTC).replace(microsecond=0)
-        entry = MaintenanceEntry("planned", now,
+        entry = Pin(PIN_MAINTENANCE, "planned", now,
                                  now + _SOON)
         new = StatusTree()
         new.restore_events([
@@ -820,7 +822,7 @@ class EventsPageTests(_Pages):
             ("maintenance edited", ["edited"], []),
             ("maintenance set", ["set"], []),
             ("error line's maintenance ended", ["line's maintenance ended"], []),
-            ("ok line silenced", ["line silenced"], []),
+            ("ok line's pin set", ["line's pin set"], []),
             ("error", [], [])])
 
     def test_a_held_back_row_keeps_its_mark_and_a_reading_has_no_chip(self):
@@ -852,7 +854,7 @@ class TimeCardTests(_Pages):
         self.assertEqual(
             self._period(),
             f"Status ok since {self._shown(self._last().timestamp)}, "
-            f"when a line was silenced")
+            f"when a line's pin was set")
 
     def test_and_so_does_one_its_end_began(self):
         _write(self.tree, deploy=ERROR, tests=OK)
@@ -901,7 +903,7 @@ class CopyTests(_Pages):
         _pin(self.tree, "deploy")
         style: TimeStyle = app_module._copy_style()
         expected = (f"- **Status ok** since {style.at(self._last().timestamp)}, "
-                    f"when a line was silenced\n")
+                    f"when a line's pin was set\n")
         self.assertIn(expected, self._source())
 
     def test_and_so_does_one_its_end_began(self):

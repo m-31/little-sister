@@ -1,0 +1,9 @@
+# Live-demo known tags (Mode 2) — see docs/testing-the-gui.md.
+#
+# The words the demo tags its nodes with (ADR-0139), each with what it means, in the
+# order the wall's filter offers them. The tags themselves are written where the
+# details are: nodes.yaml by path, and a check's file for its own node.
+production: Serves customers; a failure here is somebody's outage.
+customer-facing: A visitor from outside touches it.
+internal: Ours alone; nobody outside sees it fail.
+hall-2: In the example data centre's hall 2.

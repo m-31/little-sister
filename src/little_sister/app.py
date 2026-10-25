@@ -9,9 +9,10 @@ from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from functools import cache, partial
+from importlib.resources import files
 from pathlib import Path
 from secrets import token_hex
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 from urllib.parse import parse_qs, parse_qsl, quote, urlencode, urlsplit
 
 from flask import (
@@ -37,9 +38,9 @@ from little_sister import (
     __version__,
     csp,
     first_look,
+    handbooks,
     identity,
     instants,
-    link_probe,
     local_login,
     noise,
     readiness,
@@ -49,6 +50,8 @@ from little_sister import (
     watch_lines,
 )
 from little_sister.actions import register_builtin_fillers
+from little_sister.actions import use_tags as hold_actions_to_tags
+from little_sister.aggregation import AggregationRule, load_rules
 from little_sister.api import (
     StandingSeries,
     authenticate,
@@ -77,11 +80,14 @@ from little_sister.config_dir import (
 )
 from little_sister.copy_action import register_copy_filler
 from little_sister.copy_status import (
+    NotesSaid,
     Origin,
     TimeStyle,
     format_node_markdown,
     format_reason_markdown,
     format_tree_markdown,
+    written_details,
+    written_out,
 )
 from little_sister.curves import (
     RUNS_LABEL,
@@ -101,6 +107,7 @@ from little_sister.dashboard_layout import (
     chip_width,
     dashboard_layout,
 )
+from little_sister.details import Row as DetailRow
 from little_sister.engine import Engine, EngineInfo, SubjectSeries, create_engine
 from little_sister.errors import ConfigError
 from little_sister.event_filter import (
@@ -121,14 +128,22 @@ from little_sister.limits import format_size, format_weight
 from little_sister.line_template import Declarations, Declared, Form
 from little_sister.links import LINKS_ASPECT, current_links, links_policy_sources
 from little_sister.logger import logger, open_log_file
-from little_sister.looks import LOOKS, LOOKS_BY_KEY
-from little_sister.maintenance import MaintenanceEntry, MaintenanceStore
+from little_sister.looks import LAYOUT_LINE, LOOKS, LOOKS_BY_KEY
 from little_sister.measures import Measure
-from little_sister.nodes import load_nodes, resolve_metadata, run_consistency_pass
+from little_sister.nodes import (
+    NodeMeta,
+    load_nodes,
+    resolve_metadata,
+    run_consistency_pass,
+    tag_places,
+)
+from little_sister.notes import Note, NoteStore, context_of, notes_book
 from little_sister.origins import PackageOrigin, package_origin
 from little_sister.paths import shown_path
+from little_sister.pins import MAINTENANCE, NO_NOTE, SEEN, Pin, PinStore
 from little_sister.reasons import RECORD_TIMESTAMP_KEYS, record_leaves
 from little_sister.render import first_block, render_markdown, render_markdown_inline
+from little_sister.rule_words import rule_said
 from little_sister.secrets import (
     SecretError,
     check_reference,
@@ -152,29 +167,57 @@ from little_sister.status import (
     on_same_line,
     split_path,
 )
+from little_sister.tags import Chip as TagChip
+from little_sister.tags import load_vocabulary
+from little_sister.tags import note_unknown as note_unknown_tags
+from little_sister.tags import spelled as spelled_tag
 from little_sister.titles import Labeled, shown_title
 from little_sister.tree import (
     CAUSE_LINE_PIN_ENDED,
     CAUSE_LINE_PIN_SET,
+    CAUSE_LINE_SEEN_EDITED,
+    CAUSE_LINE_SEEN_ENDED,
+    CAUSE_LINE_SEEN_SET,
     CAUSE_PIN_EDITED,
     CAUSE_PIN_ENDED,
     CAUSE_PIN_SET,
     CAUSE_REACHED,
+    CAUSE_READING,
     CAUSE_REMOVED,
+    CAUSE_RULE,
+    CAUSE_SEEN_EDITED,
+    CAUSE_SEEN_ENDED,
+    CAUSE_SEEN_SET,
+    CAUSE_STALE,
+    ENDED_CLOCK,
+    ENDED_GONE,
+    ENDED_HAND,
+    ENDED_OCCURRENCE,
+    ENDED_RECOVERY,
+    ENDED_WORSENING,
     STATE_CODE,
+    Acceptable,
+    Beginning,
     ChipCounts,
     Event,
+    HandledRule,
     ReasonLine,
+    RuleAt,
     StatusPeriod,
     StatusSnapshot,
+    acknowledgeable_parts,
     chip_counts,
     events_from_payload,
     failing,
     failing_first,
+    handled_beneath,
     healthy,
     last_alive,
     line_healthy,
+    lines_rules,
     nodes_from_payload,
+    parts_digest,
+    rules_beneath,
     stale_after_seconds,
     status_tree,
     stopped_at_of,
@@ -316,6 +359,9 @@ def _inject_presentation() -> dict[str, object]:
         "layout": current["layout"],
         "bs_theme": "dark" if current["theme"] in DARK_THEMES else "",
         "layouts": LAYOUTS,
+        # the line beneath the layout's heading in the settings menu, as each look
+        # has its own (`looks.py`)
+        "layout_line": LAYOUT_LINE,
         # The looks a browser chooses and the deployment defaults (`looks.py`), the
         # theme first: the settings menu offers each, and `<body>` carries each one
         # in force.
@@ -350,7 +396,41 @@ def _slot(name: str, /, **context: object) -> Markup:
     """
     if has_request_context() and _presentation()["layout"] == KIOSK_LAYOUT:
         return Markup("")
+    node = context.get("node")
+    if name in _DRAFTING_SLOTS and isinstance(node, StatusSnapshot):
+        context = {**context, **_drafting(node)}
     return slots.render(name, **context)
+
+
+#: The slots whose filler may draft from its node what leaves the instance — a
+#: ticket, as ``little-sister-jira``'s does — and is handed, beside the node, what
+#: such a draft is written with (:data:`little_sister.slots.SLOTS`).
+_DRAFTING_SLOTS = frozenset({"node.actions", "reason.actions"})
+
+
+def _drafting(node: StatusSnapshot) -> dict[str, object]:
+    """What a filler of an action slot drafts from ``node`` with (ADR-0133 decisions 4
+    to 6): ``written_out``, which writes a text of the node out as the Copy document
+    writes one, a link in the short form to the absolute address of the node's
+    handbook; and ``details``, the rows of its *About* card written out the same way.
+    Functions rather than values, so that what a slot filled for every node at every
+    render does not cost is paid by the draft that asks."""
+    path = node.path
+
+    def node_written_out(text: str, inline: bool = False) -> str:
+        return written_out(text, inline=inline, handbook=_handbook_here(path))
+
+    def details() -> tuple[tuple[str, str], ...]:
+        return written_details(_card_details(node), _handbook_here)
+
+    return {"written_out": node_written_out, "details": details}
+
+
+def _handbook_here(path: str) -> str:
+    """The absolute address of the handbook of the node at ``path``, as this request
+    came by — or ``""`` outside a request, which has no base to write it from, so a
+    link in the short form stays as written."""
+    return _handbook_url(path) if has_request_context() else ""
 
 
 def _extension_assets() -> tuple[tuple[str, str], ...]:
@@ -394,14 +474,13 @@ def _static_by_hash(endpoint: str, values: dict[str, Any]) -> None:
         values["v"] = digest
 
 
-# What is sent compressed (ADR-0127, on Lex's word of 2026-10-16): the documents and
-# the fragments the ten-second refresh fetches, which carry both faces of every node
-# and so weigh four to five times what the wall did, and the JSON envelopes, a whole
-# tree each — never a static file, which the browser keeps by its hash (ADR-0112) and
-# `send_file` streams. The level is gzip's own: on a deployment's recorded wall it
-# takes the fragment from 574 KB to 26 KB in 4 ms, beside a render of 100 ms, and a
-# further level buys a kilobyte for twice the time. Nothing under a kilobyte is worth
-# the header.
+# What is sent compressed (ADR-0127): the documents and the fragments the ten-second
+# refresh fetches, which carry both faces of every node and so weigh four to five times
+# what the wall did, and the JSON envelopes, a whole tree each — never a static file,
+# which the browser keeps by its hash (ADR-0112) and `send_file` streams. The level is
+# gzip's own: on a deployment's recorded wall it takes the fragment from 574 KB to 26 KB
+# in 4 ms, beside a render of 100 ms, and a further level buys a kilobyte for twice the
+# time. Nothing under a kilobyte is worth the header.
 GZIP_MIMETYPES = frozenset(
     {"text/html", "application/json", "application/problem+json"})
 GZIP_MIN_BYTES = 1024
@@ -666,7 +745,7 @@ def _at_line(address: str, slug: str) -> str:
 
 
 def _focus_of(branch: str, node: StatusSnapshot | None
-              ) -> tuple[str, MaintenanceEntry | None]:
+              ) -> tuple[str, Pin | None]:
     """The line a node's page was asked at (``?reason=<slug>``, ADR-0036 decision
     12), and the pin on that slug where the current run did not report the line.
 
@@ -741,9 +820,111 @@ def _failing_first(lines: Iterable[ReasonLine]) -> list[ReasonLine]:
 app.jinja_env.globals["healthy"] = healthy
 app.jinja_env.globals["failing"] = failing
 app.jinja_env.globals["line_healthy"] = line_healthy
+# A configured rule's sentence (ADR-0137): what it makes of its part, in the page's
+# words, each status a placeholder the renderer draws as its sign.
+app.jinja_env.globals["rule_said"] = rule_said
+app.jinja_env.globals["lines_rules"] = lines_rules
 app.jinja_env.globals["state_code"] = STATE_CODE.__getitem__
 # the cues' shapes, drawn once per page as a sprite (`_status_cue.html`)
 app.jinja_env.globals["status_codes"] = tuple(StatusCode)
+
+
+@dataclass(frozen=True)
+class _RuleHere:
+    """A configured rule as a node's page states it (ADR-0137): where it stands on
+    the node, at which place — ``node``, ``children``, ``counted`` or ``lines`` —
+    the node whose children it counts, where that is the parent, and the rules
+    written for the same place that it decides over as the first written."""
+    at: RuleAt
+    place: str
+    parent: str = ""
+    others: tuple[AggregationRule, ...] = ()
+
+
+def _rules_here(node: StatusSnapshot) -> tuple[_RuleHere, ...]:
+    """Every configured rule that picks a place at ``node`` (ADR-0137): the explain
+    view a node's page heads its frame with, beside its pins — each whether it acts
+    now or not, the page saying *changes nothing now* where it does not, and the
+    rules it decides over beside it. What it passes up, how its children count in
+    it, how its parent counts it among its children, and how its lines count, in that
+    order."""
+    rules = status_tree.rules
+    if not rules:
+        return ()
+    picking = rules.picking(node.path)
+    here: list[_RuleHere] = []
+    for level, deciding, at, place in (
+            ("node", rules.boundary(node.path), node.rule, "node"),
+            ("children", rules.counting_children(node.path), node.children_rule,
+             "children")):
+        if deciding is not None:
+            here.append(_RuleHere(at or RuleAt(deciding), place, others=tuple(
+                rule for rule in picking if rule.level == level
+                and rule is not deciding)))
+    if node.parent_rule is not None:
+        here.append(_RuleHere(node.parent_rule, "counted",
+                              parent=node.path.rsplit("/", 1)[0] or "/"))
+    decided = {at.rule.key: at for at in lines_rules(node)}
+    if node.members:
+        for rule in rules.on_lines(node.path):
+            here.append(_RuleHere(decided.get(rule.key, RuleAt(rule)), "lines"))
+    return tuple(here)
+
+
+app.jinja_env.globals["rules_here"] = _rules_here
+
+
+@dataclass(frozen=True)
+class _Offer:
+    """What a ringed check on a node's head accepts (ADR-0142 decision 5): the parts
+    at and beneath it that fail now, as they stand, each to be its own *seen* — how
+    many, and the digest its editor carries back, so that a set that finds others
+    failing there is refused and shows them rather than accepting one nobody saw."""
+    parts: tuple[Acceptable, ...]
+
+    @property
+    def count(self) -> int:
+        return len(self.parts)
+
+    @property
+    def digest(self) -> str:
+        return parts_digest(self.parts)
+
+
+def _offers(node: StatusSnapshot | None, *, covered: bool = False
+            ) -> dict[str, _Offer]:
+    """What a ringed check on each node's head accepts (:class:`_Offer`), by path,
+    read from the **unfiltered** snapshot as the pins' editors are — a filter changes
+    what the page shows, never what a ✓ marks — once for the page: each node's own
+    parts (:func:`~little_sister.tree.acknowledgeable_parts`) and those beneath it.
+    ``covered`` says a pin above ``node`` holds it. Nodes with nothing to accept are
+    left out."""
+    if node is None:
+        return {}
+    walked: list[tuple[StatusSnapshot, bool]] = []
+    stack = [(node, covered)]
+    while stack:
+        current, held = stack.pop()
+        held = (held or current.maintenance or current.maintenance_entry is not None
+                or current.reported_code is StatusCode.MAINTENANCE)
+        walked.append((current, held))
+        stack.extend((child, held) for child in current.children)
+    found: dict[str, tuple[Acceptable, ...]] = {}
+    for current, held in reversed(walked):
+        own = () if held else acknowledgeable_parts(replace(current, children=()))
+        found[current.path] = own + tuple(
+            part for child in current.children for part in found[child.path])
+    return {path: _Offer(parts) for path, parts in found.items() if parts}
+
+
+def _ack_offer(node: StatusSnapshot) -> _Offer | None:
+    """What a ringed check on ``node``'s head accepts, as the page's view read it
+    (:func:`_offers`) — ``None`` where nothing fails there, or the page read none."""
+    offers: dict[str, _Offer] = g.get("offers", {})
+    return offers.get(node.path)
+
+
+app.jinja_env.globals["ack_offer"] = _ack_offer
 
 
 def _chip_counts_map(node: StatusSnapshot | None) -> dict[str, ChipCounts]:
@@ -857,14 +1038,25 @@ def _first_looks() -> FirstLooks:
 
 
 def _first_drawn(node: StatusSnapshot | None, depth_closed: int | None,
-                 looks: FirstLooks | None = None, *, dense: bool = True) -> Drawn:
+                 looks: FirstLooks | None = None, *,
+                 failures_open: bool = True) -> Drawn:
     """What the page draws of ``node``'s nodes as they arrive (`first_look.draw`,
-    backlog #91 §7.5): the configured look, today's density where nobody spoke, and
-    the failure budget's openings; nothing where the page draws no tree."""
+    backlog #91 §7.5): the configured look, the built-in look where nobody spoke —
+    open, but a big level as chips — and the failure budget's openings unless the
+    browser's *Failures* look keeps them shut (:func:`_failures_open`); nothing where
+    the page draws no tree."""
     if node is None:
         return Drawn()
     return first_look.draw(node, looks or _first_looks(), depth_closed=depth_closed,
-                           dense=dense)
+                           failures_open=failures_open)
+
+
+def _failures_open() -> bool:
+    """Whether this browser's failures open their way, the failure budget's
+    openings (backlog #91 §3.3): its look *Failures*, the deployment's default where
+    it chose none — `chips` keeps a failure the chip its look drew, and the wall its
+    size."""
+    return _presentation()["failures"] == "open"
 
 
 def _priced(node: StatusSnapshot | None, drawn: Drawn,
@@ -919,23 +1111,118 @@ def _url_branch(path: str) -> str:
 
 @app.template_filter("loaded_from")
 def _loaded_from(path: str) -> str:
-    """A loaded-from path as `/system` draws it — against the environment or the
-    working directory, per :mod:`little_sister.paths`. Both tables that print one
-    call this; the origin objects keep the absolute string, and so does the
+    """A loaded-from path as `/system/installed` draws it — against the environment
+    or the working directory, per :mod:`little_sister.paths`. Both tables that print
+    one call this; the origin objects keep the absolute string, and so does the
     `title` the templates hang it in."""
     return shown_path(path)
 
 
+def _handbook_address(path: str, *, external: bool = False) -> str:
+    """The address of the Handbook view of the node at ``path`` (ADR-0133 decision
+    3) — the root's at `/handbook` — and, ``external``, absolute as this request came
+    by, as a Copy document's *Dashboard* line is (ADR-0115 decision 1)."""
+    branch = _url_branch(path)
+    return (url_for('handbook', path=branch, _external=external) if branch
+            else url_for('handbook', _external=external))
+
+
+def _handbook_of(node: object) -> Callable[[], str] | None:
+    """Where a link a text writes in the short form leads (ADR-0133 decision 4): into
+    the handbook of ``node``, the path of the node the text belongs to — or nowhere,
+    ``None``, for a text that belongs to no node. The renderer asks for the address
+    only where a link leads there, which most texts never write."""
+    if node is None:
+        return None
+    path = join_path(str(node))
+    return lambda: _handbook_address(path)
+
+
 @app.template_filter("markdown")
-def _markdown(text: object) -> Markup:
-    """Render a Markdown block to safe HTML (ADR-0018)."""
-    return render_markdown(str(text) if text else "")
+def _markdown(text: object, anchors: bool = False, node: object = None) -> Markup:
+    """Render a Markdown block to safe HTML (ADR-0018), as every text is rendered,
+    for ``node``, the path of the node the text belongs to, whose handbook a link
+    written in the short form leads into (ADR-0133 decision 4) — and with
+    ``anchors``, a handbook on its page, whose headings are anchored as GitHub
+    anchors them (decision 3)."""
+    return render_markdown(str(text) if text else "", anchors=anchors,
+                           handbook=_handbook_of(node))
 
 
 @app.template_filter("markdown_inline")
-def _markdown_inline(text: object) -> Markup:
-    """Render Markdown inline (one line, no `<p>`) to safe HTML (ADR-0018)."""
-    return render_markdown_inline(str(text) if text else "")
+def _markdown_inline(text: object, node: object = None) -> Markup:
+    """Render Markdown inline (one line, no `<p>`) to safe HTML (ADR-0018): a title,
+    or a text a compact surface shows on one line — for ``node``, as
+    :func:`_markdown` says."""
+    return render_markdown_inline(str(text) if text else "",
+                                  handbook=_handbook_of(node))
+
+
+def _about_card(node: StatusSnapshot | None) -> bool:
+    """Whether a node's page has its *About* card (ADR-0133 decision 1): where the
+    node says something of itself — what its check reads, its ``description``, or
+    where it stands and what to do, its ``about`` — or has details, its own or given
+    down to it (decision 6), or carries a tag (ADR-0139 decision 4). A node with none
+    of them has none, and its page stays as it is. Asked by the leaf's page for its
+    width and by the facts block of both pages for its columns, so the three cannot
+    disagree."""
+    return bool(node is not None and (node.description or node.about or node.tags
+                                      or _card_details(node)))
+
+
+def _card_tags(node: StatusSnapshot | None) -> tuple[TagChip, ...]:
+    """The chips of a node's *About* card (ADR-0139 decision 4): every tag it
+    carries, in its order, each with what it means and the node it is written on —
+    the node itself, or the nearest above it it comes down from — which the tree
+    resolves down to it. Kept for the request, as its details are."""
+    if node is None or not node.tags:
+        return ()
+    found: dict[str, tuple[TagChip, ...]] = g.setdefault("ls_card_tags", {})
+    if node.path not in found:
+        vocabulary = status_tree.tag_vocabulary
+        found[node.path] = tuple(
+            TagChip(tag, vocabulary.line(tag), at)
+            for tag, at in status_tree.tags_given(node.path))
+    return found[node.path]
+
+
+def _card_details(node: StatusSnapshot | None) -> tuple[DetailRow, ...]:
+    """The rows of a node's *About* card (ADR-0133 decision 6): its own details and
+    those given down to it, each saying the node it is given on, which the tree
+    resolves down to it (:meth:`~little_sister.tree.StatusTree.details`). Kept for the
+    request, since its card and the width and columns that make room for it each ask."""
+    if node is None:
+        return ()
+    found: dict[str, tuple[DetailRow, ...]] = g.setdefault("ls_card_details", {})
+    if node.path not in found:
+        found[node.path] = status_tree.details(node.path)
+    return found[node.path]
+
+
+app.jinja_env.globals["about_card"] = _about_card
+app.jinja_env.globals["card_details"] = _card_details
+app.jinja_env.globals["card_tags"] = _card_tags
+
+
+def _has_handbook(branch: str) -> bool:
+    """Whether the node at ``branch`` has a handbook (ADR-0133 decision 3), which puts
+    its *Handbook* tab among its views and leads its crumb on the Handbook view into
+    it. Asked of the tree, so that every view of a node and every ancestor on its
+    trail is answered alike; a handbook is what the configuration gave the node, or
+    a run its first fill, so the tab never comes and goes with a reading."""
+    return bool(status_tree.handbook(join_path(branch)))
+
+
+app.jinja_env.globals["has_handbook"] = _has_handbook
+
+
+def _notes_count(branch: str) -> int:
+    """How many notes the Notes view of the node at ``branch`` lists (ADR-0140): the
+    node's own and its lines', which its tab carries as Series carries its curves."""
+    return notes_book.count(join_path(branch))
+
+
+app.jinja_env.globals["notes_count"] = _notes_count
 
 
 @app.template_filter("node_title")
@@ -1081,7 +1368,7 @@ def _format_local(moment: datetime, fmt: str | None = None) -> str:
 
     The one place display timestamps are formatted, so the dashboard's poll
     stamp (served in the ``X-Rendered-At`` response header) matches every
-    server-rendered time (ADR-0006) rather than the browser's locale.
+    server-rendered time (ADR-0120 decision 7) rather than the browser's locale.
 
     A **copied** document is the one thing formatted elsewhere, by
     :class:`~little_sister.copy_status.TimeStyle` (:func:`_copy_style` builds it
@@ -1127,7 +1414,7 @@ def _record_fields(value: object) -> list[_RecordField]:
     the vocabulary cannot disagree about it.
 
     A value under one of those names is an **instant** and reads in the configured
-    timezone and ``time_format``, as every other time on the page does (ADR-0006).
+    timezone and ``time_format``, as every other time on the page does (ADR-0120).
     No age stands beside it (ADR-0082 decision 5): a check that grades on an age says
     it in its own sentence. Whatever else stands under a timed name is shown as it
     was stored, like every value under any other name: a null (*this run has not
@@ -2065,6 +2352,71 @@ def _localtime(value: datetime | None, fmt: str | None = None) -> str:
     return _format_local(value, fmt)
 
 
+#: What a part a tag filter hides must be for the page to say so: a failure.
+_FAILING = (StatusCode.ERROR, StatusCode.WARN)
+
+
+def _wanted_tag() -> str:
+    """The tag a page's address filters by, ``?tag=`` (ADR-0139 decision 5), read
+    as a tag is — capitals as lower case — or ``""`` where it names none. A word that
+    is no tag is kept as written, so that the page says no node carries it."""
+    raw = request.args.get("tag", "").strip()
+    return spelled_tag(raw) or raw
+
+
+@dataclass(frozen=True)
+class _Tagged:
+    """A page filtered by a tag (ADR-0139 decision 5): its node with the parts that
+    carry the tag as its children, the path between the node and each part where
+    there is one — its context, names joined by ›, by the part's path — and the
+    parts the filter hides that fail."""
+    node: StatusSnapshot
+    context: Mapping[str, str]
+    failing: tuple[StatusSnapshot, ...]
+
+
+def _tagged_parts(node: StatusSnapshot, tag: str) -> _Tagged:
+    """The parts beneath ``node`` that carry ``tag``: each node that carries it
+    whose parent does not, in the tree's order — a filtered wall's cards, every
+    color on which is explained by what it shows — and the parts the filter hides
+    that fail: a subtree no node of which carries the tag, where it fails, and a node
+    above a tagged part whose own lines fail. A node that carries the tag itself
+    keeps every child: everything beneath it carries it."""
+    if tag in node.tags:
+        return _Tagged(node, {}, ())
+    # the paths of the nodes at or above a node that carries it, in one pass
+    reaching: set[str] = set()
+
+    def reaches(current: StatusSnapshot) -> bool:
+        found = tag in current.tags
+        for child in current.children:
+            found = reaches(child) or found
+        if found:
+            reaching.add(current.path)
+        return found
+
+    reaches(node)
+    tops: list[StatusSnapshot] = []
+    context: dict[str, str] = {}
+    failing: list[StatusSnapshot] = []
+
+    def walk(current: StatusSnapshot, trail: tuple[str, ...]) -> None:
+        for child in current.children:
+            if tag in child.tags:
+                tops.append(child)
+                if trail:
+                    context[child.path] = " › ".join(trail)
+            elif child.path in reaching:
+                if child.own_code in _FAILING:
+                    failing.append(child)
+                walk(child, (*trail, child.name))
+            elif child.code in _FAILING:
+                failing.append(child)
+
+    walk(node, ())
+    return _Tagged(replace(node, children=tuple(tops)), context, tuple(failing))
+
+
 def _filter_snapshot(node: StatusSnapshot,
                      hidden: set[StatusCode]) -> StatusSnapshot | None:
     """Drop nodes (and their subtrees) whose effective code is in `hidden`."""
@@ -2102,28 +2454,42 @@ def _nothing_left(hidden: Sequence[StatusSnapshot], under: str = "") -> str:
 
 
 def _node_meta_map(node: StatusSnapshot | None) -> dict[str, dict[str, str | int]]:
-    """Path → what the inspection card (ADR-0019) says of a node's ``about``, for
-    every node of ``node``'s subtree that has one: its first block, rendered
-    (``about``), and how many blocks follow it (``more``), which the card counts as
-    *… 3 more paragraphs on its page*.
+    """Path → what the inspection card (ADR-0019) says of a node, for every node of
+    ``node``'s subtree that says something of itself: the first block of its
+    ``about``, rendered (``about``), and how many blocks follow it (``more``), which
+    the card counts as *… 3 more paragraphs on its page*; and where a node has no
+    ``about``, its ``description``, what its check reads, the same way (ADR-0133
+    decision 2). A status either names is drawn as its sign (decision 5). A node that
+    has a handbook says so, by its Handbook view's address (``handbook``), which the
+    card links (decision 3), and a link either text writes in the short form leads
+    into it (decision 4); the handbook itself rides in no fragment. And the tags a
+    node carries (``tags``), which the card names in one line (ADR-0139 decision 4).
 
     The card's heading is the node's name and title as its own head draws them,
     which every node's box carries, open or closed, so the map carries neither: a
     title that only repeats the name is already dropped there (`titles.py`), and a
-    node with neither a title nor an ``about`` has no card. The map rides in every
-    fragment of the refresh (`_status_grid.html`), so a node a run names after the
-    load has its card and a changed ``about`` is current. (``description`` is not
-    in the card: it stays on the node's own page, beneath its head's row.)"""
+    node with no title, no ``about`` or ``description``, no handbook and no tags has
+    no card. The
+    map rides in every fragment of the refresh (`_status_grid.html`), so a node a
+    run names after the load has its card and a changed text is current."""
     out: dict[str, dict[str, str | int]] = {}
     if node is None:
         return out
     stack = [node]
     while stack:
         current = stack.pop()
-        if current.about:
-            block, more = first_block(current.about)
+        said: dict[str, str | int] = {}
+        if text := current.about or current.description:
+            block, more = first_block(text, handbook=_handbook_of(current.path))
             if block:
-                out[current.path] = {"about": str(block), "more": more}
+                said = {"about": str(block), "more": more}
+        if current.has_handbook:
+            said["handbook"] = _handbook_address(current.path)
+        # and the tags it carries, in one line (ADR-0139 decision 4)
+        if current.tags:
+            said["tags"] = " ".join(current.tags)
+        if said:
+            out[current.path] = said
         stack.extend(current.children)
     return out
 
@@ -2136,12 +2502,12 @@ class _MaintenancePin:
 
     **Two texts, and they must never be taken for each other.** ``line`` is *what* is
     silenced — the reason line an entry pin covers, empty on a node pin, which covers
-    the node whole — and ``note`` is *why*, the admin's justification. Both are
-    called "reason" in the model (``ReasonLine.text`` and ``MaintenanceEntry.reason``)
-    and they are not the same kind of thing at all; a page that shows one in the
-    other's place is the confusion this naming exists to prevent. The **slug never
-    appears as text** — ADR-0036 makes it opaque — so it travels only as the deep
-    link's ``?reason=`` value.
+    the node whole — and ``note`` is *why*, the admin's justification
+    (``ReasonLine.text`` and ``Pin.note`` in the model). They are not
+    the same kind of thing at all; a page that shows one in the other's place is the
+    confusion this naming exists to prevent. The **slug never appears as text** —
+    ADR-0036 makes it opaque — so it travels only as the deep link's ``?reason=``
+    value.
 
     ``slot`` places a node's pins: its own first (``-1``), then its entries in the
     **check's** order, which is information (severity, API order) that sorting by an
@@ -2166,14 +2532,14 @@ class _MaintenancePin:
     4): its check no longer reports the node, or has not written it yet in this
     process. The pin is held all the same, silences nothing, and holds again when
     the node returns. Such a pin has no title and no line to show — both went with
-    the node — and only the Maintenance page lists it: the wall counts what is
+    the node — and only *Handled* lists it: the wall counts what is
     silenced now.
     """
     path: str
     title: str
     note: str
     remaining: str
-    expires_at: datetime
+    expires_at: datetime | None
     slug: str = ""
     line: str = ""
     #: Where this pin sits **among the pins of its own node** — the index of the
@@ -2184,7 +2550,7 @@ class _MaintenancePin:
     slot: int = -1
     total: int = 0
     set_by: str = ""
-    entry: MaintenanceEntry | None = None
+    entry: Pin | None = None
     suspended: bool = False
 
     @property
@@ -2294,43 +2660,20 @@ def _brand_accent(text: object) -> Markup:
     return span.join(Markup.escape(part) for part in str(text).split(BRAND_NAME))
 
 
-@app.template_filter("since")
-def _since(value: datetime | None) -> str:
-    """How long ago a moment was, phrased so a page left open cannot make it a lie.
-
-    A server-rendered age is true only at the instant it is rendered, and the
-    links page does not poll: a tab left open all afternoon would go on claiming
-    *2m ago*. So the age is stated as a **floor** — ``> 2m ago``, ``> 3h ago``,
-    ``> 2d 3h ago`` — which starts true and stays true however long the window
-    sits there.
-
-    Under a minute there is no floor worth stating (*less than a minute ago* is
-    exactly the reading that rots), so the moment names itself: ``at 14:07``.
-    That is also the common case right after a deliberate *check now*, where the
-    clock time is the friendlier answer anyway.
-
-    ``—`` when there is no moment, which on the links page means nothing has been
-    asked yet rather than that the answer was fresh.
-    """
-    if value is None:
-        return "—"
-    elapsed = int((_now() - value).total_seconds())
-    if elapsed < 60:
-        return f"at {_format_local(value, '%H:%M')}"
-    return f"> {coarse_span(elapsed)} ago"
-
-
-def _pin_remaining(entry: MaintenanceEntry, now: datetime) -> str:
-    """How long a pin has left at ``now``, as an index row words it."""
+def _pin_remaining(entry: Pin, now: datetime) -> str:
+    """How long a pin has left at ``now``, as an index row words it — nothing for an
+    acknowledgment given no end, which ends as what it accepted changes."""
+    if entry.expires_at is None:
+        return ""
     return _humanize_remaining((entry.expires_at - now).total_seconds())
 
 
-def _pin_view(node: StatusSnapshot, entry: MaintenanceEntry, now: datetime, *,
+def _pin_view(node: StatusSnapshot, entry: Pin, now: datetime, *,
               slug: str = "", line: str = "", slot: int = -1) -> _MaintenancePin:
     """One stored pin as an index row. ``slug`` / ``line`` / ``slot`` are set for an
     **entry** pin and left at their defaults for a node's own."""
     return _MaintenancePin(
-        path=node.path, title=node.title, note=entry.reason,
+        path=node.path, title=node.title, note=entry.note,
         remaining=_pin_remaining(entry, now), slug=slug, line=line, slot=slot,
         total=len(node.reasons), expires_at=entry.expires_at,
         set_by=entry.set_by, entry=entry)
@@ -2355,7 +2698,7 @@ def _suspended_pins(whole: StatusSnapshot | None,
     nodes, lines = status_tree.pins()
     pins = [
         _MaintenancePin(
-            path=path, title="", note=entry.reason,
+            path=path, title="", note=entry.note,
             remaining=_pin_remaining(entry, now), expires_at=entry.expires_at,
             set_by=entry.set_by, entry=entry, suspended=True)
         for path, entry in nodes.items() if path not in reported]
@@ -2364,11 +2707,55 @@ def _suspended_pins(whole: StatusSnapshot | None,
                   key=lambda pin: (pin[0], pin[2].created_at, pin[1]))
     for slot, (path, slug, entry) in enumerate(held):
         pins.append(_MaintenancePin(
-            path=path, title="", note=entry.reason,
+            path=path, title="", note=entry.note,
             remaining=_pin_remaining(entry, now), slug=slug, slot=slot,
             expires_at=entry.expires_at, set_by=entry.set_by, entry=entry,
             suspended=True))
     return pins
+
+
+@dataclass(frozen=True)
+class _ShownNote:
+    """One note as the Notes view and the page of a path no node stands at state it
+    (ADR-0140): the note; the line it is on as it reads now — the run's words where
+    the run reports the line, the words it was written beside where it does not —
+    and whether the run reports it (ADR-0047 decision 8); whether it is the note of
+    a pin that still stands, which is edited with that pin; and whether the reader
+    may edit it here, which a note of its own is while it is the newest on its node
+    (decision 5)."""
+    note: Note
+    line: str = ""
+    reported: bool = True
+    pin_stands: bool = False
+    editable: bool = False
+
+
+def _shown_notes(notes: Sequence[Note], node: StatusSnapshot | None, *,
+                 admin: bool = False) -> list[_ShownNote]:
+    """``notes`` as a page states them, against ``node`` — the one they are on, or
+    ``None`` on the page of a path no node stands at, where every line is gone with
+    its node — each editable where ``admin`` reads it and the book allows it."""
+    lines = {line.slug: line.text for line in node.reasons} if node is not None else {}
+    shown = []
+    for note in notes:
+        reported = not note.slug or node is None or note.slug in lines
+        said = lines.get(note.slug, "") or next(
+            (line.text for line in note.context.lines if line.slug == note.slug), "")
+        shown.append(_ShownNote(
+            note, line=said if note.slug else "", reported=reported,
+            pin_stands=_pin_stands(note),
+            editable=admin and notes_book.editable(note)))
+    return shown
+
+
+def _pin_stands(note: Note) -> bool:
+    """Whether ``note`` is the note of a pin that is still in the table: the pin it
+    names by its creation, on its node or on its line (ADR-0047 decision 5)."""
+    if not note.pin:
+        return False
+    entry = (status_tree.entry_maintenance(note.path, note.slug) if note.slug
+             else status_tree.maintenance_entry(note.path))
+    return entry is not None and instants.stamp(entry.created_at) == note.pin
 
 
 @dataclass(frozen=True)
@@ -2387,7 +2774,9 @@ class _NoNode:
     ``first_level`` whether the path is one segment long, so that the root is its
     parent and not merely what is left. ``pins`` are the ones held against the path
     or beneath it (:func:`_suspended_pins`), in that function's order: by path, a
-    node's own first."""
+    node's own first. ``notes`` are the notes written for the path and for the paths
+    beneath it, newest first: they outlive the node (ADR-0047 decision 7), and here,
+    where no node's Notes view stands, is where they are found (ADR-0140)."""
 
     path: str
     pin_path: str
@@ -2398,6 +2787,7 @@ class _NoNode:
     above_series: bool
     first_level: bool
     pins: list[_MaintenancePin]
+    notes: list[_ShownNote] = field(default_factory=list)
 
 
 def _no_node(branch: str, now: datetime) -> _NoNode:
@@ -2427,7 +2817,8 @@ def _no_node(branch: str, now: datetime) -> _NoNode:
         above=above, above_series=bool(above) and _series_tab(above),
         first_level=len(names) == 1,
         pins=[pin for pin in _suspended_pins(status_tree.snapshot(""), now)
-              if pin.path == held or pin.path.startswith(held + "/")])
+              if pin.path == held or pin.path.startswith(held + "/")],
+        notes=_shown_notes(notes_book.beneath(held), None))
 
 
 def _no_node_page(user: identity.Identity, branch: str) -> ResponseReturnValue:
@@ -2462,11 +2853,10 @@ def _maintenance_view(
     this node's own lines and leaves every child reporting exactly as before. So an
     entry-pinned container that also holds a pinned descendant gets the pip, and
     needs it; for its *own* entry pins it needs none, because its card already draws
-    the quiet count. The pip earns its place here in **dense** mode: a node whose
-    members are all pinned reads ``MAINTENANCE`` — neither warn nor error — so it
-    collapses to a leaf chip, and a chip renders no reasons and no quiet count at
-    all; the same disappearance happens under the depth ceiling and behind the branch
-    cap's fold.
+    the quiet count. The pip earns its place wherever a node is drawn as a chip: a
+    node whose members are all pinned reads ``MAINTENANCE`` — neither warn nor error —
+    so where its level starts as chips it stays one, and a chip renders no reasons and
+    no quiet count at all; the same disappearance happens under the depth ceiling.
 
     Deliberately **not render-aware**: the set is computed from the snapshot, not
     from what the template ended up drawing, so the pip can be redundant beside a
@@ -2513,7 +2903,7 @@ def _maintenance_view(
     return node_pins, entry_pins, ancestors
 
 
-def _pins_above(branch: str) -> list[tuple[str, MaintenanceEntry]]:
+def _pins_above(branch: str) -> list[tuple[str, Pin]]:
     """The pins set on the nodes above ``branch``, outermost first, each with the
     path it stands on.
 
@@ -2527,7 +2917,7 @@ def _pins_above(branch: str) -> list[tuple[str, MaintenanceEntry]]:
     ancestors are all the nodes there are to ask, and the root is one of them.
     """
     segments = split_path(branch)
-    above: list[tuple[str, MaintenanceEntry]] = []
+    above: list[tuple[str, Pin]] = []
     for depth in range(len(segments)):
         path = join_path(*segments[:depth])
         entry = status_tree.maintenance_entry(path)
@@ -2547,6 +2937,24 @@ def _maintenance_pins(node_pins: list[_MaintenancePin],
                   key=lambda pin: (pin.path, pin.slot))
 
 
+def _oldest_first(pins: Sequence[_MaintenancePin]
+                  ) -> list[tuple[str, list[_MaintenancePin]]]:
+    """``pins`` by node for *Handled* (ADR-0135 decision 8): each node's own pin
+    first and then its lines' in the check's order, as :func:`_maintenance_pins`
+    sorts them, and the nodes by the oldest pin each holds, the longest standing
+    first — the index's order is its whole nudge, nothing notifies — then by path."""
+    groups: dict[str, list[_MaintenancePin]] = {}
+    for pin in pins:
+        groups.setdefault(pin.path, []).append(pin)
+
+    def oldest(item: tuple[str, list[_MaintenancePin]]) -> tuple[Any, ...]:
+        made = [pin.entry.created_at for pin in item[1] if pin.entry is not None]
+        # A pin built by hand carries no stored entry, and no age: it goes last.
+        return (0, min(made), item[0]) if made else (1, item[0])
+
+    return sorted(groups.items(), key=oldest)
+
+
 def _maintenance_rows(node_pins: list[_MaintenancePin],
                       entry_pins: list[_MaintenancePin]) -> list[_MaintenanceRow]:
     """One row per **node** for the capped popover — see :class:`_MaintenanceRow`."""
@@ -2564,8 +2972,10 @@ def _maintenance_rows(node_pins: list[_MaintenancePin],
     for path, found in entries.items():
         if path in pinned:
             continue
-        # The soonest to clear leads the row, by the instant it ends at.
-        soonest = min(found, key=lambda pin: pin.expires_at)
+        # The soonest to clear leads the row, by the instant it ends at: a line's
+        # maintenance pin always has one.
+        soonest = min(found, key=lambda pin: pin.expires_at or datetime.max.replace(
+            tzinfo=UTC))
         sole = found[0] if len(found) == 1 else None
         rows.append(_MaintenanceRow(
             path=path, title=found[0].title,
@@ -2718,7 +3128,7 @@ announce_aspects()
 # has no line: `/system/installed` says why it was not.
 noise.settle()
 
-# API tokens for the JSON backend (ADR-0008): "name=token,name2=token2" — set
+# API tokens for the JSON backend (ADR-0080): "name=token,name2=token2" — set
 # directly, or as a value that is itself a secret reference (ADR-0023), which the
 # server's start resolves (ADR-0091).
 # Unresolvable ⇒ no tokens (the API rejects all requests until restart)
@@ -2814,7 +3224,8 @@ def start() -> None:
             engine_error = None
             logger.info("engine disabled via LITTLE_SISTER_ENGINE")
         else:
-            state = StateLayer(interval_seconds=config.state_interval)
+            state = StateLayer(interval_seconds=config.state_interval,
+                               keeper_interval_seconds=config.keeper_interval)
             held = Lease(state.directory, mark=this_instance().mark)
             try:
                 how = held.take()
@@ -2856,26 +3267,31 @@ def _start_engine(state: StateLayer, held: Lease, how: str) -> None:
         logger.warning("engine not started: %s", error)
         return
     engine_error = None
+    # The `nodes` aspect is read once (ADR-0012): the tags it writes are the tree's
+    # before the rules are read, which may pick by them (ADR-0139), and its labels
+    # are seeded after the log is restored, as before.
+    declared = _read_nodes()
+    _seed_tags(built, declared)
+    _load_aggregation(built)
     _restore_state(built, state)
     _restore_series(built, state)
-    _seed_node_metadata(built)
+    _restore_notes(built, state)
+    _seed_node_metadata(built, declared)
     engine = built
     built.start()
 
 
 def stop(*, trigger: str = "a call") -> None:
-    """The instance's stop (ADR-0088): the links probe's pass abandoned, then the
-    engine's stop — the runs in flight abandoned, one save, the lease let go — or,
-    where the start built no engine, the lease let go. gunicorn reaches it through
-    :mod:`little_sister.gunicorn_hooks`'s ``worker_exit``, with ``atexit`` as the
-    backstop, and ``trigger`` says which in the engine's one line. A second call
-    does nothing, and says nothing."""
+    """The instance's stop (ADR-0088): the engine's stop — the runs in flight
+    abandoned, one save, the lease let go — or, where the start built no engine, the
+    lease let go. gunicorn reaches it through :mod:`little_sister.gunicorn_hooks`'s
+    ``worker_exit``, with ``atexit`` as the backstop, and ``trigger`` says which in
+    the engine's one line. A second call does nothing, and says nothing."""
     global _stopped
     with _start_lock:
         if _stopped:
             return
         _stopped = True
-    link_probe.stop_probing()
     if engine is not None:
         engine.stop(trigger=trigger)
     elif lease is not None:
@@ -2989,6 +3405,16 @@ def ready() -> ResponseReturnValue:
 
 
 @app.context_processor
+def _inject_signed_in() -> dict[str, str]:
+    """Whom the settings menu's first row says this browser is signed in as: the
+    identity's name, the one a pin and an event are recorded against, so that two
+    people of one first name can tell which of them it is (backlog #91); empty where
+    nobody is."""
+    user = identity.current_user()
+    return {"signed_in_as": user.name if user is not None else ""}
+
+
+@app.context_processor
 def _inject_user_avatar() -> dict[str, str]:
     """Give the shared settings trigger the session user's avatar URL.
 
@@ -3010,17 +3436,67 @@ def _inject_user_avatar() -> dict[str, str]:
     return {"user_avatar_url": url}
 
 
-def _seed_node_metadata(engine: Engine) -> None:
-    """Resolve `about` (nodes.yaml > inline check), seed it onto the tree, and run
-    the startup consistency pass (ADR-0012). A bad `nodes.yaml` is logged, not
-    fatal — node metadata must not stop monitoring. The file as loaded is kept by
-    the engine for the life of the process (ADR-0128): what a path's `children:`
-    says is read as each child is written, since no path names the children. And
-    the page's first look is built from it, the checks and `settings.yaml` — the
-    checks' alone where the file was not read."""
-    global first_looks
+def _load_aggregation(engine: Engine) -> None:
+    """Read the configured rules (ADR-0137) and hand them to the tree — before the
+    log and the pins are restored, so that the periods a restart seeds are of what
+    the tree rolls up to under them. Each root's ``aggregation.yaml``, the root named
+    last first; a rule that cannot apply is a line on the startup record, its part
+    no configured check reaches among the reasons — and a tag its `tag:` names that
+    the configuration writes for no node (ADR-0139 decision 7), which is why the
+    tags are the tree's first — and nothing here stops the monitor: a rule that does
+    not apply fails toward alarming by itself."""
+    status_tree.use_aggregation(load_rules(check_roots=engine.check_roots(),
+                                           tags=status_tree.written_tags))
+
+
+def _read_nodes() -> dict[str, NodeMeta] | CheckError:
+    """The `nodes` aspect as every root declares it (ADR-0012, ADR-0031), or why it
+    could not be read — once at the start, for the tags the tree is handed before the
+    rules and for the labels seeded after the log."""
     try:
-        declared = load_nodes()
+        return load_nodes()
+    except CheckError as error:
+        return error
+
+
+def _seed_tags(engine: Engine,
+               declared: dict[str, NodeMeta] | CheckError) -> None:
+    """Read the known tags and hand the tree the tags the configuration writes for
+    each path, a check's file and `nodes.yaml` added up (ADR-0139 decisions 2 and 3)
+    — before the rules are read, which may pick by them, and before the log is
+    restored. A `nodes.yaml` that was not read writes no tags; its line says so
+    (`_seed_node_metadata`). Every tag the configuration writes that no `tags.yaml`
+    names is a line on the startup record, once, with where it is written."""
+    nodes = {} if isinstance(declared, CheckError) else declared
+    vocabulary = load_vocabulary()
+    written = resolve_metadata(engine.checks, nodes)
+    places = tag_places(engine.checks, nodes)
+    status_tree.use_tags(vocabulary, {path: meta.tags
+                                      for path, meta in written.items() if meta.tags},
+                         written=places)
+    # an action's `tag:` is held to them as a rule's is (decision 7)
+    hold_actions_to_tags(status_tree.written_tags)
+    note_unknown_tags(vocabulary, places)
+
+
+def _seed_node_metadata(engine: Engine,
+                        declared: dict[str, NodeMeta] | CheckError | None = None
+                        ) -> None:
+    """Resolve `about` (nodes.yaml > inline check), seed it onto the tree, and run
+    the startup consistency pass (ADR-0012), the handbooks with it (ADR-0133). A bad
+    `nodes.yaml` is logged, not fatal — node metadata must not stop monitoring. The
+    file as loaded is kept by the engine for the life of the process (ADR-0128): what
+    a path's `children:` says is read as each child is written, since no path names
+    the children. And the page's first look is built from it, the checks and
+    `settings.yaml` — the checks' alone where the file was not read. ``declared`` is
+    the file as the start read it (:func:`_read_nodes`), read here where none is
+    handed over."""
+    global first_looks
+    read = _read_nodes() if declared is None else declared
+    try:
+        if isinstance(read, CheckError):
+            raise read
+        declared = read
         metadata = resolve_metadata(engine.checks, declared)
     except CheckError as error:
         self_report.startup.note(
@@ -3034,6 +3510,11 @@ def _seed_node_metadata(engine: Engine) -> None:
     for path, meta in metadata.items():
         status_tree.set_about(path, meta.about)
         status_tree.set_title(path, meta.title)
+        status_tree.set_handbook(path, meta.handbook)
+        # The deployment's details by path (ADR-0133 decision 6), `nodes.yaml`'s over
+        # the check's own file key by key, kept apart from what a run writes.
+        if meta.details:
+            status_tree.set_details(path, meta.details)
         # Only where the entry states one: seeding `None` as `0` would make every
         # nodes.yaml entry an ordering declaration and shut out the check's rank
         # on any node that merely has an `about` (ADR-0055).
@@ -3047,6 +3528,12 @@ def _seed_node_metadata(engine: Engine) -> None:
         if meta.show_when_quiet is not None:
             status_tree.set_show_when_quiet(path, meta.show_when_quiet)
     run_consistency_pass(engine.checks, metadata)
+    # Every handbook the configuration states has been read by now — the check files'
+    # as the checks were built, nodes.yaml's above — so a Markdown file in a root's
+    # handbook/ that none of them named is one nobody's page shows (ADR-0133
+    # decision 3). Not where nodes.yaml failed to load: the files it names would be
+    # named here as nobody's.
+    handbooks.note_unnamed(config_roots())
 
 
 #: The reason the instance's own node gives for the gap a restart leaves in its
@@ -3088,7 +3575,7 @@ def _restore_state(engine: Engine, state: StateLayer) -> None:
     ``restore`` an adoption hands the store's copy to when a keeper's tick makes
     this instance the holder, or the backup's on *take the backups* (ADR-0077):
     the tree's ``adopt_events`` beside the log's producer, and the side-table's,
-    which ``MaintenanceStore`` registers itself at construction. The log first,
+    which ``PinStore`` registers itself at construction. The log first,
     because the pins' adoption writes its transitions into the log and files are
     adopted in registration order. *Take the backups* is the layer's one action
     on its child, admin-only like every write.
@@ -3116,10 +3603,13 @@ def _restore_state(engine: Engine, state: StateLayer) -> None:
                             HEARTBEAT_PATH, local_time(since))
     state.keep(EVENTS_FILE, status_tree.events_payload,
                restore=status_tree.adopt_events)
-    store = MaintenanceStore(state, tree=status_tree)
-    status_tree.use_maintenance_store(store)
-    nodes, entry_pins = store.load_all()
-    status_tree.restore_maintenance(nodes, entry_pins=entry_pins)
+    store = PinStore(state, tree=status_tree)
+    status_tree.use_pin_store(store)
+    held = store.load_all()
+    status_tree.restore_maintenance(held.nodes, entry_pins=held.lines)
+    # and what a person accepted (ADR-0142), bound to what it accepted, which the
+    # nodes' first readings check
+    status_tree.restore_acknowledgments(held.acknowledged, held.lines_acknowledged)
     # What is covered: the line of every configured check, and the instance's own.
     # Its node and its children are no check's, and a pin on one of them — which
     # ADR-0071 decision 4 and ADR-0076 decision 1 count on — is no orphan.
@@ -3134,9 +3624,9 @@ def _restore_state(engine: Engine, state: StateLayer) -> None:
                     "check covers: %s", len(forgotten), ", ".join(forgotten))
     self_report.register_contributor(
         "state", state.lines, title="State", report=state.report,
-        about="What a restart keeps — the maintenance pins, the event log and the "
-              "series under `var/state/` — and whether it was restored, written and, "
-              "where a "
+        about="What a restart keeps — the pins, the event log, the "
+              "series and the notes under `var/state/` — and whether it was "
+              "restored, written and, where a "
               "keeper is registered, carried off the machine (ADR-0071); and what "
               "a takeover set aside as `.bak`, which *take the backups* swaps back "
               "(ADR-0077).")
@@ -3171,6 +3661,35 @@ def _restore_series(engine: Engine, state: StateLayer) -> None:
                         sum(used.series for used in engine.series.usage().values()),
                         state.path(SERIES_FILE))
     state.keep(SERIES_FILE, engine.series.payload, restore=engine.series.restore)
+
+
+def _restore_notes(engine: Engine, state: StateLayer) -> None:
+    """Put back the notes the last process wrote, write them through from now on, and
+    retire on every tick what the configuration says is past keeping (ADR-0140) —
+    once, post-fork, before the engine runs.
+
+    After :func:`_restore_state`, which has fetched what a keeper holds. The file is
+    read whole or not at all: one the layer cannot take is a load failure, a line on
+    the ``state`` child for the life of the process, and the history starts empty.
+    Nothing reaps a note — it outlives its pin, its node and the configuration that
+    made the node (ADR-0047 decision 7) — so the start takes every path the file
+    holds, covered or not. The store registers its other direction itself, so a
+    takeover's adopted copy, or the backup's, replaces the history (ADR-0077).
+    Retention runs beside the pins' expiry, on the scheduler tick (ADR-0047 decision
+    12): a node that never gets another note still trims."""
+    store = NoteStore(state, book=notes_book)
+    notes_book.restore(store.load())
+    notes_book.use_store(store)
+    engine.every_tick("notes", _retire_notes)
+
+
+def _retire_notes() -> None:
+    """One sweep of the notes under the configured retention (ADR-0047 decision 9),
+    the engine's on every tick; what it retired is a log line."""
+    retired = notes_book.retire(config.notes_retention, now=instants.now(),
+                                zone=config.tzinfo)
+    if retired:
+        logger.info("notes: retired %d note(s) past the retention", retired)
 
 
 #: The machine's trust store, measured **once** here and never again (ADR-0073).
@@ -3245,7 +3764,7 @@ self_report.register_contributor(
 
 
 def _api_json(payload: dict[str, object], status_code: int = 200) -> Response:
-    """A JSON API response; echoes an inbound X-Flow-Id if present (ADR-0008)."""
+    """A JSON API response; echoes an inbound X-Flow-Id if present (ADR-0080)."""
     resp = make_response(jsonify(payload), status_code)
     flow = request.headers.get("X-Flow-Id")
     if flow:
@@ -3348,7 +3867,7 @@ def _split_heartbeat(
     node: StatusSnapshot | None,
 ) -> tuple[StatusSnapshot | None, StatusSnapshot | None]:
     """Lift the engine's self-heartbeat (ADR-0005) out of a root snapshot's
-    children so the dashboard can render it as the status strip (ADR-0024) rather than
+    children so the dashboard can render it as the status strip (ADR-0056) rather than
     a grid card. Returns ``(node_without_heartbeat, heartbeat)``.
 
     The heartbeat is only ever a child of the root overview, so on a branch page
@@ -3411,7 +3930,8 @@ def status(branch: str = "") -> ResponseReturnValue:
         # The two facts `/health` withholds from an ungated caller are fine
         # here, where the reader has already presented a token (ADR-0080).
         return _api_json(status_envelope(node, version=__version__,
-                                         engine=_engine_state()))
+                                         engine=_engine_state(),
+                                         handbooks=_handbook_url))
     # This route is not behind the gate (`identity.SELF_AUTHENTICATING_ENDPOINTS`):
     # the JSON branch above answers a bearer token, and a gate in front of the whole
     # view would redirect an API client to a login form. So the session half is
@@ -3443,11 +3963,13 @@ def status(branch: str = "") -> ResponseReturnValue:
         # with it, because on a node with 150 findings "the right page" is not the
         # same as "the line", and the page marks the one it names.
         focus, focus_orphan = _focus_of(branch, node)
+        g.offers = _offers(node, covered=bool(_pins_above(branch)))
         return render_template('check.html', username=user.name,
                                firstname=user.firstname, node=node,
                                # Its fold as its files say (ADR-0128): ✓ ok is a
                                # leaf page's one fold, and it starts as configured.
-                               drawn=_first_drawn(node, None),
+                               drawn=_first_drawn(
+                                   node, None, failures_open=_failures_open()),
                                # The curves that stand on this node (ADR-0097
                                # decision 2), and the views beside this one.
                                node_curves=_node_curves(node), view="status",
@@ -3459,8 +3981,10 @@ def status(branch: str = "") -> ResponseReturnValue:
                                dependents=status_tree.dependents(branch),
                                branch=branch, since=since,
                                # A leaf shows what it counts for itself, so
-                               # nothing beneath it makes it so: this is None.
-                               made_by=_made_by(node), focus=focus,
+                               # nothing beneath it makes it so, and its one
+                               # period is its own: both are None.
+                               made_by=_made_by(node), shows=_shows(node),
+                               focus=focus,
                                focus_orphan=focus_orphan,
                                pins_above=_pins_above(branch),
                                is_admin=user.admin,
@@ -3473,10 +3997,15 @@ def status(branch: str = "") -> ResponseReturnValue:
     # None on the overview root, which is nobody's node. Taken from the node before
     # any filter below removes its children, which the rule is about.
     since = _since_of(branch, node) if branch and node else None
-    # And the node beneath it that makes what it shows, which the card's first line
-    # names with that node's own period (ADR-0123 decision 3) — from the same
+    # The period of what it shows, which the card's first line states (ADR-0132
+    # decision 5), and the node beneath it that makes what it shows, named with that
+    # node's own period where it began later (ADR-0123 decision 3) — from the same
     # unfiltered node, since a filter that hides a child cannot change what made it.
-    made_by = _made_by(node) if branch and node else None
+    shows = _shows(node) if branch and node else None
+    made_by = _made_by(node, shows) if branch and node else None
+    # Why it has its color (ADR-0135 decision 7): what counts and what is handled
+    # beneath it, a card after Time — from the same unfiltered node.
+    why = _why(node) if branch and node else None
     # A branch's page lists the node's own lines as a leaf's does, so it is asked at
     # one of them the same way — the index's link and a line's write come back with
     # `?reason=<slug>` — and says the same of a pin whose line is absent.
@@ -3487,7 +4016,7 @@ def status(branch: str = "") -> ResponseReturnValue:
     # The same curves as the leaf page's, from the unfiltered node: the curves that
     # stand on it (ADR-0097 decision 2), which the poll renders again.
     node_curves = _node_curves(node) if branch else None
-    # Lift the engine self-heartbeat into the status strip (ADR-0024) before filtering,
+    # Lift the engine self-heartbeat into the status strip (ADR-0056) before filtering,
     # so it shows there always — never as a card, never hidden by hide-ok.
     node, heartbeat = _split_heartbeat(node)
     # What a pin's editor on this page says and where its write comes back to
@@ -3495,6 +4024,9 @@ def status(branch: str = "") -> ResponseReturnValue:
     # filter below drops a child, and the page's own address, with its filters and
     # its depth — the same from the page and from the refresh's fragment.
     containers = _containers(node)
+    # and what a ringed check on each head would mark, from the same unfiltered
+    # snapshot (ADR-0142)
+    g.offers = _offers(node, covered=bool(pins_above))
     here = _own_address()
     hide_ok = _resolve_flag('hide_ok', False)
     hide_idle = _resolve_flag('hide_idle', False)
@@ -3503,6 +4035,12 @@ def status(branch: str = "") -> ResponseReturnValue:
     now = _now()
     node_pins, entry_pins, maintenance_ancestors = _maintenance_view(node, now)
     maintenance_rows = _maintenance_rows(node_pins, entry_pins)
+    # and the parts a configured rule changes the count of now (ADR-0137), and the
+    # parts a person has seen (ADR-0142), which the band's pill counts beside the
+    # pins, in the chip's short form
+    handled_now = {} if node is None else handled_beneath(node)
+    ruled_parts = handled_now.get("rule", 0)
+    seen_parts = handled_now.get(SEEN, 0)
     # What each chip counts (ADR-0127 decision 2), from the same unfiltered
     # snapshot: a filter changes what the page shows, never what a chip says.
     chip_counts_by_path = _chip_counts_map(node)
@@ -3515,6 +4053,17 @@ def status(branch: str = "") -> ResponseReturnValue:
     if node is not None and branch and not node.children:
         # the refresh of a branch's page whose node has no children any more
         nothing_left = f"Nothing stands beneath {node.name} now."
+    # A wall filtered by a tag (ADR-0139 decision 5): the parts that carry it, each
+    # a card of its own with the path above it as its context, and nothing above
+    # them — and the parts it hides that fail, which the band names. In the address
+    # alone, never a cookie: unlike hide ok it hides failures.
+    tag = _wanted_tag()
+    tagged = _tagged_parts(node, tag) if node is not None and tag else None
+    if tagged is not None:
+        node = tagged.node
+        if not node.children and not nothing_left:
+            nothing_left = (f"Nothing beneath {node.name} carries {tag}." if branch
+                            else f"No node carries {tag}.")
     if node is not None and (hide_ok or hide_idle):
         hidden: set[StatusCode] = set()
         if hide_ok:
@@ -3537,14 +4086,16 @@ def status(branch: str = "") -> ResponseReturnValue:
     max_depth = 0 if depth == 0 else MAX_DEPTH
     depth_closed = depth if depth else None
     # The first look (ADR-0128, backlog #91 §7.5): how each node the filters leave
-    # starts — as its files say, today's density where nobody spoke, the failure
-    # budget's openings among them — and what the planner prices of it, which reads
-    # no status. `depth=0`'s one card draws no tree. The chips are priced in the face
-    # this browser's theme draws them in, as its estimate's length is read.
-    drawn = _first_drawn(node, depth_closed) if max_depth >= 1 else Drawn()
+    # starts — as its files say, the built-in look where nobody spoke, the failure
+    # budget's openings among them unless this browser's *Failures* look keeps them
+    # shut — and what the planner prices of it, which reads no status. `depth=0`'s
+    # one card draws no tree. The chips are priced in the face this browser's theme
+    # draws them in, as its estimate's length is read.
+    drawn = (_first_drawn(node, depth_closed, failures_open=_failures_open())
+             if max_depth >= 1 else Drawn())
     priced = _priced(node, drawn, chip_leaves,
                      chip_face(_presentation()["theme"]))
-    # One server-formatted stamp per response (ADR-0006): rendered into the page
+    # One server-formatted stamp per response (ADR-0120): rendered into the page
     # so it dates its data from the first paint (page JavaScript cannot read
     # navigation-response headers), and sent as X-Rendered-At so the poll loop
     # reads the same clock — "updated …" / "could not refresh — last ok …" honor
@@ -3561,8 +4112,8 @@ def status(branch: str = "") -> ResponseReturnValue:
     if request.args.get('fragment'):
         body = render_template('_status_grid.html', node=node, branch=branch,
                                no_node=no_node,
-                               since=since, made_by=made_by,
-                               node_curves=node_curves,
+                               since=since, made_by=made_by, shows=shows,
+                               why=why, node_curves=node_curves,
                                # The poll fragment renders the same node block as
                                # the page, so it needs the same facts — without
                                # this the dependent count would vanish ten seconds
@@ -3586,11 +4137,14 @@ def status(branch: str = "") -> ResponseReturnValue:
                                pins_above=pins_above,
                                heartbeat=heartbeat, node_meta=node_meta,
                                reason_cap=config.reason_cap,
-                               branch_cap=config.branch_cap,
                                maintenance_cap=config.maintenance_cap,
                                maintenance_rows=maintenance_rows,
+                               ruled_parts=ruled_parts, seen_parts=seen_parts,
                                maintenance_ancestors=maintenance_ancestors,
-                               nothing_left=nothing_left)
+                               nothing_left=nothing_left,
+                               tag=tag, tag_line=status_tree.tag_vocabulary.line(tag),
+                               tag_context=tagged.context if tagged else {},
+                               tag_hidden=tagged.failing if tagged else ())
     else:
         body = render_template('status.html', username=user.name,
                                firstname=user.firstname, node=node,
@@ -3601,6 +4155,7 @@ def status(branch: str = "") -> ResponseReturnValue:
                                dependents=(status_tree.dependents(branch)
                                            if branch else ()),
                                branch=branch, since=since, made_by=made_by,
+                               shows=shows, why=why,
                                max_depth=max_depth, depth_closed=depth_closed,
                                drawn=drawn, priced=priced,
                                hide_ok=hide_ok, hide_idle=hide_idle,
@@ -3616,11 +4171,16 @@ def status(branch: str = "") -> ResponseReturnValue:
                                heartbeat=heartbeat, node_meta=node_meta,
                                rendered_at=rendered_at,
                                reason_cap=config.reason_cap,
-                               branch_cap=config.branch_cap,
                                maintenance_cap=config.maintenance_cap,
                                maintenance_rows=maintenance_rows,
+                               ruled_parts=ruled_parts, seen_parts=seen_parts,
                                maintenance_ancestors=maintenance_ancestors,
-                               nothing_left=nothing_left)
+                               nothing_left=nothing_left,
+                               tag=tag, tag_line=status_tree.tag_vocabulary.line(tag),
+                               tag_context=tagged.context if tagged else {},
+                               tag_hidden=tagged.failing if tagged else (),
+                               tag_options=[(offered, status_tree.tag_vocabulary.line(
+                                   offered)) for offered in status_tree.offered_tags])
     response = make_response(body)
     response.headers['X-Rendered-At'] = rendered_at
     response.headers['X-Assets'] = assets_digest()
@@ -3639,6 +4199,105 @@ def status(branch: str = "") -> ResponseReturnValue:
             response.delete_cookie(name, samesite='Lax',
                                    secure=_connection_is_secure())
     return response
+
+
+#: How many periods of what a node above others showed its History keeps open
+#: (ADR-0132 decision 6): the newest, the one that holds among them. The rest stand in
+#: one fold beneath them, which opens without a script — a node above a busy check
+#: lists hundreds.
+SHOWN_OPEN = 50
+
+#: What moved a node above others into a period, in History's words (ADR-0132
+#: decisions 4 and 6), by the cause its period keeps. A row of a log written before a
+#: row said its cause is a reading's, as the Events page draws it, and so is the end
+#: of a wait, which the reading that completed its count wrote (ADR-0119 decision 3).
+_WHAT_MOVED: Mapping[str, str] = {
+    "": "a reading",
+    CAUSE_READING: "a reading",
+    CAUSE_REACHED: "a reading",
+    CAUSE_PIN_SET: "a pin set",
+    CAUSE_PIN_EDITED: "a pin edited",
+    CAUSE_PIN_ENDED: "a pin ended",
+    CAUSE_LINE_PIN_SET: "a line's pin set",
+    CAUSE_LINE_PIN_ENDED: "a line's pin ended",
+    CAUSE_REMOVED: "a removal",
+    CAUSE_STALE: "gone stale",
+    CAUSE_RULE: "a rule began",
+    CAUSE_SEEN_SET: "marked seen",
+    CAUSE_SEEN_EDITED: "a seen changed",
+    CAUSE_SEEN_ENDED: "no longer seen",
+    CAUSE_LINE_SEEN_SET: "a line marked seen",
+    CAUSE_LINE_SEEN_EDITED: "a line's seen changed",
+    CAUSE_LINE_SEEN_ENDED: "a line no longer seen",
+}
+
+
+@dataclass(frozen=True)
+class _ShownRow:
+    """One row of History's first table: a period of what a node above others showed
+    (ADR-0132 decision 6). ``code``, and since when — the instant ``since``, a bound
+    where ``before`` — and ``until``, when the next began, ``None`` for the period
+    that holds. ``name`` is the node whose change began it as the row says it:
+    *itself*, its path beneath the node, or its full path where it stands elsewhere —
+    a dependency a shield is reached through; ``history`` is what its name links to,
+    its path as a URL branch, empty for the node itself and for one the tree no
+    longer holds, as the Events page links only a node that stands. ``what`` is what
+    moved it — *the rule develop advises began*, where a rule the deployment
+    configures began it, its node the one whose count the rule changed (ADR-0137
+    decision 11). Both are empty where the beginning is a bound, and where a tick
+    found a difference no change explained (decision 3)."""
+    code: StatusCode
+    since: datetime
+    before: bool
+    until: datetime | None
+    name: str = ""
+    history: str = ""
+    what: str = ""
+
+
+def _shown_rows(path: str, node: StatusSnapshot) -> list[_ShownRow]:
+    """The periods of what ``node``, the node at ``path`` above others, showed, as
+    History's first table lists them (ADR-0132 decision 6), newest first: the one
+    that holds where the snapshot says it is of what the node shows (decision 3,
+    :attr:`StatusSnapshot.period`) — the snapshot the page's head says, so the two
+    say one status — and then every one that ended, as the tree derives them from
+    its rows (:meth:`StatusTree.shown_history`). Where the period that holds is not
+    of what the node shows, only those that ended."""
+    ended, _ = status_tree.shown_history(path)
+    holds = node.period
+    periods: list[tuple[StatusCode, Beginning, datetime | None, str, str]] = []
+    if holds is not None:
+        periods.append((holds.code, holds.began, None, holds.by, holds.rule))
+        # A write between the snapshot and the derivation began a period the head
+        # does not say yet: the rows say no more than the head does.
+        ended = [period for period in ended if period.began.at < holds.began.at]
+    periods.extend((period.code, period.began, period.until, period.by, period.rule)
+                   for period in ended)
+    beneath = node.path.rstrip("/") + "/"
+    standing: set[str] = set()
+    stack = [node]
+    while stack:
+        shot = stack.pop()
+        standing.add(shot.path)
+        stack.extend(shot.children)
+    asked: dict[str, bool] = {}
+    rows: list[_ShownRow] = []
+    for code, began, until, by, rule in periods:
+        if not by:
+            rows.append(_ShownRow(code, began.at, began.before, until))
+            continue
+        if by == node.path:
+            name, linked = "itself", False
+        else:
+            name = by[len(beneath):] if by.startswith(beneath) else by
+            if by not in standing and by not in asked:
+                asked[by] = status_tree.snapshot(by) is not None
+            linked = by in standing or asked[by]
+        what = (f"the rule {rule} began" if began.cause == CAUSE_RULE and rule
+                else _WHAT_MOVED.get(began.cause, ""))
+        rows.append(_ShownRow(code, began.at, began.before, until, name,
+                              _url_branch(by) if linked else "", what))
+    return rows
 
 
 @app.route('/history/<path:path>')
@@ -3669,9 +4328,14 @@ def history(path: str) -> ResponseReturnValue:
     # of what its page heads with, and the page says so under its table (ADR-0123
     # decision 3) — unless it declares nothing, which the line above already says.
     own_periods = bool(node.children) and not declares_nothing
+    # A node above others lists first the periods of what it shows (ADR-0132
+    # decision 6), the newest open and the rest in one fold beneath them.
+    shown = _shown_rows(path, node) if node.children else None
     return render_template('history.html', username=user.name,
                            firstname=user.firstname, node=node,
                            branch=path, periods=periods,
+                           shown_open=None if shown is None else shown[:SHOWN_OPEN],
+                           shown_folded=[] if shown is None else shown[SHOWN_OPEN:],
                            declares_nothing_since=quiet_since,
                            declares_nothing=declares_nothing,
                            own_periods=own_periods,
@@ -3680,6 +4344,119 @@ def history(path: str) -> ResponseReturnValue:
                            readings=_history_readings(node), view="history",
                            series_tab=_series_tab(path),
                            series_count=_series_count(path))
+
+
+@app.route('/handbook')
+@app.route('/handbook/<path:path>')
+def handbook(path: str = "") -> ResponseReturnValue:
+    """A node's Handbook view (ADR-0133 decision 3): what its team writes at length
+    about it — its runbook, how to sign in, its policy — rendered as the node's own
+    text is, a status it names drawn as its sign, and its headings anchored as GitHub
+    anchors them, so that a link to `#sign-in` opens there. Read, not polled, as
+    History is: a handbook is read with the configuration, at a restart. A node that
+    has none answers `404` and says so, its tab not standing among its views."""
+    user = identity.signed_in()
+    node = status_tree.snapshot(path)
+    if node is None:
+        return _no_node_page(user, path)
+    text = status_tree.handbook(path)
+    page = render_template('handbook.html', username=user.name,
+                           firstname=user.firstname, node=node, branch=path,
+                           handbook=text, view="handbook",
+                           series_tab=_series_tab(path),
+                           series_count=_series_count(path))
+    return page if text else (page, 404)
+
+
+@app.route('/notes/<path:path>', methods=['GET', 'POST'])
+def notes(path: str) -> ResponseReturnValue:
+    """A node's Notes view (ADR-0140): what was written about the node and its lines,
+    newest first — notes of their own and its pins' notes, which enter the history as
+    a pin is set (ADR-0047 decision 4) — each with who wrote it and when and, folded,
+    what the node showed then (decision 6). An admin adds a note at the top, on the
+    node or on one of its lines — the one ``?reason=<slug>`` names, where a line's
+    own control led here — and edits the newest note of its own; a pin's note is
+    edited with its pin while the pin stands (decision 5). Not polled: it is read, as
+    History is. A path no node stands at is answered as its other addresses are, and
+    that page lists the notes written for the path and beneath it (ADR-0116)."""
+    user = identity.signed_in()
+    node = status_tree.snapshot(path)
+    if node is None:
+        return _no_node_page(user, path)
+    if request.method == 'POST':
+        return _write_note(user, path, node)
+    return _notes_page(user, path, node, line=request.args.get('reason', ''))
+
+
+def _notes_page(user: identity.Identity, path: str, node: StatusSnapshot, *,
+                line: str = "", refused: str = "", mine: str = "",
+                editing: str = "") -> ResponseReturnValue:
+    """The Notes view as a reader sees it, or as a refused write comes back to it:
+    ``refused`` says why nothing was saved, ``mine`` are the admin's words, back in
+    the form they were written in — the newest note's, ``editing`` naming it by its
+    key, where that note may still be edited, and otherwise a new note's, on the line
+    ``line``, so that nothing typed is lost."""
+    shown = _shown_notes(notes_book.of(path), node, admin=user.admin)
+    if editing and not any(entry.editable and entry.note.key == editing
+                           for entry in shown):
+        editing = ""
+    return render_template(
+        'notes.html', username=user.name, firstname=user.firstname, node=node,
+        branch=path, view="notes", series_tab=_series_tab(path),
+        series_count=_series_count(path), notes=shown, may=user.admin,
+        lines=[entry for entry in node.reasons if entry.slug],
+        line=line, refused=refused, mine=mine, editing=editing)
+
+
+def _write_note(user: identity.Identity, path: str,
+                node: StatusSnapshot) -> ResponseReturnValue:
+    """An admin's note, added or edited (ADR-0140), answered with the Notes view.
+
+    A note added is appended to the node's history with what the node showed (ADR-0047
+    decision 6). An edit names the note by its key and the token it was drawn with —
+    the compare-and-set of decision 5 — and is refused where somebody changed the note
+    since, where a newer note was written on the node, and where the note is a pin's:
+    nothing is saved, and the admin's words come back in the form, as a refused pin
+    comes back (ADR-0014). A note without words is refused alike."""
+    if not user.admin:
+        abort(403)
+    text = request.form.get('text', '').strip()
+    if request.form.get('action') == 'edit':
+        key = request.form.get('key', '')
+        if not text:
+            return _notes_page(user, path, node, refused=_NO_WORDS, mine=text,
+                               editing=key)
+        write = notes_book.edit(path, key, text, by=user.name,
+                                expected=request.form.get('set_at', ''))
+        if write.refused:
+            return _notes_page(user, path, node, refused=_edit_refused(write.current),
+                               mine=text, editing=key)
+        return redirect(url_for('notes', path=path))
+    slug = request.form.get('slug', '')
+    if not text:
+        return _notes_page(user, path, node, line=slug, refused=_NO_WORDS)
+    notes_book.add(path, slug, text, by=user.name, context=context_of(node, slug))
+    return redirect(url_for('notes', path=path))
+
+
+#: What a note written without words is answered with.
+_NO_WORDS = "A note needs words: nothing was saved."
+
+
+def _edit_refused(current: Note | None) -> str:
+    """Why an edit of ``current`` — the note as the history holds it now, or
+    ``None`` where it holds it no longer — was refused, in the page's words."""
+    if current is None:
+        return "That note is no longer kept: nothing was saved. Your words are below."
+    if current.pin:
+        return ("That note is a pin's, and is changed with its pin: nothing was "
+                "saved. Your words are below.")
+    if not notes_book.editable(current):
+        return ("A newer note was written on this node: a note is changed only while "
+                "it is the newest, so nothing was saved. Your words are below, to add "
+                "as a note of their own.")
+    return ("Somebody changed this note since it was opened: nothing was saved. It "
+            "reads as they left it, and your words are below.")
 
 
 @app.route('/series')
@@ -4086,12 +4863,17 @@ def self_report_action(contributor: str, slug: str) -> ResponseReturnValue:
     shown as the sentence, because a button that answers with a traceback page
     has told the operator nothing about the thing they pressed it for.
 
-    **An action that ran is followed by a flush of the state layer**: an action
-    is a write into this process, and what it changed reaches the store now
-    rather than at the next interval — a keeper's *take over* adopts and saves
+    **An action runs between two flushes of the state layer** (ADR-0076 decision
+    6, ADR-0134 decision 6). The one before the handler sends the keeper what the
+    process holds while the lease is still its own: a keeper's *release* gives
+    the lease up in its handler, and the flush after it finds nothing it may send
+    through. The one after a handler that ran sends what the action changed — an
+    action is a write into this process, and what it changed reaches the store
+    now rather than at the next interval: a keeper's *take over* adopts and saves
     in the click, and on an instance that holds the lease already it is the
-    save. The flush is the scheduler's own, serialized with it, and never raises;
-    a handler that raised changed nothing worth flushing.
+    save. Both are the scheduler's own flush, serialized with it, never raising,
+    and each sends everything, whatever ``keeper_interval`` says; a handler that
+    raised changed nothing worth the second.
     """
     user = identity.signed_in()
     if not user.admin:
@@ -4099,6 +4881,8 @@ def self_report_action(contributor: str, slug: str) -> ResponseReturnValue:
     action = self_report.find_action(contributor, slug)
     if action is None:
         abort(404)
+    if state_layer is not None:
+        state_layer.flush()
     try:
         said = action.handler() or ""
     except Exception as error:
@@ -4114,9 +4898,11 @@ def self_report_action(contributor: str, slug: str) -> ResponseReturnValue:
     return redirect(url_for("status", branch=f"little-sister/{contributor}"))
 
 
-@app.route('/maintenance', methods=['POST'])
+@app.route('/pins/maintenance', methods=['POST'])
 def maintenance() -> ResponseReturnValue:
-    """Set, edit or clear a pin — a **compare-and-set** write (ADR-0014).
+    """Set, edit or clear a maintenance pin — a **compare-and-set** write (ADR-0014),
+    on the route of its own act, which asks the permission of its own name
+    (ADR-0141 decision 4).
 
     Every form here carries the entry's ``set_at`` as a hidden token: the write
     names the pin it believes it is replacing, and an empty token says *"I believe
@@ -4132,25 +4918,25 @@ def maintenance() -> ResponseReturnValue:
     nothing, and the answer is the one a save gets.
 
     A write returns to **where its block stands**. A form that says where it was
-    opened (``next`` — a card on the wall, a branch's head, the Maintenance page)
+    opened (``next`` — a card on the wall, a branch's head, *Handled*)
     goes back there; a leaf's own page says nothing, and gets its page back — for
     one of its lines at the line, by the address that names one
     (``?reason=<slug>#pinned-reason``, ADR-0036 decision 12), since on a node of
     150 lines the top of the page is a long way from the line that was just pinned.
     """
     user = identity.signed_in()
-    if not user.admin:
+    if not user.may(MAINTENANCE):
         abort(403)
     path = request.form['path']
     token = request.form.get('set_at')
     clearing = request.form.get('action') == 'clear'
-    typed = request.form.get('reason', '').strip()
+    typed = request.form.get('note', '').strip()
     duration = request.form.get('duration', '')
     # A `slug` names **one reason** of the node instead of the node itself
     # (ADR-0036): same form, same token, same expiry — one key deeper. The field is
-    # `slug` rather than `reason` because `reason` is already this form's
-    # explanation text; the *addressing* shape the ADR fixes is the query parameter
-    # (`?reason=<slug>`), which is a different namespace.
+    # `slug` rather than `reason` because the *addressing* shape the ADR fixes is
+    # the query parameter (`?reason=<slug>`), which is a different namespace from
+    # the form's; the explanation is the `note` (ADR-0047 decision 1).
     slug = request.form.get('slug', '')
     # A card's editor says where it was opened (`next`), so pinning from the
     # wall returns to the wall, and a branch's head to its page as it was asked
@@ -4207,23 +4993,32 @@ def maintenance() -> ResponseReturnValue:
                 # about the stored pin moved, so what the field was filled with
                 # comes back too.
                 return refused(problem=str(bad), stored=None, expiry_was=was)
-        # A blank reason on an **edit** means "I did not touch this field", so the
+        # A blank note on an **edit** means "I did not touch this field", so the
         # stored text stays; on a new pin there is nothing to keep and the literal
-        # `maintenance` is the honest placeholder.
-        held = _held_reason(path, slug, token)
-        reason = typed or held or 'maintenance'
+        # `maintenance` is the honest placeholder (`NO_NOTE`).
+        held = _held_note(path, slug, token)
+        note = typed or held or NO_NOTE
         setter = (partial(status_tree.set_entry_maintenance, path, slug) if slug
                   else partial(status_tree.set_maintenance, path))
-        write = setter(reason, expires_at=expires_at,
+        # What the node shows as the pin is set, which its note keeps beside its
+        # words (ADR-0047 decision 6) — read before the pin changes it, and only
+        # where there are words for the node's notes to take.
+        context = (context_of(status_tree.snapshot(path), slug) if note != NO_NOTE
+                   else None)
+        write = setter(note, expires_at=expires_at,
                        set_by=user.name,
                        expected_set_at=token)
+        if context is not None and write.applied and write.current is not None:
+            # A pin's note enters its node's notes as the pin is set, and follows an
+            # edit of it while the pin stands (ADR-0047 decisions 4 and 5).
+            notes_book.pinned(path, slug, write.current, context)
     if write.refused:
         return refused(problem=None, stored=write.current, kept=kept)
     return redirect(where)
 
 
-def _held_reason(path: str, slug: str, token: str | None) -> str:
-    """The reason text already stored for this pin, for an edit that left the field
+def _held_note(path: str, slug: str, token: str | None) -> str:
+    """The note already stored for this pin, for an edit that left the field
     blank. Empty when there is nothing pinned — or when the caller believes there is
     not (an empty token), in which case keeping someone else's words would be
     stranger than the placeholder."""
@@ -4231,13 +5026,13 @@ def _held_reason(path: str, slug: str, token: str | None) -> str:
         return ""
     entry = (status_tree.entry_maintenance(path, slug) if slug
              else status_tree.maintenance_entry(path))
-    return entry.reason if entry is not None else ""
+    return entry.note if entry is not None else ""
 
 
 def _maintenance_refused(*, path: str, slug: str, back: str, clearing: bool,
                          mine: str, duration: str, token: str,
                          problem: str | None,
-                         stored: MaintenanceEntry | None,
+                         stored: Pin | None,
                          expiry_was: str = "",
                          kept: bool = False) -> ResponseReturnValue:
     """The page a refused write lands on: nothing was saved, here is why, and here
@@ -4259,7 +5054,7 @@ def _maintenance_refused(*, path: str, slug: str, back: str, clearing: bool,
 
     The page is headed by the node's path as every page writes one (``node_path``),
     whichever way the form spelled it: a node's own page posts the route's
-    ``branch``, the Maintenance page and the wall the absolute path. Its forms
+    ``branch``, *Handled* and the wall the absolute path. Its forms
     post ``path`` back as it came.
     """
     user = identity.signed_in()
@@ -4277,19 +5072,279 @@ def _maintenance_refused(*, path: str, slug: str, back: str, clearing: bool,
         maintenance_timezone=config.timezone)
 
 
-@app.route('/maintenance', methods=['GET'])
-def maintenance_overview() -> ResponseReturnValue:
-    """The full, uncapped maintenance overview as its own page — every pin, node and
-    entry alike (ADR-0014, ADR-0036), with what it silences, how long is left, why,
-    and who is behind it. Read from the whole snapshot, so it is depth- and
-    filter-independent. Viewer-visible and bookmarkable; the strip pill's popover
-    "+N more" links here.
+def _acknowledgment_end(raw: str, *, now: datetime,
+                        floor: _IntervalFloor | None = None) -> datetime | None:
+    """Resolve the ringed check's *Until* field (ADR-0142): blank is no end, the
+    acknowledgment ending only as what it accepted changes, and anything else an end
+    read as maintenance's expiry is, by its grammar and within its bounds — at most a
+    year, and long enough for the slowest check it covers to run again — refused
+    rather than bent (:func:`_maintenance_expiry`)."""
+    if not raw.strip():
+        return None
+    return _maintenance_expiry(raw, now=now, floor=floor)
+
+
+@app.route('/pins/seen', methods=['POST'])
+def seen() -> ResponseReturnValue:
+    """Mark a failure seen, edit a seen, or end one by hand (ADR-0142) — on the route
+    of its own act, which asks the permission of its own name (ADR-0141 decision 4).
+
+    **One part**, a node's own failure or one of its lines (``slug``), is a
+    compare-and-set write as a pin's is (ADR-0014): the form carries the token of the
+    seen it believes it replaces, empty for none, and a refusal shows both texts. A
+    new one is taken only where its part fails now, and binds itself to that failure
+    as it stands; an edit keeps what it is bound to and changes its note and its end;
+    a blank note on an edit keeps the stored one; an *Until* that still reads what it
+    was filled with keeps the stored end, and an emptied one leaves it none.
+
+    **A head's ringed check** names its node and carries ``parts``, the digest of the
+    failing parts at and beneath it that its editor listed (ADR-0142 decision 5):
+    each is marked seen, its own acknowledgment sharing the note, each bound to its
+    own failure and ending by itself — where the parts failing there now are still
+    the ones listed. Where they are not, nothing is written, and the refusal lists
+    them as they stand, to be marked from there.
+
+    A note enters its node's notes as it is set, and follows an edit while the seen
+    stands (ADR-0140). A write comes back where its block stands, as a pin's does."""
+    user = identity.signed_in()
+    if not user.may(SEEN):
+        abort(403)
+    path = request.form['path']
+    slug = request.form.get('slug', '')
+    token = request.form.get('set_at')
+    clearing = request.form.get('action') == 'clear'
+    typed = request.form.get('note', '').strip()
+    duration = request.form.get('duration', '')
+    digest = request.form.get('parts', '')
+    next_raw = request.form.get('next', '')
+    if next_raw:
+        where = _safe_next(next_raw)
+    elif slug:
+        where = url_for('status', branch=path.lstrip('/'),
+                        reason=slug) + '#pinned-reason'
+    else:
+        where = url_for('status', branch=path.lstrip('/'))
+    refused = partial(_seen_refused, path=path, slug=slug, back=where,
+                      clearing=clearing, mine=typed, duration=duration,
+                      token=token or '')
+    if clearing:
+        write = status_tree.clear_acknowledgment(path, slug, expected_set_at=token)
+        if write.refused:
+            return refused(stored=write.current)
+        return redirect(where)
+    now = instants.now()
+    was = request.form.get('expiry_was', '').strip()
+    stored = status_tree.acknowledgment(path, slug) if token else None
+    if bool(token) and bool(was) and duration.strip() == was:
+        if stored is None:
+            return refused(stored=None, kept=True)
+        expires_at = stored.expires_at
+    else:
+        try:
+            expires_at = _acknowledgment_end(duration, now=now,
+                                             floor=_interval_floor(path))
+        except _BadExpiry as bad:
+            return refused(problem=str(bad), stored=None, expiry_was=was)
+    note = typed or (stored.note if stored is not None else "")
+    if digest:
+        node = status_tree.snapshot(path)
+        covered = bool(_pins_above(path.lstrip('/'))) if node is not None else False
+        parts = acknowledgeable_parts(node, covered=covered) if node else ()
+        if not parts or parts_digest(parts) != digest:
+            return refused(problem=(
+                "What fails here changed since this was opened." if parts else
+                "Nothing fails here now that a ringed check could mark."),
+                stored=None, parts=parts)
+        contexts = {part.path: context_of(status_tree.snapshot(part.path), part.slug)
+                    for part in parts} if note else {}
+        answers = status_tree.set_acknowledgments(
+            [(part.path, part.slug) for part in parts], SEEN, note,
+            expires_at=expires_at, set_by=user.name)
+        for at, line, pin, _problem in answers:
+            if pin is not None and note:
+                notes_book.pinned(at, line, pin, contexts.get(at, context_of(None)))
+        return redirect(where)
+    context = context_of(status_tree.snapshot(path), slug) if note else None
+    write = status_tree.set_acknowledgment(path, slug, SEEN, note,
+                                           expires_at=expires_at, set_by=user.name,
+                                           expected_set_at=token)
+    if write.refused:
+        return refused(stored=write.current)
+    if write.problem:
+        return refused(problem=f"{write.problem[:1].upper()}{write.problem[1:]}.",
+                       stored=None)
+    if context is not None and write.applied and write.current is not None:
+        notes_book.pinned(path, slug, write.current, context)
+    return redirect(where)
+
+
+def _seen_refused(*, path: str, slug: str, back: str, clearing: bool, mine: str,
+                  duration: str, token: str, stored: Pin | None,
+                  problem: str | None = None, expiry_was: str = "",
+                  kept: bool = False,
+                  parts: Sequence[Acceptable] = ()) -> ResponseReturnValue:
+    """The page a refused write of a *seen* lands on (ADR-0142): nothing was saved,
+    here is why, and here are your own words back — as a pin's refusal is
+    (:func:`_maintenance_refused`). A head's set whose parts changed lists them as
+    they stand, with a form that marks those, its digest refreshed."""
+    user = identity.signed_in()
+    if kept:
+        duration = expiry_was = (_expiry_input(stored.expires_at)
+                                 if stored is not None else "")
+    return render_template(
+        'seen_refused.html', username=user.name, firstname=user.firstname,
+        path=path, node_path=join_path(path), back=back, clearing=clearing,
+        stored=stored, slug=slug, problem=problem, mine=mine, duration=duration,
+        token=token, expiry_was=expiry_was, kept=kept, parts=parts,
+        digest=parts_digest(parts) if parts else "",
+        maintenance_default=config.maintenance_default_expiry,
+        maintenance_timezone=config.timezone)
+
+
+@dataclass(frozen=True)
+class _ByRule:
+    """A configured rule as *Handled* lists it (ADR-0137): the rule; each node it
+    changes the count of now, or the lines of, with how many lines — 0 for the node
+    itself; and where it changes nothing, what it missed — how many places it picks
+    now, the places it picks where a rule written before it decides and which, and
+    the paths it would pick with case folded."""
+    rule: AggregationRule
+    acting: tuple[tuple[str, int], ...] = ()
+    picked: int = 0
+    over: tuple[tuple[str, str], ...] = ()
+    folded: tuple[str, ...] = ()
+
+    @property
+    def at(self) -> RuleAt:
+        """Where the rule stands, as its block says it: whether it acts now."""
+        return RuleAt(self.rule, changes=bool(self.acting))
+
+    @property
+    def parts(self) -> int:
+        """How many parts it changes the count of now: nodes and lines."""
+        return sum(lines or 1 for _path, lines in self.acting)
+
+
+def _by_rule(whole: StatusSnapshot | None) -> tuple[_ByRule, ...]:
+    """Every configured rule for *Handled*'s *By a rule* (ADR-0137), the longest
+    standing first, as the pins are: each with the parts it changes the count of now,
+    read from the whole snapshot — so depth- and filter-independent — and, where it
+    changes nothing, why: what it picks now, where a rule written before it decides,
+    and what it would pick with case folded, as a package's rule list says it of a
+    rule that matched nothing (ADR-0129 decision 5). A rule that misses is no
+    mistake — what it names comes and goes — and fails toward alarming by itself, so
+    the index is where it is found, not the startup record (decision 8)."""
+    rules = status_tree.rules
+    if not rules or whole is None:
+        return ()
+    acting: dict[str, list[tuple[str, int]]] = {rule.key: [] for rule in rules.rules}
+    picked: dict[str, int] = dict.fromkeys(acting, 0)
+    over: dict[str, list[tuple[str, str]]] = {rule.key: [] for rule in rules.rules}
+    folded: dict[str, list[str]] = {rule.key: [] for rule in rules.rules}
+    stack: list[tuple[StatusSnapshot, tuple[str, ...]]] = [(whole, ())]
+    while stack:
+        node, above = stack.pop()
+        stack.extend((child, node.tags) for child in reversed(node.children))
+        segments = split_path(node.path)
+        for at in (node.rule, node.parent_rule):
+            if at is not None and at.changes:
+                acting[at.rule.key].append((node.path, 0))
+        for at in lines_rules(node):
+            if at.changes:
+                acting[at.rule.key].append((node.path, sum(
+                    1 for line in node.reasons if line.rule is not None
+                    and line.rule.rule is at.rule and line.rule.changes)))
+        deciding = {"node": rules.boundary(node.path),
+                    "children": rules.counting_children(node.path)}
+        for rule in rules.rules:
+            if rule.level == "lines":
+                if rule.picks(segments, node.tags) and node.members:
+                    picked[rule.key] += 1
+            elif rule.tops(segments, node.tags, above):
+                picked[rule.key] += 1
+                decider = deciding[rule.level]
+                if decider is not None and decider is not rule:
+                    over[rule.key].append((node.path, decider.name))
+            elif len(segments) == len(rule.segments) and rule.would_pick_folded(
+                    segments):
+                folded[rule.key].append(node.path)
+    rows = [_ByRule(rule, tuple(acting[rule.key]), picked[rule.key],
+                    tuple(over[rule.key]), tuple(folded[rule.key]))
+            for rule in rules.rules]
+    return tuple(sorted(rows, key=lambda row: (row.rule.since, row.rule.order)))
+
+
+@dataclass(frozen=True)
+class _AcceptedPin:
+    """One acknowledgment as *Handled* lists it under *Accepted* (ADR-0142): the node
+    it stands on and its title, the stored pin, and for a line's its slug, its text
+    and where it stands among its node's lines. ``suspended`` says the part is not
+    reported now — its node is not in the tree, or its lines are no members, a
+    check's error standing in for them — so that the acknowledgment holds nothing
+    until it is, and ends where a reading says it is gone."""
+    path: str
+    title: str
+    entry: Pin
+    slug: str = ""
+    line: str = ""
+    slot: int = -1
+    suspended: bool = False
+
+    @property
+    def name(self) -> str:
+        """The node's own name, which a title repeating it duplicates — what lets the
+        `node_title` filter ask its question here, as of a pin's row."""
+        return self.path.rsplit("/", 1)[-1]
+
+
+def _accepted_groups(whole: StatusSnapshot | None
+                     ) -> list[tuple[str, list[_AcceptedPin]]]:
+    """Every acknowledgment that stands, by node, for *Handled* (ADR-0142, ADR-0135
+    decision 8): each node's own first and then its lines' in the check's order, and
+    the nodes by the oldest each holds, the longest standing first — read from the
+    tree's tables against ``whole``, so that one whose part is not reported now is
+    listed too, as suspended."""
+    nodes, lines = status_tree.acknowledgments()
+    index: dict[str, StatusSnapshot] = {}
+    stack = [whole] if whole is not None else []
+    while stack:
+        current = stack.pop()
+        index[current.path] = current
+        stack.extend(current.children)
+    rows = [_AcceptedPin(path, index[path].title if path in index else "", pin,
+                         suspended=path not in index)
+            for path, pin in nodes.items()]
+    for (path, slug), pin in lines.items():
+        node = index.get(path)
+        reasons = node.reasons if node is not None and node.members else ()
+        slot = next((at for at, line in enumerate(reasons) if line.slug == slug), -1)
+        rows.append(_AcceptedPin(
+            path, node.title if node is not None else "", pin, slug=slug,
+            line=reasons[slot].text if slot >= 0 else "",
+            slot=slot if slot >= 0 else len(reasons), suspended=slot < 0))
+    groups: dict[str, list[_AcceptedPin]] = {}
+    for row in sorted(rows, key=lambda row: (row.path, row.slot, row.slug)):
+        groups.setdefault(row.path, []).append(row)
+    return sorted(groups.items(), key=lambda item: (
+        min(row.entry.created_at for row in item[1]), item[0]))
+
+
+@app.route('/handled', methods=['GET'])
+def handled() -> ResponseReturnValue:
+    """*Handled*, the index of every rule that stands (ADR-0135 decision 8), grouped
+    by job, oldest first — *In maintenance*: every pin, node and entry alike
+    (ADR-0014, ADR-0036), with what it holds, how long is left, why, and who is
+    behind it; and *Accepted*: every *seen* (ADR-0142), its node's own and its
+    lines', with what it accepted and what ends it. Read from the whole snapshot, so
+    it is depth- and filter-independent. Viewer-visible and bookmarkable; the band's
+    pill and its popover's "+N more" link here, and the rail's entry.
 
     This is the page that has room for **every pin**, which is what makes the
-    popover's one-row-per-node summary safe: an admin asking *what is silenced right
-    now?* gets a complete answer somewhere. Each pin is the block a node's own page
-    states it in, under its node's path, and an admin edits and clears it there
-    (ADR-0104 decision 6) — so the page gets what the block's editor prints.
+    popover's one-row-per-node summary safe: an admin asking *what is in
+    maintenance right now?* gets a complete answer somewhere. Each pin is the block
+    a node's own page states it in, under its node's path, and an admin edits and
+    clears it there (ADR-0104 decision 6) — so the page gets what the block's
+    editor prints.
 
     ``?node=<path>`` names the node a change came from: a save or a clear on this
     page comes back with it, and the page marks that node's section — the
@@ -4297,19 +5352,37 @@ def maintenance_overview() -> ResponseReturnValue:
 
     **A pin whose node is not reported is listed too** (ADR-0109 decision 4), under
     its path and marked as suspended: nothing else shows it, and its block is where
-    an admin edits or clears it."""
+    an admin edits or clears it.
+
+    **Every configured rule is listed too** (ADR-0137), in a section of its own, *By
+    a rule*, the longest standing first: each with what it changes the count of now,
+    or *changes nothing now* and what it missed (:func:`_by_rule`). Read-only: a
+    configured rule is changed in the configuration, and its block says where."""
     user = identity.signed_in()
     now = _now()
     whole = status_tree.snapshot("")
     node_pins, entry_pins, _ = _maintenance_view(whole, now)
+    pins = _maintenance_pins(node_pins, entry_pins, _suspended_pins(whole, now))
     return render_template('maintenance.html', username=user.name,
-                           firstname=user.firstname,
-                           pins=_maintenance_pins(node_pins, entry_pins,
-                                                  _suspended_pins(whole, now)),
+                           firstname=user.firstname, by_rule=_by_rule(whole),
+                           pins=pins, groups=_oldest_first(pins),
+                           accepted=_accepted_groups(whole),
                            focus=request.args.get('node', ''),
                            is_admin=user.admin,
+                           may_seen=user.may(SEEN),
                            maintenance_default=config.maintenance_default_expiry,
                            maintenance_timezone=config.timezone)
+
+
+@app.route('/maintenance', methods=['GET'])
+def maintenance_overview() -> ResponseReturnValue:
+    """The index's old address, which *Handled* took (ADR-0135 decision 8): it
+    answers with the new one and its query, so that a bookmark and a form drawn
+    before the change — whose way back names ``?node=`` here — still land. A pin's
+    writes went to a route per act, ``POST /pins/maintenance`` (ADR-0141 decision
+    4)."""
+    query = request.query_string.decode("utf-8", "replace")
+    return redirect(url_for('handled') + (f"?{query}" if query else ""))
 
 
 #: What a row of the Events page says caused it, in a chip beside its status, where
@@ -4321,11 +5394,41 @@ _CAUSE_CHIPS: Mapping[str, str] = {
     CAUSE_PIN_SET: "set",
     CAUSE_PIN_EDITED: "edited",
     CAUSE_PIN_ENDED: "maintenance ended",
-    CAUSE_LINE_PIN_SET: "line silenced",
+    CAUSE_LINE_PIN_SET: "line's pin set",
     CAUSE_LINE_PIN_ENDED: "line's maintenance ended",
     CAUSE_REMOVED: "removed",
     CAUSE_REACHED: "reached",
+    CAUSE_SEEN_SET: "seen",
+    CAUSE_SEEN_EDITED: "seen changed",
+    CAUSE_SEEN_ENDED: "seen ended",
+    CAUSE_LINE_SEEN_SET: "line seen",
+    CAUSE_LINE_SEEN_EDITED: "line's seen changed",
+    CAUSE_LINE_SEEN_ENDED: "line's seen ended",
 }
+
+#: Why an acknowledgment ended (ADR-0142), as its row's chip says it after the act:
+#: *seen ended · worse*.
+_ENDED_WORDS: Mapping[str, str] = {
+    ENDED_HAND: "by hand",
+    ENDED_CLOCK: "at its end",
+    ENDED_RECOVERY: "recovered",
+    ENDED_WORSENING: "worse",
+    ENDED_OCCURRENCE: "a new occurrence",
+    ENDED_GONE: "no longer reported",
+}
+
+
+def _cause_chip(event: Event) -> str:
+    """The chip a row of the Events page carries (:data:`_CAUSE_CHIPS`), and why an
+    acknowledgment ended, where the row is its end (ADR-0142) — empty for a row a
+    reading wrote."""
+    chip = _CAUSE_CHIPS.get(event.cause, "")
+    why = _ENDED_WORDS.get(event.ended, "")
+    return f"{chip} · {why}" if chip and why else chip
+
+
+app.jinja_env.globals["cause_chip"] = _cause_chip
+app.jinja_env.globals["ended_words"] = _ENDED_WORDS
 
 
 def _counted(count: int) -> str:
@@ -4357,7 +5460,11 @@ def _events_view(kept: Sequence[Event], window: _Window,
     """The Events page over ``kept``, the log newest first: the window as the Series
     view reads it, its ends filled from the log's own (ADR-0101 decision 4), an event
     in it when its time is, ends included; and the count and the empty table's
-    sentence as decision 5 words them. Every count is over the whole log kept."""
+    sentence as decision 5 words them. Every count is over the whole log kept that
+    the page lists: a row its node showed, or one a rule held back — not a reading
+    a floor on its node's lines raised, which its node showed as more and the log
+    keeps for the replay alone (ADR-0137 decision 11)."""
+    kept = tuple(event for event in kept if event.shown or event.suppressed_by)
     if not kept:
         return _EventsView((), "", "No events yet.", None, False)
     moments = [event.timestamp for event in kept]
@@ -4368,7 +5475,8 @@ def _events_view(kept: Sequence[Event], window: _Window,
         start = window.start or min(moments)
         end = window.end or max(moments)
         inside = [event for event in kept if start <= event.timestamp <= end]
-    shown = tuple(event for event in inside if wanted.matches(event))
+    shown = tuple(event for event in inside
+                  if wanted.matches(event, status_tree.tags_of))
     if wanted.narrows and inside:
         line = (f"{len(shown):,} of {_counted(len(inside))} "
                 + ("matches" if len(shown) == 1 else "match"))
@@ -4397,10 +5505,11 @@ def _events_view(kept: Sequence[Event], window: _Window,
 @app.route('/events')
 def events() -> ResponseReturnValue:
     """The transition log, newest first, narrowed by what its URL names (ADR-0101):
-    a node and everything beneath it, words in the reason, the status an event moved
-    to, whether a rule held it back, what wrote it — a reading, a pin, a removal
-    (ADR-0109 decision 5) — and the window the Series view reads. Nothing remembers
-    a filter: ``/events`` alone is always the whole log."""
+    a node and everything beneath it, a tag its node carries (ADR-0139 decision 7),
+    words in the reason, the status an event moved to, whether a rule held it back,
+    what wrote it — a reading, a pin, a removal (ADR-0109 decision 5) — and the window
+    the Series view reads. Nothing remembers a filter: ``/events`` alone is always the
+    whole log."""
     user = identity.signed_in()
     try:
         window = _window(request.args)
@@ -4417,7 +5526,9 @@ def events() -> ResponseReturnValue:
                            anything_set=shown.anything_set, wanted=wanted,
                            status_words=STATUS_WORDS, held_words=HELD_WORDS,
                            cause_words=CAUSE_WORDS, cause_chips=_CAUSE_CHIPS,
-                           window_args=dict(window.written))
+                           window_args=dict(window.written),
+                           tag_options=[(offered, status_tree.tag_vocabulary.line(
+                               offered)) for offered in status_tree.offered_tags])
 
 
 #: How ``/system/installed`` names a pair's unit, and each kind that has no unit.
@@ -4464,13 +5575,13 @@ class GradingRow:
 
 @dataclass(frozen=True)
 class TypeRow:
-    """One check type on ``/system``'s roster, with the checks that name it.
+    """One check type on ``/system/installed``'s roster, with the checks that name it.
 
     ``paths`` is the node path of every check configured with this type, in the
-    engine's own order — so it reads down the page in the same order as the check
-    table above it — and one entry per *check*, not per node: two checks may sit on
-    one host node (ADR-0015 allows it for disjoint owned subtrees), and a list that
-    deduplicated them would stop matching the count it is there to substantiate.
+    engine's own order — the order *Running*'s schedule lists the checks in — and
+    one entry per *check*, not per node: two checks may sit on one host node
+    (ADR-0015 allows it for disjoint owned subtrees), and a list that deduplicated
+    them would stop matching the count it is there to substantiate.
     """
     origin: TypeOrigin
     paths: tuple[str, ...]
@@ -4545,8 +5656,8 @@ def _type_roster(
     count is the one thing on this page that cannot be checked from this page. Two
     of what? — and the configuration naming a type in two different check files,
     each rendering in a different branch of the tree, is the ordinary case, not a
-    defect. Everything else on `/system` names its subjects; this row now can too,
-    and the paths were in hand all along (`info.checks`). Node paths, not check
+    defect. Everything else on `/system/installed` names its subjects; this row can
+    too, and the paths were in hand all along (`info.checks`). Node paths, not check
     names, because the path is what the reader can go and look at.
 
     Folded rather than dropped, because the roster is also the only place a freshly
@@ -4579,7 +5690,8 @@ def _type_roster(
 
 @dataclass(frozen=True)
 class PackageRow:
-    """One package on ``/system``'s inventory, with everything it registered."""
+    """One package on ``/system/installed``'s inventory, with everything it
+    registered."""
     origin: PackageOrigin
     registers: tuple[str, ...]
 
@@ -4834,14 +5946,22 @@ def _copy_origin(branch: str = "", reason: str = "") -> Origin:
 
     Absolute, as a link back out of a ticket has to be, and so the address this
     request came by: what a proxy or a tunnel was asked for, where one stands in
-    front. The jira package's link back is built the same way."""
+    front. The jira package's link back is built the same way. A node's handbook is
+    addressed from the same base, for the *Handbook* line and for the links a text
+    writes in the short form (ADR-0133 decisions 3 and 4)."""
     if not branch:
         address = url_for('status', _external=True)
     elif reason:
         address = url_for('status', branch=branch, reason=reason, _external=True)
     else:
         address = url_for('status', branch=branch, _external=True)
-    return Origin(address, _now())
+    return Origin(address, _now(), handbooks=_handbook_url)
+
+
+def _handbook_url(path: str) -> str:
+    """The absolute address of the handbook of the node at ``path``, as this request
+    came by: what a Copy document and the API say of it (ADR-0133 decision 3)."""
+    return _handbook_address(path, external=True)
 
 
 def _declares_nothing(node: StatusSnapshot) -> bool:
@@ -4855,14 +5975,29 @@ def _declares_nothing(node: StatusSnapshot) -> bool:
 def _node_markdown(branch: str, node: StatusSnapshot, style: TimeStyle) -> str:
     """A node's Copy document, at `/copy/<branch>`, its period bounded as its page
     bounds it. It names the node's own page as where it is from, and what it lists
-    beneath a branch is dated by the tree's periods (ADR-0115 decisions 1 and 2)."""
+    beneath a branch is dated by the tree's periods (ADR-0115 decisions 1 and 2); it
+    carries the node's details as its *About* card shows them (ADR-0133 decision
+    6), and its newest note whole, with how many more its Notes view lists
+    (ADR-0140)."""
     origin = _copy_origin(branch)
     since = _since_of(branch, node)
+    # the node's About card's table, its details given down among them (ADR-0133
+    # decision 6), which the document carries as its block
+    details = status_tree.details(node.path)
+    # and the tags it carries, each with what it means (ADR-0139 decision 4)
+    vocabulary = status_tree.tag_vocabulary
+    tags = tuple((tag, vocabulary.line(tag)) for tag in node.tags)
+    written = notes_book.of(node.path)
+    notes = (NotesSaid(written[0], len(written) - 1,
+                       url_for('notes', path=branch, _external=True))
+             if written else None)
     if since is None:
-        return format_node_markdown(node, style, origin=origin, periods=_period_of)
+        return format_node_markdown(node, style, origin=origin, periods=_period_of,
+                                    details=details, tags=tags, notes=notes)
     return format_node_markdown(node, style, since.at, before=since.before,
                                 began=since.began, origin=origin,
-                                periods=_period_of)
+                                periods=_period_of, details=details, tags=tags,
+                                notes=notes)
 
 
 @dataclass(frozen=True)
@@ -4896,19 +6031,24 @@ def _began(period: StatusPeriod) -> str:
 
     A period of maintenance says nothing more, however it began. One that follows
     maintenance began where that ended — the node's pin cleared or expired, its
-    lines' pins where every line was silenced, or its check's own report. And one a
-    line's pin began, set or ended, says which: a silenced line turns a node green,
-    and that is no recovery. A period stated by a bound says nothing of how it
-    began: the tree did not see it begin, and such a period carries neither what
-    the node showed before nor a cause."""
+    lines' pins where every line was pinned, or its check's own report. And one a
+    line's pin began, set or ended, says which: a pinned line turns a node green,
+    and that is no recovery — nor is a line a person has seen, set or ended
+    (ADR-0142). A period stated by a bound says nothing of how it began: the tree
+    did not see it begin, and such a period carries neither what the node showed
+    before nor a cause."""
     if period.code is StatusCode.MAINTENANCE:
         return ""
     if period.previous is StatusCode.MAINTENANCE:
         return "when its maintenance ended"
     if period.cause == CAUSE_LINE_PIN_SET:
-        return "when a line was silenced"
+        return "when a line's pin was set"
     if period.cause == CAUSE_LINE_PIN_ENDED:
         return "when a line's maintenance ended"
+    if period.cause == CAUSE_LINE_SEEN_SET:
+        return "when a line was marked seen"
+    if period.cause == CAUSE_LINE_SEEN_ENDED:
+        return "when a line was no longer seen"
     return ""
 
 
@@ -4941,6 +6081,33 @@ def _period_of(node: StatusSnapshot) -> _Since | None:
 
 
 @dataclass(frozen=True)
+class _Shows:
+    """The period of what a node above others shows, as its Time card's first line
+    states it (ADR-0132 decision 5): ``status``, what it shows, and since when — the
+    instant ``at``, a bound where ``before`` — or no instant where the period the tree
+    keeps is not of what the node shows (decision 3), which the snapshot has decided
+    (:attr:`StatusSnapshot.period`)."""
+    status: StatusCode
+    at: datetime | None = None
+    before: bool = False
+
+
+def _shows(node: StatusSnapshot) -> _Shows | None:
+    """The period of what ``node`` shows, where the Time card states it on a line of
+    its own (ADR-0132 decision 5): a node whose status counts the nodes beneath it,
+    the root of a branch's page and a container that declares nothing among them —
+    or ``None``: a leaf, whose one period is its own, and a node whose own status
+    cancels what is beneath it, a pin or its check's word, whose own period is what
+    it shows. Taken from the node before a filter takes its children away, as the
+    node's own period is."""
+    if not node.counts_beneath:
+        return None
+    if node.period is None:
+        return _Shows(node.code)
+    return _Shows(node.code, node.period.began.at, node.period.began.before)
+
+
+@dataclass(frozen=True)
 class _MadeBy:
     """The node beneath a branch that makes what the branch shows, as the branch's
     Time card names it (ADR-0123 decision 3): ``path``, its own, which its name
@@ -4956,7 +6123,8 @@ class _MadeBy:
     more: int = 0
 
 
-def _made_by(node: StatusSnapshot) -> _MadeBy | None:
+def _made_by(node: StatusSnapshot,
+             shows: _Shows | None = None) -> _MadeBy | None:
     """The node beneath ``node`` that makes what it shows (ADR-0123 decision 3), or
     ``None``: where that is the node's own, where it is a status no one node makes
     — *ok*, *maintenance* — and where no node beneath counts it for itself, as one
@@ -4972,27 +6140,38 @@ def _made_by(node: StatusSnapshot) -> _MadeBy | None:
     because its own reading went stale, from when it went stale: its last
     observation and its tolerance after it, since its period is of something else.
     Taken from the node before a filter takes its children away, as the period
-    is."""
+    is.
+
+    **Its own *since* only where it began after the branch's** (ADR-0132 decision
+    5): where ``shows``, the branch's period, began no later than the named node's,
+    that node made the whole period and the card says the branch's instant once.
+    Where the branch states no instant, the named node keeps its own.
+
+    The walk is a loop over a stack in the order the page draws, and no closure that
+    calls itself, which would hold all it saw for the cycle collector at every page
+    (ADR-0132's consequence on cost)."""
     shown = node.code
     if not node.derived or shown not in (StatusCode.WARN, StatusCode.ERROR):
         return None
     makers: list[tuple[datetime | None, _MadeBy]] = []
-
-    def walk(parent: StatusSnapshot) -> None:
-        for child in parent.children:
-            if child.counted is not shown:
-                continue
-            if child.own_counted is shown:
-                makers.append(_maker(node, child))
-            walk(child)
-
-    walk(node)
+    stack = list(reversed(node.children))
+    while stack:
+        child = stack.pop()
+        if child.counted is not shown:
+            continue
+        if child.own_counted is shown:
+            makers.append(_maker(node, child))
+        stack.extend(reversed(child.children))
     if not makers:
         return None
     longest = min(((at, index) for index, (at, _) in enumerate(makers)
                    if at is not None), default=None)
     _, first = makers[longest[1] if longest is not None else 0]
-    return replace(first, more=len(makers) - 1)
+    first = replace(first, more=len(makers) - 1)
+    if (shows is not None and shows.at is not None and first.since is not None
+            and first.since.at <= shows.at):
+        first = replace(first, since=None)
+    return first
 
 
 def _maker(node: StatusSnapshot,
@@ -5012,6 +6191,104 @@ def _maker(node: StatusSnapshot,
             _MadeBy(child.path, name, since=since))
 
 
+@dataclass(frozen=True)
+class _Counting:
+    """A part beneath a branch that fails and counts, as the branch's *why* card
+    lists it (ADR-0135 decision 7): its path and its name beneath the branch, the
+    status it counts as, and since when — its period, or, where it counts only
+    because its reading went stale, when it was last observed. ``own`` marks the
+    branch's own reading, which counts for it as a part beneath does."""
+    path: str
+    name: str
+    status: StatusCode
+    since: _Since | None = None
+    observed: datetime | None = None
+    own: bool = False
+
+
+#: How many rows of each of a branch's *why* lists stand open (ADR-0135 decision 7):
+#: the rest fold beneath *N more*, as History folds its earlier periods, so that an
+#: outage's branch does not grow its page by a screen of what fails beneath it.
+WHY_OPEN = 5
+
+
+@dataclass(frozen=True)
+class _Why:
+    """Why a branch has its color (ADR-0135 decision 7): the card's title, its
+    question; what counts, errors first and the longest first among each; and what
+    is handled beneath it, rule by rule (:func:`tree.rules_beneath`). Each list
+    shows its first :data:`WHY_OPEN` rows, ``open``."""
+    title: str
+    counting: tuple[_Counting, ...]
+    handled: tuple[HandledRule, ...]
+    open: ClassVar[int] = WHY_OPEN
+
+    @property
+    def by_job(self) -> tuple[tuple[str, tuple[HandledRule, ...]], ...]:
+        """What is handled beneath, by job, as the card lists it under each job's
+        mark: in maintenance, then by a rule (ADR-0137) — each job where it holds
+        something, its rows in the tree's order."""
+        jobs: dict[str, list[HandledRule]] = {}
+        for row in self.handled:
+            jobs.setdefault(row.job, []).append(row)
+        return tuple((job, tuple(jobs[job])) for job in ("maintenance", "aggregation")
+                     if job in jobs)
+
+
+def _failing(code: StatusCode | None) -> StatusCode | None:
+    return code if code in (StatusCode.WARN, StatusCode.ERROR) else None
+
+
+def _why(node: StatusSnapshot) -> _Why | None:
+    """A branch's *why* (ADR-0135 decision 7), or ``None``: a card of its own on its
+    Status tab, right after Time, wherever the branch fails or holds something
+    handled, and nowhere else — a leaf's lines are on its page, and a node in
+    maintenance says why in its block.
+
+    **What counts** is each part whose failure reaches the branch: the branch's own
+    reading where it fails for itself, and each node beneath that counts a failure
+    for itself and passes one up through every node between — so what a pin, a
+    shield or a damping counter holds back, and all beneath it, is not here
+    (:attr:`StatusSnapshot.counted`). **What is handled** is every rule that stands
+    beneath the branch, a node's pin and a line's, whatever stands above it, with
+    what the part reads under it where that is a failure (:func:`rules_beneath`,
+    which the Copy document lists too). Taken from the node before a filter takes
+    its children away, as the period is."""
+    if not node.children:
+        return None
+    shown = node.code
+    if shown not in (StatusCode.ERROR, StatusCode.WARN, StatusCode.OK):
+        return None
+    counting: list[tuple[datetime | None, int, _Counting]] = []
+    if _failing(node.own_counted) is not None:
+        since = _since_of(node.path.lstrip("/"), node)
+        counting.append((since.at if since is not None else None, 0,
+                         _Counting(node.path, node.name, node.own_counted,
+                                   since=since, own=True)))
+    handled = rules_beneath(node)
+    order = 0
+    # Each part with whether a failure of its own would reach the branch: it does
+    # where every node between passes one up.
+    stack = [(child, True) for child in reversed(node.children)]
+    while stack:
+        child, reaches = stack.pop()
+        order += 1
+        passes = reaches and _failing(child.counted) is not None
+        if passes and _failing(child.own_counted) is not None:
+            at, made = _maker(node, child)
+            counting.append((at, order, _Counting(
+                child.path, made.name, child.own_counted, since=made.since,
+                observed=made.observed)))
+        stack.extend((beneath, passes) for beneath in reversed(child.children))
+    if shown is StatusCode.OK and not handled:
+        return None
+    ranked = sorted(counting, key=lambda item: (
+        0 if item[2].status is StatusCode.ERROR else 1,
+        item[0] is None, item[0] or datetime.min.replace(tzinfo=UTC), item[1]))
+    return _Why(f"Why {shown.name.lower()}", tuple(part for _, _, part in ranked),
+                handled)
+
+
 @app.route('/links')
 def links() -> ResponseReturnValue:
     """The shared toolbox: the deployment's curated links (ADR-0030).
@@ -5019,12 +6296,6 @@ def links() -> ResponseReturnValue:
     The configuration is re-read only when the file actually changed, so an
     operator fixing a URL sees it on the next reload and the process keeps the
     history it has in memory.
-
-    Opening the page is also what **triggers** a reachability pass, and only
-    when the newest answer is older than the configured interval (ADR-0030 §9).
-    The call starts a daemon thread and returns, so the render never
-    waits on the network: the page shows what is already in memory, each verdict
-    with its own age, and the answers this open triggers land on the next.
 
     ``icon_names`` is the roster the page's *Icon names* fold shows, with links
     or without: every name a registered pack defines, so whoever writes the file
@@ -5034,7 +6305,6 @@ def links() -> ResponseReturnValue:
     """
     user = identity.signed_in()
     links_config = current_links()
-    link_probe.refresh_if_due(links_config)
     # The page allows the hosts its icons load from — the viewer's browser fetches
     # a remote mark and a favicon itself, and the file names them (ADR-0030).
     g.csp_page_policy = csp_policy.adding(
@@ -5043,30 +6313,7 @@ def links() -> ResponseReturnValue:
                            firstname=user.firstname,
                            links_config=links_config,
                            links_file=_links_file_hint(),
-                           probe=link_probe.page_view(links_config),
                            icon_names=known_names())
-
-
-@app.route('/links/check', methods=['POST'])
-def links_check() -> ResponseReturnValue:
-    """Probe the links page's targets **now**, then redirect back to it.
-
-    The shape `/preferences` and `/maintenance` already use, and for the same
-    reasons: a `GET` would let a reload, a prefetch or a crawler spend outbound
-    requests, and the redirect is what stops a refresh from firing a second pass.
-    It is a button in a form, so it needs no JavaScript.
-
-    Unlike an open, this **waits** — under a deadline, joining the pass already
-    running if there is one (ADR-0030). Whatever has not answered by
-    then keeps its previous verdict and age while the pass finishes behind the
-    response.
-
-    Open to **every logged-in viewer**, not only an admin: whoever maintains
-    `links.yaml` is not necessarily one, and this is the control that person
-    needs most. It is the same call the problems block above it already makes.
-    """
-    link_probe.refresh_now(current_links())
-    return redirect(_safe_next(request.form.get('next')))
 
 
 def _links_file_hint() -> str:
@@ -5204,6 +6451,29 @@ def about() -> ResponseReturnValue:
                            version=__version__,
                            rings=watch_lines.rings(),
                            says=watch_lines.says())
+
+
+#: The account of using the wall (ADR-0136): one Markdown file the package ships beside
+#: its code, so that the repository reads it as the page does.
+HELP_ACCOUNT = ("help", "using-the-wall.md")
+
+
+@cache
+def help_account() -> str:
+    """The account of using the wall, read once from the package (ADR-0136): it changes
+    with a release, never at runtime."""
+    return files("little_sister").joinpath(*HELP_ACCOUNT).read_text(encoding="utf-8")
+
+
+@app.route('/help')
+def help_page() -> ResponseReturnValue:
+    """How the wall is used (ADR-0136): what a viewer sees on it and what a click does,
+    each group of the settings menu among them — the account the package ships, drawn
+    as a handbook is, its headings anchored as GitHub anchors them, so that `/help#the-
+    band` opens at the band. The settings menu's foot links it. Read, not polled."""
+    user = identity.signed_in()
+    return render_template('help.html', username=user.name,
+                           firstname=user.firstname, account=help_account())
 
 
 @app.route('/favicon.ico')

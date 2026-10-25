@@ -120,9 +120,11 @@ def _rows(body: str) -> list[list[str]]:
 
 
 def _periods(body: str) -> list[list[str]]:
-    """The periods table's rows, cell by cell."""
-    table = re.search(r"<table\b[^>]*>\s*<thead>\s*<tr><th>Status</th>(.*?)</table>",
-                      body, re.S)
+    """The rows of the table of the node's own periods, cell by cell: the one table
+    of a node with nothing beneath it, the second of a node above others, beneath
+    the periods of what it shows (ADR-0132 decision 6)."""
+    table = re.search(r'<table class="[^"]*\bls-history__own\b[^"]*">\s*<thead>'
+                      r"\s*<tr><th>Status</th>(.*?)</table>", body, re.S)
     assert table is not None, "no periods table"
     return [[_words(cell) for cell in re.findall(r"<td[^>]*>(.*?)</td>", row, re.S)]
             for row in re.findall(r"<tr[^>]*>(.*?)</tr>",

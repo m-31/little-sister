@@ -1,7 +1,7 @@
 # ADR-0127 — The wall is a tree: a node is closed or open, and a click changes which
 
 - **Status:** Accepted
-- **Date:** 2026-10-11
+- **Date:** 2026-10-25 (accepted 2026-10-11)
 - **Related:** [ADR-0056](0056-stable-useful-dashboard-flow.md) (dense mode, its
   `branch_cap` and the band's depth and chips controls, which this retires; the flow
   model, which prices the first look),
@@ -10,22 +10,33 @@
   exception a single child claims), [ADR-0019](0019-inspection-popover.md) (the
   inspection card: when it opens, what it says, and that a refresh keeps it),
   [ADR-0029](0029-per-user-presentation-preferences.md) (the presentation cookie, which
-  gains the chip runs' look; what a viewer opens stays out of it),
+  gains the looks of the chip runs, the head's buttons and the failure budget; what a
+  viewer opens stays out of it),
   [ADR-0034](0034-template-slots-for-dependent-packages.md) (decision 11, a node's
   actions, now in the head's row), [ADR-0038](0038-declarative-action-list.md) and
   [ADR-0076](0076-the-instance-node-is-a-branch.md) (the actions a head draws, with an
   icon and without), [ADR-0044](0044-run-facts-on-the-node.md) (decision 8, a page's own
   facts, which stand after its children as it decided),
-  [ADR-0012](0012-node-metadata.md) (a node's `about`, shown open on its page, and
-  decision 4's startup pass), [ADR-0104](0104-a-pin-is-one-block-on-what-it-silences.md)
+  [ADR-0012](0012-node-metadata.md) (a node's `about`, which its *About* card shows,
+  and decision 4's startup pass), [ADR-0104](0104-a-pin-is-one-block-on-what-it-silences.md)
   (a pin's block and its setter), [ADR-0041](0041-maintenance-is-a-contribution-rule.md)
-  (a pin silences and keeps the colors beneath it), [ADR-0017](0017-node-title.md) and
+  (a pin holds what is beneath it and keeps its colors), [ADR-0017](0017-node-title.md) and
   [ADR-0061](0061-decoration-is-not-a-label.md) (where a title is drawn; a chip no
   longer draws one), [ADR-0055](0055-sibling-order.md) (a level's declared order),
   [ADR-0114](0114-a-curve-seen-small-and-the-series-tabs-count.md) (decision 3, the
   curves a node's page draws, in full as before),
   [ADR-0005](0005-dashboard-freshness-and-self-monitoring.md) (the ten-second refresh),
-  [ADR-0080](0080-the-envelope-is-the-snapshot-published.md) (the envelope, untouched)
+  [ADR-0080](0080-the-envelope-is-the-snapshot-published.md) (the envelope, untouched),
+  [ADR-0135](0135-a-handled-part-keeps-its-true-color-and-every-surface-says-by-what.md) (decision 6, what a closed
+  node says of what is handled beneath it, which decision 2 takes),
+  [ADR-0133](0133-a-node-says-what-it-is-in-a-card-and-at-length-in-a-handbook.md)
+  (decision 1, the *About* card a node's `about` stands in, and its handbook),
+  [ADR-0139](0139-a-node-carries-every-tag-written-for-it-or-above-it.md) (decision 5, a
+  wall filtered by a tag),
+  [ADR-0142](0142-a-failure-marked-seen-counts-as-ok-above-until-it-changes.md)
+  (decision 5, the ringed check after ‖),
+  [ADR-0138](0138-a-viewer-may-pack-a-levels-boxes.md) (how a level's boxes stand, a
+  look a browser keeps)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -67,9 +78,14 @@ closes it again. It holds at every level, down to a leaf, whose lines are what o
 it shows, and an open node is a box at every level, its border and its tint saying where
 it begins.
 
-A closed node at the top of the wall stays a card in its place, closed to one line, its
-head and its counts, so a click never moves another card sideways, and closing every
-card turns the wall into a one-line overview laid out as the open one. A box keeps
+A closed node at the top of the wall stays a card in its place, closed to its head and
+its counts — one line where its track holds one — so a click never moves another card
+sideways, and closing every card turns the wall into an overview laid out as the open
+one. It keeps the track the planner gave it open (ADR-0128 decision 6), and where that
+track is too narrow for its name, its counts and its state side by side, as under *Close
+all* it can be, a closed card's head wraps: the name whole on its first line, the counts
+beside it where they fit, and the state beneath, at the right. Where the line holds them
+all nothing moves, the title taking what is left. A box keeps
 today's colors: a failing leaf is vivid, and a branch takes the pale tint of what rolls
 up into it. A closed node that fails is a vivid chip, red for an error and yellow for a
 warning, a branch's as a leaf's, so it stands out on the pale tint of the box it sits
@@ -93,12 +109,15 @@ their ✓, where counting the leaves alone drew it red over nothing red. Where e
 a chip counts shares one state, it shows one total and no glyph, muted unless the chip
 fails; where states mix, each state's glyph and count — *● 2 ▲ 1 ‖ 1 ✓ 119*. The counts
 explain the chip's color and add up the same way at every level. A leaf's chip counts
-its lines the same way, and a leaf of one line shows no count: its chip is that line. A
-‖ stands on a chip where a rule stands beneath it. A stale leaf's own chip is drawn as
-the warning it counts as. The counts are said in words as the chip's tooltip and in its
-accessible name — *2 errors, 1 warning, 119 ok* — a damped count with how near it is to
-escalating and a running line among them, and a bare ‖ says that a rule stands beneath;
-there is no legend, and every open head pairs its cue with its word. A chip counts what
+its lines the same way, and a leaf of one line shows no count: its chip is that line.
+Beside the counts a ringed diamond and a number say how many parts beneath a rule
+handles that the counts do not show as such — a pinned branch, the chip's own node among
+them, and a line's pin where its node is not ‖ among the counts (ADR-0135 decision 6). A
+stale leaf's own chip is drawn as the warning it counts as. The counts are said in words
+as the chip's tooltip and in its accessible name — *2 errors, 1 warning, 119 ok* — a
+damped count with how near it is to escalating and a running line among them, and the
+words end with what each job handles: *1 ok, 1 handled: 1 line in maintenance*; there is
+no legend, and every open head pairs its cue with its word. A chip counts what
 is beneath it before *hide ok* and *hide idle* drop what they hide, so a filter changes
 what the page shows and never what a chip says.
 
@@ -111,51 +130,85 @@ once it is open, and in the inspection card (ADR-0019).
 
 ### 3. An open node's head carries its page, its two folds and its rule, in its own row
 
-In this order: ↗, the node's page; its healthy fold (decision 4), a funnel, pressed
-while the node's healthy ones are folded — pressed is the compact look for both buttons
-— with its count in its tooltip and accessible name, and not ✓, which stays the cue of
-an ok state and the ok count; ▤, its children as chips (decision 5); for an admin, ‖,
-which opens a pin's editor in the node's box (ADR-0104) — the page's one editor, kept
-outside the grid the refresh swaps and cloned where it is asked for, never one drawn
-into every head; and before them all, the node's actions, which a deployment's
-`node.actions` slot fills (ADR-0034). The head's own are small square icons that hold
-its upper right corner and look the same on every head, after its state word where the
-state shares their row, on every open head but the kiosk's and always shown, drawn from
-the ink of the surface they stand on, as the rule buttons and action chips are, so that
-they hold in every theme (ADR-0028): at rest an edge of the ink at 75 % around a glyph
-in the full ink, the glyph what says *button* and the edge its square; pressed, the full
-ink as the edge and a wash of it; ▤ half washed while some of the node's children are
-open and some closed; and a dot of the ink on a button the viewer set differently from
-the configured look. A glyph is drawn at 16 of its square's 24 pixels, so that the eye
-finds the symbol, not the margin. Under a coarse pointer the squares stand 8 pixels
-apart, where a mouse keeps 3, each one's tap area reaching to the middle of the gap, 32
-pixels wide and never over the state word; the row loses no height. The fold stands wherever the node
-has a healthy child or line, whether others stand beside them or not, ▤ where it has
-children, and ↗ on every open head but that of a page's own node. The row never wraps:
-the title gives way first, then the node's actions fold behind ⋯ (below), and only then
-the name. The kiosk draws none of them, as it draws no pin control and no slot: ↗ would
-take it to a node's page, a leaf's not refreshed and a branch's holding the kiosk there,
-and the folds have nobody to set them.
+In this order: ↗, the node's page, the first of the head's own buttons, so that on every
+head the button that opens the node's page is the first after its name; its healthy
+fold (decision 4), a funnel, pressed while the node's healthy ones are folded — pressed
+is the compact look for both buttons — with its count in its tooltip and accessible
+name, and not ✓, which stays the cue of an ok state and the ok count; ▤, its children as
+chips (decision 5); for an admin, ‖, which opens a pin's editor in the node's box
+(ADR-0104) — the page's one editor, kept outside the grid the refresh swaps and cloned
+where it is asked for, never one drawn into every head — and after it, where something
+at or beneath the node fails and may be marked seen, the ringed check that marks it
+(ADR-0142 decision 5); and after the head's own, the node's actions, which a
+deployment's `node.actions` slot fills (ADR-0034), and ⋯. The head's own are small
+square icons that look the same on every head, on every open head but the kiosk's,
+drawn from the ink of the surface they stand on, as the rule buttons and action chips
+are, so that they hold in every theme (ADR-0028): at rest an edge of the ink at 75 %
+around a glyph in the full ink, the glyph what says *button* and the edge its square;
+pressed, the full ink as the edge and a wash of it; ▤ half washed while some of the
+node's children are open and some closed; and a dot of the ink on a button the viewer
+set differently from the configured look. A glyph is drawn at 16 of its square's 24
+pixels, so that the eye finds the symbol, not the margin. Under a coarse pointer the
+squares stand 8 pixels apart, where a mouse keeps 3, each one's tap area reaching to the
+middle of the gap, 32 pixels wide and never over the state word; the row loses no
+height. The fold stands wherever the node has a healthy child or line, whether others
+stand beside them or not, ▤ where it has children, and ↗ on every open head but that of
+a page's own node. The kiosk draws none of them, as it draws no pin control and no slot:
+↗ would take it to a node's page, a leaf's not refreshed and a branch's holding the
+kiosk there, and the folds have nobody to set them.
 
-A node's actions stand before the head's own, and before its state where the state
-shares the row, shown always. An action that names an icon (ADR-0038) is a square of the
-same shape, the icon alone, its label its tooltip and accessible name; one that names
-none, as the self-report buttons do not (ADR-0076), keeps its label as a small chip,
-since a letter in a square would be a guess on a touch screen. The title gives way to
-them, and actions that do not fit even with the title gone fold, from the last, behind
-a ⋯ at the end of their rail, before the state and the icons, whose menu lists them by
+Where an open head keeps its buttons is a look, `head_buttons` (ADR-0029), so that the
+pointer need not travel to the row's far end for a node's page. In every look they
+stand in the order above, and the state is no button: it stands in the row outside
+them, after the title, so where the buttons end the row the state precedes them.
+`pointer`, the library's: they stand right after the name, the title and the state after
+them, and show while the pointer is on the head, the keyboard's focus — not a click's —
+is in it or its menu is open. Where a pointer can rest on a head they take no room in
+the row: the title stands right after the name, and the buttons, shown, lie over it on
+the box's own fill, covering what they cover, so that nothing moves when they show; what
+the row has no room for still folds behind ⋯, the row read as with the buttons in it,
+and where even so the name gives way, they keep their room and the name breaks beside
+it. A touch screen, which has no pointer to rest on a head, shows them always, in their
+room.
+`pointer-name`: there too, but the pointer's click on an open head's name opens the
+node's page — the name underlined under the pointer, and the row's own answer kept off
+it — while ↗ is the keyboard's alone, out of sight until it has the focus, since Enter
+and Space on the name still open and close the node, as the rest of the head does under
+the pointer. `line`: they stand on a line of their own beneath the row, from under the
+name, and the row wraps its state beneath where it has no room for it, as a closed
+card's does, so nothing folds behind ⋯; under `card_status_line: below` a card's state
+stands at the right of that line. `name`: they stand at the row's end, the name opening
+the node's page as under `pointer-name`. Under every look but `line` the row never
+wraps: the title gives way first, then the node's actions fold behind ⋯ (below), and
+only then the name.
+
+A node's actions stand after the head's own buttons, with them. An action that names an
+icon (ADR-0038) is a square of the same shape, the icon alone, its label its tooltip and
+accessible name; one that names none, as the self-report buttons do not (ADR-0076),
+keeps its label as a small chip, since a letter in a square would be a guess on a touch
+screen. The title gives way to them, and actions that do not fit even with the title
+gone fold, from the last, behind ⋯ at the end of the buttons, whose menu lists them by
 their labels, so that no action cuts the name and none moves to a line beneath; nothing
-is laid over the title, so on a phone nothing covers the name. ⋯ never holds one action
-alone where the state's own line beneath keeps it in the row: a menu of one item puts
-the action behind an unlabeled button and a second click. Under `card_status_line:
-below` the icons and actions stay on the first line with the name and the state alone
-takes the standing line; in the default the state drops to a line of its own only where
-the name would otherwise be cut or a lone action fold. A name breaks where its words meet,
-after an underscore, a dot or a hyphen, and inside a word only where one is longer than
-its line. Where the name breaks onto a second line
-anyway, the state stands on that line, beneath the icons, rather than on a third of its
-own — unless it would touch the name's words or the icons there. A chip carries none of
-them; it is opened first.
+but the buttons while they show is laid over the title, so on a phone, where they keep
+their room, nothing covers the name. ⋯ never holds one action alone where the state's
+own line beneath keeps it in the row: a menu of one item puts the action behind an
+unlabeled button and a second click. Under `card_status_line: below` the buttons stay on
+the first line with the name, except under `line`, and the state alone takes the
+standing line; in the default the state drops to a line of its own only where the name would
+otherwise be cut or a lone action fold. A name breaks where its words meet, after an
+underscore, a dot or a hyphen, and inside a word only where one is longer than its line.
+Where the name breaks onto a second line anyway, the state stands on that line, at the
+row's end, rather than on a third of its own — unless it would touch the name's words or
+the buttons there. A chip carries none of them; it is opened first.
+
+A state wider than the line it has to itself breaks between its parts — the stale mark,
+the pin's pip, the time, the cue with the word, and the reading beside them —
+right-aligned, the reading beside the word first and then the time from the word, so
+that a failure held back, *01:08 → 01:23 error · 1 of 2 to escalate*, stays in its box
+in a narrow column; a part alone wider than the line breaks at its own spaces, and the
+head makes room for every line the state takes. A closed card's state and one on the
+`line` look's row do the same in their own lines. In the row it keeps its whole width,
+and a state that fits its line reads whole.
 
 ### 4. The healthy fold folds what counts ok for itself
 
@@ -198,6 +251,15 @@ card grows by at most three paths, each ending in a reason block the line budget
 — and a viewer's click wins over it both ways, as over every default, a close holding
 for its node's incident (decision 9).
 
+Whether the budget opens anything is a look, `failures` (ADR-0029): `open`, the
+library's, where it opens a failure's way as above, or `chips`, where it opens nothing —
+every failure stays the red chip its look drew and the wall keeps its size, what a run
+names and a box's own lines coming as they come — a kiosk's wish above all, and
+switchable on every layout. A switch set once is forgotten until the one failure a
+first glance should show stays shut, so the line beneath its heading in the settings
+menu says that the default is the one to keep, a kiosk's too. A deployment defaults it
+in `settings.yaml`, and *Close all* turns the budget off for the tab whatever the look.
+
 ### 6. The folds replace `branch_cap`; `reason_cap` stays
 
 Chips and the healthy fold are the folds. `branch_cap` and its *+N more* go with dense
@@ -207,7 +269,16 @@ healthy ones folded, and a click that asks to open everything opens everything.
 lines first — errors, then warnings, then the rest, each in its check's order — so the
 reason for its colour is never what the budget clips; a pinned line stays among the
 rest. Beneath the lines, while they overflow the budget, *⌄ all N* shows them all, N
-their total, and *⌃ less* folds them again; the head keeps no seat for it. The budget
+their total, and *⌃ less* folds them again; the head keeps no seat for it. The lines it
+opens stand no taller than about half a window, or than the box's budget where a
+deployment's is taller, and scroll inside the box beyond it: the budget holds any line
+on the wall, clipping by height, and only a viewer's click would stand a box past every
+screen — a wiz band of 148 lines, opened whole, would stand some thousand wrapped lines
+tall in a 330-pixel column. While its lines scroll the block is a region the keyboard
+reaches and a screen reader names, *All N lines of* its node, and it stands where its
+viewer left it through the swap, as a wide table does; nothing holds the wheel at either
+end, so a page scrolled past it goes on. *⌃ less* folds it to its first lines, the
+closed box is as it was, and a node's own page lists every line. The budget
 clamps every box below a page's own node, the
 cards of a node's page as the wall's, and each shows its failing lines first; only the
 page's own node — its own lines in its head, a leaf's own page — and the Copy documents
@@ -236,6 +307,14 @@ the count of what the viewer set in the tab, the nodes its map holds and a `dept
 a click on it drops what it counts: *As configured · 3* resets, and *Close all · 2*
 closes everything in one click.
 
+A wall filtered by a tag, `?tag=production` (ADR-0139 decision 5), draws each topmost
+node that carries the tag as a card of its own, in the tree's order, the path above it
+before its name, and nothing above it; a node's page filters what is beneath it, the
+node in its frame. *hide ok* and *hide idle* apply within it, and a chip counts what is
+beneath it unfiltered. The band offers one tag at a time beside them, and a line above
+the cards names the tag and says which parts the filter hides that fail. The filter is
+the page's address and never a cookie.
+
 ### 8. A node's page is the same tree, framed, its facts after it
 
 ↗ opens `/status/<path>`: the same tree, rooted at that node. The node is always open
@@ -252,12 +331,15 @@ card open, as before. The page is read from the top — the head says what the n
 the children why — and the detail follows whole, where a long report above the children
 would push away what the reader came for, and folded it was a click on every page.
 
-The node's `about` (ADR-0012) is shown open in the band, beneath its name and title, on
-every view of the node, where it was folded behind a line, so that what a node is needs
-no click. It is the short account of the node, and the startup consistency pass notes
-one past about 400 characters. What a team writes at length about a node — where it
-stands, who answers for it, its runbook, its dashboards — is to be a field of its own on
-a tab of the page, a decision of its own.
+The node's `about` (ADR-0012) stands in a card of its own, *About*, on its Status tab
+alone (ADR-0133 decision 1): beside the node's facts, to the right of *Time* where the
+page is wide enough, the facts keeping their measure, and before *Configuration* at
+every width where it does not fit there, a leaf's page widening from 820 pixels to about
+1,300 for it. The node's `description` stands first in it, and its details beneath the
+`about`. The node's other views show none of them, one click from Status, and a node
+with nothing to show has no card. The `about` is the short account of the node, and the
+startup consistency pass notes one past about 400 characters. What a team writes at
+length about a node is its handbook, on a tab of its own (ADR-0133 decision 3).
 
 ### 9. What a viewer opens holds for the tab, and only where it differs
 
@@ -306,7 +388,12 @@ on the same control of the same node, and keeps an open inspection card on its n
 new element (ADR-0019). The card's text rides in each refresh, so a node that arrives
 after the load has its card and a changed `about` is current; and a table's or a curve's
 scroll is put back once the map is applied, since a box the map opens has no layout
-before it. A pin's editor still holds the swap back (ADR-0104 decision 7). A text
+before it. The window stands through a refresh as well: before the swap the script notes
+the nodes the window shows nearest its top, and once the map is applied scrolls by what
+the nearest of them still shown moved, at once whatever the page's `scroll-behavior`
+says, so the window shows what it showed, a line added above it or not; a window at the
+page's top stays there, and a card new at the head of the wall is seen. A pin's editor
+still holds the swap back (ADR-0104 decision 7). A text
 selection still goes with a swap; merging the answer node by node would keep it, and is
 the step to take if that bothers.
 
@@ -326,7 +413,7 @@ nor a head's underlined. A chip a click opens below the fold is
 brought into view, as far as its box needs. A click with a modifier, a middle click and
 a long press keep the link's own meaning, and without JavaScript the wall is the
 server's first look with every node a link to its page. The keyboard reaches chips and
-heads with Tab, and a head's controls — its actions, ⋯ and its icons — are one toolbar,
+heads with Tab, and a head's controls — its icons, its actions and ⋯ — are one toolbar,
 a single stop walked with the arrow keys, Home and End; a toggle moves the focus to the
 other face, since the face that held it is hidden; and Escape closes the inspection
 card. The wall is a grid of cards, not a tree to walk with the arrow keys, which move
@@ -379,9 +466,10 @@ drawn.
   (ADR-0128), so a click makes a card taller or shorter where it stands.
 - **A viewer's look is the tab's.** Two tabs can hold two looks of one wall; a second
   machine, or a link sent to a colleague, starts as configured. The looks a browser
-  keeps are the presentation cookie's: the theme, the layout, the chip runs, the
-  inspection card's switch, and whether a row and a chip answer the pointer with an
-  outline or a wash.
+  keeps are the presentation cookie's: the theme, the layout, the chip runs, how a
+  level's boxes stand (ADR-0138), the inspection card's switch, whether a row and a chip
+  answer the pointer with an outline or a wash, where an open head keeps its buttons,
+  and whether the failure budget opens anything.
 - **One script owns every toggle**, so the grid's state is one map read in one place;
   the two scripts that kept *+N more* and the chevron for the page's life fold into it.
 - **Costs.** A failure under a chip past its card's budget is two clicks from its
@@ -395,8 +483,7 @@ drawn.
   three columns where the 90th percentile of the names gave four, and on a phone one
   where it gave two, 246 pixels more. A node's page keeps its facts below its children,
   so a long roster is scrolled past to reach them, as today, its head carrying the time
-  and the next update for the glance; and an *about* shown open is the band's height on
-  every view of its node, which the startup note keeps to a few lines. Where a node
+  and the next update for the glance. Where a node
   claims `show_when_quiet`, a funnel pressed as configured and one the viewer pressed
   fold different things, and only the changed dot tells them apart; and every roster
   with a quiet line carries a funnel, eight heads more on one deployment's tree, whose
@@ -419,16 +506,16 @@ drawn.
   it, which stepping back opens again; and a find that moves on to what is already shown
   tells the page nothing, so a box it passed stays open. A clipped box is one short line
   taller, its *⌄ all N* standing beneath the cut. Every fragment carries the inspection
-  card's text for the nodes it draws, each `about`'s first paragraph, which the same
-  measure prices; a keyboard reaches a head's controls past its first by the arrow keys,
-  not Tab; and under a coarse pointer the head's corner is wider by its gaps, which its
-  title gives way to.
+  card's text for the nodes it draws, the first paragraph of each one's `about` or
+  `description`, which the same measure prices; a keyboard reaches a head's controls
+  past its first by the arrow keys, not Tab; and under a coarse pointer the head's
+  buttons are wider by their gaps, which its title gives way to.
 - **Unchanged:** the snapshot and the envelope, and the macOS client, which draws no
   tree; the filters; a level's order (ADR-0055), whichever of its children are open; a
   pin's block and its editor, though one editor now serves a page; the refresh's
   cadence and what holds it back.
 - **Amended:** ADR-0012, ADR-0017, ADR-0019, ADR-0029, ADR-0034, ADR-0056, ADR-0061,
-  ADR-0063 and ADR-0104, each by an update under its header.
+  ADR-0063 and ADR-0104, each where it decided otherwise.
 
 ## Alternatives considered
 
@@ -441,6 +528,13 @@ drawn.
   clicks, is a later step if one is wanted, and reopens ADR-0029 when it comes.
 - **Rendering the viewer's look on the server.** A load cannot send the tab's storage,
   so the browser would apply the map anyway.
+- **The browser's own scroll anchoring** to hold the window through a refresh: a swap
+  replaces every element it holds on to, and it takes hold of one in the layouts the
+  swap passes through before the map is back and the grid planned — a refresh scrolled
+  a wall back up, 24 pixels on one and 1,347 from its foot. Set aside with it: **the
+  anchoring turned off on the grid**, and **the grid planned before anything is
+  measured**, either of which ends the jump but leaves the window where it was when a
+  line is added above it.
 - **Every failure opens its way**, today's rule: with every leaf failing the real wall
   is 12.6 screens; the first three under each node, 6.6; the first three a card, 3.5.
   **A chip holds its failures**, opening none, is the most compact, 3.2 screens and 8.5
@@ -457,10 +551,36 @@ drawn.
   short ones; in one row of lines with an opened one at the frame's full width beneath,
   or one above another, each was still a click.
 - **The `about` in a tab or a popup of its own**, a click for what a node is: the short
-  account belongs beneath its name, and a long one gets a tab of its own.
-- **The head's buttons in a row of their own**, or shown on hover: a row of their own
-  makes the phone's wall 10.0 screens where the head's row keeps it at 9.0, its runs
-  wrapped, and hover hides them on a phone.
+  account stands on the tab a node's page opens on, and a long one gets a tab of its
+  own; and **the `about` open in the band**, beneath the node's name and title on every
+  view of it, as first decided, which stood the band taller by it on every view.
+- **The head's buttons in a row of their own** as the library's look: it makes the
+  phone's wall 10.0 screens where the head's row keeps it at 9.0, its runs wrapped, and
+  is a viewer's look, `line`; and **shown on hover everywhere**, which hides them on a
+  phone, where the library's look shows them always.
+- **The buttons at the row's far end, the node's actions first, and the name a toggle**,
+  as first decided: the pointer travelled to the row's far end for a node's page, which
+  the look `name` keeps for a browser that wants it, the name opening the page; and
+  **the buttons right after the name and always shown**, each level's names given one
+  width so that its blocks of buttons line up, which cut a long name to keep the column
+  and drew a block on every head.
+- **The buttons keeping their room in the row under the pointer**, as first built:
+  nothing moved when they showed, but the room they kept left a title — a band's colored
+  circle — standing apart from its name; and **the buttons shown for a click's focus**,
+  which stayed in the head and kept them shown after the pointer left.
+- **A closed card's row that never wraps**, as an open head's: in a track too narrow for
+  its name, its counts and its state — on one deployment's wall at 1,920 pixels under
+  *Close all*, as on a laptop and a phone — it gave way at the name, which broke inside
+  a word where it must, `githu` over `b`, or a letter a line. Set aside with it: **a
+  closed card in a track planned for the closed look**, which would move the cards
+  beside it at every click; and **a closed head fitted as an open one is**, its state
+  measured onto a line of its own, a measure of every closed card at every refresh for
+  what the row's own wrapping does.
+- **A state that never breaks**: on a line beneath the row narrower than it, a failure
+  held back ran out of its box at the left. Set aside with it: **the state starting at
+  the box's left and wrapping as text does**, which can part the time and leave ragged
+  lines among the right-aligned states; and **the time's start dropped where the line is
+  short**, which loses when the period began.
 - **A branch wearing its colour on its head and frame**, or **healthy chips drawn
   white**, against the ragged edge of wrapped chips on a branch that is not green: the
   colour, not the geometry, made it show; aligned runs answer it, and the compact view
@@ -479,11 +599,9 @@ drawn.
 - **A *Close all* that drops what the viewer opened**, as first designed: in a hazard
   whose statuses change at every refresh it held the wall still, but the viewer's path
   had to be opened again by hand, four clicks on one deployment's tree. Set aside with
-  it: **a switch per browser that stops the failure budget**, set once and forgotten
-  until the one failure a first glance should show stays shut; **a hold** in the band,
-  or one a viewer's first click takes, which freezes a look that goes stale in an
-  outage; and **a budget that keeps the longest-failing open**, which shows the old
-  failures rather than the new.
+  it: **a hold** in the band, or one a viewer's first click takes, which freezes a look
+  that goes stale in an outage; and **a budget that keeps the longest-failing open**,
+  which shows the old failures rather than the new.
 - **A chip that counts the leaves beneath it alone**, and a failure budget that takes
   failing leaves alone: a branch whose own reading failed above healthy leaves was a red
   chip counting nothing red, and the budget passed it by.

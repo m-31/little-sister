@@ -11,7 +11,8 @@
   [ADR-0038](0038-declarative-action-list.md) (the library's own filler, which needs
   none of this and is the reason the limit was survivable so long),
   [ADR-0029](0029-per-user-presentation-preferences.md) (the kiosk, which loads none
-  of it), [ADR-0008](0008-json-output-api.md) (untouched: assets are presentation),
+  of it), [ADR-0080](0080-the-envelope-is-the-snapshot-published.md) (untouched: assets
+  are presentation),
   [ADR-0100](0100-system-is-two-views.md) (the *Installed* view of `/system`, which
   lists what registered)
 - **Register:** [`../decisions.md`](../decisions.md)

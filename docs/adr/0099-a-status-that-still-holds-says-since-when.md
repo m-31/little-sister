@@ -1,7 +1,7 @@
 # ADR-0099 — A status that still holds says since when
 
 - **Status:** Accepted
-- **Date:** 2026-10-10 (accepted 2026-10-03)
+- **Date:** 2026-10-25 (accepted 2026-10-03)
 - **Related:** [ADR-0027](0027-observation-timestamp-semantics.md) (the observation a
   node's time is), [ADR-0094](0094-a-restart-is-no-transition.md) (a period that reaches
   back across a restart, and a container's `UNDEFINED`, which names no period),
@@ -9,8 +9,8 @@
   every*, a claim only a check makes),
   [ADR-0087](0087-a-check-keeps-its-subjects-readings.md) (decision 8, what a result
   rolls up to), [ADR-0039](0039-status-rollup-semantics.md) (the roll-up),
-  [ADR-0006](0006-config-file-and-timezones.md) (the configured timezone the instants
-  are written in), [ADR-0102](0102-a-readings-table-keeps-time-and-names-in-view.md)
+  [ADR-0120](0120-every-stored-time-is-an-instant.md) (decision 7, the configured
+  timezone the instants are written in), [ADR-0102](0102-a-readings-table-keeps-time-and-names-in-view.md)
   (decision 3, History's row for a period the log holds no start of),
   [ADR-0014](0014-maintenance-persistence.md) (decision 9, the event an edit of a pin
   writes), [ADR-0104](0104-a-pin-is-one-block-on-what-it-silences.md) (a pin edited in
@@ -22,7 +22,11 @@
   and one that fails),
   [ADR-0115](0115-a-copy-document-says-where-it-is-from-and-since-when.md) (decision
   6, the period of a pinned node nothing has written),
-  [ADR-0123](0123-a-node-says-one-status-wherever-it-is-read.md) (whose a period is)
+  [ADR-0123](0123-a-node-says-one-status-wherever-it-is-read.md) (whose a period is),
+  [ADR-0132](0132-a-branch-keeps-the-period-of-what-it-shows-beside-the-log.md) (the
+  period of what a node above others shows, kept beside the log),
+  [ADR-0135](0135-a-handled-part-keeps-its-true-color-and-every-surface-says-by-what.md)
+  (decision 2, maintenance's own words, in which a line's pin is said)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -80,24 +84,30 @@ period's first row had left the log before the table kept it (decision 6); and t
 log's oldest event, where the log held no row of the node. A bound is taken once and
 kept until the node changes: it does not move forward as the log drops rows. History's
 row for the period states the same (ADR-0102 decision 3). A node that declares nothing
-above nodes that report has no period of its own and says *Observed …*, and one nothing
-has written *Not yet observed*, as before (ADR-0027, ADR-0094 decision 5) — unless it
-is pinned: it has shown *maintenance* since its pin, and states that period
-([ADR-0115](0115-a-copy-document-says-where-it-is-from-and-since-when.md) decision 6).
+above nodes that report has no status of its own to state a period of: where its own
+would stand it says *Observed …*, and one nothing has written *Not yet observed*, as
+before (ADR-0027, ADR-0094 decision 5), beneath the period of what it shows (below) —
+unless it is pinned: it has shown *maintenance* since its pin, and states that period on
+its one line ([ADR-0115](0115-a-copy-document-says-where-it-is-from-and-since-when.md)
+decision 6).
 The node's Copy document says the same in its own labels: ***Status error** since …*,
 ***Status ok** since before …* and ***Last observed:** …*. What a period is, what one
 says that a pin's end began, and what a first reading begins are decisions 6, 8 and 9.
 
-The period is the node's own status's
-([ADR-0123](0123-a-node-says-one-status-wherever-it-is-read.md)). What a node that has
-nodes beneath it shows counts them, so *Status ok since …* would say the period of all
-of it: its Time card and its Copy document name the period as its own — *Its own status
-ok since …*, ***Its own status ok** since …*. Where such a node shows something its own
-status does not account for, the Time card says that first, and names the node beneath
-it that makes it so, with that node's own period in this decision's words: *Status
-error, from load-fixtures beneath it, error since …*. A node with nothing beneath it,
-and a node in maintenance, read *Status … since …*, and what a period says of its
-beginning (decisions 6 and 8) follows either wording.
+A node above others has two periods, as it has two statuses
+([ADR-0123](0123-a-node-says-one-status-wherever-it-is-read.md)): what it shows counts
+the nodes beneath it, and its own status is its own. Its first line is the period of
+what it shows, kept beside the log as its own status's is and stated by the same bounds
+([ADR-0132](0132-a-branch-keeps-the-period-of-what-it-shows-beside-the-log.md) decision
+5) — *Status error since 10:00* — and where a node beneath it makes it so, that node is
+named, with its own *since* only where that began later: *Status error since 10:00, from
+load-fixtures beneath it*. Where the period the tree keeps is not yet of what the node
+shows, after a restart until the units beneath it have run, the line says the status
+without a *since* (ADR-0132 decision 3). Beneath that line the period of its own status
+is named as its own — *Its own status ok since …*, ***Its own status ok** since …* — or
+its observation stands there, where it declares nothing. A node with nothing beneath it,
+and a node in maintenance, read *Status … since …* on one line, and what a period says
+of its beginning (decisions 6 and 8) follows either wording.
 
 ### 2. History calls the period that still holds *current*
 
@@ -201,8 +211,9 @@ shows it, and the period ends there like any other.
 - **One rule bounds every period a surface states** — the Time card on a node's page,
   on a branch's and in its poll, the Copy document and History's row for the period
   that holds — so none of them can bound a period another does not.
-- **The contract does not move**: the envelope carries no period, and `timestamp` and
-  `observed_at` keep their meaning.
+- **The contract did not move for this**: `timestamp` and `observed_at` keep their
+  meaning. The two periods a node carries in the envelope are ADR-0132's (decision 7,
+  [ADR-0080](0080-the-envelope-is-the-snapshot-published.md)).
 - **ADR-0014 decision 9 stands**, and says what its event is not: the edit is in the
   log and on the Events page, and begins no period.
 - **A pin edited before this reads as one row from now on**: periods are derived from
@@ -221,13 +232,16 @@ shows it, and the period ends there like any other.
 - **A line's pin is an event where it changes what its node shows**
   ([ADR-0107](0107-an-event-is-a-change-of-what-a-node-shows.md)), so these rules bound
   the periods of a node whose lines are pinned too, and a period that a line's pin
-  began says so as decision 8's does: *when a line was silenced*.
+  began says so as decision 8's does: *when a line's pin was set*
+  ([ADR-0135](0135-a-handled-part-keeps-its-true-color-and-every-surface-says-by-what.md)
+  decision 2).
 - **A `file` check's reason reads differently**, and so does its configuration's *max
   age*. Neither is a stored key, and the reason's text changed with every run already.
 - **A healthy container's log line is longer** — `UNDEFINED, rolls up to OK` on every
   run — and a search of the log for `ERROR` finds a run whose children failed.
-- **Where a pin's expiry is shown does not change**: the banner and the Maintenance card
-  keep it, and their order is the maintenance pages' question.
+- **Where a pin's expiry is shown does not change**: the block that states the pin
+  keeps it, wherever the pin shows
+  ([ADR-0104](0104-a-pin-is-one-block-on-what-it-silences.md) decision 1).
 
 ## Alternatives considered
 

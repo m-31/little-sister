@@ -6,6 +6,7 @@ heartbeat carries for a load that failed and a save that failed — and, at the
 end, what was set aside by an adoption and the way back (ADR-0077): the ``.bak``
 files listed beside the live copies, and *take the backups*.
 """
+import gzip
 import json
 import os
 import stat
@@ -21,6 +22,7 @@ from little_sister.lease import Lease
 from little_sister.reasons import Entry
 from little_sister.state import BACKUP_SUFFIX, EVENTS_FILE, SERIES_FILE, StateLayer
 from little_sister.status import HEARTBEAT_PATH
+from tests.state_files import encoded, on_disk
 
 
 class _Clock:
@@ -78,8 +80,7 @@ class WriteThroughTests(TestCase):
         with tempfile.TemporaryDirectory() as directory:
             state = StateLayer(Path(directory) / "var" / "state")
             self.assertTrue(state.write("a.json", {"x": 1}))
-            self.assertEqual(json.loads(state.path("a.json").read_text()),
-                             {"x": 1})
+            self.assertEqual(on_disk(state.path("a.json")), {"x": 1})
             self.assertEqual(list(state.directory.glob("*.tmp")), [])
 
     def test_a_failed_write_is_a_line_until_a_write_succeeds(self):
@@ -130,8 +131,7 @@ class KeptFileTests(TestCase):
             clock.now += 1
             state.tick()
             self.assertEqual(calls, [1])
-            self.assertEqual(json.loads(state.path(EVENTS_FILE).read_text()),
-                             {"events": []})
+            self.assertEqual(on_disk(state.path(EVENTS_FILE)), {"events": []})
 
     def test_an_unchanged_state_is_not_rewritten(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -171,10 +171,11 @@ class KeptFileTests(TestCase):
                 after, _peak = tracemalloc.get_traced_memory()
             finally:
                 tracemalloc.stop()
-            size = state.path(SERIES_FILE).stat().st_size
+            # the text is the JSON inside the gzip (ADR-0134), megabytes still
+            size = len(gzip.decompress(state.path(SERIES_FILE).read_bytes()))
             self.assertGreater(size, 2 * 1024 ** 2)
             self.assertLess(after - before, size // 100)
-            self.assertEqual(json.loads(state.path(SERIES_FILE).read_text()), payload)
+            self.assertEqual(on_disk(state.path(SERIES_FILE)), payload)
 
     def test_flush_writes_what_changed_regardless_of_the_interval(self):
         # The graceful-shutdown write.
@@ -183,8 +184,8 @@ class KeptFileTests(TestCase):
             state.keep("a.json", lambda: {"a": 1})
             state.keep("b.json", lambda: {"b": 2})
             state.flush()
-            self.assertEqual(json.loads(state.path("a.json").read_text()), {"a": 1})
-            self.assertEqual(json.loads(state.path("b.json").read_text()), {"b": 2})
+            self.assertEqual(on_disk(state.path("a.json")), {"a": 1})
+            self.assertEqual(on_disk(state.path("b.json")), {"b": 2})
 
     def test_a_producer_that_raises_is_a_failed_save_of_its_file_only(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -215,7 +216,7 @@ class KeptFileTests(TestCase):
             blocked.unlink()
             state.flush()
             self.assertEqual(state.lines(), ())
-            self.assertEqual(json.loads(state.path("a.json").read_text()), {"a": 1})
+            self.assertEqual(on_disk(state.path("a.json")), {"a": 1})
 
 
 class OneWriterTests(TestCase):
@@ -237,7 +238,7 @@ class OneWriterTests(TestCase):
             (Path(directory) / "var" / "state.lease").write_text(json.dumps(
                 {"mark": "thief:2:t:b", "host": "elsewhere", "pid": 2}))
             self.assertFalse(state.write("pins.json", {"a": 2}))
-            self.assertEqual(json.loads(state.path("pins.json").read_text()), {"a": 1})
+            self.assertEqual(on_disk(state.path("pins.json")), {"a": 1})
             state.keep("kept.json", lambda: {"b": 1})
             state.flush()
             self.assertFalse(state.path("kept.json").exists())
@@ -266,16 +267,16 @@ class OneWriterTests(TestCase):
             held = {"n": 1}
             state.keep("kept.json", lambda: dict(held))
             state.shutdown()
-            self.assertEqual(json.loads(state.path("kept.json").read_text()), {"n": 1})
+            self.assertEqual(on_disk(state.path("kept.json")), {"n": 1})
             lease = json.loads((Path(directory) / "var" / "state.lease").read_text())
             self.assertEqual(lease["state"], "released")
             held["n"] = 2
             state.flush()
             self.assertFalse(state.write("late.json", {"late": True}))
-            self.assertEqual(json.loads(state.path("kept.json").read_text()), {"n": 1})
+            self.assertEqual(on_disk(state.path("kept.json")), {"n": 1})
             self.assertFalse(state.path("late.json").exists())
             state.shutdown()          # a second stop writes nothing either
-            self.assertEqual(json.loads(state.path("kept.json").read_text()), {"n": 1})
+            self.assertEqual(on_disk(state.path("kept.json")), {"n": 1})
 
     def test_a_layer_without_a_lease_still_writes_until_its_stop(self):
         """A layer nobody handed a lease to — every test's, and a server's before the
@@ -336,10 +337,10 @@ class RestoreAtStartupTests(TestCase):
         self._app.status_tree = self._original
 
     def _yesterday(self, directory: str) -> StateLayer:
-        from little_sister.maintenance import MaintenanceEntry, MaintenanceStore
+        from little_sister.pins import MAINTENANCE, Pin, PinStore
         from little_sister.tree import StatusTree
         state = StateLayer(directory)
-        MaintenanceStore(state).save({"/x": MaintenanceEntry(
+        PinStore(state).save({"/x": Pin(MAINTENANCE,
             "planned", datetime(2026, 1, 1, tzinfo=UTC),
             datetime(2999, 1, 1, tzinfo=UTC), "ada")})
         written = StatusTree()
@@ -353,7 +354,7 @@ class RestoreAtStartupTests(TestCase):
         with tempfile.TemporaryDirectory() as directory:
             state = self._yesterday(directory)
             self._app._restore_state(_Roots("/x"), state)  # type: ignore[arg-type]
-            self.assertEqual(self.tree.maintenance_entry("/x").reason, "planned")
+            self.assertEqual(self.tree.maintenance_entry("/x").note, "planned")
             # yesterday's transitions first, then this process's own — the pin
             # replayed onto the node
             self.assertEqual([event.new for event in self.tree.recent_events()
@@ -365,8 +366,7 @@ class RestoreAtStartupTests(TestCase):
             # this process keeps the log: the flush writes what happened since
             self.tree.upsert("/x", StatusCode.OK)
             state.flush()
-            codes = [raw["new"] for raw in json.loads(
-                state.path(EVENTS_FILE).read_text())["events"]]
+            codes = [raw["new"] for raw in on_disk(state.path(EVENTS_FILE))["events"]]
             self.assertEqual(codes[-1], "OK")
             self.assertGreater(len(codes), 2)
 
@@ -374,11 +374,11 @@ class RestoreAtStartupTests(TestCase):
         """Yesterday's pins: on a check's node and on a path that no check covers,
         and on the instance's own line — its node, a child of it, and a line of
         another child — each with a line's pin beside the node's."""
-        from little_sister.maintenance import MaintenanceEntry, MaintenanceStore
+        from little_sister.pins import MAINTENANCE, Pin, PinStore
         state = StateLayer(directory)
-        pin = MaintenanceEntry("planned", datetime(2026, 1, 1, tzinfo=UTC),
+        pin = Pin(MAINTENANCE, "planned", datetime(2026, 1, 1, tzinfo=UTC),
                                datetime(2999, 1, 1, tzinfo=UTC), "ada")
-        MaintenanceStore(state).save(
+        PinStore(state).save(
             {"/x": pin, "/gone": pin, HEARTBEAT_PATH: pin,
              f"{HEARTBEAT_PATH}/keeper": pin},
             {(f"{HEARTBEAT_PATH}/state", "keeper-behind"): pin,
@@ -389,7 +389,7 @@ class RestoreAtStartupTests(TestCase):
         # the instance's own node and its children are no check's, so a pin on one
         # of them, a node's or a line's, was restored and then reaped at every
         # start, the log naming it an orphaned pin
-        from little_sister.maintenance import MaintenanceStore
+        from little_sister.pins import PinStore
         state_child = f"{HEARTBEAT_PATH}/state"
         keeper = f"{HEARTBEAT_PATH}/keeper"
         with tempfile.TemporaryDirectory() as directory:
@@ -400,11 +400,12 @@ class RestoreAtStartupTests(TestCase):
                 with self.subTest(path=path):
                     held = self.tree.maintenance_entry(path)
                     assert held is not None, path
-                    self.assertEqual(held.reason, "planned")
+                    self.assertEqual(held.note, "planned")
             self.assertEqual(sorted(self.tree.entry_maintenance_at(state_child)),
                              ["keeper-behind"])
             # what the file holds after the start is what the tree holds
-            nodes, lines = MaintenanceStore(state).load_all()
+            held = PinStore(state).load_all()
+            nodes, lines = held.nodes, held.lines
             self.assertEqual(sorted(nodes), sorted(["/x", HEARTBEAT_PATH, keeper]))
             self.assertEqual(sorted(lines),
                              sorted([("/x", "line"), (state_child, "keeper-behind")]))
@@ -434,7 +435,7 @@ class RestoreAtStartupTests(TestCase):
             state.path(EVENTS_FILE).write_text("{torn")
             with self.assertLogs(level="ERROR"):
                 self._app._restore_state(_Roots("/x"), state)  # type: ignore[arg-type]
-            self.assertEqual(self.tree.maintenance_entry("/x").reason, "planned")
+            self.assertEqual(self.tree.maintenance_entry("/x").note, "planned")
             self.assertEqual([line.slug for line in state.lines()],
                              [f"load.{EVENTS_FILE}"])
 
@@ -461,8 +462,8 @@ class BackupTests(TestCase):
         return StateLayer(directory, interval_seconds=3600, wall=wall)
 
     @staticmethod
-    def _aged(path: Path, text: str, stamp: float) -> None:
-        path.write_text(text)
+    def _aged(path: Path, text: str | bytes, stamp: float) -> None:
+        path.write_bytes(text if isinstance(text, bytes) else text.encode())
         os.utime(path, (stamp, stamp))
 
     def test_a_backup_is_listed_beside_the_live_copy_with_both_ages(self):
@@ -516,37 +517,36 @@ class BackupTests(TestCase):
             state = self._layer(directory, wall)
             pins: dict[str, object] = {"nodes": {"/x": "theirs"}}
             log = {"events": ["theirs"]}
-            state.restore_with("maintenance.json", pins.update)
+            state.restore_with("pins.json", pins.update)
             state.keep(EVENTS_FILE, lambda: log, restore=log.update)
-            state.write("maintenance.json", pins)
+            state.write("pins.json", pins)
             state.flush()
-            self._aged(state.path("maintenance.json" + BACKUP_SUFFIX),
+            self._aged(state.path("pins.json" + BACKUP_SUFFIX),
                        json.dumps({"nodes": {"/y": "mine"}}), wall.now - 600)
             self._aged(state.path(EVENTS_FILE + BACKUP_SUFFIX),
-                       json.dumps({"events": ["mine"]}), wall.now - 600)
+                       encoded(EVENTS_FILE, {"events": ["mine"]}), wall.now - 600)
             state.take_stock()
 
             said = state.take_backups()
 
             self.assertEqual(pins, {"nodes": {"/y": "mine"}})
             self.assertEqual(log, {"events": ["mine"]})
-            self.assertEqual(state.read("maintenance.json"),
+            self.assertEqual(state.read("pins.json"),
                              {"nodes": {"/y": "mine"}})
-            self.assertEqual(json.loads(state.path("maintenance.json"
-                                                   + BACKUP_SUFFIX).read_text()),
+            self.assertEqual(on_disk(state.path("pins.json" + BACKUP_SUFFIX)),
                              {"nodes": {"/x": "theirs"}})
-            self.assertEqual(json.loads(state.path(EVENTS_FILE + BACKUP_SUFFIX)
-                                        .read_text()), {"events": ["theirs"]})
+            self.assertEqual(on_disk(state.path(EVENTS_FILE + BACKUP_SUFFIX)),
+                             {"events": ["theirs"]})
             # taken in registration order, the same order an adoption uses
-            self.assertIn("took the backup of maintenance.json, events.json", said)
+            self.assertIn("took the backup of pins.json, events.json", said)
             self.assertIn(BACKUP_SUFFIX, said)
             # the stamps moved with the files: what is live now was written now
             # and the .bak is as old as the copy it holds
             wall.now += 60
             report = state.report()
-            self.assertIn("maintenance.json.bak holds what was set aside, last "
+            self.assertIn("pins.json.bak holds what was set aside, last "
                           "written 1m ago", report)
-            self.assertIn("the live maintenance.json was written 1m ago", report)
+            self.assertIn("the live pins.json was written 1m ago", report)
             self.assertEqual(state.lines(), ())
 
     def test_the_way_back_is_taken_by_the_keeper(self):

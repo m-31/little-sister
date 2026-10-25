@@ -440,7 +440,11 @@ def _children(t: float, period: float) -> CheckResult:
     read *disk, memory, load* — the order somebody walking a host thinks in — and
     the name sort would file `load` in the middle. Each child says its rank, so the
     row is the check's to arrange; delete the ``order=`` arguments and the card
-    falls back to alphabetical, which is the whole demonstration."""
+    falls back to alphabetical, which is the whole demonstration.
+
+    And it gives the host and its disk the **details** of their objects (ADR-0133
+    decision 6), as a type gives them, with every run: the host's name and its bays,
+    the array the disk is — the first rows of each node's *About* card."""
     f = t / period
     memory = (CheckResult(StatusCode.WARN, ["memory at 84%"], name="memory", order=2)
               if 0.4 <= f < 0.7
@@ -458,29 +462,33 @@ def _children(t: float, period: float) -> CheckResult:
                        for index in range(volumes))
     return CheckResult(StatusCode.OK, children=(
         CheckResult(StatusCode.OK, name="disk", order=1,
-                    report=f"Volumes in scope:\n\n{mounts}"), memory, load),
+                    report=f"Volumes in scope:\n\n{mounts}",
+                    details={"array": "`/dev/md0`, RAID 5"}), memory, load),
+        details={"host": "`nas.example.net`", "bays": "4"},
         report=(f"Enumerated **{volumes + 2} devices** on this host: "
                 f"{volumes} volume{'s' if volumes != 1 else ''}, one memory "
                 f"bank, one load average.\n\nNothing here carries a verdict — "
                 f"what would is a reason."))
 
 
-#: The fleet's hosts: five quiet boxes on one level, two past the branch cap of
-#: three, so the level folds the surplus behind *+N more* — the fold the tab's map
-#: keeps through the refresh and a reload (ADR-0127 decision 9). Each host has two
-#: leaves, which is what makes it a box and not a chip.
-_FLEET = ("node-01", "node-02", "node-03", "node-04", "node-05")
+#: The fleet's hosts: twelve on one level nobody configures, each with two leaves,
+#: so that opened the level would draw thirty-six boxes — past the thirty of the
+#: built-in look's net (``first_look.BIG_LEVEL``), so its hosts start as chips with
+#: their counts, which a viewer opens and the tab's map keeps open through the
+#: refresh and a reload (ADR-0127 decision 9).
+_FLEET = tuple(f"node-{index:02d}" for index in range(1, 13))
 _FLEET_FAILS = "node-04"
 
 
 @_scenario("fleet")
 def _fleet(t: float, period: float) -> CheckResult:
-    """A fleet of five hosts, each a box of two quiet leaves: more quiet boxes than
-    the branch cap shows, so the level folds two behind *+N more* — which the
-    viewer opens, and the tab's map keeps open through every refresh and a reload.
-    Mid-cycle one host's disk fills: a failing box is never folded, so it steps out
-    of the fold on its own and the count behind *+N more* drops by one until it
-    clears, while the level the viewer opened stays open."""
+    """A fleet of twelve hosts, each with two quiet leaves: a level that, opened,
+    would draw thirty-six boxes, so it starts as chips — the net for a level nobody
+    expected to be big, which the demo's files leave unsaid on purpose. Mid-cycle
+    one host's disk fills: the failure budget opens that host with its disk, the
+    rest stay chips, and once it clears it is a chip again. Each host carries its
+    name as the detail of its object (ADR-0133 decision 6), first in its card, above
+    the rack and the site the deployment gives down to it."""
     f = t / period
     hosts = []
     for name in _FLEET:
@@ -488,7 +496,8 @@ def _fleet(t: float, period: float) -> CheckResult:
                 if name == _FLEET_FAILS and 0.4 <= f < 0.7
                 else CheckResult(StatusCode.OK, name="disk"))
         hosts.append(CheckResult(StatusCode.OK, name=name, children=(
-            CheckResult(StatusCode.OK, name="cpu"), disk)))
+            CheckResult(StatusCode.OK, name="cpu"), disk),
+            details={"host": f"`{name}.example.net`"}))
     return CheckResult(StatusCode.OK, children=tuple(hosts),
                        report=f"Enumerated **{len(_FLEET)} hosts**, two leaves each.")
 

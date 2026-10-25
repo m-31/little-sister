@@ -1,13 +1,15 @@
 # ADR-0014 — Persist maintenance to a file, with auto-expiry
 
 - **Status:** Accepted
-- **Date:** 2026-10-18 (accepted 2026-06-27)
+- **Date:** 2026-10-25 (accepted 2026-06-27)
 - **Related:** [ADR-0001](0001-in-process-threaded-engine.md) (one process, in
   memory), [ADR-0002](0002-rlock-snapshot-synchronization.md) (the tree owns state),
   [ADR-0003](0003-config-and-secrets-via-env-file.md) (config / secrets in files),
-  [ADR-0006](0006-config-file-and-timezones.md) (`settings.yaml`),
   [ADR-0015](0015-check-discovery-union.md) (the static check set the reaper keys
-  off), [ADR-0008](0008-json-output-api.md) (JSON envelope, unchanged here),
+  off), [ADR-0041](0041-maintenance-is-a-contribution-rule.md) (a pin is recorded,
+  never written, and its end restores nothing — decisions 1, 2 and 4),
+  [ADR-0080](0080-the-envelope-is-the-snapshot-published.md) (JSON envelope, unchanged
+  here),
   [ADR-0071](0071-what-a-restart-keeps-is-a-directory-of-files.md) (the state layer
   this file belongs to, and the path it moved to),
   [ADR-0104](0104-a-pin-is-one-block-on-what-it-silences.md) (the block that states a
@@ -20,9 +22,20 @@
   [ADR-0110](0110-what-every-node-last-showed-is-kept-beside-the-log.md) (the
   forgetting of what every node last showed, which takes the reaper's roots),
   [ADR-0120](0120-every-stored-time-is-an-instant.md) (a pin's times are instants,
-  written in UTC and read strictly),
+  written in UTC and read strictly; decision 7, `settings.yaml`),
   [ADR-0130](0130-a-unit-has-a-period-of-its-own.md) (decision 5: a check's units, whose
-  periods decision 13's floor reads).
+  periods decision 13's floor reads),
+  [ADR-0134](0134-the-state-is-compressed-and-stamped.md) (decision 4: the generation
+  every state file carries), [ADR-0141](0141-every-pin-is-one-thing-with-a-kind-and-the-envelope-lists-what-handles-a-part.md)
+  (every pin one thing with a kind, in one file, with an id; its route and its
+  permission — decisions 1, 2, 6, 7 and 11),
+  [ADR-0047](0047-node-notes-and-their-retention.md) (decision 1: a pin's text is its
+  note), [ADR-0140](0140-a-nodes-notes-stand-on-a-tab-of-their-own.md) (decision 6:
+  `note` in the model, the form and the file; a pin's note enters its node's notes),
+  [ADR-0107](0107-an-event-is-a-change-of-what-a-node-shows.md) (decision 1: a pin's
+  set and end are rows of its node where they change what it shows — decisions 4 and
+  12), [ADR-0135](0135-a-handled-part-keeps-its-true-color-and-every-surface-says-by-what.md)
+  (decisions 2 and 8: maintenance's own words, and *Handled*, which lists every pin).
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -37,44 +50,56 @@ restart-survival answer **sooner**, without pulling that decision forward.
 Persist maintenance to a small JSON file and restore it on startup; bound every
 entry with an expiry.
 
-1. **A maintenance side-table in the tree.** `StatusTree` owns
-   `dict[path → entry]`, where an entry is `{reason, set_at, expires_at, set_by}`;
-   `Status.maintenance` stays the in-tree bool that drives roll-up
-   ([ADR-0004](0004-status-aggregation-semantics.md)) and the `upsert` guard.
+1. **A maintenance side-table in the tree.** `StatusTree` owns `dict[path → Pin]`,
+   where an entry is a `Pin` of kind `maintenance`
+   ([ADR-0141](0141-every-pin-is-one-thing-with-a-kind-and-the-envelope-lists-what-handles-a-part.md)
+   decision 1) — its note, `set_at`, `expires_at` and `set_by` among the fields §7
+   lists; `Status.maintenance` stays the in-tree bool: the snapshot derives
+   `MAINTENANCE` from it, which contributes nothing to the roll-up
+   ([ADR-0039](0039-status-rollup-semantics.md) rule 3), and a check keeps writing a
+   pinned node, since `upsert` has no maintenance branch
+   ([ADR-0041](0041-maintenance-is-a-contribution-rule.md) decisions 1 and 2).
    `set_maintenance` / `clear_maintenance` are the single choke points that keep the
-   two in sync. A pin is held against its path and makes no node
+   side-table and the flag in sync. A pin is held against its path and makes no node
    ([ADR-0109](0109-a-node-says-its-children-are-complete.md) decision 4), whether it
    is set, replayed at a start or adopted: `Status.maintenance` is the flag of a node
    the tree holds, and a node the tree makes at a pinned path takes it from the
    side-table.
-2. **Write-through JSON at `var/state/maintenance.json`.** Every set / clear / expiry /
+2. **Write-through JSON at `var/state/pins.json`.** Every set / clear / expiry /
    reap rewrites the whole file **atomically** (temp + `os.replace`); the file is
-   exactly the side-table serialized. It is runtime state the app writes (not
-   hand-authored config), so the path is **fixed** (not env-overridable) and
-   git-ignored. The file is one of the state layer's
-   ([ADR-0071](0071-what-a-restart-keeps-is-a-directory-of-files.md)), which does the
-   writing and holds every state file to this discipline; the move out of `var/` is a
-   clean break in the spirit of decision 11 — the old path is not read, and a file
-   still sitting there is named once at startup. A failed write keeps the in-memory
-   state for the session — there is **no flush-on-shutdown**, so a crash right after a
-   set never loses it — and it is a line on `/little-sister` under a stable slug, as
-   is a file that could not be read at startup: what this decision left to the log,
-   the layer says where somebody looks (ADR-0071 §4).
+   exactly the side-table serialized, every pin of every kind in it (ADR-0141
+   decision 1). It is runtime state the app writes (not hand-authored config), so the
+   path is **fixed** (not env-overridable) and git-ignored. The file is one of the
+   state layer's ([ADR-0071](0071-what-a-restart-keeps-is-a-directory-of-files.md)),
+   which does the writing and holds every state file to this discipline.
+   `maintenance.json`, which held the maintenance pins before it, is a clean break in
+   the spirit of decision 11: it is not read, a start that finds it without
+   `pins.json` says so once, and a pin set before the upgrade holds nothing until it
+   is set again. A failed write keeps the in-memory state for the session — there is
+   **no flush-on-shutdown**, so a crash right after a set never loses it — and it is a
+   line on `/little-sister` under a stable slug, as is a file that could not be read
+   at startup: what this decision left to the log, the layer says where somebody looks
+   (ADR-0071 §4).
 3. **Restore post-fork, before the engine starts** (single worker,
    [ADR-0001](0001-in-process-threaded-engine.md), so once). Replay each non-expired
-   entry via `set_maintenance` — which makes no node
+   entry as `set_maintenance` applies one — which makes no node
    ([ADR-0109](0109-a-node-says-its-children-are-complete.md) decision 4), so a replay
    before any check has run brings back the pins and no nodes: each node is pinned
    from its first reading, and a pin whose node its check has stopped reporting stays
    in the file, suspended, until the node returns or the pin expires. Already-expired
    entries are dropped and the file rewritten once.
 4. **Auto-expiry.** Setting maintenance applies a **default duration** — one week,
-   configurable in `settings.yaml` ([ADR-0006](0006-config-file-and-timezones.md)) —
+   configurable in `settings.yaml` ([ADR-0120](0120-every-stored-time-is-an-instant.md)
+   decision 7) —
    unless an explicit duration is given (`parse_duration`: `2h`, `3d`, `2w`, …). **No
    indefinite.** The scheduler ([ADR-0001](0001-in-process-threaded-engine.md))
-   sweeps each tick and clears entries past `expires_at` via `clear_maintenance` — a
-   real `MAINTENANCE → UNDEFINED` transition and event — and the next check refills
-   the node.
+   sweeps each tick and ends every pin past `expires_at`, a node's and a line's: a
+   node's end is a row of its node, and a line's one where its node shows something
+   else for it ([ADR-0107](0107-an-event-is-a-change-of-what-a-node-shows.md)
+   decision 1). Ending a pin restores nothing, because nothing was destroyed: the check
+   kept writing the node while it was pinned, so it shows its reading again at once
+   ([ADR-0041](0041-maintenance-is-a-contribution-rule.md) decisions 1 and 4), and
+   `UNDEFINED` only where no check has written it since the start.
 5. **Orphan reaping at startup, by static check-root coverage.** After loading the
    checks and restoring the file, drop any maintenance entry whose path **neither a
    configured check nor the instance's own node covers.** A check at `full_path` *Q*
@@ -107,22 +132,30 @@ overwrote whatever was there — reason, expiry and author — with nothing said
 admins pinning the same node a minute apart silently lost the first one's words. The
 reason field is the whole point of a pin; losing it quietly is the bad kind of cheap.
 
-6. **A pin is editable in place.** The set form is reachable **while pinned** and
-   **prefilled with the stored reason**, beside *Clear*, in the block that states the
-   pin (§16, [ADR-0104](0104-a-pin-is-one-block-on-what-it-silences.md)). The expiry
+6. **A pin is editable in place.** The set form, which posts to
+   `POST /pins/maintenance` and asks the permission `maintenance` (ADR-0141 decision
+   4), is reachable **while pinned** and **prefilled with the stored note**, beside
+   *Clear*, in the block that states the pin (§16,
+   [ADR-0104](0104-a-pin-is-one-block-on-what-it-silences.md)). The expiry
    field (§20) is filled with the stored expiry, and a field left as it was filled
    keeps that instant exactly; emptied, it means the configured default from now, as
    a blank field does on an unpinned node. Setting an already-pinned node is an
-   **edit** — it keeps the entry, replaces reason and expiry, and never passes through
+   **edit** — it keeps the entry, replaces note and expiry, and never passes through
    an unpinned state.
-7. **Both dates.** The entry becomes `{reason, set_at, expires_at, set_by, created_at,
-   created_by}`. `set_at` / `set_by` mean **the last write that changed the pin** — a
-   set that says what the stored pin says, the same reason and the same expiry, writes
-   nothing ([ADR-0104](0104-a-pin-is-one-block-on-what-it-silences.md)) — and
-   `created_at` / `created_by` mean the first. An entry that carries neither reads as
-   its own creation: a pin set once and never edited. Clearing drops the entry, so a
+7. **Both dates.** A pin carries `{note, set_at, expires_at, set_by, created_at,
+   created_by}`, beside its kind and its id — made when it is first set and kept
+   through every edit (ADR-0141 decisions 1 and 2). `set_at` / `set_by` mean **the
+   last write that changed the pin** — a set that says what the stored pin says, the
+   same note and the same expiry, writes nothing
+   ([ADR-0104](0104-a-pin-is-one-block-on-what-it-silences.md)) — and `created_at` /
+   `created_by` mean the first. An entry that carries neither reads as its own
+   creation: a pin set once and never edited. Clearing drops the entry, so a
    clear-and-re-pin — and an expiry sweep followed by a new pin — honestly starts a new
-   creation; there is nothing extra to rule.
+   creation, with a new id; there is nothing extra to rule. A pin's text is its note
+   ([ADR-0047](0047-node-notes-and-their-retention.md) decision 1): `Pin.note`, the
+   field a pin's form posts and the key the file keeps it under, which enters its
+   node's notes as the pin is set
+   ([ADR-0140](0140-a-nodes-notes-stand-on-a-tab-of-their-own.md) decision 6).
 8. **The write is a compare-and-set.** Every form carries a hidden token, the entry's
    `set_at` as it is spelled ([ADR-0120](0120-every-stored-time-is-an-instant.md)); the
    write names the pin it believes it is replacing, and an empty token is the claim
@@ -137,8 +170,8 @@ reason field is the whole point of a pin; losing it quietly is the bad kind of c
    one write that stays silent. A post carrying **no** token field at all — a
    hand-rolled client, never one of our forms — writes unguarded, as before.
 9. **An edit emits an event.** Editing a pin is `MAINTENANCE -> MAINTENANCE`, which the
-   status code alone cannot see, so an extended window or a rewritten reason would leave
-   no trace anywhere. A changed **reason or expiry** therefore emits a transition too; a
+   status code alone cannot see, so an extended window or a rewritten note would leave
+   no trace anywhere. A changed **note or expiry** therefore emits a transition too; a
    re-submit that changes neither does not, so a double-click is neither history nor a
    write (§7). History beyond that single event stays out. The event is in the log and
    on the Events page, and it begins no period
@@ -156,44 +189,44 @@ space and §2's file shape grow, nothing above is withdrawn)*
 
 10. **The key widens from `path` to `(path, slug)`.** A pin may name **one reason** of
     a node instead of the node ([ADR-0036](0036-addressable-reasons.md) decision 5).
-    The two live in one side-table and one file, under separate keys, because they are
-    one mechanism at two depths: the same entry shape, the same author and expiry
-    fields, the same compare-and-set token, the same startup replay, the same coverage
-    reap, the same sweep. Only the *effect* differs — a node pin writes
-    `MAINTENANCE` into the tree, an entry pin writes nothing and is joined at snapshot
-    time, which is what [ADR-0032](0032-status-contribution-boundary.md) rule 3 asks
-    for and what the node pin does not yet do.
-11. **The file holds two tables**: `{"nodes": {path: entry}, "entries": {path: {slug:
-    entry}}}`. This is a **clean break** with the bare node table the file used to be —
-    there is no reader for the old shape and no migration, in the spirit of the
-    `config/` move ([ADR-0031](0031-deployment-config-directory.md)). An old file is
-    ignored with a warning naming what it dropped, and the next save rewrites it. The
-    cost is a pin or two on one upgrade; the alternative is a compatibility branch
-    sitting in the read path forever, for state the program owns, never hand-authors,
-    and bounds with a finite expiry anyway. A pin's `set_at`, `created_at` and
-    `expires_at` are instants, written in UTC
-    ([ADR-0120](0120-every-stored-time-is-an-instant.md)), and the file is read
-    strictly: one of them without a zone refuses the file whole, as the bare node table
-    is refused, so the pins of a version before that record are not in force after the
-    upgrade.
-12. **An entry pin emits no event.** It changes no stored code — the node's own status
-    is derived at snapshot time — so there is no transition to record, exactly as
-    staleness has none ([ADR-0005](0005-dashboard-freshness-and-self-monitoring.md)).
-    A node whose entries all go quiet therefore reads `MAINTENANCE` without an entry in
-    the log. That is the accepted price of not flooding the log with per-entry events
-    ([ADR-0036](0036-addressable-reasons.md) decision 11), and the pin itself is
-    visible on the node, in the maintenance surfaces and in `/maintenance`.
-
-    > *That last clause was written ahead of the code and was untrue for a week:* the
-    > index walked node pins only, so an entry pin reached none of those surfaces, and
-    > a node whose members were all pinned showed a blue card the maintenance page
-    > denied — a suppression with no entry in any index, which
-    > [ADR-0032](0032-status-contribution-boundary.md) rule 5 forbids. Repaired
-    > 2026-08-02; see [ADR-0036](0036-addressable-reasons.md) decisions 10 and 12
-    > for the shape the two surfaces settled on. `/maintenance` now lists **one row per pin**
-    > and gains a *Silenced* column — what a pin covers, as against *Why* it does —
-    > because "reason" names two different things here and one heading over both is a
-    > table nobody can read.
+    The two live in the tree's side-tables, one keyed by `path` and one by
+    `(path, slug)`, and in one file, because they are one mechanism at two depths: the
+    same entry shape, the same author and expiry fields, the same compare-and-set
+    token, the same startup replay, the same coverage reap, the same sweep. Only the
+    *effect* differs — a node pin holds the node and everything beneath it, an entry
+    pin its line alone — and neither writes into the tree: both are recorded and joined
+    at snapshot time ([ADR-0041](0041-maintenance-is-a-contribution-rule.md) decisions
+    1 and 2), which is what [ADR-0032](0032-status-contribution-boundary.md) rule 3
+    asks for.
+11. **The file is one list**: `{"pins": [{"path", "slug", "id", "kind", …}, …]}`, each
+    pin beside its target — `slug` empty for a node's own — in the order of the
+    targets, so the same pins are the same bytes (ADR-0141 decision 1). Every shape
+    before it is a **clean break** — there is no reader for an old shape and no
+    migration, in the spirit of the `config/` move
+    ([ADR-0031](0031-deployment-config-directory.md)). The cost is a pin or two on one
+    upgrade; the alternative is a compatibility branch sitting in the read path
+    forever, for state the program owns, never hand-authors, and bounds with a finite
+    expiry anyway. A pin's `set_at`, `created_at` and `expires_at` are instants,
+    written in UTC ([ADR-0120](0120-every-stored-time-is-an-instant.md)), and the file
+    is read strictly: one of them without a zone refuses the file whole, as a shape it
+    does not know does. Beside the list sits a second top-level key the state layer
+    stamps on every write, `generation` — the writer's mark, its count of the file's
+    writes, and whether it held the keeper's lease
+    ([ADR-0134](0134-the-state-is-compressed-and-stamped.md) decision 4) — which a
+    reader that takes the list by name passes over.
+12. **A line's pin is a row of its node where it changes what the node shows.** It
+    changes no stored code — the node's own status is derived at snapshot time — and
+    every change of what a node shows is an event, a line's pin set, ended or replaced
+    among its causes ([ADR-0107](0107-an-event-is-a-change-of-what-a-node-shows.md)
+    decision 1), so a node whose entries all go quiet reads `MAINTENANCE` with the row
+    that made it so. A line's pin that changes nothing its node shows — one of two
+    failing lines pinned, a note or an expiry edited — is no event, so the log does not
+    fill with per-entry events, which [ADR-0036](0036-addressable-reasons.md) decision
+    11 keeps out of it. The pin itself is stated wherever its node is — on the node,
+    under its line and on *Handled*, one block for each pin
+    ([ADR-0104](0104-a-pin-is-one-block-on-what-it-silences.md) decisions 1 and 6) —
+    since a suppression with no entry in any index is what
+    [ADR-0032](0032-status-contribution-boundary.md) rule 5 forbids.
 
 ### A window is positive and bounded, and a blank field changes nothing
 *(decided 2026-08-02, after review; decision §4's "always a finite expiry" is made
@@ -202,9 +235,9 @@ precise, nothing above is withdrawn)*
 Three defects with one shape: a write that quietly did something other than what was
 asked.
 
-13. **A window must be positive, bounded, and long enough to silence a run.** At least
+13. **A window must be positive, bounded, and long enough to hold a run.** At least
     one second and at most a year — and, because a window that ends before the check
-    it covers runs again silences no run of it, at least the longest `frequency`
+    it covers runs again holds no run of it, at least the longest `frequency`
     among the checks that **cover** the pin, *covers* read exactly as §5 reads it.
     Where a check declares **units**
     ([ADR-0130](0130-a-unit-has-a-period-of-its-own.md) decision 5), the floor is read
@@ -212,11 +245,11 @@ asked.
     unit's period, and a pin above a check's units — on a container or the mount — at
     least the shortest period among the units beneath it, which is what that node says
     it is read on. A window that ends before the fastest unit beneath it runs again
-    silences no run of anything; one that outlasts it silences runs of that unit, which
+    holds no run of anything; one that outlasts it holds runs of that unit, which
     is what the floor exists to guarantee.
     §4 said *finite*, and finite was not enough. `-1d` and `0` parse cleanly,
     land `expires_at` in the past, and the very next sweep drops the entry — so the
-    reason text and both authorships are gone within a tick, behind a redirect that
+    note and both authorships are gone within a tick, behind a redirect that
     looked like a success. That is exactly the lost-explanation failure the
     compare-and-set guard exists to prevent, arriving through the other door. At the
     far end, `99999999d` and `1e20` parse and then raise `OverflowError` out of the
@@ -237,11 +270,11 @@ asked.
     deployment's **configured default**: a `settings.yaml` typo must not make the form
     unusable. A blank field therefore keeps that exemption whole — the default is
     never refused, and is held to no floor of §13's.
-15. **A blank reason on an edit keeps the stored text.** Blank means *"I did not touch
+15. **A blank note on an edit keeps the stored text.** Blank means *"I did not touch
     this field"*, so an edit that only moves the window keeps the explanation. On a
     **new** pin there is nothing to keep and the literal `maintenance` stays the honest
-    placeholder. This is the same principle as the duration rule above: a field the
-    admin left alone must not change anything.
+    placeholder, which no surface shows as a note. This is the same principle as the
+    duration rule above: a field the admin left alone must not change anything.
 
 ### Read first, edit on intent
 *(decided 2026-08-02; decision §6's in-place edit grows to entry pins and the form's
@@ -252,10 +285,12 @@ changes it. Keeping its raw field permanently open makes it look like unfinished
 and hiding a whole per-entry form behind hover made the pointer move the form it was
 trying to reach. The two depths now follow one interaction.
 
-16. **Pinned is a read state.** A pinned node or entry shows its rendered explanation,
+16. **Pinned is a read state.** A pinned node or entry shows its rendered note,
     authorship and expiry with explicit *Edit* and *Clear* actions, in one block that
-    states the pin where it acts — on a node's page, under a line, on the Maintenance
-    page and in a card ([ADR-0104](0104-a-pin-is-one-block-on-what-it-silences.md)).
+    states the pin where it acts — on a node's page, under a line, on *Handled* and in
+    a box on the wall, where its note stands behind a mark of its own, *Edit* is a
+    pencil and *Clear* stands in the editor
+    ([ADR-0104](0104-a-pin-is-one-block-on-what-it-silences.md) decision 1).
     *Edit* opens the editor there, with a prefilled textarea and the expiry field
     filled with the stored expiry (§6); *Save* is the same guarded `action=set`, and
     *Cancel* writes nothing. An unpinned item has one *Set maintenance* disclosure into
@@ -263,7 +298,7 @@ trying to reach. The two depths now follow one interaction.
 17. **Entry pins edit in place.** The entry form carries `(path, slug)` and the stored
     entry's `set_at`, exactly as the node form carries `path` and its token. Rewording or
     extending one therefore never clears it and never lets the finding alarm in the
-    gap. Blank reason and duration keep the rules in §§15 and 6.
+    gap. Blank note and duration keep the rules in §§15 and 6.
 18. **Hover never owns the form.** A member reason has a compact control in a stable
     action rail. Hover or focus may change its emphasis, but only activation opens the
     editor. This is a web presentation rule, not a new maintenance state.
@@ -340,8 +375,9 @@ natural-language parser whose meaning changes by locale or library version.
   a database was going to subsume is a store per record behind a package's seam
   ([ADR-0071](0071-what-a-restart-keeps-is-a-directory-of-files.md) §6), never a
   service in the core.
-- The JSON envelope ([ADR-0008](0008-json-output-api.md)) is **not** changed here;
-  whether `maintenance_expires_at` joins it is the API-envelope round's decision.
+- The JSON envelope ([ADR-0080](0080-the-envelope-is-the-snapshot-published.md)) is
+  **not** changed here; a pin reaches it as an item of its part's `handled`, its end
+  with it (ADR-0141 decision 3).
 - *(2026-08-02)* **The token is designed once and widens later.** Per-entry pins key the
   side-table by `(path, slug)` ([ADR-0036](0036-addressable-reasons.md)); the same guard
   has to cover them, which is why the concurrency answer lands before them rather than
@@ -350,10 +386,10 @@ natural-language parser whose meaning changes by locale or library version.
   rules: the popover has room for one name and takes `set_by` — the writer whose reason
   text it is showing — a card's block says who set it and how long is left, and the
   whole four-field reading (*pinned by Anna three days ago, last changed by Ben an hour
-  ago*) belongs on the node page and on the Maintenance page, where there is room for
-  it. The second line appears only on a pin that has actually been edited.
+  ago*) belongs on the node page and on *Handled*, where there is room for it. The
+  second line appears only on a pin that has actually been edited.
 - *(2026-08-02)* **A ticket reference will be a named field on the entry**, not text
-  inside `reason` — so moving it to acknowledgment is later a migration and not a parse.
+  inside its note — so moving it to acknowledgment is later a migration and not a parse.
 
 ## Alternatives considered
 - **Wait for the durable store.** Rejected: restart-survival and an expiry are wanted

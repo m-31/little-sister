@@ -125,16 +125,30 @@ class Slot:
 #: renders a filtered subset of reasons would silently point an action at a
 #: different finding. A slug does not move, so the object carrying it is what the
 #: slot promises.
+#:
+#: Both hand over, beside the node, **what a draft is written with** — a ticket, a
+#: message, anything a filler makes from the node that leaves the instance — as two
+#: functions, called by the filler for a draft it makes and by nobody else, since a
+#: slot is filled for every node at every render (ADR-0133 decisions 4 to 6):
+#: ``written_out(text, inline=False)``, a text of the node written out as the Copy
+#: document writes one — a status its braces name, ``{error}``, as *error ⛔*, and a
+#: link in the short form, ``handbook#sign-in``, to the absolute address of the
+#: node's handbook — and ``details()``, the rows of the node's *About* card as
+#: ``(key, value)``, those given down to it among them, each value written out the same
+#: way, a link in the short form to the handbook of the node it is given on. Outside a
+#: request there is no base to write an address from, and a short form stays as
+#: written.
 SLOTS: Mapping[str, Slot] = {
     "reason.actions": Slot(
         name="reason.actions",
-        context=("node", "reason", "line", "index", "surface"),
+        context=("node", "reason", "line", "index", "surface", "written_out",
+                 "details"),
         where="beside one rendered reason line — every reason of every node, on "
               "the dashboard grid and on the leaf detail page",
     ),
     "node.actions": Slot(
         name="node.actions",
-        context=("node", "surface", "place"),
+        context=("node", "surface", "place", "written_out", "details"),
         where="in the head's row of every node the dashboard grid draws, open or "
               "closed — a card head, each nested box under it — and on a node's page, "
               "a branch's or a leaf's, in the frame head of the node itself; an "

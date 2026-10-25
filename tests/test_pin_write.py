@@ -5,7 +5,7 @@ Three things a walk of the pin block on a running deployment found (backlog #89)
 * A line's set, edit and clear from its node's own page came back to the top of
   that page — on a node with 150 lines, a long way from the line. They come back
   to the line, at the address that names one (`?reason=<slug>#pinned-reason`,
-  ADR-0036 decision 12), as a write from the Maintenance page comes back to its
+  ADR-0036 decision 12), as a write from *Handled* comes back to its
   node (ADR-0104 decisions 3, 4 and 6).
 * A save that changed neither the note nor the expiry rebuilt the pin all the
   same: it took the saver's name and a new token, and another open editor of it
@@ -26,14 +26,14 @@ from urllib.parse import parse_qs, urlsplit
 os.environ.setdefault("SECRET_KEY", "test-key")
 
 from little_sister import app as app_module
-from little_sister.maintenance import MaintenanceEntry
+from little_sister.pins import Pin
 from little_sister.status import StatusCode
 from little_sister.tree import StatusTree
 from tests.page_tree import Element, parse
 
 PATH = "/ci/actions"
 #: The node as its own page's forms name it: the route's `branch`, which has no
-#: leading slash. The Maintenance page and the wall post the absolute path.
+#: leading slash. *Handled* and the wall post the absolute path.
 FORM_PATH = "ci/actions"
 #: Slugs as checks write them: a declared one, the natural one of a discovered
 #: entry, which holds a slash, and one with what a fragment would mis-read.
@@ -51,13 +51,14 @@ class _CountingStore:
     def __init__(self) -> None:
         self.saves = 0
 
-    def load(self) -> dict[str, MaintenanceEntry]:
+    def load(self) -> dict[str, Pin]:
         return {}
 
-    def load_entries(self) -> dict[tuple[str, str], MaintenanceEntry]:
+    def load_entries(self) -> dict[tuple[str, str], Pin]:
         return {}
 
-    def save(self, entries: Any, entry_pins: Any = None) -> None:
+    def save(self, entries: Any, entry_pins: Any = None, acknowledged: Any = None,
+             lines_acknowledged: Any = None) -> None:
         self.saves += 1
 
 
@@ -67,7 +68,7 @@ class _WriteCase(TestCase):
     def setUp(self) -> None:
         app_module.app.config["TESTING"] = True
         self.store = _CountingStore()
-        self.tree = StatusTree(maintenance_store=self.store)
+        self.tree = StatusTree(pin_store=self.store)
         app_module.status_tree = self.tree
         self.client = app_module.app.test_client()
         self.client.post("/login",
@@ -75,7 +76,7 @@ class _WriteCase(TestCase):
         self.tree.upsert(PATH, StatusCode.ERROR, dict(LINES))
 
     def _pin_node(self, note: str = "the runners are being replaced",
-                  by: str = "ada") -> MaintenanceEntry:
+                  by: str = "ada") -> Pin:
         write = self.tree.set_maintenance(
             PATH, note, set_by=by,
             expires_at=datetime.now(UTC) + timedelta(days=2, hours=3))
@@ -84,7 +85,7 @@ class _WriteCase(TestCase):
 
     def _pin_line(self, slug: str = "mobile-build",
                   note: str = "until the signing key is renewed",
-                  by: str = "ada") -> MaintenanceEntry:
+                  by: str = "ada") -> Pin:
         write = self.tree.set_entry_maintenance(
             PATH, slug, note, set_by=by,
             expires_at=datetime.now(UTC) + timedelta(hours=5, minutes=30))
@@ -93,7 +94,7 @@ class _WriteCase(TestCase):
 
     def _post(self, **fields: str) -> Any:
         """A write, addressed as the node's own page addresses it."""
-        return self.client.post("/maintenance",
+        return self.client.post("/pins/maintenance",
                                 data={"path": FORM_PATH, **fields})
 
     def _get(self, url: str) -> Element:
@@ -110,7 +111,7 @@ class _WriteCase(TestCase):
     def _as_filled(self, form: Element) -> dict[str, str]:
         """What a browser posts for ``form`` with nothing in it touched."""
         fields = self._hidden(form)
-        fields["reason"] = form.one(tag="textarea").source()
+        fields["note"] = form.one(tag="textarea").source()
         [expiry] = [box for box in form.all(tag="input")
                     if box.attrs.get("name") == "duration"]
         fields["duration"] = expiry.attrs.get("value", "")
@@ -149,7 +150,7 @@ class ReturnTests(_WriteCase):
 
     def test_setting_a_lines_pin_comes_back_to_the_line(self):
         response = self._post(slug="web-build", action="set", set_at="",
-                              reason="on it", duration="2h")
+                              note="on it", duration="2h")
         self.assertEqual(response.status_code, 302)
         there = response.headers["Location"]
         self.assert_leads_to_line(there, "web-build")
@@ -162,12 +163,12 @@ class ReturnTests(_WriteCase):
     def test_editing_and_clearing_a_lines_pin_come_back_to_it(self):
         entry = self._pin_line()
         edit = self._post(slug="mobile-build", action="set",
-                          set_at=entry.token, reason="longer", duration="3d")
+                          set_at=entry.token, note="longer", duration="3d")
         self.assertEqual(edit.status_code, 302)
         self.assert_leads_to_line(edit.headers["Location"], "mobile-build")
         now = self.tree.entry_maintenance(PATH, "mobile-build")
         assert now is not None
-        self.assertEqual(now.reason, "longer")
+        self.assertEqual(now.note, "longer")
         clear = self._post(slug="mobile-build", action="clear",
                            set_at=now.token)
         self.assertEqual(clear.status_code, 302)
@@ -186,7 +187,7 @@ class ReturnTests(_WriteCase):
         for slug in ("acme/api-pr-412", "disk#2-at-90%"):
             with self.subTest(slug=slug):
                 response = self._post(slug=slug, action="set", set_at="",
-                                      reason="noted", duration="2h")
+                                      note="noted", duration="2h")
                 there = response.headers["Location"]
                 self.assert_leads_to_line(there, slug)
                 self.assertEqual(
@@ -195,15 +196,15 @@ class ReturnTests(_WriteCase):
 
     def test_the_line_is_named_however_the_form_spelled_the_path(self):
         # a client of its own may post the absolute path and no way back
-        response = self.client.post("/maintenance", data={
+        response = self.client.post("/pins/maintenance", data={
             "path": PATH, "slug": "web-build", "action": "set", "set_at": "",
-            "reason": "on it", "duration": "2h"})
+            "note": "on it", "duration": "2h"})
         self.assertEqual(response.status_code, 302)
         self.assert_leads_to_line(response.headers["Location"], "web-build")
 
     def test_a_nodes_own_pin_comes_back_to_its_page_as_it_did(self):
         # its block stands at the top of the page, where the page opens
-        response = self._post(action="set", set_at="", reason="the fleet",
+        response = self._post(action="set", set_at="", note="the fleet",
                               duration="2h")
         self.assertEqual(response.status_code, 302)
         parts = urlsplit(response.headers["Location"])
@@ -211,12 +212,12 @@ class ReturnTests(_WriteCase):
                          ("/status/ci/actions", "", ""))
 
     def test_a_write_that_says_where_it_came_from_goes_back_there(self):
-        # the Maintenance page and the wall name their own way back (`next`);
+        # *Handled* and the wall name their own way back (`next`);
         # a line's write from there returns there, not to the node's page
-        back = "/maintenance?node=/ci/actions#pinned-node"
-        response = self.client.post("/maintenance", data={
+        back = "/handled?node=/ci/actions#pinned-node"
+        response = self.client.post("/pins/maintenance", data={
             "path": PATH, "slug": "web-build", "action": "set", "set_at": "",
-            "reason": "on it", "duration": "2h", "next": back})
+            "note": "on it", "duration": "2h", "next": back})
         self.assertEqual(response.status_code, 302)
         parts, wanted = urlsplit(response.headers["Location"]), urlsplit(back)
         self.assertEqual((parts.path, parts.query, parts.fragment),
@@ -241,7 +242,7 @@ class ReturnTests(_WriteCase):
             expires_at=datetime.now(UTC) + timedelta(days=1),
             expected_set_at=entry.token)
         stale = self._post(slug="mobile-build", action="set",
-                           set_at=entry.token, reason="mine", duration="1d")
+                           set_at=entry.token, note="mine", duration="1d")
         self.assertEqual(stale.status_code, 200)
         page = parse(stale.get_data(as_text=True))
         for way in self._ways_back(page):
@@ -249,14 +250,14 @@ class ReturnTests(_WriteCase):
         # and saving from the refusal's own form takes that way
         [form] = [form for form in page.all(tag="form")
                   if form.all(tag="textarea")]
-        saved = self.client.post("/maintenance", data=self._as_filled(form))
+        saved = self.client.post("/pins/maintenance", data=self._as_filled(form))
         self.assertEqual(saved.status_code, 302)
         self.assert_leads_to_line(saved.headers["Location"], "mobile-build")
         # an expiry the route will not read is refused onto the same page
         now = self.tree.entry_maintenance(PATH, "mobile-build")
         assert now is not None
         unread = self._post(slug="mobile-build", action="set",
-                            set_at=now.token, reason="mine",
+                            set_at=now.token, note="mine",
                             duration="yesterday")
         self.assertEqual(unread.status_code, 200)
         for way in self._ways_back(parse(unread.get_data(as_text=True))):
@@ -270,9 +271,9 @@ class NothingChangedTests(_WriteCase):
         entry = self._pin_node(by="ada")
         saves = self.store.saves
         fields = self._as_filled(self._edit_form("/status" + PATH, "node"))
-        self.assertEqual(fields["reason"], entry.reason)
+        self.assertEqual(fields["note"], entry.note)
         self.assertNotEqual(fields["duration"], "")
-        response = self.client.post("/maintenance", data=fields)
+        response = self.client.post("/pins/maintenance", data=fields)
         # answered as a save is
         self.assertEqual(response.status_code, 302)
         self.assertEqual(urlsplit(response.headers["Location"]).path,
@@ -282,7 +283,7 @@ class NothingChangedTests(_WriteCase):
         self.assertEqual(self.store.saves, saves)
         # so it still reads as ada's, and as never changed
         block = self._stated(self._get("/status" + PATH), "node")
-        self.assertIn("is silenced by ada until",
+        self.assertIn("is in maintenance by ada until",
                       block.one("rule-block__what").text())
         record = block.one("rule-block__edit").one("rule-block__record").text()
         self.assertEqual(
@@ -293,7 +294,7 @@ class NothingChangedTests(_WriteCase):
         saves = self.store.saves
         fields = self._as_filled(self._edit_form("/status" + PATH, "line"))
         self.assertEqual(fields["slug"], "mobile-build")
-        response = self.client.post("/maintenance", data=fields)
+        response = self.client.post("/pins/maintenance", data=fields)
         self.assertEqual(response.status_code, 302)
         self.assertEqual(self.tree.entry_maintenance(PATH, "mobile-build"),
                          entry)
@@ -302,16 +303,16 @@ class NothingChangedTests(_WriteCase):
     def test_the_maintenance_pages_form_too(self):
         entry = self._pin_node(by="ada")
         saves = self.store.saves
-        fields = self._as_filled(self._edit_form("/maintenance", "node"))
+        fields = self._as_filled(self._edit_form("/handled", "node"))
         self.assertEqual(fields["path"], PATH)
-        response = self.client.post("/maintenance", data=fields)
+        response = self.client.post("/pins/maintenance", data=fields)
         self.assertEqual(response.status_code, 302)
         self.assertEqual(urlsplit(response.headers["Location"]).path,
-                         "/maintenance")
+                         "/handled")
         self.assertEqual(self.tree.maintenance_entry(PATH), entry)
         self.assertEqual(self.store.saves, saves)
         # the page's own record of the pin gains no second sentence
-        block = self._stated(self._get("/maintenance"), "node")
+        block = self._stated(self._get("/handled"), "node")
         [record] = [child for child in block.children
                     if isinstance(child, Element)
                     and child.has("rule-block__record")]
@@ -325,9 +326,9 @@ class NothingChangedTests(_WriteCase):
         entry = self._pin_node(by="ada")
         saves = self.store.saves
         fields = self._as_filled(self._edit_form("/status" + PATH, "node"))
-        fields["reason"] = ""
+        fields["note"] = ""
         self.assertEqual(
-            self.client.post("/maintenance", data=fields).status_code, 302)
+            self.client.post("/pins/maintenance", data=fields).status_code, 302)
         self.assertEqual(self.tree.maintenance_entry(PATH), entry)
         self.assertEqual(self.store.saves, saves)
 
@@ -336,33 +337,33 @@ class NothingChangedTests(_WriteCase):
         # as it was, and the second's real change is not refused as stale
         self._pin_node(by="ada")
         first = self._as_filled(self._edit_form("/status" + PATH, "node"))
-        second = dict(first, reason="the runners are back on Monday")
+        second = dict(first, note="the runners are back on Monday")
         self.assertEqual(
-            self.client.post("/maintenance", data=first).status_code, 302)
-        answer = self.client.post("/maintenance", data=second)
+            self.client.post("/pins/maintenance", data=first).status_code, 302)
+        answer = self.client.post("/pins/maintenance", data=second)
         self.assertEqual(answer.status_code, 302)       # not the refusal's 200
         now = self.tree.maintenance_entry(PATH)
         assert now is not None
-        self.assertEqual((now.reason, now.set_by, now.created_by),
+        self.assertEqual((now.note, now.set_by, now.created_by),
                          ("the runners are back on Monday", "pan", "ada"))
 
     def test_a_changed_note_or_a_typed_expiry_is_saved_as_before(self):
         entry = self._pin_node(by="ada")
         saves = self.store.saves
         fields = self._as_filled(self._edit_form("/status" + PATH, "node"))
-        self.client.post("/maintenance",
-                         data=dict(fields, reason=entry.reason + " (again)"))
+        self.client.post("/pins/maintenance",
+                         data=dict(fields, note=entry.note + " (again)"))
         noted = self.tree.maintenance_entry(PATH)
         assert noted is not None
-        self.assertEqual((noted.reason, noted.set_by, noted.expires_at),
-                         (entry.reason + " (again)", "pan", entry.expires_at))
+        self.assertEqual((noted.note, noted.set_by, noted.expires_at),
+                         (entry.note + " (again)", "pan", entry.expires_at))
         self.assertNotEqual(noted.set_at, entry.set_at)
         self.assertEqual(self.store.saves, saves + 1)
         fields = self._as_filled(self._edit_form("/status" + PATH, "node"))
-        self.client.post("/maintenance", data=dict(fields, duration="3d"))
+        self.client.post("/pins/maintenance", data=dict(fields, duration="3d"))
         moved = self.tree.maintenance_entry(PATH)
         assert moved is not None
-        self.assertEqual(moved.reason, noted.reason)
+        self.assertEqual(moved.note, noted.note)
         self.assertNotEqual(moved.expires_at, noted.expires_at)
         self.assertNotEqual(moved.set_at, noted.set_at)
         self.assertEqual(self.store.saves, saves + 2)
@@ -372,13 +373,13 @@ class RefusalHeadingTests(_WriteCase):
     """A refused write is headed by the node's path as every page writes it."""
 
     def _heading(self, **fields: str) -> str:
-        response = self.client.post("/maintenance", data={
+        response = self.client.post("/pins/maintenance", data={
             "action": "set", "set_at": "", "duration": "yesterday", **fields})
         self.assertEqual(response.status_code, 200)
         return parse(response.get_data(as_text=True)).one(tag="h1").text()
 
     def test_it_reads_the_same_however_the_form_spelled_the_path(self):
-        # a node's own page posts the route's `branch`, the Maintenance page and
+        # a node's own page posts the route's `branch`, *Handled* and
         # the wall the absolute path
         for posted in (FORM_PATH, PATH):
             with self.subTest(path=posted):

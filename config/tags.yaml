@@ -1,0 +1,23 @@
+# The known tags (ADR-0139) — the words this deployment tags its nodes with, each with
+# one line of what it means. Configuration only: no code.
+#
+# This file is an example and names no tag as it stands (every line is commented out).
+# It gives no node a tag: a node is tagged where its details are written — `tags:` in a
+# check's file for its own node, under an aspect's name in its `subnodes:` block, and
+# in nodes.yaml by path — and carries every tag written for it or for a node above it.
+#
+# A tag is a fact about what a node is, never about what it is doing: `production`,
+# not `failing`; and never a policy — whether a production failure wakes somebody is a
+# rule over the tag, not a tag `page`.
+#
+# Each line maps a tag to what it means. A tag is lowercase letters and digits with
+# hyphens between them; capitals are read as lower case, and one with any other
+# character is not read. Every configuration root's file is read and they add up, the
+# later root's line winning for a tag two of them name; the wall's filter offers the
+# tags in this order, and a node lists them in it. A tag the configuration writes that
+# no file names still applies, and the startup record names it once, with where it is
+# written — every tag, while no root has this file.
+#
+# production: Serves customers; a failure here is somebody's outage.
+# staging: The release candidate, before production.
+# rack-4: In rack 4 of hall 2.

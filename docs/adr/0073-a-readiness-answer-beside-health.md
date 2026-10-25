@@ -146,7 +146,7 @@ the wrong thing.
 
 `no-store`, for the reason `/health` has it. Not part of the JSON API, not in
 `api/openapi.yaml`, no bearer token and no `schema_version`
-([ADR-0008](0008-json-output-api.md)) — the same argument
+([ADR-0080](0080-the-envelope-is-the-snapshot-published.md)) — the same argument
 [ADR-0066](0066-health-answers-liveness-and-says-almost-nothing.md) §4 makes, for
 the same audience.
 

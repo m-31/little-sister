@@ -50,8 +50,10 @@ ENTRY_LIMIT = 100_000
 #: check read about one subject, so the number is drawn where a composed record
 #: ends and a payload dump begins: the first records assembled by hand come to a
 #: few hundred bytes, while a single raw row from a provider's API is already
-#: several kilobytes. Two kilobytes leaves the former room to grow and refuses the
-#: latter, which is the line the limit exists to hold.
+#: several kilobytes. Three kilobytes leaves the former room to grow and refuses the
+#: latter, which is the line the limit exists to hold — and it leaves the 2,048 bytes
+#: the library's command types are sized to at two thirds of it, under the share at
+#: which a start says a declared record is close (:data:`AMBER_SHARE`).
 #:
 #: ``record_limit`` in ``settings.yaml`` overrides it. That override costs one
 #: thing worth knowing: the limit is enforced inside ``CheckResult`` and
@@ -59,7 +61,7 @@ ENTRY_LIMIT = 100_000
 #: so the seam reads the configuration **late** rather than importing it — a check
 #: module that bound the settings at import time would bind them when a *plugin* is
 #: imported.
-RECORD_LIMIT = 2_048
+RECORD_LIMIT = 3_072
 
 #: The share of what the machine gives this process that the process may be
 #: resident at before the line turns red — one gunicorn worker beside the OS on
@@ -68,15 +70,17 @@ RECORD_LIMIT = 2_048
 MEMORY_SHARE = 0.5
 
 #: What every series together may weigh (ADR-0087), counted as the record limit
-#: counts one record: the bytes of the JSON the series file keeps each reading in.
-#: A default rather than a share of memory, for the reason the entry limit is one —
-#: something else binds first. Here it is the file: the state layer rewrites
-#: ``series.json`` whole every interval a series changed, which with any check
-#: keeping one is every interval, and a keeper carries each copy. Measured on the
-#: device VM, eight mebibytes of kept readings are a file of about thirteen, written
-#: in a few hundredths of a second on the scheduler's tick — the time is not what
-#: binds, the copy a keeper sends every minute is. Past this the series written to
-#: longest ago is evicted. ``series_limit`` in ``settings.yaml`` overrides it.
+#: counts one record: the bytes of each reading's JSON. A default rather than a
+#: share of memory, for the reason the entry limit is one — something else binds
+#: first. It was set by the file: the state layer rewrites the series whole every
+#: interval one changed, which with any check keeping one is every interval, and
+#: measured on the device VM eight mebibytes of kept readings were a file of about
+#: thirteen, every copy of which a keeper carried. Since ADR-0134 that copy is
+#: compact JSON under gzip, about a twentieth of it, sent every interval only while
+#: another instance stands by — which raised nothing here: the readings held in
+#: memory and their serialization on the scheduler's tick do not shrink. Past this
+#: the series written to longest ago is evicted. ``series_limit`` in
+#: ``settings.yaml`` overrides it.
 SERIES_LIMIT = 8 * 1024 ** 2
 
 #: The share of either limit at which its line first stands, at WARN.

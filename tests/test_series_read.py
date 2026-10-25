@@ -236,7 +236,7 @@ class HostEstate(_Read):
 
     def test_the_read_answers_json_behind_the_bearer_token(self) -> None:
         answer = self._answer("/series/hosts/alpha")
-        self.assertEqual(answer["schema_version"], 2)
+        self.assertEqual(answer["schema_version"], 3)
         self.assertEqual(set(answer["instance"]), {"version", "engine"})
         self.assertEqual(answer["instance"]["engine"], "running")
 

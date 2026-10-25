@@ -5,7 +5,20 @@ path: /services/api
 title: API gateway
 about: |
   The public **API gateway** (a *synthetic* demo node). Cycles
-  ok → warn → error with a growing reason list → recover.
+  {ok} → {warn} → {error} with a growing reason list → recover: each
+  status the about names is drawn as its sign (ADR-0133 decision 5), and
+  [what to do](handbook#when-it-fails) opens its runbook at that section
+  (decision 4).
+# Its runbook, read on its Handbook tab (ADR-0133 decision 3): a Markdown file in the
+# configuration directory's handbook/, named relative to it. Text written here would
+# do as well.
+handbook: handbook/api-gateway.md
+# Its own details (ADR-0133 decision 6), beside those /services gives every service
+# beneath it: an owner of its own, which stands in the row /services named first, and
+# where its documentation is.
+details:
+  owner: API squad
+  docs: "[API reference](https://docs.example.org/api)"
 scenario: escalate
 frequency: 4s
 period: 60s

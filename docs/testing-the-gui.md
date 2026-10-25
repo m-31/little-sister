@@ -65,7 +65,7 @@ multi-front incident wall (eruption + trace + stale/idle/maintenance at once), a
 overview with two tall roots, dozens of descendants, every node open and spare grid columns
 (subtree balance), an
 **OK** severity leaf flooding 150 long audit findings (the real-deployment case
-that once made a skyscraper column — since the ADR-0024 chips it collapses to one
+that once made a skyscraper column — since the ADR-0056 chips it collapses to one
 quiet pill, the flood in its box beside the chip, hidden until found, and on its leaf
 page), single-token reasons — a
 ~300-char URL, an image digest, a 500-char `code()` line — that stress *width*
@@ -82,9 +82,19 @@ ways and mounted as the deployment that runs mounts it — one team's five check
 the wall's cards, the variant `deployed` — its weight on the wire where the browser
 takes gzip, and the render's time and peak memory (what a browser pays for the same
 wall is Mode 5's). The file is read by eye and scanned against `release/private_strings.txt`
-before it changes. Add a case by appending a `Fixture` there; every fixture is
-also rendered as a smoke test in `tests/test_ui_fixtures.py`, so a template that
-breaks on an extreme is caught by the gate.
+before it changes. Beside it stands a **second deployment's wall** in the same shape
+(`tests/hosts_tree.py`, from `tests/fixtures/hosts_tree.json`): 101 nodes under two
+cards, nine hosts the library's own types write — `host-metrics` on each, `macos-memory`
+beside it on one, `qnap-metrics` on the NAS — and a card of the family's checks, every
+name the deployment's own replaced by a generic one of its length and every line
+made-up text of the recorded length, read with that deployment's `reason_cap` of 6 —
+the wall the host types are measured on when they say how their levels start, as the
+variant `hosts` of the same two files, drawn with what the three types propose as the
+deployment mounts them (`hosts_tree.checks()`) and with what they say of their nodes, an
+about and a handbook an aspect. It is no fixture of the sheet. Add a case by appending a
+`Fixture` there; every fixture is also rendered as a smoke test in
+`tests/test_ui_fixtures.py`, so a template that breaks on an extreme is caught by the
+gate.
 
 ---
 
@@ -134,7 +144,7 @@ A pin that outlives the stop shows what a start does with one its log has lost
 place, and start it:
 
 ```bash
-echo '{"events": []}' > var/demo/var/state/events.json
+echo '{"events": []}' | gzip > var/demo/var/state/events.json.gz
 uv run python tests/demo_wsgi.py
 ```
 
@@ -169,8 +179,9 @@ minute later — then stop it, empty the kept log's rows and leave its table of 
 every node last showed, and start it:
 
 ```bash
-python3 -c "import json, pathlib; kept = pathlib.Path('var/demo/var/state/events.json'); \
-log = json.loads(kept.read_text()); log['events'] = []; kept.write_text(json.dumps(log))"
+python3 -c "import gzip, json, pathlib; kept = pathlib.Path('var/demo/var/state/events.json.gz'); \
+log = json.loads(gzip.decompress(kept.read_bytes())); log['events'] = []; \
+kept.write_bytes(gzip.compress(json.dumps(log).encode()))"
 uv run python tests/demo_wsgi.py
 ```
 
@@ -204,12 +215,12 @@ time:
 - **children** — disk / memory / load in a shifting mix, so the card's roll-up
   moves. Its three also carry a **declared rank** (below), which is why they read in
   that order rather than with `load` filed in the middle.
-- **fleet** — five hosts of two quiet leaves each under `/hosts/fleet`: five quiet
-  **boxes** on one level, two past the branch cap of three, so the level folds them
-  behind **+2 more** — the fold the tab's map keeps (below). Mid-cycle one host's
-  disk fills: a failing box is never folded, so it steps out of the fold by itself
-  and the count reads *+1 more* until it clears, while a level the viewer opened
-  stays open.
+- **fleet** — twelve hosts of two quiet leaves each under `/hosts/fleet`, a level no
+  file speaks for that, opened, would draw thirty-six boxes: past the built-in look's
+  thirty, so its hosts start as **chips** with their counts — the net for a level
+  nobody expected to be big ([ADR-0128](adr/0128-where-a-nodes-first-look-comes-from.md)).
+  Mid-cycle one host's disk fills: the failure budget opens that host with its disk,
+  and once it clears it is a chip again, while a host the viewer opened stays open.
 - **audit** — a wiz-style findings leaf that stays **OK** while its reason list
   swells to ~150 long lines, then clears: a skyscraper card growing and
   collapsing under the poll without ever changing color. Its findings are
@@ -355,8 +366,8 @@ after its control is activated. The review queue is the
 pleasant everyday version, and it is deliberately small enough to pin *every* member,
 which is the case worth walking: with all of them pinned the card reads
 **MAINTENANCE** on the dashboard, the strip pill's popover says *all 5 reasons* — the
-row that explains the blue card — and `/maintenance` states each pin as a block that
-opens with the line it silences. Follow a block's *this line* and you land on that
+row that explains the blue card — and *Handled* states each pin as a block that
+opens with the line it holds. Follow a block's *this line* and you land on that
 line, marked, rather than at the top of the page. Pin a line on `/security/audit`
 too, and then wait out a cycle: the audit list clears at the end of it, and the node
 page tells you the pin's line is no longer being reported rather than leaving you to
@@ -370,10 +381,10 @@ ring cue — and the node's color is *derived* from them. Two things to walk. Wa
 verdict is not displaced by the retry, which is the whole design in one line. Then
 pin that one red line: the node takes the color of the lines that are left — yellow
 while the gate waits, **green** once it is approved — while the pinned line sits in
-the maintenance tint with its cue still saying *error*: silencing the one failing
-workflow no longer silences (or discolors) the rest. The node's **Time** card says
-*since* that moment, *when a line was silenced*, and `/events?under=/ci/pipelines`
-lists the row with a *line silenced* chip and, for its reason, the line and the pin's
+the maintenance tint with its cue still saying *error*: pinning the one failing
+workflow no longer holds (or discolors) the rest. The node's **Time** card says
+*since* that moment, *when a line's pin was set*, and `/events?under=/ci/pipelines`
+lists the row with a *line's pin set* chip and, for its reason, the line and the pin's
 note ([ADR-0107](adr/0107-an-event-is-a-change-of-what-a-node-shows.md)). Leave the
 pin through a cycle: what the build does beneath it is on Events as rows marked
 *maintenance*, the node's own changes beside them, and the node's History lists only
@@ -428,6 +439,18 @@ that make the features above visible:
   positively-ranked siblings rather than at its alphabetical place. The **third**
   source is in `checks/security_wiz.yaml`: an inline `order: -1` beside that check's
   own `title:`, which is what puts the posture card ahead of `audit`.
+- **Handbooks**: `checks/services_api.yaml` gives the API gateway its runbook,
+  `handbook/api-gateway.md`, and links it from its about by the short form;
+  `nodes.yaml` gives `/services` one as text
+  ([ADR-0133](adr/0133-a-node-says-what-it-is-in-a-card-and-at-length-in-a-handbook.md)
+  decisions 3 and 4) — see *Handbook* below.
+- **Details**: `nodes.yaml` gives `/services` an owner, a link to whom to call and where
+  its tickets go, and `/hosts` its site; `checks/services_api.yaml` gives the gateway
+  an owner of its own and its documentation, `checks/hosts_fleet.yaml` the fleet's
+  rack; and the `demo` type gives `/hosts/nas`, its disk and each of the fleet's hosts
+  the details of their objects with every run
+  ([ADR-0133](adr/0133-a-node-says-what-it-is-in-a-card-and-at-length-in-a-handbook.md)
+  decision 6) — see *Details* below.
 - **`actions.yaml`** puts a deployment's own links on the pages — see below.
 - **`csp.yaml`** adds one source to the assembled Content-Security-Policy, so the
   `/system/installed` readout has a line whose contributor is *this deployment* rather than the
@@ -533,7 +556,7 @@ when: compare one against the *since* on that node's own Time card. The review q
 proves authored links survive; the maintenance recipe below proves both a whole-node
 pin and an individually pinned reason are named and attributed, and a pin set on a
 **branch** from its head has to stand on the branch's own line, above what it
-silences. **Copy Markdown** should put the visible source on the clipboard as plain
+holds. **Copy Markdown** should put the visible source on the clipboard as plain
 text; **Copy Rich HTML** should paste as a nested list in a rich editor and still
 carry the Markdown as its plain-text fallback — also where the page has no clipboard
 interface, which is any instance opened by a host's name over plain `http`: the
@@ -550,8 +573,11 @@ Every instant carries an offset: compare one against the node's Time card, which
 shows the same moment without one. Pin the node on its Status tab and open Copy
 again — the document must still report what the check **measured** and say a pin is
 in force, never present `maintenance` as the reading. And on a **container**
-(`/status/ci`) the tab leads to `/copy/ci`, which says what the branch shows and
-where that comes from, and lists what needs attention beneath it.
+(`/status/ci`) the tab leads to `/copy/ci`, which says what the branch shows and where
+that comes from, since when it has shown it and what began it — *begun by a reading of
+… beneath it*, the *From* and *What* of the newest row of its History's first table
+([ADR-0132](adr/0132-a-branch-keeps-the-period-of-what-it-shows-beside-the-log.md)
+decision 6): compare the two — and lists what needs attention beneath it.
 
 `/ci/pipelines` is the one to copy for coded lines: each line that declared a code
 carries its own cue, the uncoded advisory beside them carries none, and a running
@@ -590,12 +616,12 @@ The read/edit interaction has one concrete walk:
    configured timezone; open *Which formats can I use?* by click and keyboard and
    confirm the full table fits the editor. Enter
    `**owned** — [ticket](https://example.com/ticket)` plus `Friday` and save. The
-   line stays in place, takes the maintenance tint and carries its block: who silenced
-   it, the resolved expiry with what is left of it, and the bold word and link as
-   rendered HTML. The page comes back **at that line**, ringed — pin one far down the
-   list, where the top of the page would be out of sight of it. Repeat once with
-   `07-10` or a day such as `17` and confirm the displayed boundary is the next future
-   midnight described by the help.
+   line stays in place, takes the maintenance tint and carries its block: who put it
+   in maintenance, the resolved expiry with what is left of it, and the bold word and
+   link as rendered HTML. The page comes back **at that line**, ringed — pin one far
+   down the list, where the top of the page would be out of sight of it. Repeat once
+   with `07-10` or a day such as `17` and confirm the displayed boundary is the next
+   future midnight described by the help.
 3. Click *Edit* in the block. The textarea contains the exact Markdown source, not text
    recovered from the rendered DOM, with the cursor at its end, and the expiry field
    holds the stored expiry; click into it and all of it is selected. Change the note
@@ -607,16 +633,17 @@ The read/edit interaction has one concrete walk:
    *Last changed* beside it, and the same pin's editor left open in a second tab
    still saves. *Clear* remains a separate action, and comes back at the line too.
 4. Repeat at node depth: ‖ in the head's row opens the node's editor beneath the row,
-   saying how many lines it silences. Pinned, the node's block heads the page's frame,
-   which runs round every line, the line pinned before says *also silenced on its own*,
+   saying how many lines it puts in maintenance. Pinned, the node's block heads the
+   page's frame, which runs round every line, the line pinned before says *also in
+   maintenance on its own*,
    and raw `<script>` entered as a note stays visible as escaped text rather than
    becoming an element. With scripts disabled, each *Edit* and each mark still opens
    its editor. A branch's page states its node's pin in its head, above the children,
    and an admin's ‖ stands there: open `/status/ci`, set a pin from the
    head and read it back in the block, whose *Edit* fills the expiry field the same
    way. Open `/status/ci/reviews`: its frame is headed by `/ci`'s block too, without
-   buttons — *This node is silenced from /ci* — whose link leads back to the pin. Back
-   on `/status/ci`, edit the node's note once more and read
+   buttons — *This node is in maintenance from /ci* — whose link leads back to the
+   pin. Back on `/status/ci`, edit the node's note once more and read
    its **Time** card and its History: the card still says *maintenance since* the
    moment the pin was set, and History has one maintenance row, *current*, with the
    note as it reads now
@@ -642,16 +669,18 @@ The read/edit interaction has one concrete walk:
    the editor opens in the box, after its head's row and before its lines, and holds
    the refresh as the card's does. Then set the services pin, with *hide idle* on and
    a depth of your own in the address. The wall comes back as it was asked for, and
-   the card states its pin as the block: who, until when and what is left, and the
-   note in full. *Edit* and *Clear* show while the pointer is over the card or the
-   keyboard is on them, *Edit* holds the stored expiry, and the card has no ‖ while
-   it is pinned. With scripts disabled ‖ is a link to the node's page, whose head
-   keeps *Set maintenance*. The kiosk layout and a viewer's wall show the block
-   without buttons, and no ‖.
-6. Pin a second node, so that two are, and open **Maintenance**. The pins stand under
-   their node's path: *The whole node* first, then its lines in the order the node's
-   own page lists them, each opening with its line and, under the node's pin, saying
-   it is *also silenced on its own*; a node with only lines pinned has no first block.
+   the card states its pin as the block in its wall's form: who, until when and what is
+   left, and the note behind a speech bubble (the walk below). The pencil after it
+   shows while the pointer is over the card or the keyboard is on it, its editor holds
+   the stored expiry and *Clear* beside *Save changes* and *Cancel*, and the card has
+   no ‖ while it is pinned. With scripts disabled ‖ is a link to the node's page, whose
+   head keeps *Set maintenance*. The kiosk layout and a viewer's wall show the block
+   without a pencil, and no ‖.
+6. Pin a second node, so that two are, and open **Handled**. Under *In maintenance*
+   the pins stand under their node's path, the node whose pins have stood longest
+   first: *The whole node* first, then its lines in the order the node's own page lists
+   them, each opening with its line and, under the node's pin, saying it is *also in
+   maintenance on its own*; a node with only lines pinned has no first block.
    Beneath each note stands who pinned it, and who last changed it where somebody has.
    Click *Edit* in a line's block: the editor opens in the block, in place of that
    record, with the note's source and the expiry filled as in step 3. Save. The page
@@ -660,12 +689,46 @@ The read/edit interaction has one concrete walk:
    on its node's page. Narrow the window to a phone's width with an editor open;
    nothing on the page scrolls sideways.
 
+**What is handled, and why a branch has its color**
+([ADR-0135](adr/0135-a-handled-part-keeps-its-true-color-and-every-surface-says-by-what.md))
+need a node's pin with a long note, a line's pin and a branch with something failing
+beneath it:
+
+1. Pin `/services` with a note of several paragraphs — paste three of this page's — and
+   open the wall. The card states the pin in one sentence, *In maintenance by pan until
+   … · 7d left*, and a speech bubble after it; the note itself is not on the wall.
+   Click the bubble: the note opens in a card above the block, in the hover card's
+   look, naming the node, saying the sentence, the note whole and scrolling past a
+   height, who set it and when, and a link to the node's page. Let a refresh pass with
+   the card open: it stays on its block. Escape closes it and gives the bubble the
+   focus back; a click elsewhere, or on the bubble again, closes it too. Choose *Hover
+   card: on a pause* in the settings menu and rest the pointer on the bubble: the card
+   opens after a moment, and leaving the bubble and the card closes it. With scripts
+   disabled the bubble is a link to the node's page, which states the note whole.
+2. The block's edge is dashed, and the block keeps its blue; nothing else on the wall
+   has a dashed edge. As an admin, point at the card: a pencil shows after the bubble,
+   and its editor carries *Clear* in words beside *Save changes* and *Cancel*.
+3. Pin one red line of `/ci/pipelines` from its page and close `/ci` on the wall: its
+   chip carries a ringed diamond and *1* after its counts, and its tooltip ends *1
+   handled: 1 line in maintenance*. Pin a leaf beneath it whole: it counts as ‖ among
+   the chip's counts, and the diamond still says *1*.
+4. Open `/status/ci`. Right after the Time card a card says why the branch has its
+   color — *Why error* or *Why warn* while something beneath it fails, listing each
+   part that counts with its status and since when, or *Why ok* — and beneath ◇ and
+   *‖ In maintenance* the two pins, the line's saying what it reads, each with who
+   set it and until when and linked to where it stands. The Time card's *and N more*,
+   where it has one, leads to it. A leaf's page and a pinned node's have none. Copy
+   `/ci`'s document: after *Beneath it*, *Handled beneath it* lists the same.
+5. The band's pill reads ◇ and the number of pins that stand, its tooltip by kind —
+   *3 handled: 2 nodes in maintenance, 1 line in maintenance* — and leads to
+   **Handled**; `/maintenance` in the address lands there too, its query kept.
+
 **A pin whose node is not reported**
 ([ADR-0109](adr/0109-a-node-says-its-children-are-complete.md) decision 4) needs the job
 name that comes and goes. Pin `/ci/jobs/backfill` for `10m` while it is on the wall, and
-open the Maintenance page once it has left, within two minutes at the latest. Its
+open *Handled* once it has left, within two minutes at the latest. Its
 section stands under its path, which is no link there, says that the node is not
-reported at present and that its pin silences nothing, and its block opens *The whole
+reported at present and that its pin holds nothing, and its block opens *The whole
 node, when it is reported,*. The wall's pill does not count it. *Edit* the note in the
 block and save: the page comes back with the section marked, and no node appears on the
 wall. When `backfill` returns it is in maintenance from its first reading —
@@ -692,11 +755,160 @@ tabs, submit the newer, then the older. An **entry** pin conflicts identically a
 the page carries its slug, so the two tabs can be two per-line pins on the same
 reason of `/ci/reviews`.
 
-Do it once from the **Maintenance** page as well: open it in two tabs, open the same
-block's *Edit* in both, save one and then the other. The conflict page is answered at
-the Maintenance page's own address, so check each way off it — *Change nothing*
-above all, which is a plain link — loads the Maintenance page again with that node's
-section marked, rather than staying where it is.
+Do it once from **Handled** as well: open it in two tabs, open the same block's *Edit*
+in both, save one and then the other. The conflict page is answered at the write's own
+address, `/pins/maintenance`, so check each way off it — *Change nothing* above all, which is
+a plain link — loads *Handled* again with that node's section marked, rather than
+staying where it is.
+
+### Seen
+
+A failure marked seen
+([ADR-0142](adr/0142-a-failure-marked-seen-counts-as-ok-above-until-it-changes.md))
+needs no code either: an admin marks one with the ringed check, which stands after ‖ in
+a head's icons and just before ‖ at a failing line's end, wherever something fails now.
+The part keeps its color and counts as ok one level up until it changes.
+
+1. **A worsening ends it.** `/services/api` in its amber quarter, 15 to 30 seconds into
+   its minute: its card's ringed check opens the page's one editor in the card, *Mark
+   seen the one failure at api.* Save it with a note: the card stays amber under its
+   block, *Seen by pan at* {warn} *· until it changes*, and `/services` counts it ok —
+   the configured floor on the gateway counts after the seen, from the ok it passes. At
+   30 seconds the gateway turns red, the seen ends and `/services` counts it red;
+   `/events?under=/services/api` shows the row *seen* and the row *seen ended · worse*.
+   Mark it seen again while it is red: at 54 seconds it recovers, *seen ended ·
+   recovered*.
+2. **A line, at its own page.** `/status/ci/pipelines` while the build fails, 32 to 72
+   seconds into its 90: the build's line ends in the ringed check and ‖; mark it seen,
+   and the page comes back at the line, which keeps its red cue under the ringed check
+   with its block beneath it, *This line is marked seen by pan at* {error}. The node is
+   green — the waiting gate is healed by its rule — and at 72 seconds the build passes:
+   *line's seen ended · recovered*.
+3. **A line no longer reported.** `/status/ci/reviews` before 76 seconds into its 90:
+   mark #4846 seen. When it is merged, near the end of the cycle, its line goes and the
+   seen with it, *line's seen ended · no longer reported*; when it comes back next cycle
+   it alarms as new.
+4. **A head's, each its own.** On the wall, while the nightly erupts — from 42 seconds
+   into its minute — with the reviews waiting, press the ringed check on `/ci`'s card:
+   the editor says how many failures it marks at and beneath `/ci`, each its own. On
+   `/status/ci` the head's own editor lists every one, linked. Save: each is a seen of
+   its own, sharing the note; `/handled` lists them under *Accepted*, *N seen on M
+   nodes, the longest standing first*, and each ends by itself as its failure changes.
+   Open the editor again, wait until a review opens mid-cycle (50 seconds into its 90)
+   and save: *Not marked seen — What fails here changed since this was opened.* lists
+   the failures as they stand now, with a form that marks those.
+5. **Edit, Clear, and what it holds.** On a node's page the block's *Edit* changes the
+   note and may give an end — *2h*, read as a pin's expiry is — which the sentence then
+   says, *or* the time *· 2 h left*; *Clear* ends it at once, *seen ended · by hand*. No
+   ringed check stands on a node in maintenance, on a green one, on one failing only
+   because its reading went stale, or on what is seen already.
+6. **What says it elsewhere.** A closed chip's diamond counts what is seen beneath it,
+   *2 seen*, and the band's pill counts each seen beside the pins. Copy
+   `/services/api`'s document while it is seen: *☑️ Seen — by pan at warn ⚠️, until it
+   changes*, and *☑️ Accepted* in `/services`'s list of what is handled. The JSON
+   (`Accept: application/json` with the demo's token) says
+   `"contribution": {"code": "OK", "by": "seen", "rule": "<its id>"}` on the gateway,
+   and its `handled` lists the seen with the `status` it was set at.
+
+### Configured rules
+
+A deployment's configured rules
+([ADR-0137](adr/0137-a-deployment-says-in-a-table-how-a-part-counts-above-it.md)) need
+no code either: `tests/demo_config/aggregation.yaml` writes one rule of each kind on the
+scripted checks, and the demo reads it at its start as a deployment reads its own. Every
+part keeps its true color; what changes is what it counts as one level up, under § and a
+sentence that names the rule.
+
+1. **The cap.** When `/ci/nightly` erupts, from 42 seconds into its minute, its box
+   stays red with its twelve lines, and beneath its head a block with a dashed edge and
+   no fill says *{error} counts as {warn} above, by the rule nightly advises*, the two
+   statuses drawn as their signs; its speech bubble opens the note and *Configured in
+   …/aggregation.yaml since 2026-10-24*, with no buttons for an admin either. `/ci`
+   counts the nightly amber. Close `/ci`: its chip counts the nightly as an error among
+   its counts, and its diamond says *1 by a rule*.
+2. **The floor.** `/services/api` in its amber quarter, from 15 to 30 seconds into its
+   minute: the gateway's box is amber under *{warn} counts as {error} above*, and
+   `/services` is red. `/status/services` says *Why error*, and lists the gateway under
+   *§ By a rule*: what it reads, what it counts and the rule, since when.
+3. **Healing one named line.** `/ci/pipelines` while `deploy-gate` waits and the build
+   passes — 27 to 31 and 72 to 81 seconds into its 90: the gate's line keeps its amber
+   cue with § before its words, its tooltip *Counts as ok by the rule a waiting gate is
+   no failure*, the node's block says *On 1 of its lines, {warn} counts as {ok}*, and
+   the node is green. While the build fails the node is red, the rule changing nothing
+   of it.
+4. **A count over lines.** `/ci/reviews` is green while five reviews wait, each line
+   under §, and its block says *… while fewer than 6 fail — 5 do*. From 50 to 76
+   seconds into its 90 six wait: the block leaves the wall, the lines count as they read
+   and the node is amber, and its page keeps the block with *— 6 do · changes nothing
+   now*.
+5. **A count over children.** `/hosts/fleet` while node-04's disk is full, 24 to 42
+   seconds into its minute: node-04 and its disk stay red, the fleet's block says *Of
+   its children, {error} counts as {warn} while fewer than 2 fail — 1 does*, node-04's
+   page says *Among /hosts/fleet's children, …*, and the fleet is amber.
+6. **What changes nothing now.** `/handled` lists the six under *By a rule*, the longest
+   standing first — here the file's order, every rule dated the same day — each its
+   block with the path it picks, its note and its file, and beneath it what it changes
+   the count of now, each part linked, or *changes nothing now* and why. *backfill is a
+   one-off* picks nothing while the job is away; while it is on the wall it changes the
+   count of `/ci/jobs/backfill`, which counts nothing above. The band's pill counts the
+   parts the rules change now beside the pins, and its popover's *N by a rule…* leads to
+   the section.
+7. **The log and the envelope.** `/events?under=/ci/nightly` shows the eruption's row
+   with the chip *aggregation*, which *held back* hides; `/events?under=/ci/pipelines`
+   shows the gate's wait as a row of its own, the reading the node did not show, marked
+   the same. The JSON (`Accept: application/json` with the demo's token) says
+   `"contribution": {"code": "WARN", "by": "aggregation"}` on the nightly, and the
+   gate's entry carries `"contribution": {"code": "OK", "by": "aggregation"}`. Copy
+   `/ci`'s document: *Handled beneath it* lists *§ By a rule* after *In maintenance*.
+8. **A rule that cannot apply.** Stop the demo, change `nightly advises` to
+   `counts_as: {ERROR: OK}` and start it: `/little-sister`'s startup line names the file
+   and the rule, and says that it does not apply because a worse status would count for
+   less than a milder one; the nightly turns `/ci` red again, and the other five apply.
+   Put the file back.
+
+### Tags
+
+The demo tags its nodes as a deployment does
+([ADR-0139](adr/0139-a-node-carries-every-tag-written-for-it-or-above-it.md)):
+`tests/demo_config/nodes.yaml` gives `/services` *production* and *customer-facing*,
+`/ci` *internal*, `/storage` *production* and `/hosts` *hall-2*, the fleet's own check
+file gives `/hosts/fleet` *production*, and `tests/demo_config/tags.yaml` says what each
+means.
+
+1. **On a node.** `/status/services/api`: the *About* card lists *production* and
+   *customer-facing* as chips between its text and its details, each one's tooltip what
+   the tag means and *written on /services*. The wall's hover card names them in one
+   line, and the Copy document lists them under *Tags*.
+2. **The wall filtered.** The band's list beside *hide idle* offers the four tags in
+   `tags.yaml`'s order. Choose *production*: the address says `?tag=production`, the
+   cards are `/services`, `/hosts/fleet` — *hosts ›* muted before its name — and
+   `/storage`, and the line above them says what the tag means, names the failing parts
+   the filter hides — `/ci` while a pipeline fails, `/hosts/nas` while its disk is full
+   — and leads back to every node. A click on *fleet* closes it to its head, and the
+   refresh keeps both the close and the filter. A chip on an *About* card leads to the
+   same wall.
+3. **Beneath a node.** `/status/hosts?tag=production` is the fleet alone in `/hosts`'s
+   frame, with `/hosts/nas` among what it hides; `/status/ci?tag=production` says
+   *Nothing beneath ci carries production.*
+4. **Nothing remembers it.** Open `/status` again: every node, the list on *every node*.
+5. **Events.** `/events?tag=production` lists the changes of what carries the tag — the
+   gateway's, the fleet's, the backup's — and counts them against the log; its *tag*
+   list offers the same tags.
+6. **A rule by a tag.** Stop the demo, add to `tests/demo_config/aggregation.yaml`
+
+   ```yaml
+     - name: internal advises
+       tag: internal
+       counts_as: {ERROR: WARN}
+       note: Delivery is ours alone; it advises.
+       since: 2026-10-24
+   ```
+
+   and start it. While a job or a build fails, `/ci` stays red on its own box and its
+   block says *{error} counts as {warn} above, by the rule internal advises*; `/handled`
+   names what it picks *What carries internal*. Write `tag: intenral` and start again:
+   `/little-sister`'s startup line says the rule picks what carries *intenral*, a tag
+   the configuration writes for no node, and does not apply. Put the file back.
 
 ### History
 
@@ -705,10 +917,15 @@ section marked, rather than staying where it is.
 readings box both ways: its heading row and its Time column hold still, and its
 scrollbars stay at its edges; tab into it and scroll with the arrow keys and Page Down.
 *Response time · ms* heads the declared column over `response_ms`, before the fields
-nothing declares. `/history/services` declares nothing of its own and says so in its
-periods table; a node the log holds no change of shows the period that holds, since
-*before* the log's oldest event — after a long run, or with a seeded log (below) whose
-events name other nodes.
+nothing declares. `/history/services` declares nothing of its own and says so in the
+table of its own periods, beneath the periods of what it shows
+([ADR-0132](adr/0132-a-branch-keeps-the-period-of-what-it-shows-beside-the-log.md)
+decision 6): each names under *From* the node whose change began it, linked to that
+node's History — *itself* where its own change did it — and under *What* what moved it,
+the oldest neither, since it began before the log's oldest row; past fifty, the older
+ones stand in one fold, *N earlier periods*, that opens without a script. A node the
+log holds no change of shows the period that holds, since *before* the log's oldest
+event — after a long run, or with a seeded log (below) whose events name other nodes.
 
 `/history/ci/jobs/import` lists every kept run of a job name with its code's cue and its
 sentence, the older runs' from the lines its grading wrote for the record;
@@ -717,12 +934,73 @@ ticks say. `/history/ci/jobs` lists `backfill`'s kept runs while that job name i
 *All 6 readings kept of* `jobs/backfill` — and no such table while its node stands,
 where they are the node's own (ADR-0109 decision 6).
 
+### Notes
+
+`/status/ci/reviews` carries a *Notes* tab after *History*, with no number until a
+note is written ([ADR-0140](adr/0140-a-nodes-notes-stand-on-a-tab-of-their-own.md)). Open a
+line's ‖: beneath its editor, *write a note on this line* opens the Notes view with
+that line chosen — write one, and the tab says *Notes 1*. Set a line's pin with a
+note: it stands among the notes as the note of a pin that stands; clear the pin and it
+is the note of a pin that has ended, its words kept. *Add a note* writes one on the
+node, and the newest note of its own has *Edit*: an edit from a second tab, opened
+before it, is refused with its words kept. *What the line showed then* folds what the
+node and the line said as the note was written. `/copy/ci/reviews` has a *Notes* block
+after its reasons, the newest note whole and how many more there are. Write a note on
+`/ci/jobs/backfill` while it stands, and its address lists it once the node is gone.
+A pins file a version before wrote, a pin's text under `reason`, starts its pins
+without their text, and `/little-sister/startup` says how many.
+
+### Handbook
+
+`/status/services/api` carries a *Handbook* tab between *Notes* and *Copy*, and so
+does every other view of the node; `/status/services` carries one too, and
+`/status/services/web` none
+([ADR-0133](adr/0133-a-node-says-what-it-is-in-a-card-and-at-length-in-a-handbook.md)
+decision 3). `/handbook/services/api` is the gateway's runbook, a file of the demo's
+`handbook/` that its check's file names: its *Sign in* link opens at its section,
+beneath the sticky bar and not under it, and so does its *when it fails*, written in the
+short form, `handbook#when-it-fails`, which on its own page stays in the page;
+`/handbook/services/api#when-it-fails` opens at that heading. `{warn}` and `{error}` in
+its headings are drawn as their signs, and its *Who to call* is a table, drawn as GitHub
+draws one, its *weekends* struck through — on a phone it scrolls sideways inside itself
+where it is wider than the screen, its words whole in their cells. Its crumb `services`
+opens the services' handbook, and `nodes` the overview, the root having none. Hover the
+gateway's name on the wall: the card ends in a *Handbook* line, and so does the
+services' card. `/handbook/services/web` answers `404` and says where a handbook is
+written.
+
+The gateway's About card says *what to do*, a link its about writes in the short form
+(decision 4): it opens the runbook at *When it fails* in a tab of its own, and so does
+the same link in the hover card. Its Copy tab names the runbook beside *Dashboard*, its
+address as the page was reached. Write `handbook: handbook/gateway.md` in the gateway's
+check file in place of its own, a file the demo does not have, and restart: the tab is
+gone, and the startup node says which file the check names and that its about links
+`handbook#when-it-fails` on a node with no handbook.
+
+### Details
+
+`/status/services/api`'s About card ends, after a thin rule, in a table of its details
+([ADR-0133](adr/0133-a-node-says-what-it-is-in-a-card-and-at-length-in-a-handbook.md)
+decision 6): *owner* first, *API squad*, the gateway's own, standing in the row
+`/services` named first; then *on call* and *tickets*, given down from `/services` —
+hover either key and its tooltip says `/services` — and *docs* last, its own. *on call*
+opens the services' handbook at *Who to call*, the handbook of the node it is given on
+and not the gateway's runbook. `/status/hosts/fleet/node-03` reads *host* first, its
+object's name from the run, then *site* from `/hosts` and *rack* from the fleet's check
+file: a place told level by level. `/status/hosts/nas` and its disk read their objects'
+details first, and the site beneath them. On a phone the table keeps each key on one
+line and breaks a long value anywhere rather than widening the card. The gateway's Copy
+tab carries the same rows under *Details*, after its facts, *on call* written out to
+the services' handbook's full address. Write `tickets:` with no value under the
+gateway's `details:` and restart: its row is gone from the gateway's card, and stays on
+`/status/services`.
+
 ### Events
 
 `/events` shows what its URL names
 ([ADR-0101](adr/0101-the-events-page-is-filtered-by-its-url.md)), and the demo's own
 log grows too slowly to judge that by. Give it a busy one: stop the demo, write a log
-into `var/demo/var/state/events.json` — `{"events": [...]}`, oldest first, each event
+into `var/demo/var/state/events.json.gz` — `{"events": [...]}` under gzip, oldest first, each event
 as `Event.to_dict()` writes it, its time without an offset on this machine's clock —
 and start the demo again, which restores it. Seed an outage that takes five aspects of
 one host down at one moment, among a few hundred unrelated transitions and a pin over a
@@ -756,7 +1034,7 @@ it keeps one, and the node's title stands on the line beneath, where the trail l
 it less room than a word needs. On Events, History and both System views a table
 scrolls inside its box while the bar and the rail stay put, and System's schedule,
 scrolled to *Seen*, is still there after the next poll. Open an editor on a node's
-page and on the Maintenance page: it fits. Tap an action chip once — *Copy* or
+page and on *Handled*: it fits. Tap an action chip once — *Copy* or
 *Nudge* on a line of `/status/ci/reviews`' head, *File it* in a card's head on the
 wall: the link is followed on that tap, and no inspection card comes up for the node
 the chip stands in; a tap on the node's name opens or closes the node, and no card
@@ -791,7 +1069,8 @@ decided its look: `drawn`, `entry` once you clicked it, `swq` on `informational`
 node and its children, `kept` for a card an open node beneath it keeps open under
 *Close all*.
 
-The **head's icons**, in each open head's upper right corner: ↗ opens the node's
+The **head's icons**, right after each open head's name and shown while the pointer
+is on the head (*Head's buttons*, below): ↗ opens the node's
 page; the **funnel** folds the node's healthy children and lines behind *✓ +N ok*
 after the rest, pressed while they are folded, its tooltip the count — on `fleet` it
 folds the four green hosts behind *✓ +4 ok* and leaves `node-04`, and on `wiz` a
@@ -845,14 +1124,17 @@ wait for a refresh, and the focus is on *File it* of the same node. On a touch
 screen the squares stand 8 pixels apart, and a tap in the gap lands on the nearer
 one. A box whose lines run past the budget ends them in **⌄ all N** — `nightly`'s
 *⌄ all 12*, `pipelines`' *⌄ all 8* — which shows the lot and reads *⌃ less* until
-clicked again.
+clicked again. Where the lot stands taller than about half the window, it scrolls
+inside the box: make the window short until `nightly`'s twelve pass half of it, Tab to
+the lines and scroll them with the keys, wait ten seconds, and they stand where you
+left them; *⌃ less* folds them to their first lines.
 
 The band's three buttons: **Close all** closes everything the configuration opened
 and keeps what you opened, with the nodes above it — open `web`'s `api` first, press
 *Close all*, and the services card and `api` stand open while everything else is a
 chip or a one-line card; the button is pressed and carries *· 1*, the one node the
 map holds, and a second click on it closes everything. **Open all** opens every node,
-the healthy shown and every *+N more* unfolded; **As configured** brings the first
+the healthy shown; **As configured** brings the first
 look back and empties the map, and with a `depth=` in the address loads the address
 without it. `depth=2` in the address closes every node two levels below the wall —
 the cards' children — for that one load, the viewer's word, and writes no cookie;
@@ -885,9 +1167,18 @@ then its findings inside the frame and its facts after them — and its funnel f
 healthy findings: open `audit`'s chip on the wall, and they are folded there too. As
 an admin, ‖ in either head's row opens the editor for the node's pin beneath the row,
 which stands out of sight until then; Escape closes it and gives ‖ the focus back.
-With scripts disabled the head shows the editor's own *Set maintenance* instead. On
-every view of a node — Status, Series, History, Copy — the *about* stands open in the
-band, beneath the trail and the title.
+With scripts disabled the head shows the editor's own *Set maintenance* instead. On a
+node's Status tab its *About* card stands beside its facts (ADR-0133): what its check
+reads, muted, and its *about* beneath. At a desk it stands to the right of *Time*, the
+facts at their 820 pixels and a leaf's page as wide as 1,300 for it; narrow the window
+until it no longer fits beside them, or open the page on a phone, and it stands among
+the facts, before *Configuration*. A branch's stands beside its facts after its
+children. The node's other views — Series, History, Handbook, Copy — show neither text,
+and its head no longer says what its check reads. `/status/services/api`'s about names the
+statuses it cycles through, `{ok} → {warn} → {error}`, and the card draws each as its
+sign — the status's cue and its word on its own tint, glowing in cyberpunk — where the
+file says it in braces; switch the theme in the settings menu and each stays readable
+on its card.
 
 What a viewer opens on the wall stands through the refresh and a reload (decisions 9
 and 10): one script, `static/js/tree.js`, keeps it in the tab's `sessionStorage`
@@ -929,14 +1220,15 @@ The card answers a node's name alone ([ADR-0019](adr/0019-inspection-popover.md)
 updates), once a browser asks for it: the library's look is `inspection_card: off`
 since 2026-10-18, so first choose *Hover card: on a pause* in the settings menu. Then
 rest the pointer on the name of a chip that wears the help cursor — its node
-has a title or an *about* — and about two thirds of a second later its card comes up — the name and the title as the head draws
+has a title, an *about* or a description — and about two thirds of a second later its card comes up — the name and the title as the head draws
 them, the first block of its *about*, and *… N more paragraphs on its page* linking
-there where more follows — and not sooner; moving on the name starts the pause again.
+there where more follows, or what its check reads where it has no *about* — and not
+sooner; moving on the name starts the pause again.
 Rest it on the rest of a head's row, its title, its state or an icon: nothing comes,
 and only the names that have a card wear the help cursor, the row the pointer's. Click
 a name: the node opens or closes and no card follows, even with the hand still moving
 on it. Tab to a name: the card is up at once, and Escape closes it. On a node's page
-its own head has none — its *about* is open in the band. Back in the settings menu:
+its own head has none — its *About* card stands on the page. Back in the settings menu:
 *Hover card: off* keeps the card closed for the pointer and the keyboard, and no name
 wears the help cursor; with the operating system's high contrast on (forced colors) a
 head's row and a chip wear the outline whichever look answers the pointer. Both
@@ -945,6 +1237,49 @@ chosen: set `inspection_card: pause` in `tests/demo_config/settings.yaml` and re
 the demo, and a browser that never chose has the card, while one that chose *off*
 keeps none. The demo is drawn in the library's theme, cyberpunk; *Theme: plain* is
 the light palette the other themes are drawn from.
+
+An open head's buttons stand right after its name under the library's look,
+`head_buttons: pointer`
+([ADR-0127](adr/0127-the-wall-is-a-tree-and-a-click-opens-or-closes-a-node.md)'s
+updates): at rest a head shows its name, its title right after it and its state, and
+the pointer anywhere on the head shows its buttons over the title, on the box's fill —
+nothing moves — and leaving it hides them again, after a click on one of them too; Tab
+onto a name shows its head's, and an open ⋯ menu keeps them while the pointer goes
+elsewhere. On a phone they show always. *Head's
+buttons: on a line beneath* gives them a line of their own under the name; narrow the
+window until a long name and its state no longer share a line and the state goes
+beneath, at the right, nothing behind ⋯ — and the demo's `card_status_line: below`
+puts a card's state at the right of the buttons' line. *Head's buttons: at the end,
+the name opens the page* puts the state and then the buttons at the row's end and ↗
+out of sight: the name underlines under the pointer and a click on it opens the
+node's page, a click on the rest of the row opens and closes the node, and from the
+keyboard Enter and Space on the name open and close it, while Tab and the arrows
+reach ↗ in the toolbar, shown once it has the focus.
+
+Open the settings menu: its first row says whom the browser is signed in as, and *Log
+out* at its far end is a button, there to press as the menu opens — shorten the window
+until the looks scroll inside the menu, and it still is. Beneath it the headline
+*Display* says where the choices are kept: in this browser, not in the account. At its
+foot *Using the wall* opens `/help`, the account of using the wall the package ships: at
+a desk it stands at the last column's foot, and the menu fits the window as it did; on
+a phone it ends the menu. `/help#the-band` opens at the band beneath the bar. Each group
+says beneath its heading what it changes, the layout's too, in a muted line that wraps
+in its column and never widens the menu; a screen reader names the group by its heading
+and reads its line as the focus enters it. At a desk the groups stand in three columns,
+read down each in turn, and the menu fits a laptop's window without scrolling; narrow
+the window below 72rem and they stand in two, below 36rem, a phone's, in one. The last
+group, *Failures*, is the failure budget's switch
+([ADR-0127](adr/0127-the-wall-is-a-tree-and-a-click-opens-or-closes-a-node.md) decision
+5): under *open their way*, the default, a failure beneath a chip opens
+its way, the first three in each card with the nodes on their paths; choose *stay chips*
+and every failure stays the red chip its look drew and the wall keeps its size, and the
+group's line says to keep the default, a kiosk's too. Set `failures: chips` in
+`tests/demo_config/settings.yaml` and restart the demo, and a browser that never chose
+keeps its failures shut while one that chose *open their way* opens them. *Close all*
+turns the budget off for the tab whatever the look. Choose any look and the page draws
+itself again with it, the menu open on your choice and the focus on it; a click inside
+the menu that changes nothing leaves it open, and *Escape* or a click beside it closes
+it. The band's *hide ok* reloads the page too, and leaves the menu shut.
 
 ---
 
@@ -984,9 +1319,12 @@ bar outranks any picked swatch. `tests/sweep_contrast.py` walks every theme — 
 settings menu opened on `/status`, the rows on `/links` that are not plain body
 text and the folds of its setup guide, closed and opened, the coded reason lines of a
 seeded tree, on its leaf page a pin's block
-with its buttons and its opened editor, the Maintenance page's count, headings
-and records, the same block on the wall — in a box inside a card, in the editor a
-card's ‖ clones into it, and in a branch's head — every culprit's own name and state
+with its buttons and its opened editor, *Handled*'s count, headings
+and records, the same block on the wall — in a box inside a card, its note mark, its
+pencil, its dashed edge and its editor's *Clear*, in the editor a card's ‖ clones into
+it, and in a branch's head — a configured rule's block on a red, an amber and a green
+node, its words, its note mark and its dashes, and § on a line it counts otherwise —
+every culprit's own name and state
 word on its fill, a failing box's, a warning's, a pinned box's and an undefined
 card's, the head's row's chips, *⌄ all N* and the band's buttons, and its squares,
 the icons on an error's and an ok's fill, ⋯ on a card drawn narrow for it and an
@@ -994,7 +1332,9 @@ action wearing its icon, their glyphs and their resting edges against the non-te
 bar — and the chips and status words in the rows of the Events page and of a node's
 History tab, and measures each as the eye actually gets it: the *computed* ink, the
 background composited from every translucent layer above the first opaque one,
-stacked opacity folded in. It prints the WCAG ratio:
+stacked opacity folded in — but a head's buttons, which under the library's look show
+only under the pointer or the keyboard's focus, are measured as they show, their
+toolbar's opacity whole while they are. It prints the WCAG ratio:
 
 ```bash
 npm i --prefix var/bootstrap bootstrap@5.3.2     # once; var/ is gitignored
@@ -1016,11 +1356,11 @@ to sit at 3.41:1 while everything nearby was measured and fine. This is what
 finds a surface we do not own; it is also what re-checks those two constants when
 the Bootstrap pin moves.
 
-It found the second one the same way: the links page's *check now* button was
-written as a `btn-outline-secondary`, which Bootstrap paints `#6c757d` on **every**
-canvas — 3.76:1 on the dark one. The button now wears `btn btn-sm` for the shape
-and takes its ink from our tokens, which is the general answer whenever a
-Bootstrap component's own color has to hold the bar on six canvases.
+It found the second one the same way: a button written as a `btn-outline-secondary`,
+which Bootstrap paints `#6c757d` on **every** canvas — 3.76:1 on the dark one. A
+button wears `btn btn-sm` for the shape and takes its ink from our tokens, which is
+the general answer whenever a Bootstrap component's own color has to hold the bar on
+six canvases.
 
 A pin's block is walked for the same reason. Its statement and its note sit on the
 block's own tint, a pair the tokens can measure; but *Set maintenance*, which a page
@@ -1028,11 +1368,18 @@ without script shows beneath the head's row, and ‖ in the row stand on the hea
 status fill, and the editor's labels, muted help and *Cancel* are Bootstrap's inks on
 our panel. So the block's buttons draw from the ink
 they stand in rather than wearing an outline variant, and the sweep opens the editor
-and reads each of those rows where it lands. On the Maintenance page the same blocks
+and reads each of those rows where it lands. On *Handled* the same blocks
 stand on the page's own canvas, with rows a node's page does not have: the count
 above them, which is Bootstrap's muted ink, a node's path, which is a link on the
 canvas, the link to its line inside a block's sentence, and the record beneath a
 note. The sweep reads those there.
+
+A configured rule's block has no fill of its own (ADR-0137): its words and its marks are
+its node's ink on its node's fill, whichever status gives it, where maintenance's stand
+on its tint. So the sweep reads one on a red node, one on an amber and one on a green —
+the first in a card that is not the pinned one's, by the rule's name — with its dashes
+at the 75 % of its ink the sheet draws them at, where maintenance's 65 % fell to 2.86:1
+on an amber node in the dark theme.
 
 The Links page's setup guide is walked for it too. Its folds are cards, which
 Bootstrap paints, so what a fold's summary says beside its name takes our muted ink
@@ -1159,14 +1506,16 @@ card and a box's into the box after its row, the clone the browser's disclosure 
 Escape closes and takes away, the refresh holding off while it is open and dropping
 an answer that was on its way, the line saying *paused while editing* at once, the
 page dimming a minute later but for the card being edited, an editor opened from a
-nested box's block holding the refresh as a card's does, ‖ shown always, ending the
-row after the state and reached by the keyboard, a link to the node's page without
+nested box's block holding the refresh as a card's does, ‖ shown with the head's other
+buttons, the last of its icons on the name's line — before the state under the
+library's look, after it under `head_buttons: name` — and reached by the keyboard, a
+link to the node's page without
 script — with a pointer, with the keyboard and by touch — and on a node's page, a
 branch's and a leaf's, the head's own ‖ opening the editor the head keeps, out of sight
 until then, Escape closing it and giving ‖ the focus back. A node's inspection card stays away while its editor is open, and a pinned
 card is drawn at every width a card comes in, its sentence ending no line inside the
 date of its expiry. Run it when `maintenance-edit.js`, `poll.js`, `inspect.js`, the
-block's templates or styles, or what `POST /maintenance` returns to change:
+block's templates or styles, or what `POST /pins/maintenance` returns to change:
 
 ```
 uv run pytest tests/test_pin_browser.py
@@ -1249,6 +1598,44 @@ the hero's stylesheet rules change:
 
 ```
 uv run pytest tests/test_about_browser.py
+```
+
+`tests/test_about_card_browser.py` holds where a node's About card stands
+([ADR-0133](adr/0133-a-node-says-what-it-is-in-a-card-and-at-length-in-a-handbook.md)
+decision 1): a real server and Chromium at a desk, a laptop, a window too narrow for
+the card beside the facts, and an emulated phone. At a desk and on the laptop the card
+has to stand to the right of *Time*, from its top, the facts at their 820 pixels — a
+leaf's page and a branch's, after its children; in the narrow window the facts keep
+that measure and the card stands, as wide as they are, after the report and before
+*Configuration*, as on the phone, which is no wider than its screen; and the root's
+card stands at the wall's foot. A status the about names, `{error}:`, has to be drawn
+as its sign (decision 5), in the library's theme and the plain one: in one piece, no
+taller than its sentence's line, its cue drawn from the shape the page holds, on a
+surface of its own, and glowing in cyberpunk alone. A table the about writes, and one a
+line writes, has to keep its words whole in their cells and scroll sideways inside what
+holds it where it is wider — the card beside *Time*, a phone
+([ADR-0018](adr/0018-markdown-rendering.md) decision 14). The card's details (decision
+6) have to stand beneath its texts, each key on one line, a long value breaking within
+its cell rather than widening the card, at a desk and on the phone. Run it when
+`_node_facts.html`, `_about_card.html`, the node-facts, sign or tables' rules of the
+stylesheet, `render.sign` or a leaf page's width change:
+
+```
+uv run pytest tests/test_about_card_browser.py
+```
+
+`tests/test_handbook_browser.py` holds a node's handbook on its page
+([ADR-0133](adr/0133-a-node-says-what-it-is-in-a-card-and-at-length-in-a-handbook.md)
+decision 3): a real server and Chromium at a desk and on an emulated phone. A link into
+a section has to open it in the page, at its anchor and in no tab of its own, with the
+heading beneath the sticky bar and not under it, and so does an address that names the
+section; on the phone a long line of code, a word longer than the screen and a table
+wider than it have to keep to it, the table scrolling sideways inside itself. Run it
+when `handbook.html`, the handbook's or the tables' rules of the stylesheet or the
+renderer's anchors and link rule change:
+
+```
+uv run pytest tests/test_handbook_browser.py
 ```
 
 `tests/test_curve_frame_browser.py` holds where a curve's frame opens on a phone: a real
@@ -1362,9 +1749,9 @@ uv run --group browser pytest tests/test_a11y_browser.py
 ```
 
 `tests/test_tree_state_browser.py` holds the tab's map on the page's own clock, as
-`test_pin_browser.py` does: a level's *+N more* and a box's *⌄ all N* opened by a
-click stand through a refresh and a reload, with the grid held back until they are
-back and nothing of it in a cookie; a nested box's too; a new tab starts as
+`test_pin_browser.py` does: a box's *⌄ all N* opened by a click stands through a
+refresh and a reload, with the grid held back until it is back and nothing of it in a
+cookie; a nested box's too; a new tab starts as
 configured; the keyboard's focus returns to the same control of the same node
 without a scroll; an open inspection card stays on its node; the system page
 refreshes without the map; a map of another version is dropped whole; a browser
@@ -1387,15 +1774,16 @@ a drag that selects the head's text not, a modified click keeping the link, Ente
 and Space, a chip opened below the fold brought into view and one in view not moving,
 the focus on the other face after each toggle and put back after a swap without a
 scroll; ▤ folding every child and opening them all, mixed once a click opens one, a
-child whose claim would keep it open given an entry of its own; the funnel folding
+child whose claim would keep it open given an entry of its own, and on a fold every
+failing one, so that one made on a node's page holds on the wall; the funnel folding
 the healthy and a press taking `show_when_quiet` and a roster's own quiet lines, its
 tooltip and *✓ +N ok* counting the fold in force, and standing on a green node as on a
 failing one; the band's three buttons, the one in force pressed with the count of the
 map's nodes and a `depth=`, *Close all* keeping a node the viewer opened and the
 nodes above it while the statuses beneath change, a click on the button in force
-dropping what it counts, *Open all* showing the healthy and every level's surplus,
-*As configured* loading the address without its `depth=`, and with `tree.js` held back
-the band's buttons in their place from the first paint, as the script draws them, and
+dropping what it counts, *Open all* showing the healthy, *As configured* loading the
+address without its `depth=`, and with `tree.js` held back the band's buttons in their
+place from the first paint, as the script draws them, and
 a node's page's ‖ in its head's row where *Set maintenance* would stand beneath it —
 without script, neither; the icons' edge and wash at rest, pressed and mixed, the
 band's at rest and in force, and `.is-changed` cleared by
@@ -1416,7 +1804,10 @@ nothing, its ▤ folding the page's cards and its funnel the healthy ones and it
 lines by the node's own entries, so the wall follows, a leaf's page keeping its fold,
 and its head one toolbar. Its
 `HeadRow` classes hold the head's row over a wall where every node carries three
-actions: the actions before the state and the icons, shown always; what a narrowed
+actions, under the library's look: the buttons right after the name, on a card and
+on a box the head's icons first and ↗ the first of them, then the actions, the title
+and the state after them, and a head with no icon — a leaf's own page, the leaf with
+a pin of its own — keeping no room for them; what a narrowed
 card's row has no room for folding behind ⋯, whose menu lists the folded by their
 labels and gives the focus back on Escape; nothing folding where ⋯'s own square and
 gap would give the row's overflow back; a lone action keeping its place, the state
@@ -1424,9 +1815,10 @@ taking its line beneath, where that line keeps it in the row, and folding alone,
 state in the row, where it does not; the state dropping beneath where the name would
 be cut, the name wrapping last, and `card_status_line: below` giving every
 card's state its line and the actions the room back — not where the row's own line
-holds it; a name broken onto a second line carrying the state there, beneath the
-icons, a card's under `below` as a box's, and a state that would touch the name's
-words, or stand nearer them than the toolbar's gap, keeping its own line; the glyphs
+holds it; a name broken onto a second line carrying the state there, at the row's
+end, a card's under `below` as a box's, a name of one line never, and a state that
+would touch the name's words, or stand nearer them than the toolbar's gap, keeping its
+own line; the glyphs
 16 pixels in their 24-pixel squares; a card's children 6 pixels below its lines; a
 title squeezed below 2.5em hidden at every width a card narrows through; the glyphs
 growing with their squares at a 20-pixel font; a long name broken only after its
@@ -1445,8 +1837,8 @@ width of a card and of a box,
 down to the half pixel where folding every action still leaves the row short; a box
 a click, the map or a reload opens measured at once, and a window that grows giving
 the row its room back once the grid's observer has seen the new width; a head's
-controls one toolbar walked with the arrow keys, its
-stop kept through a swap; *⌄ all N* beneath clipped lines, whether the server drew it
+controls one toolbar walked with the arrow keys from ↗ through the icons to the
+actions, its stop kept through a swap; *⌄ all N* beneath clipped lines, whether the server drew it
 or the script found a wrapping line; an admin's ‖ cloning the editor and holding the
 swap; a refresh reading again only the rows the server drew otherwise or that stand at
 another width — none on a quiet one, the rest drawn as they were read, their folds, ⋯
@@ -1455,8 +1847,35 @@ card, a spanned one's as on the load, and the planner's frame after a swap writi
 nothing; the rows this page drew read again when asked for, all of them when the
 pointer turns coarse, the toolbar's gap read anew, and when the root's font grows; and
 on a phone a card of three actions keeping its name whole, its squares 8
-pixels apart with a tap in the gap landing on one of them, and a row and a chip
-under a finger wearing no outline and their press the wash. Its `ChipRunTests` hold
+pixels apart with a tap in the gap landing on one of them and none two pixels past
+the toolbar's first square or its last — ⋯, the last action or the last icon, and a
+page's own first action where it has no icon — a row and a chip under a finger
+wearing no outline and their press the wash, and the buttons shown always. Its
+`PointerHeadTests`, `PointerNameHeadTests`, `LineHeadTests` and `NameHeadTests` hold
+the look `head_buttons`: under `pointer` the buttons shown while the pointer is on the head,
+the keyboard's focus is in it or its menu is open — a click's focus leaving none shown —
+taking no room, the title right after the name and the buttons over it on the box's
+fill, keeping their room where the name breaks, and nothing moving when they show;
+under `line` the buttons on a line beneath the row, from under the name, the state at
+the right and clear of the title, wrapping beneath where the row has no room for it
+and breaking between its parts where even that line has none, nothing folding, and
+under `card_status_line: below` a card's state at the right of
+the buttons' line, the head no taller; under `name` the state and then the
+buttons at the row's end, a state that would touch them keeping its own line; under
+`pointer-name` the buttons where `pointer` puts them, ↗ taking no room, and nothing
+moving when they show; and under both the latter ↗ out of sight until the
+keyboard's Tab from the name lands on it, Enter and Space on the name opening and
+closing the node and a pointer's click on it opening the node's page, a closed
+card's name opening the card, and the name underlined under the pointer with the
+row's wash off it. Its `StateBreakTests` hold a state wider than the line it has to
+itself: broken between its parts, right-aligned — the reading beside the word first,
+then a card's time apart from its cue and word — and inside a part, the stale mark's
+as any other's, only where that part alone is wider than the line, nothing of it out
+of its box; the head making room for every line it takes, under
+`card_status_line: below` too, and a closed card's state taking those lines in the
+head's own flow, under `below` as beside, no room kept from when it was open; and the
+room drawn from what was read through a refresh that reads no row. Its
+`ChipRunTests` hold
 the runs of chips: the runs on either side of an open child lining up, every chip
 stretched to its column, nothing cut; a level's width what its widest name and its
 largest count need, measured in pixels, and neither a click, a count nor a reload in
@@ -1479,6 +1898,51 @@ first:
 uv run --group browser pytest tests/test_tree_browser.py
 ```
 
+`tests/test_boxes_browser.py` holds the look `boxes`
+([ADR-0138](adr/0138-a-viewer-may-pack-a-levels-boxes.md)) on the page's own clock the
+same way, on a card of six open boxes, the second twenty lines tall: in rows the boxes
+after the first row start beneath the tall one and nothing of the packing is drawn;
+packed they stand beside it, two boxes of a column the level's gap apart and packing
+again moving none, boxes of about one height in the columns rows give them, a level's
+first boxes one to a column, a level of boxes alike as deep in each column as rows stand
+them in as many columns, and the wall's own cards packed the same way. A run of chips
+stands in one column as a box does, where the first of its nodes stood, and keeps its
+column through a refresh; a box a click closes leaves its chip where it stood, the chip
+at its run's top, and a chip a click opens stands its box where the chip stood, from a
+run of two too; a column a click empties stays where it stood and as wide; a run a click
+forms is read one column wide before anything reads the page; a level drawn again lays
+as many columns as its boxes and runs fill; and a level a click leaves one open box
+keeps nothing of the packing. Packed, the plan gives a card of six boxes both tracks of
+a wall 1,000 pixels wide where rows' plan gives it one, the wall the lower for it. A
+refresh, a click and a box growing of itself keep every box in its column, each packed
+before anything reads the page, and the window stands where it stood; a width that
+changes a level's columns packs it afresh, a reload too, and one of a single column
+leaves nothing of the packing; a load packs by the heights the tab's map leaves,
+whatever a frame before the map packed, and the wall is hidden until then, a `tree.js`
+that never comes leaving it hidden for a second; the page's order is the source's; and
+on a phone neither look moves a box. Five of them run on the browser's own clock, where
+what they wait for comes in an animation frame or when the browser says a box changed
+size, which a held clock may leave waiting:
+
+```
+uv run --group browser pytest tests/test_boxes_browser.py
+```
+
+`tests/test_boxes.py`, which every gate runs, holds the server's half without a browser:
+the plan each look publishes, and the refresh's fragment carrying the same.
+
+`tests/test_settings_menu_browser.py` holds the settings menu's staying open (ADR-0029):
+a click inside it keeps it open, the choice already in force and a heading alike; a
+choice brings the page back with the menu open and the focus on it, the look in force
+and the tab's entry gone, and the next choice the same way, while a reload no choice
+brought opens nothing; *Escape* and a click outside close it; the band's filter switch
+leaves it shut; and where the tab's session storage is refused the choice still applies,
+the menu shut and no error:
+
+```
+uv run --group browser pytest tests/test_settings_menu_browser.py
+```
+
 `tests/test_wall_cost_browser.py` takes what the wall costs a browser on the anonymized
 tree of Mode 1, in the library's theme — cyberpunk since 2026-10-18, whose monospace
 face reads every wall taller than the plain theme's did — today's numbers the baseline
@@ -1493,7 +1957,8 @@ repositories, a band of 300 findings. The **deployed wall** is read beside them 
 tree mounted as the deployment that runs mounts it, one team's five checks as the
 wall's cards — on the desk it is mostly looked at on, 2,560 pixels wide with a screen
 of 1,300 there, its aws card and its github card on their own, and at 1,920 and 1,280
-pixels and on a phone. Each is read as an admin, whose ‖ stands on every
+pixels and on a phone; and so is the **hosts wall** of Mode 1, at the same four widths.
+Each is read as an admin, whose ‖ stands on every
 open head without a pin, and the walls as a viewer too — the same session, signed again
 with `admin` false, ‖ on no head — so that what a team sees and what is an admin's alone
 stand side by side. The prototype's reading stands beside each case as what the round
@@ -1562,19 +2027,21 @@ npm i --prefix var/bootstrap bootstrap@5.3.2 \
     @floating-ui/core@1.6.8 @floating-ui/dom@1.6.12     # once; var/ is gitignored
 uv sync --group browser
 uv run python tests/walk_gui.py                          # → var/gui-walk/index.html
+uv run python tests/walk_gui.py --look boxes=packed      # a look of the menu besides
 ```
 
 On every screen it opens the wall and a branch's wall and points at each card head — a
 tap on the phone — which raises the inspection card where a node has one, its browser
 choosing the card on a pause as a viewer does in the settings menu, since the library's
-look keeps it off (`CHOSEN_LOOKS` in the script); a branch's
-page, a leaf's and its History; a subject's branch and node; Events, Maintenance, both
+look keeps it off (`CHOSEN_LOOKS` in the script, to which `--look KEY=VALUE` adds a
+look of the menu, as `--look boxes=packed` walks every screen packed); a branch's
+page, a leaf's and its History; a subject's branch and node; Events, Handled, both
 System views, Links, Copy and About; the Series index with every fold open; and two
 Series views, with a pointer at rest on a curve and, with a mouse, a stretch dragged
 across it. Once, on the widest screen, it pins the demo's job name that comes and goes
 through the wall's own editor, waits until its node has left the tree, and then visits
 what a removed node leaves on every screen: its row on Events, its suspended pin on
-Maintenance, the branch it left, its own address, and its check's History and Series.
+Handled, the branch it left, its own address, and its check's History and Series.
 Last it opens every page of the fixture sheet on the widest screen and on the phone.
 A walk takes about eight minutes, most of it the demo's own clock.
 
@@ -1583,10 +2050,15 @@ console's errors, the Content-Security-Policy reports the page sent, and how far
 layout shifted with no input. **And every step is measured** against a short list of
 facts (`FACTS` in the script): a page no wider than its screen, a raised card inside
 the screen, the name, the title, the actions, the state and the icons of a head's
-row — a card's and a box's — not lying over one another, a name read as its lines
-rather than its box, since the state may stand on a broken name's second line, and
-everything a curve or a sparkline draws inside its plot. A fact that does
-not hold **marks** the step.
+row — a card's and a box's — not lying over one another as a reader sees them, no box
+of a level — the wall's cards, a card's open boxes — standing over another, and
+everything a curve or a sparkline draws inside its plot. Of a head's row a name is
+read as its lines rather than its box, since the state may stand on a broken name's
+second line; a part the page hides or fades, itself or by a box around it, is none,
+as the pointer looks fade a head's whole toolbar until the pointer rests on it; and a
+shown toolbar over the title is no mark where `pointer` and `pointer-name` lay it
+there on purpose, though over the name or the state it is one under every look. A
+fact that does not hold **marks** the step.
 
 **Nothing fails.** A review collects, so the walk always ends with its gallery,
 `var/gui-walk/index.html`: each fact with how many steps it marked, the marked steps
@@ -1599,10 +2071,11 @@ second walk is the one to believe.
 
 **A baseline.** Before the interactive wall's stage 2 the walk was taken twice on
 4174324, in the cloud container, and marked the same nine steps both times; its
-gallery is kept beside the checkout, git-ignored, where `docs/handover.md` says. The
-walks after the wall's stages are read against it: `walk.json`'s facts and their
-counts first, then the marked steps, then the same step's screenshot side by side —
-a mark the baseline carries is today's, a new one is the stage's. Two of the
+gallery was kept beside the checkout, git-ignored, until the walks after the wall's
+stages 3 and 4 had been read against it. A walk is read against a baseline so:
+`walk.json`'s facts and their counts first, then the marked steps, then the same step's
+screenshot side by side — a mark the baseline carries is today's, a new one is the
+stage's. Two of the
 baseline's marks are the walk's own reading of what the page does on purpose or
 has always done: the console's 404 on a removed node's own address, which that page
 answers (ADR-0116), and a layout shift on the sheet's large walls at 1,440 pixels,

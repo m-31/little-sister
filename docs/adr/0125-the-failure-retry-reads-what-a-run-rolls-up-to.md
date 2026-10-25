@@ -1,7 +1,7 @@
 # ADR-0125 — The failure retry reads what a run rolls up to
 
 - **Status:** Accepted
-- **Date:** 2026-10-10
+- **Date:** 2026-10-25 (accepted 2026-10-10)
 - **Related:** [ADR-0033](0033-budgeted-failure-retry.md) (decision 2, what arms the
   retry and what ends an episode, which this amends),
   [ADR-0060](0060-a-line-makes-no-claim.md) (decision 4, an episode ends on any change
@@ -90,8 +90,9 @@ rate-limited provider may make it.
   them fails.
 - **The log line and the retry agree.** A run logged as *UNDEFINED, rolls up to ERROR*
   pulls its slot in where the retry is on.
-- **ADR-0033 decision 2 and ADR-0060 decision 4 carry an update.** The engine's change
-  is the one code the retry block reads, which the log line computed already.
+- **ADR-0033 decision 2 and ADR-0060 decision 4 are amended**, each naming this record.
+  The engine's change is the one code the retry block reads, which the log line
+  computed already.
 
 ## Alternatives considered
 

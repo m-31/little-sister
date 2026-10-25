@@ -1,19 +1,23 @@
 # ADR-0097 — A node's series have a view of their own, beside its status and its history
 
 - **Status:** Accepted
-- **Date:** 2026-10-10 (accepted 2026-09-27)
+- **Date:** 2026-10-25 (accepted 2026-09-27)
 - **Related:** [ADR-0092](0092-a-check-declares-its-measures.md) (decisions 6 and 7,
   which this amends), [ADR-0096](0096-a-measure-names-its-node-and-its-things.md) (the
   curves, and the node each stands on),
   [ADR-0044](0044-run-facts-on-the-node.md) (the measurement a shared mount withholds),
   [ADR-0016](0016-node-addressing.md) (the path every view is addressed by),
-  [ADR-0008](0008-json-output-api.md) (the status routes' JSON),
+  [ADR-0080](0080-the-envelope-is-the-snapshot-published.md) (the status routes' JSON),
   [ADR-0094](0094-a-restart-is-no-transition.md) decision 5 (a node that declares
   nothing of its own has no periods),
   [ADR-0106](0106-a-subject-with-a-history-has-a-node-of-its-own.md) (the node that
   stands for a subject and shows its series, and the `series` read on the API),
   [ADR-0122](0122-a-series-is-read-over-the-api-as-it-stands.md) (that read, built at
-  this view's URL, and the credential its two routes choose)
+  this view's URL, and the credential its two routes choose),
+  [ADR-0140](0140-a-nodes-notes-stand-on-a-tab-of-their-own.md) (decision 2: the
+  *Notes* tab),
+  [ADR-0133](0133-a-node-says-what-it-is-in-a-card-and-at-length-in-a-handbook.md)
+  (decisions 1 and 3: the *Handbook* tab, and the *About* card on *Status*)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -97,20 +101,29 @@ view shows. History keeps every reading, as before.
   ([ADR-0106](0106-a-subject-with-a-history-has-a-node-of-its-own.md) decision 4): the
   tree says that, the configuration not knowing where a grading writes a subject's
   line, and it is never read from a reading's numbers; **History** on every node but
-  the root; and **Copy** on every node, the root included, which hands the node over
+  the root; **Notes** on every node but the root, with the number of notes its view
+  lists as Series carries its curves
+  ([ADR-0140](0140-a-nodes-notes-stand-on-a-tab-of-their-own.md) decision 2);
+  **Handbook** on a node that has a handbook, as the configuration says — for a node a
+  run names, its first fill — so it never comes and goes with a reading
+  ([ADR-0133](0133-a-node-says-what-it-is-in-a-card-and-at-length-in-a-handbook.md)
+  decision 3); and **Copy** on every node, the root included, which hands the node over
   ([ADR-0115](0115-a-copy-document-says-where-it-is-from-and-since-when.md) decision
-  7). The History page and the Copy page take the same title and tabs.
+  7), and stays last. The History, Notes, Handbook and Copy pages take the same title
+  and tabs, and the node's *About* card stands on Status alone (ADR-0133 decision 1).
 - The rail gains **Series** beside Status, lit on every Series view as Status is on
   every status page.
 - The routes do not move: `/status/<path>`, `/series/<path>`, `/history/<path>`,
-  `/copy/<path>`.
-  `/status` is the JSON API's ([ADR-0008](0008-json-output-api.md)) and the client's,
+  `/copy/<path>`, with `/notes/<path>` and `/handbook/<path>` beside them.
+  `/status` is the JSON API's ([ADR-0080](0080-the-envelope-is-the-snapshot-published.md))
+  and the client's,
   and a view named after the node's path would collide with a node named `series`.
 
 ### 4. The roots
 
-- `/status` is the overview it is: every root node's card. Its title is `nodes`, and it
-  has three tabs: Status, Series and Copy, which is the tree's document at `/copy`.
+- `/status` is the overview it is: every root node's card. Its title is `nodes`, and its
+  tabs are Status, Series, Handbook where the root has one, and Copy, which is the
+  tree's document at `/copy`.
 - `/series` is an index, not a page of curves: every node a series is kept on, grouped
   under its root node, with its status, the checks keeping it, what it draws, how many
   readings it holds and when the newest was taken. A node's name opens its Status page,

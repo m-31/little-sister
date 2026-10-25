@@ -153,8 +153,7 @@ class HttpCheck(Check):
             # and headers**, which urllib reads inside `opener.open` where no deadline
             # of ours can reach (see `fetch`'s module docstring). A `Deadline` does not
             # help with that either. Closing it means owning the header parse or
-            # running the request on a thread — the shape the link prober already has,
-            # for the same reason, in its pass abandonment (ADR-0030).
+            # running the request on a thread that is abandoned at a deadline.
             #
             # **The timer wraps the call and nothing else** (backlog #76). What is
             # measured is the subject — the time until this endpoint answered — and

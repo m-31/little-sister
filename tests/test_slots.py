@@ -10,6 +10,9 @@ from jinja2 import TemplateNotFound
 
 from little_sister import app as app_module
 from little_sister import self_report, slots
+from little_sister.checks.metadata import Stated
+from little_sister.first_look import FirstLooks
+from little_sister.nodes import NodeMeta
 from little_sister.reasons import slug
 from little_sister.status import StatusCode
 from little_sister.tree import StatusTree
@@ -260,9 +263,13 @@ class NodeActionTests(TestCase):
         # Adding a name to a slot's context is compatible; removing one is not, so
         # the contract is worth a test of its own (ADR-0034). `place` joined with the
         # head's row (ADR-0127 decision 3), so a filler can tell a card's head from
-        # a nested box's.
+        # a nested box's; `written_out` and `details` with what a draft is written
+        # with (ADR-0133 decisions 4 to 6), on both action slots.
         self.assertEqual(slots.SLOTS["node.actions"].context,
-                         ("node", "surface", "place"))
+                         ("node", "surface", "place", "written_out", "details"))
+        self.assertEqual(slots.SLOTS["reason.actions"].context,
+                         ("node", "reason", "line", "index", "surface", "written_out",
+                          "details"))
         self.assertIn("`place`", slots.SLOTS["node.actions"].where)
 
     def test_no_registration_means_no_pixels(self):
@@ -306,10 +313,15 @@ class NodeActionTests(TestCase):
         # A chip has no room for an action, and nothing quiet is worth acting on;
         # the node's box, drawn beside the chip and hidden until found (ADR-0127
         # decision 1), carries the slot as every box does, so a click that opens
-        # the node shows the action without a request.
+        # the node shows the action without a request. The host's leaves start as
+        # chips where its files say so (ADR-0128).
         slots.register("node.actions", DEMO, NODE_TEMPLATE, node_action)
         self._login()
         self.tree.upsert("/hosts/alpha/disk", StatusCode.OK, "disk at 12%")
+        app_module.first_looks = FirstLooks(
+            (), {"/hosts/alpha": NodeMeta(look=Stated(chips=True))},
+            app_module.config, self.tree.named_by_run)
+        self.addCleanup(setattr, app_module, "first_looks", None)
         page = parse(self._body())
         node = next(node for node in page.all("tree-node")
                     if node.attrs.get("data-node") == "/hosts/alpha/disk")
@@ -483,7 +495,7 @@ class AssetTests(TestCase):
         slots.register_assets(DEMO, "demo.js")
         self._login()
         self.tree.upsert("/db", StatusCode.OK)
-        for page in ("/status", "/status/db", "/events", "/maintenance", "/system"):
+        for page in ("/status", "/status/db", "/events", "/handled", "/system"):
             with self.subTest(page=page):
                 self.assertIn("/ext/", self._body(page))
 
@@ -600,6 +612,88 @@ class ContextContractTests(TestCase):
                 seen = self._seen("node.actions", url)
                 self.assertEqual(
                     {handed["node"].path: handed["place"] for handed in seen}, places)
+
+
+class DraftingTests(TestCase):
+    """What a filler drafts with (ADR-0133 decisions 4 to 6). Beside the node, both
+    action slots hand over two functions that write the node's texts and its *About*
+    card out of the instance as the Copy document does: a status's sign as its word
+    and cue, a link in the short form to the absolute address of a handbook — the
+    node's own, or for a detail given down, the handbook of the node it is given on.
+    A filler calls them for a draft it makes; one that does not pays nothing."""
+
+    def setUp(self):
+        app_module.app.config["TESTING"] = True
+        self.tree = StatusTree()
+        app_module.status_tree = self.tree
+        self.client = app_module.app.test_client()
+        self.client.post("/login",
+                         data={"username": "pan", "password": "12345678"})
+        self.addCleanup(slots.forget_fillers)
+        self.tree.set_details("/servers", (("contact", "[the runbook](handbook#who)"),))
+        self.tree.set_handbook("/servers", "## Who\n")
+        self.tree.upsert("/servers/db", StatusCode.ERROR,
+                         "{error}: down, [see](handbook#restart)",
+                         type_details=(("host", "`db-1`"),))
+
+    def _drafts(self, slot, *, url="/status/servers/db", asks=True):
+        drafts: list = []
+
+        def provider(*, node, written_out, details):
+            if asks and node.path == "/servers/db":
+                drafts.append((written_out(node.reason[0]),
+                               written_out("{warn} {nobody}", inline=True),
+                               details()))
+            return None
+
+        slots.register(slot, DEMO, NODE_TEMPLATE, provider)
+        self.client.get(url)
+        return drafts
+
+    def test_a_filler_writes_the_nodes_texts_and_its_card_out(self):
+        for slot in ("node.actions", "reason.actions"):
+            with self.subTest(slot=slot):
+                slots.forget_fillers()
+                drafts = self._drafts(slot)
+                self.assertTrue(drafts, f"{slot} handed nothing over")
+                for line, word, details in drafts:
+                    self.assertEqual(
+                        line, "error ⛔: down, "
+                              "[see](http://localhost/handbook/servers/db#restart)")
+                    # a name no status has is a text's own
+                    self.assertEqual(word, "warn ⚠️ {nobody}")
+                    # the type's first, then what /servers gives down, its link into
+                    # the handbook of the node it is given on
+                    self.assertEqual(details, (
+                        ("host", "`db-1`"),
+                        ("contact",
+                         "[the runbook](http://localhost/handbook/servers#who)")))
+
+    def test_a_filler_that_does_not_ask_pays_nothing(self):
+        # a slot is filled for every node at every render, so the card is resolved
+        # for the draft that asks for it and for nobody else
+        asked: list = []
+        resolve = self.tree.details
+
+        def counted(path):
+            asked.append(path)
+            return resolve(path)
+
+        self.tree.details = counted
+        self._drafts("node.actions", url="/status", asks=False)
+        self.assertNotIn("/servers/db", asked)
+        slots.forget_fillers()
+        self._drafts("node.actions", url="/status")
+        self.assertIn("/servers/db", asked)
+
+    def test_outside_a_request_a_short_form_stays_as_written(self):
+        # with no request there is no base to write an address from
+        with app_module.app.app_context():
+            drafting = app_module._drafting(self.tree.snapshot("/servers/db"))
+            self.assertEqual(drafting["written_out"]("[see](handbook#restart)"),
+                             "[see](handbook#restart)")
+            self.assertEqual(drafting["details"]()[1],
+                             ("contact", "[the runbook](handbook#who)"))
 
 
 class ContextGrowthTests(TestCase):

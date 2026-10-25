@@ -1,0 +1,81 @@
+{#- A node's notes as a page states them (ADR-0140): its Notes view, and the page of a
+    path no node stands at, which lists the notes written for it and beneath it.
+
+    Each note says what it is on — the node, or one of its lines, as the line reads
+    now and linked to it where the run reports it; marked where it does not, since a
+    line that is not reported is suspended, not gone (ADR-0047 decision 8) — who wrote
+    it and when, who changed it last where somebody did, and whether it is the note of
+    a pin, which is changed with its pin while that stands and is kept as it was once
+    the pin ends (decision 5). Then its words, an admin's Markdown, and folded beneath
+    them what the node showed when they were written (decision 6): its status and its
+    lines — the line, for a note on one — each line on its status's tint. A note is
+    not an event and not a reading: nothing here is a status of the node now.
+
+    `note_item` takes a `_ShownNote`; `path` is the node's, as its address writes it,
+    and empty on the page of a gone path, where nothing links to a line and nothing is
+    edited, and where `at` names the path a note was written for when it is one
+    beneath the page's own. `mine` are an admin's words a refused edit brought back,
+    in the editor `editing` names. -#}
+{% macro note_context(note) -%}
+{%- set context = note.context %}
+<details class="ls-note__context mt-1">
+    <summary class="small text-muted">What {{ 'the line' if note.slug else 'the node' }} showed then</summary>
+    <p class="small mb-1">{% if context.code %}The node showed <strong>{{ context.code }}</strong>{% else %}No node stood there{% endif %}
+        {%- if context.lines %}, {{ 'and the line read' if note.slug else 'and its lines read' }}:{% else %}.{% endif %}</p>
+    {%- if context.lines %}
+    {#- A line's status where it declares one, in a column of its own only where one
+        of them does: a line that declares none carries its node's. -#}
+    {%- set coded = context.lines | selectattr('code') | list %}
+    <div class="table-responsive position-relative">
+    <table class="table table-sm align-top mb-1 ls-note__lines">
+        <tbody>
+            {%- for line in context.lines %}
+            <tr{% if line.code %} class="row-{{ line.code }}"{% endif %}>
+                {%- if coded %}
+                <td class="text-nowrap">{{ line.code }}</td>
+                {%- endif %}
+                <td class="md-body">{{ line.text | markdown_inline(node=note.path) }}</td>
+            </tr>
+            {%- endfor %}
+        </tbody>
+    </table>
+    </div>
+    {%- if context.more %}
+    <p class="small text-muted mb-0">And {{ context.more }} more {{ 'line' if context.more == 1 else 'lines' }}.</p>
+    {%- endif %}
+    {%- endif %}
+</details>
+{%- endmacro %}
+
+{% macro note_item(shown, path, index, editing='', mine='', at='') -%}
+{%- set note = shown.note %}
+<li class="ls-note mb-3 pb-2 border-bottom" id="note-{{ index }}">
+    <p class="ls-note__said small text-muted mb-1">
+        {%- if at %}At <code>{{ at }}</code>. {% endif %}
+        {%- if note.slug %}On {% if path and shown.reported %}<a href="{{ url_for('status', branch=path | url_branch, reason=note.slug) }}#pinned-reason">a line</a>{% else %}a line{% endif %}
+        {%- if shown.line %}: {{ shown.line | markdown_inline(node=note.path) }}{% endif %}
+        {%- if not shown.reported %} <span class="ls-note__unreported">— the check does not report it now</span>{% endif %}.
+        {%- else %}On the node.{% endif %}
+        Written by <strong>{{ note.created_by or 'unknown' }}</strong> {{ note.created_at | localtime }}
+        {%- if note.set_at != note.created_at %}, last changed by <strong>{{ note.set_by or 'unknown' }}</strong> {{ note.set_at | localtime }}{% endif %}.
+        {%- if note.pin %} The note of a pin{% if shown.pin_stands %} that stands, and changed with it{% else %} that has ended{% endif %}.{% endif %}
+    </p>
+    <div class="ls-note__text md-body">{{ note.text | markdown(node=note.path) }}</div>
+    {{ note_context(note) }}
+    {%- if path and shown.editable %}
+    <details class="ls-note__edit mt-1"{% if editing == note.key %} open{% endif %}>
+        <summary class="small">Edit</summary>
+        <form method="post" action="{{ url_for('notes', path=path) }}" class="mt-1">
+            <input type="hidden" name="action" value="edit">
+            <input type="hidden" name="key" value="{{ note.key }}">
+            <input type="hidden" name="set_at" value="{{ note.token }}">
+            <label class="form-label small" for="note-edit-{{ index }}">Note</label>
+            <textarea class="form-control form-control-sm" id="note-edit-{{ index }}"
+                      name="text" rows="4">{{ mine if editing == note.key else note.text }}</textarea>
+            <div class="form-text">Markdown is supported; raw HTML is shown as text. A note is changed while it is the newest on its node.</div>
+            <button class="btn btn-sm btn-primary mt-2" type="submit">Save changes</button>
+        </form>
+    </details>
+    {%- endif %}
+</li>
+{%- endmacro %}

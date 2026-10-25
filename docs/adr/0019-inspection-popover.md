@@ -1,16 +1,25 @@
 # ADR-0019 — Inspection popover (hover card)
 
 - **Status:** Accepted
-- **Date:** 2026-10-18 (accepted 2026-06-27)
+- **Date:** 2026-10-25 (accepted 2026-06-27)
 - **Related:** [ADR-0017](0017-node-title.md) (`title`) and
-  [ADR-0012](0012-node-metadata.md) (`about`) — the fields the card shows;
+  [ADR-0012](0012-node-metadata.md) (`about` and `description`) — the fields the card
+  shows;
   [ADR-0018](0018-markdown-rendering.md) (the card injects server-rendered Markdown);
   [ADR-0005](0005-dashboard-freshness-and-self-monitoring.md) (the ~10s grid-fragment
   poll the card rides in);
   [ADR-0127](0127-the-wall-is-a-tree-and-a-click-opens-or-closes-a-node.md) (the tree: a
-  click opens or closes a node, decision 11, and a node's page shows its `about` open,
-  decision 8); [ADR-0029](0029-per-user-presentation-preferences.md) (`inspection_card`,
-  the look that says whether the card opens).
+  click opens or closes a node, decision 11, and a node's page, decision 8);
+  [ADR-0029](0029-per-user-presentation-preferences.md) (`inspection_card`,
+  the look that says whether the card opens);
+  [ADR-0135](0135-a-handled-part-keeps-its-true-color-and-every-surface-says-by-what.md) (decision 3, the note of a
+  rule's block, opened in a card of this one's look on this one's machinery);
+  [ADR-0133](0133-a-node-says-what-it-is-in-a-card-and-at-length-in-a-handbook.md) (the
+  `description` where a node has no `about`, the handbook, and the *About* card where
+  the whole text stands);
+  [ADR-0139](0139-a-node-carries-every-tag-written-for-it-or-above-it.md) (decision 4,
+  the tags a node carries); [ADR-0104](0104-a-pin-is-one-block-on-what-it-silences.md)
+  (decision 3, the block's control, which raises no card of this one's).
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -38,27 +47,36 @@ type's documentation made a card 1,920 pixels tall, 387 with its first paragraph
 A **custom, client-side hover card fed by a map that rides in the polled fragment** — no
 new endpoint.
 
-1. **Content — the node's name and title, and the first block of its `about`.** The card
-   says the node's name and **`title`** as its head shows them, and the first block of
-   its **`about`**, whatever that block is (`render.first_block`), as server-rendered
-   Markdown ([ADR-0018](0018-markdown-rendering.md)), with a line beneath counting the
-   blocks after it and a link to the node's page, where the whole `about` stands open
-   (ADR-0127 decision 8). It does **not** repeat the live code / reasons — the chip or
-   head under the pointer shows the node's state, and the detail view its reasons — nor
-   the leaf `description` (that stays on the detail page). A node with neither field
-   gets **no** card, and a node's page's own head has none: its `about` stands open in
-   the band above it.
+1. **Content — the node's name and title, the first block of its `about`, its tags and
+   its handbook.** The card says the node's name and **`title`** as its head shows
+   them, and the first block of its **`about`** — or of its **`description`**, what its
+   check reads, where it has no `about` (ADR-0133 decision 2) — whatever that block is
+   (`render.first_block`), as server-rendered Markdown
+   ([ADR-0018](0018-markdown-rendering.md)), with a line beneath counting the blocks
+   after it and a link to the node's page, where the whole of it stands in the node's
+   *About* card on its Status tab (ADR-0133 decision 1). After the block it names the
+   tags the node carries, in one line (ADR-0139 decision 4), and where the node has a
+   handbook, a link to it (ADR-0133 decision 3); a link written `handbook#<section>` in
+   its text leads into the node's handbook. It does **not** repeat the live code /
+   reasons — the chip or head under the pointer shows the node's state, and the detail
+   view its reasons — nor a node's `description` beside its `about`, which the *About*
+   card shows together. A node with none of these — no title, no text, no tags and no
+   handbook — gets **no** card, and a node's page's own head has none: on its Status tab
+   the *About* card stands on the page, and from the node's other views it is one click
+   away.
 
 2. **Delivery — a map in the polled fragment, rendered client-side.** The wall's
-   fragment carries a **path-keyed map** of each node's first `about` block, already
-   rendered, and the count of the blocks after it; the name and title come from the
-   node's own head, which every node's box carries, open or closed. A small script reads
-   the map again after every ~10s `#status-grid` swap, so a node a run names after the
-   load has its card and an `about` changed in the configuration is current. **No
-   per-hover request, no new route**: the script binds once via **event delegation** on
-   the stable `#status-grid` parent, and every node element carries a **`data-path`** so
-   the handler can resolve its metadata after any swap. On the recorded wall the map
-   weighs 2,450 bytes of the fragment, 800 on the wire, measured with the rest of it.
+   fragment carries a **path-keyed map** of what each node says of itself: the first
+   block of its `about`, or of its `description`, already rendered, and the count of the
+   blocks after it; its tags; and its handbook's address where it has one. The name and
+   title come from the node's own head, which every node's box carries, open or closed.
+   A small script reads the map again after every ~10s `#status-grid` swap, so a node a
+   run names after the load has its card and an `about` changed in the configuration is
+   current. **No per-hover request, no new route**: the script binds once via **event
+   delegation** on the stable `#status-grid` parent, and every node element carries a
+   **`data-path`** so the handler can resolve its metadata after any swap. On the
+   recorded wall the map weighs 2,450 bytes of the fragment, 800 on the wire, measured
+   with the rest of it.
 
 3. **Behavior.** The card opens only on a **pause on a node's name** — a chip, the name
    in an open node's head or the status strip's — after about two thirds of a second,
@@ -90,6 +108,15 @@ new endpoint.
    *off*: a browser that never chose draws no card, and no name wears the help cursor.
    *On a pause* is a viewer's choice in the settings menu, or a deployment's, and opens
    the card as above.
+
+6. **A rule's note rides on the same machinery.** A second card opens in this one's
+   look and its place: the note of a rule's block on the wall (ADR-0135 decision 3),
+   opened by the block's note mark on a click, a tap, Enter or Space for every viewer,
+   and on a pause where `inspection_card` opens this card on one (decision 5). It names
+   the node, says the block's sentence and its note whole, who set it and when, and
+   links to the node's page; it carries no buttons, and it holds through the refresh as
+   this card does. The mark is the block's control, which raises no card of this one's
+   (ADR-0104 decision 3).
 
 ## Consequences
 - One CDN dependency (Floating UI) + one small static JS file and CSS. **No server route

@@ -1,22 +1,25 @@
 <!DOCTYPE html>
 <html>
 <head>
-    {% from '_rule_block.html' import pin_block with context %}
+    {% from '_rule_block.html' import pin_block, rule_mark, config_block with context %}
     {% from '_pin_sections.html' import suspended_pins, suspended_sentence with context %}
-    {% set page_title = 'Maintenance' %}
+    {% set page_title = 'Handled' %}
     {% include '_header.html' %}
 
-    {#- The full, uncapped maintenance overview (ADR-0014, ADR-0036): **every pin** —
-        a node's own, or one of its reasons' — with what it silences, how long is
-        left, why, and who is behind it, read from the whole snapshot so it is
-        depth- and filter-independent. Viewer-visible and bookmarkable; the strip
-        pill's popover "+N more" links here. A plain page (the check.html /
-        events.html pattern), not polled — so an open editor has nothing to wait
-        for.
+    {#- *Handled*, the index of every rule that stands (ADR-0135 decision 8), its
+        sections the jobs — *In maintenance*, *Accepted* (ADR-0142) and *By a rule*
+        (ADR-0137). In maintenance,
+        **every pin** — a node's own, or one of its reasons' — with what it holds,
+        how long is left, why, and who is behind it, read from the whole snapshot
+        so it is depth- and filter-independent, the nodes whose pins stand longest
+        first, so that the old ones are where the eye starts. Viewer-visible and
+        bookmarkable; the band's pill and its popover's "+N more" link here, and
+        `/maintenance` answers with it. A plain page (the check.html / events.html
+        pattern), not polled — so an open editor has nothing to wait for.
 
         This page is what makes the popover's one-row-per-node summary safe: it is
-        where *"what is silenced right now?"* is answered completely, so the capped
-        surface is free to fold.
+        where *"what is in maintenance right now?"* is answered completely, so the
+        capped surface is free to fold.
 
         **The same blocks as a node's own page** (ADR-0104 decision 6,
         `_rule_block.html`), grouped under each node's path: the node's own pin
@@ -33,12 +36,11 @@
 
         **Two texts, in two places.** What a pin covers is what its block's
         sentence opens with — *The whole node*, or the reason line itself — and
-        why is the block's note. Both are called "reason" in the model and they
-        are not the same kind of thing. A line's block stands away from its line
-        here, so it names the line and links to it on its node's page; the slug
-        appears in neither as text: ADR-0036 makes it opaque, so it travels only
-        in the link's `?reason=` value and in the field of the form that changes
-        the pin.
+        why is the block's note, and they are not the same kind of thing. A
+        line's block stands away from its line here, so it names the line and
+        links to it on its node's page; the slug appears in neither as text:
+        ADR-0036 makes it opaque, so it travels only in the link's `?reason=`
+        value and in the field of the form that changes the pin.
 
         This is also the place with room for the pin's **whole** reading
         (ADR-0014) for everyone — *pinned by Anna three days ago, last changed by
@@ -48,27 +50,29 @@
 
         **A pin whose node is not reported** (ADR-0109 decision 4) stands under its
         path like any other, and its section says so: the check stopped returning
-        the node, or has not written it yet since the start. Such a pin silences
-        nothing, so its block says what it will silence *when the node is
+        the node, or has not written it yet since the start. Such a pin holds
+        nothing, so its block says what it will hold *when the node is
         reported*; the path is no link, there being no page to open, and a line's
         pin names no line, the lines having gone with the node. It is edited and
         cleared here, where nothing else shows it. -#}
     <div class="container-fluid mt-3 px-4">
-        <h1 class="h4 mb-3">Maintenance</h1>
+        <h1 class="h4 mb-3">Handled</h1>
         {% if pins %}
-        {%- set nodes = pins | map(attribute='path') | unique | list | length %}
-        <p class="pin-count text-muted small mb-3">{{ pins | length }} {{ 'pin' if pins | length == 1 else 'pins' }} on {{ nodes }} {{ 'node' if nodes == 1 else 'nodes' }}.</p>
+        {%- set nodes = groups | length %}
+        <section class="handled-job" aria-labelledby="handled-maintenance">
+        <h2 class="handled-job__title" id="handled-maintenance">{{ rule_mark('maintenance') }}In maintenance</h2>
+        <p class="pin-count text-muted small mb-3">{{ pins | length }} {{ 'pin' if pins | length == 1 else 'pins' }} on {{ nodes }} {{ 'node' if nodes == 1 else 'nodes' }}, the longest standing first.</p>
         <div class="pin-list">
-        {%- for path, group in pins | groupby('path') %}
+        {%- for path, group in groups %}
             {#- Whether the node is pinned whole: its lines' blocks then say they
-                are silenced on their own as well, since they stay quiet when the
-                node's pin ends. -#}
+                are in maintenance on their own as well, since they stay quiet when
+                the node's pin ends. -#}
             {%- set covered = group | rejectattr('slug') | list | length > 0 %}
-            {%- set back = url_for('maintenance_overview', node=path) ~ '#pinned-node' %}
+            {%- set back = url_for('handled', node=path) ~ '#pinned-node' %}
             {%- set place = loop.index %}
             {%- set suspended = group[0].suspended %}
             <section class="pin-node{% if suspended %} pin-node--suspended{% endif %}{% if path == focus %} is-focused{% endif %}"{% if path == focus %} id="pinned-node"{% endif %}>
-                <h2 class="pin-node__path">{% if suspended %}{{ path }}{% else %}<a href="{{ url_for('status', branch=path | url_branch) }}">{{ path }}</a>{% endif %}{% set shown = group[0] | node_title %}{% if shown %} <span class="node-title">{{ shown | markdown_inline }}</span>{% endif %}</h2>
+                <h3 class="pin-node__path">{% if suspended %}{{ path }}{% else %}<a href="{{ url_for('status', branch=path | url_branch) }}">{{ path }}</a>{% endif %}{% set shown = group[0] | node_title %}{% if shown %} <span class="node-title">{{ shown | markdown_inline(node=path) }}</span>{% endif %}</h3>
                 {%- if suspended %}
                 <p class="pin-node__suspended">{{ suspended_sentence(group) }}</p>
                 {%- endif %}
@@ -81,7 +85,7 @@
                         {#- The reason line as its node writes it — rendered, and
                             whole: a member's text is often a link, and cutting it
                             would leave raw syntax on the page. -#}
-                        {%- set subject %}{{ pin.line | markdown_inline }} — <a href="{{ url_for('status', branch=path | url_branch, reason=pin.slug) }}#pinned-reason">this line</a>{% endset %}
+                        {%- set subject %}{{ pin.line | markdown_inline(node=path) }} — <a href="{{ url_for('status', branch=path | url_branch, reason=pin.slug) }}#pinned-reason">this line</a>{% endset %}
                         {{ pin_block(pin.entry, 'line', path, pin.slug, 'pin-' ~ place ~ '-' ~ loop.index, is_admin, also=covered, subject=subject, record=true, next=back, of=path) }}
                     {%- else %}
                         {%- set subject %}<strong>The whole node</strong>{% endset %}
@@ -92,9 +96,75 @@
             </section>
         {%- endfor %}
         </div>
-        {% else %}
-        <p class="text-muted">No nodes are in maintenance.</p>
+        </section>
+        {% elif not by_rule and not accepted %}
+        <p class="text-muted">Nothing is handled: no node or line is in maintenance, seen or held by a rule.</p>
         {% endif %}
+        {#- **Accepted** (ADR-0142): every *seen* that stands, grouped under its
+            node's path as the pins are, the nodes whose acknowledgments stand longest
+            first — each its block, with who marked it and when under its note, and
+            for whoever may mark a failure seen *Edit* and *Clear*. A node's own is
+            its own failure, and a line's names its line and links to it. One whose
+            part is not reported now is listed too: it holds nothing until it is, and
+            ends where a reading says its part is gone. -#}
+        {%- if accepted %}
+        {%- set marked = accepted | map(attribute=1) | map('length') | sum %}
+        <section class="handled-job" aria-labelledby="handled-accepted">
+        <h2 class="handled-job__title" id="handled-accepted">{{ rule_mark('seen') }}Accepted</h2>
+        <p class="pin-count text-muted small mb-3">{{ marked }} seen on {{ accepted | length }} {{ 'node' if accepted | length == 1 else 'nodes' }}, the longest standing first.</p>
+        <div class="pin-list">
+        {%- for path, group in accepted %}
+            {%- set back = url_for('handled', node=path) ~ '#pinned-node' %}
+            {%- set place = loop.index %}
+            <section class="pin-node{% if path == focus %} is-focused{% endif %}"{% if path == focus and not pins %} id="pinned-node"{% endif %}>
+                <h3 class="pin-node__path"><a href="{{ url_for('status', branch=path | url_branch) }}">{{ path }}</a>{% set shown = group[0] | node_title %}{% if shown %} <span class="node-title">{{ shown | markdown_inline(node=path) }}</span>{% endif %}</h3>
+                <div class="pin-node__pins">
+                {%- for row in group %}
+                    {%- if row.slug %}
+                        {%- set subject %}{% if row.line %}{{ row.line | markdown_inline(node=path) }} — <a href="{{ url_for('status', branch=path | url_branch, reason=row.slug) }}#pinned-reason">this line</a>{% else %}<strong>A line not reported now</strong>{% endif %}{% endset %}
+                        {{ pin_block(row.entry, 'line', path, row.slug, 'seen-' ~ place ~ '-' ~ loop.index, may_seen, subject=subject, record=true, next=back, of=path) }}
+                    {%- else %}
+                        {%- set subject %}<strong>Its own failure</strong>{% endset %}
+                        {{ pin_block(row.entry, 'node', path, '', 'seen-' ~ place ~ '-' ~ loop.index, may_seen, subject=subject, record=true, next=back, of=path) }}
+                    {%- endif %}
+                {%- endfor %}
+                </div>
+            </section>
+        {%- endfor %}
+        </div>
+        </section>
+        {%- endif %}
+        {#- **By a rule** (ADR-0137): every configured rule, the longest standing
+            first, each its block — what it makes of the part it picks, its note,
+            where it is written and since when — and beneath it what it changes the
+            count of now, each part linked to where it stands; or *changes nothing
+            now* and what it missed: nothing picked, a rule written before it
+            deciding where it picks, a path it would pick with case folded. No
+            buttons: a configured rule is changed in the configuration. -#}
+        {%- if by_rule %}
+        <section class="handled-job" aria-labelledby="handled-rule">
+        <h2 class="handled-job__title" id="handled-rule">{{ rule_mark('aggregation') }}By a rule</h2>
+        <p class="pin-count text-muted small mb-3">{{ by_rule | length }} {{ 'rule' if by_rule | length == 1 else 'rules' }} configured, the longest standing first.</p>
+        <div class="pin-list">
+        {%- for row in by_rule %}
+            <section class="pin-node by-rule" id="rule-{{ loop.index }}">
+                <h3 class="pin-node__path">{{ row.rule.name }}</h3>
+                <div class="pin-node__pins">
+                {{ config_block(row.at, row.rule.level, '/', 'by-rule-' ~ loop.index, index=true) }}
+                <p class="by-rule__now small mb-0">
+                {%- if row.acting %}It changes the count of {{ row.parts }} {{ 'part' if row.parts == 1 else 'parts' }} now:
+                    {% for path, lines in row.acting %}<a href="{{ url_for('status', branch=path | url_branch) }}">{{ path }}</a>{% if lines %} — {{ lines }} {{ 'line' if lines == 1 else 'lines' }}{% endif %}{{ ', ' if not loop.last else '.' }}{% endfor %}
+                {%- elif not row.picked and not row.folded %}It picks nothing now.
+                {%- else %}
+                    {%- if row.picked %}It picks {{ row.picked }} {{ 'place' if row.picked == 1 else 'places' }} now and changes no count there{% if row.over %}: {% for path, name in row.over %}at <a href="{{ url_for('status', branch=path | url_branch) }}">{{ path }}</a> the rule <strong>{{ name }}</strong>, written before it, decides{{ '; ' if not loop.last }}{% endfor %}{% endif %}.{% else %}It picks nothing now.{% endif %}
+                    {%- if row.folded %} With case folded it would pick {% for path in row.folded %}<a href="{{ url_for('status', branch=path | url_branch) }}">{{ path }}</a>{{ ', ' if not loop.last }}{% endfor %}.{% endif %}
+                {%- endif %}</p>
+                </div>
+            </section>
+        {%- endfor %}
+        </div>
+        </section>
+        {%- endif %}
     </div>
 
 {% include '_page_end.html' %}

@@ -19,7 +19,7 @@
         explicit duration/calendar forms, not in the future, or longer than a year.
         A zero or negative window used to be written happily and then swept away a
         tick later, taking
-        the reason and both authorships with it — a lost explanation behind a
+        the note and both authorships with it — a lost explanation behind a
         redirect that looked like success, which is exactly what this page exists
         to make impossible. Here the token is unchanged, because nothing about the
         stored pin moved — and so is what the expiry field had been filled with.
@@ -72,8 +72,8 @@
             <div class="card mb-3">
                 <div class="card-body">
                     <h2 class="h6 text-muted text-uppercase">The stored note</h2>
-                    {% if stored.reason and stored.reason != 'maintenance' %}
-                        <div class="maintenance-explanation md-body">{{ stored.reason | markdown }}</div>
+                    {% if stored.note and stored.note != 'maintenance' %}
+                        <div class="maintenance-explanation md-body">{{ stored.note | markdown(node=node_path) }}</div>
                     {% else %}
                         <p class="mb-0 text-muted">No explanation was given.</p>
                     {% endif %}
@@ -117,7 +117,7 @@
                     {%- if slug %}<input type="hidden" name="slug" value="{{ slug }}">{% endif %}
                     <input type="hidden" name="action" value="set">
                     <input type="hidden" name="set_at" value="{{ stored.token }}">
-                    <input type="hidden" name="reason" value="{{ stored.reason }}">
+                    <input type="hidden" name="note" value="{{ stored.note }}">
                     <input type="hidden" name="duration" value="{{ duration }}">
                     <input type="hidden" name="next" value="{{ back }}">
                     <button class="btn btn-outline-secondary" type="submit">Keep the stored note, use my expiry</button>

@@ -2,7 +2,14 @@
 type: demo
 path: /hosts/fleet
 title: Compute fleet
-about: Five hosts of two leaves each — more quiet boxes than the branch cap shows, so the level folds two behind "+N more", the fold the tab's map keeps.
+about: Twelve hosts of two leaves each — opened, thirty-six boxes, past the thirty a level nobody configured opens to, so its hosts start as chips with their counts, and a host whose disk fills opens its way.
 scenario: fleet
+# The rack the fleet stands in (ADR-0133 decision 6), between the site /hosts gives
+# and each host's own name, which its run gives it.
+details:
+  rack: C-12
+# Its check's file tags its own node (ADR-0139), and every host beneath it with it,
+# beside the hall /hosts gives them in nodes.yaml.
+tags: production
 frequency: 5s
 period: 60s

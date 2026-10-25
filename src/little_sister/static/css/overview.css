@@ -59,7 +59,16 @@
     --ls-tint-maintenance: #e2edfb;
     --ls-tint-maintenance-ink: #244a77;
     --ls-tint-undefined: #f0f0f0;
-    --ls-tint-undefined-ink: #54585c;
+    /* As dark as keeps a pale undefined box's state word over the bar at its quiet
+       80 % (ADR-0028), as a maintenance box's is: 7.97:1 on the tint and 4.75:1 at
+       80 %, where #54585c read 3.99 — in the vivid and pastel themes too, which keep
+       this pair */
+    --ls-tint-undefined-ink: #45494d;
+    /* How far a stepped box's pale fill goes toward its state's ink: every other
+       level of box takes it, so a box stands apart from the box around it (ADR-0028,
+       below the dimmed boxes' rules). A theme whose tints sit otherwise between its
+       canvas and its inks says its own, as far as its words allow. */
+    --ls-tint-step: 12%;
 
     /* The Y3 warn accent. Defined, and deliberately applied nowhere yet: it is
        a surface-weight yellow that dies as text (~1.8:1 on the warn tint), and
@@ -468,19 +477,6 @@ body[data-ls-layout="topbar"] .ls-rail { display: none; }
         border-right: 0;
     }
 }
-/* What the node is, open beneath the trail and the title (`_page_band.html`): its
-   text, muted, at a comfortable measure, and nothing before it. */
-.ls-band__about {
-    margin-top: 0.35rem;
-    font-size: 0.875rem;
-    color: var(--ls-muted);
-}
-.ls-band__about-body {
-    max-width: 72ch;
-    margin: 0 0 0.15rem;
-}
-.ls-band__about-body > :last-child { margin-bottom: 0; }
-
 /* The Installed view's index (ADR-0100): its sections as a row of links, each with
    a muted count where one helps, the way a Series view's window controls sit above
    its curves. */
@@ -511,7 +507,7 @@ body[data-ls-layout="topbar"] .ls-rail { display: none; }
     border-radius: 8px;
     padding: 8px 10px;
     color: var(--ls-vivid-ink);
-    /* Bound card heights (ADR-0024): the shipped reason caps bound growth from
+    /* Bound card heights (ADR-0056 decision 1): the shipped reason caps bound growth from
        above; this floors a sparse card (a bare heartbeat-less leaf, or an
        all-green host that shrank to a chip row) so the everyday grid keeps a
        steady rhythm and holes stay shallow. Height ∈ [min, cap]. */
@@ -519,14 +515,15 @@ body[data-ls-layout="topbar"] .ls-rail { display: none; }
 }
 
 /* The head's row (ADR-0127 decision 3) never wraps: the cue and the name; the
-   middle, the title; and the controls at its end, the row's upper right corner.
-   The title gives way first — its middle has a basis of 0, so it exists only in the
-   row's slack and ellipses inside it — then `tree.js` folds the node's actions the
-   row has no room for behind ⋯ and, where the name would still be cut or one action
-   fold alone, drops the state cluster to a line of its own beneath
-   (`.is-state-below`, below); the name gives way last, wrapping where its words meet
-   (below). A card's head is the row
-   alone: the pin's block and the lines stand in the panel. */
+   middle, the title; the state cluster; and the toolbar, the head's buttons, where
+   the look `head_buttons` keeps them (below): right after the name, at the row's end,
+   or on a line of their own beneath it, where the row does wrap. The title gives way
+   first — its middle has a basis of 0, so it exists only in the row's slack and
+   ellipses inside it — then `tree.js` folds the node's actions the row has no room
+   for behind ⋯ and, where the name would still be cut or one action fold alone,
+   drops the state cluster to a line of its own beneath (`.is-state-below`, below);
+   the name gives way last, wrapping where its words meet (below). A card's head is
+   the row alone: the pin's block and the lines stand in the panel. */
 .status-card__head {
     display: flex;
     justify-content: space-between;
@@ -567,35 +564,54 @@ body[data-ls-layout="topbar"] .ls-rail { display: none; }
     font-size: 0.85rem;
     color: inherit;
     opacity: 0.8;
-    white-space: nowrap;       /* "14:15 → 14:16 ● error" is one fact — never
-                                  broken between its time, cue and word; it
-                                  right-aligns whole or drops whole */
     flex-shrink: 0;
 }
+/* The state cluster is one fact, and each of its parts is whole: the stale mark, the
+   pin's pip, the time, the cue with the word, and what the reading says beside them.
+   In the row it keeps its whole width, and right-aligns whole or drops whole to a
+   line of its own; where that line is narrower than it is, it breaks between its
+   parts, right-aligned. Each part is whole where the line has room for it and broken at
+   its own spaces only where it alone is wider than the line, so that nothing of it runs
+   out of its box: the time, a card's cue and word (one part, `.status-word`) and the
+   reading are blocks on the line, a box's word is one word, and the stale mark leads
+   the cluster, so it starts a line as a block would. */
+:is(.status-card__state, .status-node__state) {
+    white-space: normal;
+    text-align: right;
+}
+:is(.status-card__state, .status-node__state) > :is(.status-card__time, .status-word, .status-reported) {
+    display: inline-block;
+    white-space: normal;
+}
+/* a card's time keeps its gap to the word before the word, so that a time that ends a
+   line ends at the line's right, as the word does */
+.status-card__state > .status-card__time { margin-right: 0; }
+.status-card__state > .status-card__time + .status-word { margin-left: 0.45em; }
 /* The state's own line beneath the head's row: where `tree.js` finds the name would
    otherwise be cut (`.is-state-below`, measured as a box is shown and after each
    swap), and on every card under settings.yaml `card_status_line: below` — the
    standing second line: every card the same two-line shape instead of jumping with
    how much state it carries. A calmer grid that spends vertical space for it, so
    it is the deployment's choice; the compact default keeps the cluster in the row,
-   dropping it only where the name would be cut. The cluster stands among the head's
-   controls, so it takes that line by `position: absolute` at the head's foot — the
-   head padded by one line of the cluster's font, which never wraps — and not by a
-   full-basis flex line, which a toolbar item cannot take, nor by `display: contents`
-   on the toolbar, which browsers have more than once answered by dropping its role. */
+   dropping it only where the name would be cut. The cluster stands in the row beside
+   the toolbar, no control and outside it, and takes that line by `position: absolute`
+   at the head's foot (a closed card's, which has no toolbar, in the head's flow,
+   below) — the head padded by one line of the cluster's font, or by the lines it
+   breaks into where that line is narrower than it is, which `tree.js` reads
+   (`--ls-state-room`) — so the row itself never wraps (decision 3). */
 .status-card__head.is-state-below,
 :is(.tree-box, .viewed-head) > .status-node__self.is-state-below,
-body[data-ls-card-state="below"] .status-card__head { padding-bottom: 1.3rem; }
-.is-state-below > .node-controls > .status-card__state,
-.is-state-below > .node-controls > .status-node__state,
-body[data-ls-card-state="below"] .status-card__head > .node-controls > .status-card__state {
+body[data-ls-card-state="below"] .status-card__head { padding-bottom: var(--ls-state-room, 1.3rem); }
+.is-state-below > .status-card__state,
+.is-state-below > .status-node__state,
+body[data-ls-card-state="below"] .status-card__head > .status-card__state {
     position: absolute;
     right: 2px;
     bottom: 0;
     margin: 0;
     padding: 0;
 }
-:is(.tree-box, .viewed-head) > .status-node__self.is-state-below > .node-controls > .status-node__state { right: 0; }
+:is(.tree-box, .viewed-head) > .status-node__self.is-state-below > .status-node__state { right: 0; }
 /* Where the name broke onto a second line anyway, the state stands on that line,
    beneath the icons, instead of a third line of its own (`.is-state-beside`, which
    `tree.js` keeps only where the state touches neither the name nor the rest of the
@@ -606,7 +622,119 @@ body[data-ls-card-state="below"] .status-card__head > .node-controls > .status-c
 body[data-ls-card-state="below"] .status-card__head.is-state-beside { padding-bottom: 0; }
 .is-state-beside > .node-controls { align-self: flex-start; }
 
-/* Status not by color alone (ADR-0024): a per-state shape cue (the status_cue macro)
+/* Where the head keeps its buttons — the toolbar: the head's icons, ↗ first, then
+   the node's actions and ⋯ — is a look, `head_buttons` (ADR-0029), so that the
+   pointer need not travel to the row's far end for them (ADR-0127 decision 3). The
+   server draws the row in the look's order (`node_controls`).
+
+   `pointer`, the library's, and `pointer-name`: the toolbar right after the name, the
+   title and the state after it, and the toolbar seen only while the pointer is on the
+   head, the keyboard's focus is in it or its menu is open — the keyboard's, not a
+   click's, whose focus stayed in the head and kept the toolbar shown after the pointer
+   left. Where a pointer can rest on a head the toolbar takes no room in the row: the
+   title stands right after the name, and the toolbar, shown, lies over the title on
+   the box's own fill, covering what it covers, so that nothing moves when it shows and
+   a title — a band's colored circle — keeps to its name. `tree.js` reads the row with
+   the toolbar in it (`.is-measuring`), so what the shown toolbar has no room for before
+   the state still folds behind ⋯, and where the name would still give way the toolbar
+   keeps its room, so that the name breaks beside it (`.is-crowded`). The keyboard and a
+   screen reader find it as ever; a touch screen, with no pointer to rest on a head,
+   shows it always, in the room it keeps there. */
+@media (hover: hover) {
+    body:is([data-ls-head-buttons="pointer"], [data-ls-head-buttons="pointer-name"]) :is(.status-card__head, :is(.tree-box, .viewed-head) > .status-node__self):not(.is-measuring, .is-crowded) > .node-controls {
+        width: 0;
+        position: relative;
+        z-index: 1;
+    }
+    /* the fill under its parts and across the gaps between them, as the ⋯ menu repaints
+       it (`--ls-surface`); a pressed or open square's wash over that fill */
+    body:is([data-ls-head-buttons="pointer"], [data-ls-head-buttons="pointer-name"]) :is(.status-card__head, :is(.tree-box, .viewed-head) > .status-node__self):not(.is-measuring, .is-crowded) > .node-controls > :is(.node-icons, .node-actions, .node-more) {
+        background-color: var(--ls-surface);
+        box-shadow: 3px 0 0 var(--ls-surface), -3px 0 0 var(--ls-surface);
+    }
+    body:is([data-ls-head-buttons="pointer"], [data-ls-head-buttons="pointer-name"]) :is(.status-card__head, :is(.tree-box, .viewed-head) > .status-node__self):not(.is-measuring, .is-crowded) > .node-controls > .node-more[aria-expanded="true"] {
+        background-image: linear-gradient(
+            color-mix(in srgb, currentColor 18%, transparent),
+            color-mix(in srgb, currentColor 18%, transparent));
+    }
+    body:is([data-ls-head-buttons="pointer"], [data-ls-head-buttons="pointer-name"]) :is(.status-card__head, :is(.tree-box, .viewed-head) > .status-node__self):not(:hover, :has(:focus-visible), :has(.node-more[aria-expanded="true"])) > .node-controls {
+        opacity: 0;
+    }
+}
+/* `line`: the toolbar on a line of its own beneath the row, from under the name. The
+   row wraps there, and wraps its state beneath where it has no room for it, at the
+   right, as a closed card's does, so `tree.js` reads no row under this look. */
+body[data-ls-head-buttons="line"] :is(.status-card:not(.is-closed) > .status-card__head, :is(.tree-box, .viewed-head) > .status-node__self) {
+    flex-wrap: wrap;
+    row-gap: 0.2rem;
+}
+body[data-ls-head-buttons="line"] :is(.status-card__head, .status-node__self) > :is(.status-card__state, .status-node__state) {
+    margin-left: auto;
+    padding-left: 0.4em;
+    flex-shrink: 1;
+}
+body[data-ls-head-buttons="line"] :is(.status-card__head, .status-node__self) > .node-controls {
+    flex: 0 0 100%;
+    flex-wrap: wrap;
+    margin-left: 0;
+    align-self: auto;
+}
+body[data-ls-head-buttons="line"] :is(.tree-box, .viewed-head) > .status-node__self > .node-controls {
+    padding-left: 1.15em;      /* under the name, past the cue */
+}
+/* Under `card_status_line: below` a card's state takes the toolbar's line, at its
+   right, rather than a third line of its own: the row breaks after the title, and
+   the state wraps beneath the toolbar, at the right, where that line has no room for
+   it. The line beneath is the margin the row's gap would be. */
+body[data-ls-head-buttons="line"][data-ls-card-state="below"] .status-card:not(.is-closed) > .status-card__head {
+    padding-bottom: 0;
+    row-gap: 0;
+}
+body[data-ls-head-buttons="line"][data-ls-card-state="below"] .status-card:not(.is-closed) > .status-card__head::after {
+    content: "";
+    order: 1;
+    flex-basis: 100%;
+}
+body[data-ls-head-buttons="line"][data-ls-card-state="below"] .status-card:not(.is-closed) > .status-card__head > .node-controls {
+    order: 2;
+    flex: 0 1 auto;
+    margin-top: 0.2rem;
+}
+body[data-ls-head-buttons="line"][data-ls-card-state="below"] .status-card:not(.is-closed) > .status-card__head > .status-card__state {
+    order: 3;
+    position: static;
+    margin-top: 0.2rem;
+}
+/* `name`: the toolbar at the row's end, as decision 3 first drew it, the state before
+   it; and `pointer-name`, the toolbar where `pointer` puts it. Under both the pointer's
+   click on an open head's name follows its link to the node's page (`tree.js`): the
+   name says so, underlined under the pointer, and the row's own answer stays off it.
+   ↗ is the keyboard's alone, out of sight until it has the focus, since the keyboard's
+   Enter and Space on the name open and close the node. */
+body:is([data-ls-head-buttons="name"], [data-ls-head-buttons="pointer-name"]) .node-icons > [data-control="page"]:not(:focus-visible) {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    border: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+}
+@media (hover: hover) {
+    body:is([data-ls-head-buttons="name"], [data-ls-head-buttons="pointer-name"]) :is(.status-card:not(.is-closed) > .status-card__head > .status-card__name, .tree-box > .status-node__self > .status-node__name):hover {
+        text-decoration: underline;
+        text-underline-offset: 0.15em;
+    }
+    body:is([data-ls-head-buttons="name"], [data-ls-head-buttons="pointer-name"]) :is(.status-card:not(.is-closed) > .status-card__head, .tree-box > .status-node__self):hover:has(> :is(.status-card__name, .status-node__name):hover) {
+        outline: none;
+        background-color: transparent;
+        box-shadow: none;
+    }
+}
+
+/* Status not by color alone (architecture.md §6): a per-state shape cue (the status_cue macro)
    gives a non-color channel beside the fill, and the warn/error status word is lifted
    out of the muted state text — so a problem reads at a glance and to a red/green
    color-blind viewer. The cue is decorative (aria-hidden); the word stays for screen
@@ -645,22 +773,21 @@ body[data-ls-card-state="below"] .status-card__head.is-state-beside { padding-bo
 /* a line's chip clear of the head's icons above it: targets 24 pixels apart */
 .tree-box > .reason-block { margin-top: 0.25rem; }
 .status-node__state {
-    white-space: nowrap;
     flex-shrink: 0;
     font-size: 0.85rem;
     opacity: 0.8;
 }
 /* lift the problem word, exactly as the card state does below; the time span's
    own weight rule keeps the digits at 400 */
-.status-node.s-warn  > .status-node__self > .node-controls > .status-node__state,
-.status-node.s-error > .status-node__self > .node-controls > .status-node__state {
+.status-node.s-warn  > .status-node__self > .status-node__state,
+.status-node.s-error > .status-node__self > .status-node__state {
     opacity: 1;
     font-weight: 600;
 }
 
 /* lift the problem word out of the muted 0.8 state text (the cue carries a quiet OK) */
-.status-card.s-warn  > .status-card__head > .node-controls > .status-card__state,
-.status-card.s-error > .status-card__head > .node-controls > .status-card__state,
+.status-card.s-warn  > .status-card__head > .status-card__state,
+.status-card.s-error > .status-card__head > .status-card__state,
 .ls-strip.s-warn  > .ls-strip__state,
 .ls-strip.s-error > .ls-strip__state {
     opacity: 1;
@@ -792,7 +919,9 @@ body[data-ls-card-state="below"] .status-card__head.is-state-beside { padding-bo
    it was, so the open editor holds the refresh as before; its summary is never
    shown, since without script there is no clone. */
 .status-panel > .pin-setter,
-.tree-box > .pin-setter { display: block; }
+.tree-box > .pin-setter,
+.status-panel > .ack-setter,
+.tree-box > .ack-setter { display: block; }
 .maintenance-pop__reason {
     display: block;
     padding-left: 0.2rem;      /* its own line under the pin's row, never an orphan */
@@ -810,7 +939,7 @@ body[data-ls-card-state="below"] .status-card__head.is-state-beside { padding-bo
     font-size: 0.75rem;
     opacity: 0.6;
 }
-/* the "+N more" row links to the full /maintenance page. */
+/* the "+N more" row links to the full list, *Handled* at /handled. */
 .maintenance-pop__more { margin-top: 0.2rem; }
 .maintenance-pop__more a { color: var(--ls-tint-maintenance-ink); font-weight: 600; }
 
@@ -863,6 +992,26 @@ body[data-ls-card-state="below"] .status-card__head.is-state-beside { padding-bo
 .md-body > :last-child { margin-bottom: 0; }
 .md-body ul,
 .md-body ol { padding-left: 1.2rem; }
+/* A table a text writes as GitHub does (ADR-0018 decision 14): ruled cells, and as
+   wide as its contents but never wider than what holds it — a wider one scrolls
+   sideways inside itself, in a card, a line and a phone's page alike. A cell breaks
+   its words where a line does, between them, as GitHub's do: the `anywhere` of what
+   holds it — which lets a long word break before it widens a phone's page — would
+   make every column as narrow as a letter rather than let the table scroll. */
+.md-body table {
+    display: block;
+    width: max-content;
+    max-width: 100%;
+    overflow-x: auto;
+    margin: 0.3rem 0 0.6rem;
+    border-collapse: collapse;
+}
+.md-body :is(th, td) {
+    padding: 0.2rem 0.6rem;
+    border: 1px solid var(--ls-line);
+    vertical-align: top;
+    overflow-wrap: break-word;
+}
 .md-body pre {
     margin: 0.3rem 0;
     padding: 0.4rem 0.55rem;
@@ -1167,16 +1316,11 @@ body[data-ls-toggle-hover="wash"] {
     font-size: inherit;
     line-height: inherit;
 }
-/* What the head says beneath its row: the check's account of what it does, muted by
-   its size and never by opacity, so its ink holds 4.5:1 on every fill; the rules,
-   the lines and the damping counter, each a full line. */
-.viewed-head__description {
-    margin: 0.15rem 0 0;
-    font-size: 0.85rem;
-    overflow-wrap: anywhere;
-}
+/* What the head says beneath its row: the rules, the lines and the damping counter,
+   each a full line. */
 .viewed-head > .rule-list,
 .viewed-head > .rule-setter,
+.viewed-head > .ack-setter,
 .viewed-head > .own-lines { margin-top: 0.35rem; }
 .viewed-head > .damping-note { margin: 0.35rem 0 0; }
 /* The facts at a reading measure, after the cards, every card open; the last card
@@ -1186,6 +1330,177 @@ body[data-ls-toggle-hover="wash"] {
 .node-frame__box > .tree-ok + .node-facts,
 .node-frame__box > p + .node-facts { margin-top: 1rem; }
 .node-facts > .card:last-child { margin-bottom: 0 !important; }
+/* Unframed — the overview, whose root's card stands at the wall's foot, and a
+   `depth=0` page — the block keeps the same distance from the cards above it. */
+#status-grid > .status-grid + .node-facts { margin-top: 1rem; }
+/* **The node's About card beside its facts** (ADR-0133 decision 1). The block is
+   as wide as the facts' measure, a gap and the card's, and it is the container the
+   two columns ask: where it holds the facts at their 820 pixels, a gap and a card
+   of 18rem, the facts stand in the first column at that measure and the card in the
+   second from the top, beside *Time*, reaching down beside the facts, and takes the
+   rest up to 28rem; where it does not, the two are one column at the facts' measure
+   — the facts' own wrapper gives its cards to the block (`display: contents`) and
+   the card is ordered in before *Configuration*. The cards are spaced by the
+   columns' gap, so whichever stands last ends where the frame's padding begins. */
+.node-facts--about {
+    max-width: calc(820px + 1rem + 28rem);
+    container-type: inline-size;
+}
+.node-facts__cols {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    max-width: 820px;
+}
+.node-facts__main { display: contents; }
+.node-facts__cols .card { margin-bottom: 0 !important; }
+.node-facts__config { order: 2; }
+.node-facts__cols > .ls-node-about { order: 1; }
+@container (min-width: calc(820px + 1rem + 18rem)) {
+    .node-facts__cols {
+        display: grid;
+        grid-template-columns: minmax(0, 820px) minmax(18rem, 1fr);
+        align-items: start;
+        column-gap: 1rem;
+        max-width: none;
+    }
+    .node-facts__main {
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+        min-width: 0;
+    }
+    .node-facts__cols > .ls-node-about {
+        grid-column: 2;
+        grid-row: 1;
+    }
+}
+/* The card's two texts: the description first, the check's sentence, muted by its
+   size as the facts' secondary lines are; the about beneath, what to do, at the
+   body's size. */
+.ls-node-about__description {
+    margin: 0 0 0.5rem;
+    font-size: 0.875rem;
+    overflow-wrap: anywhere;
+}
+.ls-node-about__description:last-child { margin-bottom: 0; }
+.ls-node-about__about { overflow-wrap: anywhere; }
+.ls-node-about__about > :last-child { margin-bottom: 0; }
+/* Its details (ADR-0133 decision 6): a table after a thin rule beneath the texts, at
+   the description's size — the key muted and as wide as it needs, the value taking
+   the rest and broken anywhere, since an account's id, an address or a function's
+   name has no space to break at. A key given down from above names its node as its
+   tooltip. */
+.ls-node-about__details table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.875rem;
+}
+.ls-node-about .md-body + .ls-node-about__details,
+.ls-node-about__tags + .ls-node-about__details {
+    margin-top: 0.5rem;
+    padding-top: 0.35rem;
+    border-top: 1px solid var(--ls-line);
+}
+/* A node's tags (ADR-0139 decision 4): one line of chips, in its About card between
+   its texts and its details' rule, and in the hover card — each a word in a pill
+   drawn by a thin edge, at the description's size, wrapping to a second line where
+   the card is narrow. The word is the chip; the edge only groups it. */
+.ls-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    font-size: 0.8125rem;
+}
+.ls-node-about .md-body + .ls-node-about__tags { margin-top: 0.5rem; }
+.inspect-card .ls-tags { margin-top: 0.35rem; }
+.ls-tag {
+    padding: 0 0.45rem;
+    border: 1px solid var(--ls-line);
+    border-radius: 999px;
+    line-height: 1.5;
+    white-space: nowrap;
+}
+.ls-tag > a { color: inherit; text-decoration: none; }
+.ls-tag > a:hover { text-decoration: underline; }
+.ls-node-about__details :is(th, td) {
+    padding: 0.15rem 0;
+    vertical-align: top;
+}
+.ls-node-about__details th {
+    width: 1%;
+    padding-right: 0.75rem;
+    font-weight: normal;
+    white-space: nowrap;
+}
+/* …and what a value holds with it: Bootstrap's `code` keeps its own `break-word`,
+   which breaks a long name only where it overflows and so lets it widen the column. */
+.ls-node-about__details td,
+.ls-node-about__details td * { overflow-wrap: anywhere; }
+/* A status a text names (ADR-0133 decision 5): `{error}`, drawn by the renderer as a
+   small sign (`render.sign`) — the status's cue and its word on the status's own
+   tint, as a coded line paints its own surface (ADR-0028), so that it reads on every
+   theme and on whatever surface it stands on, the About card's muted description, a
+   coded line's fill and the hover card among them, and never by its colour alone. It
+   sits in a sentence: no taller than the line, and never broken between its cue and
+   its word. `tests/test_contrast.py` measures each pair. */
+.ls-sign {
+    white-space: nowrap;
+    border-radius: 3px;
+    padding: 0.05em 0.35em;
+}
+.ls-sign > .status-cue { margin-right: 0.25em; }
+.ls-sign--ok {
+    background: var(--ls-tint-ok);
+    color: var(--ls-tint-ok-ink);
+}
+.ls-sign--warn {
+    background: var(--ls-tint-warn);
+    color: var(--ls-tint-warn-ink);
+}
+.ls-sign--error {
+    background: var(--ls-tint-error);
+    color: var(--ls-tint-error-ink);
+}
+.ls-sign--maintenance {
+    background: var(--ls-tint-maintenance);
+    color: var(--ls-tint-maintenance-ink);
+}
+.ls-sign--undefined {
+    background: var(--ls-tint-undefined);
+    color: var(--ls-tint-undefined-ink);
+}
+/* A node's handbook, on its page (ADR-0133 decision 3): a document at the Copy
+   page's measure, which is GitHub's for a README, its headings sized as a document's
+   and not as the page's chrome, and its lists indented as a document's, so that a
+   list's numbers stand inside the column in a wide face too. Its headings are
+   anchored, and one a link opens stops beneath the sticky bar rather than under it.
+   An image keeps to the column, and a word longer than a line breaks where it must
+   rather than widen a phone's page. */
+.ls-handbook { overflow-wrap: break-word; }
+.ls-handbook :is(ul, ol) { padding-left: 2em; }
+.ls-handbook :is(h1, h2, h3, h4, h5, h6) {
+    margin: 1.5rem 0 0.75rem;
+    scroll-margin-top: calc(var(--ls-bar-height) + 1rem);
+}
+.ls-handbook h1 { font-size: 1.5rem; }
+.ls-handbook h2 {
+    font-size: 1.25rem;
+    padding-bottom: 0.3rem;
+    border-bottom: 1px solid var(--ls-line);
+}
+.ls-handbook h3 { font-size: 1.1rem; }
+.ls-handbook :is(h4, h5, h6) { font-size: 1rem; }
+.ls-handbook blockquote {
+    margin: 0 0 1rem;
+    padding: 0 0.9rem;
+    border-left: 3px solid var(--ls-line);
+    color: var(--ls-muted);
+}
+.ls-handbook img { max-width: 100%; height: auto; }
 /* A pin whose line the current run did not report: suspended, not deleted (ADR-0036
    decision 6). The pin is real and there is nothing to anchor to, so the page says
    so in words — the one thing a fragment could never have done.
@@ -1270,6 +1585,38 @@ textarea.form-control.maintenance-reason-source {
 .rule-block__what > .rule-mark,
 .rule-block__scope > .rule-mark,
 .rule-setter__toggle > .rule-mark { margin-right: 0.3em; }
+/* A configured rule's mark on a line it changes the count of (ADR-0137): §, in the
+   line's own ink before its words, floating at the line's head beside its cue as
+   the cue does, so the words wrap beside both. The line keeps its true color — its
+   tint and its cue are its reading's — and the mark says that its node counts it
+   otherwise, in its title and its hidden text. */
+.line-rule {
+    display: inline-flex;
+    align-items: center;
+}
+.status-node__reason > .line-rule,
+.check-reason__body > .line-rule {
+    float: left;
+    margin: 0.2em 0.35rem 0 0;
+}
+/* A ringed check on a line a person has seen (ADR-0142), placed as § is: the line
+   keeps its true color — its tint and its cue are its reading's — and the mark says
+   that it is accepted, by whom and until when, in its title and its hidden text. */
+.line-ack {
+    display: inline-flex;
+    align-items: center;
+}
+.status-node__reason > .line-ack,
+.check-reason__body > .line-ack {
+    float: left;
+    margin: 0.2em 0.35rem 0 0;
+}
+/* What a head's ringed check marks, listed where the page knows it: each failure,
+   its line's words and its node, in the block's own ink. */
+.ack-parts {
+    margin: 0.25rem 0 0.45rem;
+    padding-left: 1.1rem;
+}
 .rule-button {
     display: inline-flex;
     align-items: center;
@@ -1293,10 +1640,17 @@ textarea.form-control.maintenance-reason-source {
     padding: 0;
     list-style: none;
 }
+/* Every block's edge is dashed (ADR-0135 decision 5): every node and chip is a box
+   with a solid edge filled with its state, and nothing else on the page draws a
+   dashed one, so the dashes say *not a node, but something laid on one* — at 65 % of
+   the block's ink, which clears the non-text bar on maintenance's tint in every theme
+   (`tests/sweep_contrast.py`). A block has no fill of its own — the node's color runs
+   through it, its words in the node's ink — but where its rule paints its node:
+   maintenance's keeps its blue. */
 .rule-block {
     margin: 0.45rem 0 0.5rem;
     padding: 0.5rem 0.7rem;
-    border: 1px solid color-mix(in srgb, currentColor 22%, transparent);
+    border: 1.5px dashed color-mix(in srgb, currentColor 65%, transparent);
     border-radius: 6px;
     font-size: 0.875rem;
     font-style: normal;
@@ -1305,6 +1659,60 @@ textarea.form-control.maintenance-reason-source {
 .rule-block[data-rule="maintenance"] {
     background: var(--ls-tint-maintenance);
     color: var(--ls-tint-maintenance-ink);
+}
+/* A block's buttons on the wall are marks (ADR-0135 decisions 3 and 4): the note's
+   speech bubble and an admin's pencil, each a target of a finger's width in the
+   block's own ink, its words in its title and its hidden text. */
+.block-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 24px;
+    padding: 0;
+    border: 0;
+    border-radius: 0.375rem;
+    background: none;
+    color: inherit;
+    cursor: pointer;
+    list-style: none;
+}
+.block-button:hover { background: color-mix(in srgb, currentColor 12%, transparent); }
+.block-button:focus-visible {
+    outline: 2px solid currentColor;
+    outline-offset: 1px;
+}
+.block-button[aria-expanded="true"] { background: color-mix(in srgb, currentColor 16%, transparent); }
+/* A block with no fill of its own — every rule's but maintenance's, a configured
+   rule's first (ADR-0137) — stands on its node's fill, whichever status gives it, where
+   maintenance's stands on its own tint. So its dashes are its ink at 75 %, as a head's
+   squares' edges are, and its marks wash at 8 %, a ring saying which one is open: at
+   65 % and 12 % a block on an amber or a green node fell under the bars in four themes
+   (`tests/sweep_contrast.py`). */
+.rule-block:not([data-rule="maintenance"]) {
+    border-color: color-mix(in srgb, currentColor 75%, transparent);
+}
+.rule-block:not([data-rule="maintenance"]) .block-button:hover,
+.rule-block:not([data-rule="maintenance"]) .block-button[aria-expanded="true"] {
+    background: color-mix(in srgb, currentColor 8%, transparent);
+}
+.rule-block:not([data-rule="maintenance"]) .block-button[aria-expanded="true"] {
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 75%, transparent);
+}
+.rule-block--wall > .rule-block__head { column-gap: 0.25rem; }
+.rule-block__head:has(> .rule-block__edit[open]) > .rule-note-mark { display: none; }
+/* The wall's *Clear*, in its editor beside *Save changes* and *Cancel*: an outline in
+   the editor panel's own ink, which Bootstrap's grey outline is not on a dark panel. */
+.rule-block__clear-now {
+    margin-left: auto;
+    --bs-btn-color: var(--ls-ink);
+    --bs-btn-border-color: color-mix(in srgb, var(--ls-ink) 45%, transparent);
+    --bs-btn-hover-color: var(--ls-ink);
+    --bs-btn-hover-bg: transparent;
+    --bs-btn-hover-border-color: var(--ls-ink);
+    --bs-btn-active-color: var(--ls-ink);
+    --bs-btn-active-bg: transparent;
+    --bs-btn-active-border-color: var(--ls-ink);
 }
 .rule-block--line {
     margin: 0.3rem 0 0.2rem 1.35rem;
@@ -1317,7 +1725,7 @@ textarea.form-control.maintenance-reason-source {
     align-items: center;
     gap: 0.35rem 0.6rem;
 }
-/* The sentence names what it silences and who silenced it, and the record
+/* The sentence names what it puts in maintenance and who did, and the record
    beneath who and when: a line's own words, a path, a login name. One of them with
    nowhere to break is wider than a phone, so both break inside a word where they
    must — as the note between them does (`.maintenance-explanation`). */
@@ -1339,7 +1747,8 @@ textarea.form-control.maintenance-reason-source {
 .rule-block__what a,
 .rule-block__what code,
 .rule-block__note a,
-.rule-block__note code { color: inherit; }
+.rule-block__note code,
+.rule-block__record code { color: inherit; }
 .rule-block__scope { margin: 0; }
 .rule-block__editor {
     margin-top: 0.5rem;
@@ -1369,24 +1778,29 @@ textarea.form-control.maintenance-reason-source {
    A node's name may bring its inspection card (`cursor: help`, above), and a block
    or an editor in the node's box is not what the hint is about.
 
-   On a card *Edit* and *Clear* show on hover or keyboard focus, as the pause mark
+   On a card an admin's *Edit* shows on hover or keyboard focus, as the pause mark
    does: a wall of pinned cards is read far more often than it is operated, and a
-   wall of buttons would be the loudest thing on it. They keep their place while
-   hidden, so nothing moves when they show, and they are shown outright where there
-   is no hover to reveal them. A branch's head shows them always, as a leaf's page
-   does. */
+   wall of buttons would be the loudest thing on it. On the wall it is a pencil and
+   *Clear* stands in its editor (ADR-0135 decision 4); off it, a node's page states
+   *Edit* and *Clear* in words. They keep their place while hidden, so nothing moves
+   when they show, and they are shown outright where there is no hover to reveal
+   them. A branch's head shows them always, as a leaf's page does. */
 .status-panel > .rule-block,
 .status-panel > .pin-setter > .rule-block,
+.status-panel > .ack-setter > .rule-block,
 .tree-box > .rule-block,
-.tree-box > .pin-setter > .rule-block {
+.tree-box > .pin-setter > .rule-block,
+.tree-box > .ack-setter > .rule-block {
     padding: 0.35rem 0.55rem;
     font-size: 0.8rem;
     cursor: auto;
 }
 .status-panel > .rule-block,
-.status-panel > .pin-setter > .rule-block { margin: 0 0 0.4rem; }
+.status-panel > .pin-setter > .rule-block,
+.status-panel > .ack-setter > .rule-block { margin: 0 0 0.4rem; }
 .tree-box > .rule-block,
-.tree-box > .pin-setter > .rule-block { margin: 0.3rem 0 0.25rem; }
+.tree-box > .pin-setter > .rule-block,
+.tree-box > .ack-setter > .rule-block { margin: 0.3rem 0 0.25rem; }
 /* On a node's page the blocks are the rows of the head's list of rules, each a block
    of the page's size; *Set maintenance* stands where the node's own will. */
 .viewed-head > .rule-list > .rule-block {
@@ -1395,7 +1809,8 @@ textarea.form-control.maintenance-reason-source {
     font-size: 0.875rem;
     cursor: auto;
 }
-.viewed-head > .rule-setter { cursor: auto; min-width: 0; }
+.viewed-head > .rule-setter,
+.viewed-head > .ack-setter { cursor: auto; min-width: 0; }
 /* With script the head's ‖ opens it, and closed it takes no line (`tree.js`). So it
    stands from the first paint where the page has its scripts — `tree-pending.js`
    puts `ls-script` on <html> before the body is parsed — the setter out of sight and
@@ -1403,13 +1818,16 @@ textarea.form-control.maintenance-reason-source {
    a line when it runs. Bootstrap hides `[hidden]` with `!important`, which a class
    and three attributes outweigh. */
 .viewed-head > .rule-setter.is-in-row:not([open]),
-html.ls-script .viewed-head > .rule-setter:not([open]) { display: none; }
-html.ls-script .node-icons > [data-control="pin"][aria-controls="head-setter"][hidden] {
+html.ls-script .viewed-head > .rule-setter:not([open]),
+.viewed-head > .ack-setter.is-in-row:not([open]),
+html.ls-script .viewed-head > .ack-setter:not([open]) { display: none; }
+html.ls-script .node-icons > [data-control="pin"][aria-controls="head-setter"][hidden],
+html.ls-script .node-icons > [data-control="ack"][aria-controls="head-ack-setter"][hidden] {
     display: inline-flex !important;
 }
 /* A page's head runs the frame's whole width, and a sentence, a note or a form that
    did would be past reading. The block's tint fills its row, and what stands in it
-   keeps a measure: the Maintenance page's for the words, a form's for the editor. */
+   keeps a measure: *Handled*'s for the words, a form's for the editor. */
 .viewed-head .rule-block__head,
 .viewed-head .rule-block__note,
 .viewed-head .rule-block__scope { max-width: 60rem; }
@@ -1438,7 +1856,7 @@ html.ls-script .node-icons > [data-control="pin"][aria-controls="head-setter"][h
     .status-card .rule-block__clear > button { transition: none; }
 }
 
-/* The Maintenance page (ADR-0104 decision 6): every pin as its block, under its
+/* *Handled* (ADR-0104 decision 6): every pin as its block, under its
    node's path — the node's own first, then its lines'. The blocks are the rule's
    (above); what is the page's is the column they stand in, a reading measure
    rather than the canvas's width, and one metric for a node's block and a line's,
@@ -1457,6 +1875,20 @@ html.ls-script .node-icons > [data-control="pin"][aria-controls="head-setter"][h
     outline-offset: 6px;
     border-radius: 2px;
 }
+/* A branch's *why* (ADR-0135 decision 7): what counts and what is handled beneath
+   it, a list each, every row a part and how it stands. */
+.why-list { margin: 0 0 0.5rem; padding-left: 0; list-style: none; }
+.why-list > li { margin: 0.15rem 0; overflow-wrap: anywhere; }
+.why-list .status-cue { width: 0.8em; height: 0.8em; vertical-align: -0.08em; }
+.why-more { margin: -0.3rem 0 0.5rem; }
+.why-more > summary { cursor: pointer; }
+.why-more[open] > summary { margin-bottom: 0.15rem; }
+.why-card__handled > .handled-mark,
+.why-card__job > .rule-mark { margin-right: 0.35em; vertical-align: -0.08em; }
+.why-card__job { font-weight: 600; }
+/* *Handled* (ADR-0135 decision 8): one section per job, its mark and its words. */
+.handled-job__title { margin: 0 0 0.35rem; font-size: 1.05rem; font-weight: 600; }
+.handled-job__title > .rule-mark { margin-right: 0.35em; }
 .pin-node__path {
     margin: 0 0 0.35rem;
     font-size: 1rem;
@@ -1536,6 +1968,9 @@ html.ls-script .node-icons > [data-control="pin"][aria-controls="head-setter"][h
     min-height: 1.2rem;
     margin-right: 1.75rem;
 }
+/* A line that fails now keeps a second seat, for the ringed check beside the pause
+   mark (ADR-0142). */
+.check-reason__rail--seats { margin-right: 3.35rem; }
 .check-reason__rail .reason-actions {
     float: none;
     margin-left: 0;
@@ -2086,6 +2521,21 @@ html.ls-script .node-icons > [data-control="pin"][aria-controls="head-setter"][h
 .reason-pin > summary::-webkit-details-marker { display: none; }
 .reason-pin > summary::marker { content: ""; }
 .reason-pin[open] > .reason-pin__toggle { opacity: 1; }
+/* The ringed check's, on the seat before the pause mark's (ADR-0142). */
+.reason-ack > summary {
+    position: absolute;
+    top: 0;
+    right: 1.6rem;
+    display: inline-flex;
+    justify-content: center;
+    width: 1.5rem;
+    padding: 0;
+    list-style: none;
+    cursor: pointer;
+}
+.reason-ack > summary::-webkit-details-marker { display: none; }
+.reason-ack > summary::marker { content: ""; }
+.reason-ack[open] > .reason-ack__toggle { opacity: 1; }
 
 /* Slot actions on a reason line (ADR-0034). The frame is ours, the contents are a
    dependent package's: core emits the `.reason-actions` rail on every reason line
@@ -2146,12 +2596,12 @@ html.ls-script .node-icons > [data-control="pin"][aria-controls="head-setter"][h
    extensions installed side by side look like one product.
 
    In a head's row the rail stands among the head's controls (ADR-0127 decision 3),
-   before the state and the head's own icons, shown always, as they are: an action
-   that names an icon is a square like them, `.is-icon`, and one that names none a
-   small labelled chip — the `.reason-action` chip's shape deliberately, since an
-   action is an action and a second visual language for the same gesture would be
-   the extension seam leaking into the design. What the row has no room for,
-   `tree.js` folds behind ⋯ (`.is-folded`, its menu below). */
+   after the head's own icons and before ⋯, shown with them: an action that names an
+   icon is a square like them, `.is-icon`, and one that names none a small labelled
+   chip — the `.reason-action` chip's shape deliberately, since an action is an
+   action and a second visual language for the same gesture would be the extension
+   seam leaking into the design. What the row has no room for, `tree.js` folds behind
+   ⋯ (`.is-folded`, its menu below). */
 .node-actions {
     display: inline-flex;
     align-items: center;
@@ -2205,7 +2655,7 @@ html.ls-script .node-icons > [data-control="pin"][aria-controls="head-setter"][h
     border-top: 1px solid color-mix(in srgb, currentColor 22%, transparent);
 }
 
-/* Reason overflow (ADR-0024). A card clamps its reasons to a *line budget* (the block's
+/* Reason overflow (ADR-0056 decision 1). A card clamps its reasons to a *line budget* (the block's
    ``--reason-lines``, from config.yaml ``reason_cap``): short reasons show that
    many, a wrapped reason uses more of the budget. The overflow stays in the DOM,
    clipped by CSS (never cut mid-HTML, ADR-0018) and faded. *⌄ all N* beneath the
@@ -2227,6 +2677,22 @@ html.ls-script .node-icons > [data-control="pin"][aria-controls="head-setter"][h
 .reason-block.is-clipped:not(.is-open) {
     -webkit-mask-image: linear-gradient(to bottom, #000 72%, transparent);
             mask-image: linear-gradient(to bottom, #000 72%, transparent);
+}
+/* The lines *⌄ all N* opens (backlog #91) stand no taller than about half a window, or
+   than the budget where a deployment's is taller, and the rest scrolls inside the box:
+   a viewer's click no longer stands a box a thousand lines tall. Nothing holds the
+   wheel at either end, so a page scrolled past a box goes on past it. While the lines
+   scroll, tree.js makes the block a region the keyboard reaches and a screen reader
+   names, and keeps where it stood through the swap; the closed box is as it was, and a
+   node's own page lists every line. */
+.reason-block.is-open {
+    max-height: max(calc(var(--reason-lines, 6) * (1.08rem + 0.48rem) + 0.1rem), 50vh);
+    max-height: max(calc(var(--reason-lines, 6) * (1.08rem + 0.48rem) + 0.1rem), 50dvh);
+    overflow-y: auto;
+}
+.reason-block.is-open:focus-visible {
+    outline: 2px solid currentColor;
+    outline-offset: 2px;
 }
 
 /* The show-all / collapse control (ADR-0127 decision 3): *⌄ all N* beneath a box's
@@ -2285,8 +2751,7 @@ html.ls-script .node-icons > [data-control="pin"][aria-controls="head-setter"][h
 .status-card .node-children:has(> :is(.tree-node, .tree-solo) ~ :is(.tree-node, .tree-solo)) > .tree-solo > .tree-node {
     margin-top: 0;
 }
-.status-card .node-children:has(> :is(.tree-node, .tree-solo) ~ :is(.tree-node, .tree-solo)) > .tree-run,
-.status-card .node-children:has(> :is(.tree-node, .tree-solo) ~ :is(.tree-node, .tree-solo)) > .branch-more {
+.status-card .node-children:has(> :is(.tree-node, .tree-solo) ~ :is(.tree-node, .tree-solo)) > .tree-run {
     grid-column: 1 / -1;
 }
 
@@ -2476,10 +2941,10 @@ body[data-ls-chip-runs="aligned"] .tree-chip > .tree-counts {
 }
 .tree-chip.inspect-trigger { cursor: help; }
 /* A chip opens its node by a plain click as a head's row closes it, and says so as
-   the row does (Lex's word of 2026-10-16): under the pointer an outline of its own
-   ink from the row's token, a pixel out where chips stand close and never over the
-   ring the keyboard's focus draws, and pressed a wash of that ink laid over its tint,
-   which stays. No underline: the outline says it. */
+   the row does: under the pointer an outline of its own ink from the row's token, a
+   pixel out where chips stand close and never over the ring the keyboard's focus draws,
+   and pressed a wash of that ink laid over its tint, which stays. No underline: the
+   outline says it. */
 @media (hover: hover) {
     .tree-chip:hover:not(:focus-visible) {
         outline: 1px solid color-mix(in srgb, currentColor var(--ls-toggle-hover-line), transparent);
@@ -2514,7 +2979,10 @@ body[data-ls-chip-runs="aligned"] .tree-chip > .tree-counts {
 .tree-counts:empty { display: none; }
 .tree-chip.s-error > .tree-counts, .tree-chip.s-warn > .tree-counts { font-weight: 600; }
 .tree-count > .status-cue { width: 0.75em; height: 0.75em; margin-right: 0.2em; vertical-align: -0.08em; }
-.tree-rule > .rule-mark { vertical-align: -0.1em; }
+/* What is handled beneath (ADR-0135 decision 6): the ringed diamond and its
+   number, in the counts' ink, after them. */
+.tree-handled { white-space: nowrap; }
+.tree-handled > .handled-mark { width: 0.85em; height: 0.85em; margin-right: 0.2em; vertical-align: -0.1em; }
 .status-card__head > .tree-counts { margin-left: 0.6em; font-size: 0.85rem; }
 .status-card:not(.is-closed) > .status-card__head > .tree-counts { display: none; }
 
@@ -2524,8 +2992,32 @@ body[data-ls-chip-runs="aligned"] .tree-chip > .tree-counts {
 .status-card.is-closed.dim.s-error { --ls-surface: var(--ls-error); color: var(--ls-error-ink); }
 .status-card.is-closed.dim.s-warn  { --ls-surface: var(--ls-warn); color: var(--ls-warn-ink); }
 .status-card.is-closed > .status-card__head { margin-bottom: 0; }
-/* a closed card is a chip in a card's place: of its controls only the state stays */
-.status-card.is-closed > .status-card__head > .node-controls > :not(.status-card__state) { display: none; }
+/* a closed card is a chip in a card's place: its state stays, its controls go */
+.status-card.is-closed > .status-card__head > .node-controls { display: none; }
+/* A closed card keeps the track the planner gave it open — a click never moves a card
+   (ADR-0128 decision 6) — and under *Close all* that track can be narrow. Its head
+   wraps where the track has no room for its name, its counts and its state on one
+   line (ADR-0127 decision 1): the name whole on the first line, the counts beside it
+   where they fit and the state beneath, at the right; a row that never wrapped
+   squeezed the name to a letter a line. Where the line holds them all nothing moves:
+   the title has no width of its own to wrap anything (its middle's basis is 0) and
+   takes what is left, as open. */
+.status-card.is-closed > .status-card__head { flex-wrap: wrap; }
+.status-card.is-closed > .status-card__head > .status-card__state {
+    margin-left: auto;         /* the state at the right of a line of its own */
+    padding-left: 0.4em;       /* and the clearance the margin gave, beside the title */
+    flex-shrink: 1;            /* and its parts on lines of their own where that one
+                                  is narrower than it is */
+}
+/* Under settings.yaml `card_status_line: below` a closed card's state takes its line
+   of its own in the head's flow, beneath the name and the counts, where an open card's
+   stands at the head's foot: `tree.js` reads no closed card's row, and the flow makes
+   room for every line the state breaks into. */
+body[data-ls-card-state="below"] .status-card.is-closed > .status-card__head { padding-bottom: 0; }
+body[data-ls-card-state="below"] .status-card.is-closed > .status-card__head > .status-card__state {
+    position: static;
+    flex-basis: 100%;
+}
 /* what the healthy fold folds, and the fold's count after the rest; a short line
    tall and no shorter than a target of its own, in the full ink, as *⌄ all N* is */
 .tree-ok {
@@ -2564,13 +3056,14 @@ html.ls-script:not(.ls-tree-ready) .tree-ok[data-fold-drawn][hidden] {
    the edge and a wash of it; ▤ half washed while the children are mixed; and a dot
    of the ink on a button the viewer set differently from the configured look. The
    full ink as the edge on hover, and the ring on focus. Under a coarse pointer they
-   stand 8 pixels apart, each tap area grown to the middle of the gap, never over
-   the state word to their left. */
-/* The head's controls, one toolbar (decision 3): the node's actions, ⋯, the state
-   cluster and the head's own icons, in that order, at the end of the row, never
-   wrapping, and centred on the row's line, so the squares stand on the name's line
-   and the state's small words with them. One of them is the keyboard's stop into the
-   toolbar, `tree.js` moving it with the arrow keys. */
+   stand 8 pixels apart, each tap area grown to the middle of the gap, never past the
+   toolbar's ends (below). */
+/* The head's controls, one toolbar (decision 3): the head's own icons — ↗ first, so
+   that the button that opens the node's page is the first after the name on every
+   head, then the funnel, ▤ and ‖ — then the node's actions and ⋯, where the look
+   `head_buttons` puts them, never wrapping, and centred on the row's line, so the
+   squares stand on the name's line and the state's small words with them. One of them
+   is the keyboard's stop into the toolbar, `tree.js` moving it with the arrow keys. */
 .node-controls {
     display: inline-flex;
     align-items: center;
@@ -2580,9 +3073,18 @@ html.ls-script:not(.ls-tree-ready) .tree-ok[data-fold-drawn][hidden] {
     margin-left: 0.4em;        /* clear of the name or the title; the row's width is a
                                   phone's, and every pixel here drops a state beneath */
 }
-.node-controls > .status-card__state,
-.node-controls > .status-node__state { margin: 0 0.2em 0 0; }
+/* The state cluster stands in the row beside the toolbar, not in it: clear of the
+   title before it, as the toolbar is; the toolbar keeps its own clearance where the
+   look puts it after the state, and where the state ends the row it ends at the row's
+   padding, where its line beneath puts it too. Centred on the row's line, as the
+   toolbar's squares are. */
+:where(.status-card__head, .status-node__self) > :where(.status-card__state, .status-node__state) {
+    margin: 0 0 0 0.4em;
+    align-self: center;
+}
 .node-controls > .node-actions:empty + .node-more { display: none; }
+/* a page's own head may have none of the icons: no gap is kept for them */
+.node-icons:empty { display: none; }
 .node-icons {
     display: inline-flex;
     align-items: center;
@@ -2682,42 +3184,17 @@ html.ls-script:not(.ls-tree-ready) .tree-ok[data-fold-drawn][hidden] {
     /* four pixels past each square's edge, which is a pixel outside its padding
        box, where an absolute inset is measured from */
     .node-icon::before, .node-action::before { content: ""; position: absolute; inset: -5px; }
-    /* the taps meet in the middle of each gap and none reaches over the state word */
-    .node-icon:first-child::before { left: -1px; }
-    .node-actions > :last-child::before, .node-more::before { right: -1px; }
+    /* the taps meet in the middle of each gap, and at the toolbar's two ends none
+       reaches past it, over the name, the title or the state word: its first square
+       is the first icon, or the first action where a page's own head has none; its
+       last ⋯, where an action folds, else the last action, else the last icon */
+    .node-icons > :first-child::before,
+    .node-icons:empty + .node-actions > :first-child::before { left: -1px; }
+    .node-actions > :last-child::before, .node-more::before,
+    .node-icons:has(+ .node-actions:empty) > :last-child::before { right: -1px; }
 }
 
-/* Branch density (ADR-0024), until stage 4 of backlog #91: a level's quiet open
-   children past ``branch_cap`` are marked ``.is-extra`` — kept in the DOM but hidden
-   until this level's "+N more" control (tree.js) expands them in place, surviving
-   the ~10s poll swap like the reason chevron. A closed node stands in a run, which
-   the child combinator leaves alone. */
-.node-children:not(.is-expanded) > .tree-node.is-extra { display: none; }
-
-/* The reveal control — a subtle text button after a level's boxes. CSS swaps the
-   label by the container's expanded state, so tree.js only toggles the class and
-   aria-expanded, and a poll swap re-rendering the collapsed button stays correct. */
-.branch-more {
-    display: inline-block;
-    margin: 0 0 2px 2px;
-    padding: 0;
-    background: none;
-    border: 0;
-    -webkit-appearance: none;
-            appearance: none;
-    color: inherit;
-    font-size: 0.78rem;
-    font-weight: 600;
-    line-height: 1.5;
-    text-align: left;
-    opacity: 0.8;
-    cursor: pointer;
-}
-.branch-more:hover { opacity: 1; text-decoration: underline; }
-.node-children:not(.is-expanded) > .branch-more .branch-more__hide,
-.node-children.is-expanded > .branch-more .branch-more__show { display: none; }
-
-/* Status strip (ADR-0024): the engine self-heartbeat (ADR-0005), lifted
+/* Status strip (ADR-0056 decision 3): the engine self-heartbeat (ADR-0005), lifted
    out of the grid into a compact pill — now a right-aligned band at the top of
    #status-grid, beneath the hide/depth controls, reading as its own element rather
    than the grid's first row. A side note, not a summary banner (fit-content width
@@ -2815,6 +3292,52 @@ html.ls-script:not(.ls-tree-ready) .tree-ok[data-fold-drawn][hidden] {
     border-color: color-mix(in srgb, var(--ls-tint-undefined-ink) 22%, transparent);
 }
 
+/* A pale box in a box of its own fill read as one with it, the faint edge the only
+   line between them — a failing host's box in its failing card, a healthy host's in
+   the healthy box around it. So every other level of box steps its pale fill toward
+   its state's ink (ADR-0028): a card's own boxes, those two levels inside them, and so
+   on down, which the template marks on the node, `is-stepped`; each theme says how far
+   (`--ls-tint-step`). The words on a stepped fill step the other way, 30 % toward the
+   page's ink, so each reads there at least as it does on the fill it stepped from. A
+   culprit keeps its vivid fill. */
+.is-stepped > .tree-hold > .s-ok,
+.is-stepped > .tree-hold > .dim.s-ok {
+    --ls-surface: color-mix(in srgb, var(--ls-tint-ok-ink) var(--ls-tint-step), var(--ls-tint-ok));
+    color: color-mix(in srgb, var(--ls-tint-ok-ink) 70%, var(--ls-ink));
+}
+.is-stepped > .tree-hold > .dim.s-error {
+    --ls-surface: color-mix(in srgb, var(--ls-tint-error-ink) var(--ls-tint-step), var(--ls-tint-error));
+    color: color-mix(in srgb, var(--ls-tint-error-ink) 70%, var(--ls-ink));
+}
+.is-stepped > .tree-hold > .dim.s-warn {
+    --ls-surface: color-mix(in srgb, var(--ls-tint-warn-ink) var(--ls-tint-step), var(--ls-tint-warn));
+    color: color-mix(in srgb, var(--ls-tint-warn-ink) 70%, var(--ls-ink));
+}
+.is-stepped > .tree-hold > .dim.s-maintenance {
+    --ls-surface: color-mix(in srgb, var(--ls-tint-maintenance-ink) var(--ls-tint-step), var(--ls-tint-maintenance));
+    color: color-mix(in srgb, var(--ls-tint-maintenance-ink) 70%, var(--ls-ink));
+}
+.is-stepped > .tree-hold > .dim.s-undefined {
+    --ls-surface: color-mix(in srgb, var(--ls-tint-undefined-ink) var(--ls-tint-step), var(--ls-tint-undefined));
+    color: color-mix(in srgb, var(--ls-tint-undefined-ink) 70%, var(--ls-ink));
+}
+/* A chip steps with its level as a box does: one in a card steps, one in a stepped box
+   does not, so a chip stands apart from the box it stands in as a box does. Its color
+   alone, so the wash the pointer lays over it stays; a failing chip is vivid and never
+   steps. */
+.is-stepped > .tree-chip.s-ok {
+    background-color: color-mix(in srgb, var(--ls-tint-ok-ink) var(--ls-tint-step), var(--ls-tint-ok));
+    color: color-mix(in srgb, var(--ls-tint-ok-ink) 70%, var(--ls-ink));
+}
+.is-stepped > .tree-chip.s-maintenance {
+    background-color: color-mix(in srgb, var(--ls-tint-maintenance-ink) var(--ls-tint-step), var(--ls-tint-maintenance));
+    color: color-mix(in srgb, var(--ls-tint-maintenance-ink) 70%, var(--ls-ink));
+}
+.is-stepped > .tree-chip.s-undefined {
+    background-color: color-mix(in srgb, var(--ls-tint-undefined-ink) var(--ls-tint-step), var(--ls-tint-undefined));
+    color: color-mix(in srgb, var(--ls-tint-undefined-ink) 70%, var(--ls-ink));
+}
+
 /* history / events table row tints (same pale palette as the dimmed boxes) */
 .row-ok          > td { background: var(--ls-tint-ok); }
 .row-warn        > td { background: var(--ls-tint-warn); }
@@ -2883,6 +3406,21 @@ html.ls-script .ls-band__modes[hidden] { display: inline-flex !important; }
     background-color: var(--ls-toggle-on);
     border-color: var(--ls-toggle-on);
 }
+/* The tag a wall shows only what carries (ADR-0139 decision 5): a select beside the
+   switches, as wide as its longest tag. */
+.status-filters__tag { width: auto; max-width: 14rem; }
+/* …the line that says so inside the grid — which tag, what it means, what the filter
+   hides that fails and the way back — and, before a part's name, the path above it,
+   muted, since nothing above it is drawn. */
+.ls-tag-line { margin: 0 0 0.5rem; font-size: 0.875rem; }
+.ls-tag-line .ls-tag { display: inline-block; }
+.ls-tag-line__all { white-space: nowrap; }
+.status-card__context {
+    color: var(--ls-muted);
+    font-size: 0.8125rem;
+    white-space: nowrap;
+    margin-right: 0.25rem;
+}
 
 /* Inspection popover — the hover card (ADR-0019). Positioned by Floating UI
    (position: fixed); shown content is server-rendered Markdown in `.md-body`. */
@@ -2905,17 +3443,33 @@ html.ls-script .ls-band__modes[hidden] { display: inline-flex !important; }
 .inspect-card[hidden] { display: none; }
 
 /* Its heading is the node's name and title as its head draws them, the name first
-   whatever the title is (ADR-0061); then the first block of its `about`, and a line
-   to the node's page where the `about` has more. */
+   whatever the title is (ADR-0061); then the first block of its `about`, a line to
+   the node's page where the `about` has more, and a line to its handbook where it
+   has one (ADR-0133 decision 3). */
 .inspect-card__title { font-weight: 600; overflow-wrap: anywhere; }
 .inspect-card__node-title { font-weight: 400; }
 .inspect-card__title + .inspect-card__about { margin-top: 0.3rem; }
 .inspect-card__about > :last-child { margin-bottom: 0; }
-.inspect-card__more {
+.inspect-card__more,
+.inspect-card__handbook {
     display: block;
     margin-top: 0.3rem;
     font-size: 0.8rem;
 }
+/* A block's note, opened from its mark on the wall (ADR-0135 decision 3): the
+   inspection card's look and place, the node's name, the block's sentence, the
+   note whole — scrolling past a height, clamped and never cut — who set it and
+   when, and the node's page. */
+.note-card { max-width: min(44ch, 92vw); }
+.note-card__sentence { margin-top: 0.25rem; }
+.note-card__sentence > .rule-mark { margin-right: 0.3em; }
+.note-card__note {
+    margin-top: 0.35rem;
+    max-height: min(50vh, 22rem);
+    overflow: auto;
+}
+.note-card__note > :last-child { margin-bottom: 0; }
+.note-card__record { margin: 0.35rem 0 0; font-size: 0.8rem; }
 
 /* keep an embedded image from overflowing the card */
 .inspect-card img { max-width: 100%; height: auto; }
@@ -2928,10 +3482,10 @@ html.ls-script .ls-band__modes[hidden] { display: inline-flex !important; }
    dims as above — a wall left with an editor open must not read as live — but for
    the card or the head that holds the open editor, which somebody is typing in. On
    a node's page the parts dim inside its frame: the head, the cards, the facts. */
-.poll-waiting > :not(.status-grid, .node-frame):not(:has(details.maintenance-editor-disclosure[open] .maintenance-editor-form, details.reason-pin[open] .maintenance-editor-form)),
-.poll-waiting .node-frame__box > :not(.status-grid):not(:has(details.maintenance-editor-disclosure[open] .maintenance-editor-form, details.reason-pin[open] .maintenance-editor-form)),
-.poll-waiting > .status-grid > :not(:has(details.maintenance-editor-disclosure[open] .maintenance-editor-form, details.reason-pin[open] .maintenance-editor-form)),
-.poll-waiting .node-frame__box > .status-grid > :not(:has(details.maintenance-editor-disclosure[open] .maintenance-editor-form, details.reason-pin[open] .maintenance-editor-form)) {
+.poll-waiting > :not(.status-grid, .node-frame):not(:has(details.maintenance-editor-disclosure[open] .maintenance-editor-form, details.reason-pin[open] .maintenance-editor-form, details.reason-ack[open] .maintenance-editor-form)),
+.poll-waiting .node-frame__box > :not(.status-grid):not(:has(details.maintenance-editor-disclosure[open] .maintenance-editor-form, details.reason-pin[open] .maintenance-editor-form, details.reason-ack[open] .maintenance-editor-form)),
+.poll-waiting > .status-grid > :not(:has(details.maintenance-editor-disclosure[open] .maintenance-editor-form, details.reason-pin[open] .maintenance-editor-form, details.reason-ack[open] .maintenance-editor-form)),
+.poll-waiting .node-frame__box > .status-grid > :not(:has(details.maintenance-editor-disclosure[open] .maintenance-editor-form, details.reason-pin[open] .maintenance-editor-form, details.reason-ack[open] .maintenance-editor-form)) {
     opacity: 0.45;
     transition: opacity 0.3s ease;
 }
@@ -2942,12 +3496,20 @@ html.ls-script .ls-band__modes[hidden] { display: inline-flex !important; }
    and its blocks keep their layout for what the scripts measure meanwhile. A leaf's
    page, which has no grid, holds its frame back the same way. */
 html.ls-tree-pending :is(#status-grid, .node-page) { visibility: hidden; }
+/* Under the look `boxes: packed` (ADR-0138) the boxes take their columns once tree.js
+   has put the map back, and the grid is held back the same way until it puts
+   `ls-boxes-drawn` on <html> — a first paint in rows would have the packing move
+   every box beside a tall one. tree-pending.js's timer puts the class there after a
+   second whatever happens. */
+html.ls-script:not(.ls-boxes-drawn) body[data-ls-boxes="packed"] #status-grid {
+    visibility: hidden;
+}
 
 /* ----- the settings menu (ADR-0029) -----
 
-   The user's name opens it; inside are the choices that belong to this browser
-   rather than to the data — theme, layout — and the way out. Radio circles, not
-   check marks, because these are exclusive. */
+   The user's name opens it; inside are the way out, first, and then the choices
+   that belong to this browser rather than to the data — theme, layout, the looks.
+   Radio circles, not check marks, because these are exclusive. */
 .ls-menu__trigger {
     -webkit-appearance: none;
             appearance: none;
@@ -2994,6 +3556,43 @@ html.ls-tree-pending :is(#status-grid, .node-page) { visibility: hidden; }
     letter-spacing: 0.04em;
     color: var(--ls-muted);
 }
+/* The line beneath a group's heading: what the group changes, in a few words
+   (backlog #91). It wraps in its column's width, as a long choice does, so a long line
+   takes a second row and never widens the menu. */
+.ls-menu__line {
+    padding: 0 0.9rem 0.2rem;
+    font-size: 0.75rem;
+    line-height: 1.3;
+    color: var(--ls-muted);
+}
+/* A group — its heading, its line and its choices — stands whole, the groups apart by
+   their spacing. Where the window has room for them they stand in two columns of the
+   panel's 30rem, read down the first and then the second, which is the keyboard's order
+   too, and where it is a desk's, 72rem or wider, in three of 45rem, so the menu of
+   eight groups fits a laptop's window without scrolling; on a narrower one, a phone's,
+   they stand in one. */
+.ls-menu__group {
+    break-inside: avoid;
+    padding: 0.1rem 0 0.4rem;
+}
+@media (min-width: 36rem) {
+    .ls-menu__panel {
+        width: 30rem;
+    }
+    .ls-menu__groups {
+        column-count: 2;
+        column-gap: 0;
+        column-rule: 1px solid var(--bs-dropdown-divider-bg, var(--ls-line));
+    }
+}
+@media (min-width: 72rem) {
+    .ls-menu__panel {
+        width: 45rem;
+    }
+    .ls-menu__groups {
+        column-count: 3;
+    }
+}
 .ls-menu__item {
     display: flex;
     align-items: center;
@@ -3009,12 +3608,71 @@ html.ls-tree-pending :is(#status-grid, .node-page) { visibility: hidden; }
     background: color-mix(in srgb, var(--ls-menu-hover) 8%, transparent);
     text-decoration: none;
 }
-.ls-menu__item.is-disabled { color: var(--ls-muted); cursor: default; }
-.ls-menu__item.is-disabled:hover { background: none; }
 /* the ink, never the raw red: this item sits on Bootstrap's dropdown surface,
    which our --ls-panel does not reach, and there the red measured 3.41:1 */
 .ls-menu__logout { color: var(--ls-danger-ink); }
+/* The session's row, the menu's first: whom this browser is signed in as, and Log
+   out as a button drawn from its ink, an edge of it around the word — the way out is
+   done to a session, not to how the page looks, so it stands apart from the looks,
+   above them and in reach at once however short the window (backlog #91). Under the
+   pointer it takes the rows' wash. */
+.ls-menu__who {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.35rem 0.9rem 0.45rem;
+    font-size: 0.875rem;
+}
+.ls-menu__who-name {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    color: var(--ls-muted);
+}
+.ls-menu__who .ls-menu__logout {
+    flex: 0 0 auto;
+    padding: 0.15rem 0.6rem;
+    border: 1px solid currentColor;
+    border-radius: 4px;
+    font-size: 0.8125rem;
+    text-decoration: none;
+    white-space: nowrap;
+}
+.ls-menu__who .ls-menu__logout:hover {
+    background: color-mix(in srgb, var(--ls-menu-hover) 8%, transparent);
+}
+/* The headline over the looks, and its line: what they are, and where they are kept —
+   in this browser, not in the account, which the page said nowhere. */
+.ls-menu__title {
+    padding: 0.2rem 0.9rem 0;
+    font-size: 0.95rem;
+    font-weight: 600;
+}
+.ls-menu__title-line {
+    padding: 0 0.9rem 0.4rem;
+    font-size: 0.75rem;
+    line-height: 1.3;
+    color: var(--ls-muted);
+}
 .ls-menu__apply { padding: 0.4rem 0.9rem 0.2rem; }
+/* The way to the account of using the wall (ADR-0136), at the menu's foot: the last
+   thing in the groups' flow, whole in its column, a rule of the dividers' above it. In
+   the columns it stands at the last one's foot, in the room the longer columns before
+   it leave, so the menu is no taller for it; on a phone, at the end. */
+.ls-menu__help {
+    display: block;
+    break-inside: avoid;
+    margin: 0.4rem 0 0;
+    padding: 0.45rem 0.9rem 0.3rem;
+    border-top: 1px solid var(--bs-dropdown-divider-bg, var(--ls-line));
+    font-size: 0.875rem;
+    color: inherit;
+    text-decoration: none;
+}
+.ls-menu__help:hover {
+    background: color-mix(in srgb, var(--ls-menu-hover) 8%, transparent);
+    text-decoration: none;
+}
 
 /* the circle itself: the native radio, restyled rather than replaced, so it
    keeps its keyboard behavior and its place in the form */
@@ -3110,6 +3768,9 @@ body[data-ls-theme="dark"] {
     --ls-tint-maintenance-ink: #9dc4f5;
     --ls-tint-undefined: #2a2e33;
     --ls-tint-undefined-ink: #b6bcc2;
+    /* these tints are lighter for a dark canvas, nearer their inks: a smaller step
+       stands as far apart, and keeps a healthy box's quiet word over the bar */
+    --ls-tint-step: 8%;
     --ls-warn: #c28c0e;
     /* no --ls-warn-ink override: the dark ink from :root measures 5.13:1 on
        this amber, where the sheet's cream sat at 2.75:1. The surface is the
@@ -3152,6 +3813,9 @@ body[data-ls-theme="dark"] {
         --ls-tint-maintenance-ink: #9dc4f5;
         --ls-tint-undefined: #2a2e33;
         --ls-tint-undefined-ink: #b6bcc2;
+        /* these tints are lighter for a dark canvas, nearer their inks: a smaller step
+       stands as far apart, and keeps a healthy box's quiet word over the bar */
+        --ls-tint-step: 8%;
         --ls-warn: #c28c0e;
         /* no --ls-warn-ink override: the dark ink from :root measures 5.13:1 on
        this amber, where the sheet's cream sat at 2.75:1. The surface is the
@@ -3160,8 +3824,9 @@ body[data-ls-theme="dark"] {
     }
 }
 
-/* cyberpunk — the fun one: neon on near-black, monospace, a little glow. Checked
-   for legibility but deliberately not held to the AA bar the others are. */
+/* cyberpunk — the library's theme, which a browser that never chose draws in: neon on
+   near-black, monospace, a little glow, and held to the AA bar as every theme is
+   (ADR-0028). */
 body[data-ls-theme="cyberpunk"] {
     --ls-canvas: #070b12;
     --ls-ink: #c4f3ff;
@@ -3189,7 +3854,11 @@ body[data-ls-theme="cyberpunk"] {
     --ls-tint-maintenance: #071c2e;
     --ls-tint-maintenance-ink: #56c8ff;
     --ls-tint-undefined: #0d141c;
-    --ls-tint-undefined-ink: #7f98a6;
+    /* 4.73:1 at a state word's quiet 80 % on the tint, where #7f98a6 read 4.34; and
+       the undefined culprit's neon with it */
+    --ls-tint-undefined-ink: #86a0ae;
+    /* its near-black tints take a longer step to stand as far apart */
+    --ls-tint-step: 14%;
     /* the culprit's vivid pairs: lit dark glass under white-hot words, the glass a
        little off the canvas and the words at 13:1 or more on it — a neon tube, whose
        light is drawn below in its state's neon */
@@ -3211,7 +3880,7 @@ body[data-ls-theme="cyberpunk"] .status-card__state,
 body[data-ls-theme="cyberpunk"] .ls-strip__state { text-shadow: 0 0 7px currentColor; }
 body[data-ls-theme="cyberpunk"] .ls-brand__wordmark { text-shadow: 0 0 9px var(--ls-accent); }
 
-/* Cyberpunk's culprit — a node reporting its own problem, ADR-0024's vivid surface — is
+/* Cyberpunk's culprit — a node reporting its own problem, ADR-0028's vivid surface — is
    a neon tube (ADR-0028): its fill the lit dark glass and its
    words the white-hot ink the theme's block restates, and its edge, an inner glow, an
    outer glow and its words' halo in its state's neon, which is the ink its state's
@@ -3234,11 +3903,11 @@ body[data-ls-theme="cyberpunk"] .ls-strip:is(.s-error, .s-warn, .s-maintenance, 
                 0 0 12px color-mix(in srgb, var(--ls-neon) 55%, transparent);
 }
 body[data-ls-theme="cyberpunk"] .status-card:is(.s-error, .s-warn, .s-maintenance, .s-undefined):not(.dim) > .status-card__head > .status-card__name,
-body[data-ls-theme="cyberpunk"] .status-card:is(.s-error, .s-warn, .s-maintenance, .s-undefined):not(.dim) > .status-card__head > .node-controls > .status-card__state,
+body[data-ls-theme="cyberpunk"] .status-card:is(.s-error, .s-warn, .s-maintenance, .s-undefined):not(.dim) > .status-card__head > .status-card__state,
 body[data-ls-theme="cyberpunk"] .status-card.is-closed.dim:is(.s-error, .s-warn) > .status-card__head > .status-card__name,
-body[data-ls-theme="cyberpunk"] .status-card.is-closed.dim:is(.s-error, .s-warn) > .status-card__head > .node-controls > .status-card__state,
+body[data-ls-theme="cyberpunk"] .status-card.is-closed.dim:is(.s-error, .s-warn) > .status-card__head > .status-card__state,
 body[data-ls-theme="cyberpunk"] .status-node:is(.s-error, .s-warn, .s-maintenance, .s-undefined):not(.dim) > .status-node__self > .status-node__name,
-body[data-ls-theme="cyberpunk"] .status-node:is(.s-error, .s-warn, .s-maintenance, .s-undefined):not(.dim) > .status-node__self > .node-controls > .status-node__state,
+body[data-ls-theme="cyberpunk"] .status-node:is(.s-error, .s-warn, .s-maintenance, .s-undefined):not(.dim) > .status-node__self > .status-node__state,
 body[data-ls-theme="cyberpunk"] .tree-chip:is(.s-error, .s-warn) > .tree-chip__name,
 body[data-ls-theme="cyberpunk"] .ls-strip:is(.s-error, .s-warn, .s-maintenance, .s-undefined) > .ls-strip__name,
 body[data-ls-theme="cyberpunk"] .ls-strip:is(.s-error, .s-warn, .s-maintenance, .s-undefined) > .ls-strip__state {
@@ -3252,6 +3921,13 @@ body[data-ls-theme="cyberpunk"] .maintenance-pip {
                 0 0 6px var(--ls-tint-maintenance-ink);
 }
 body[data-ls-theme="cyberpunk"] .ls-curve__warned { fill: var(--ls-tint-warn-ink); }
+/* A status a node's text names glows in its state's neon, the ink it is drawn in, as
+   the theme's state words do: its word with their halo, its tint with a little light
+   round it (ADR-0133 decision 5). Shadows only, so no line of text moves. */
+body[data-ls-theme="cyberpunk"] .ls-sign {
+    text-shadow: 0 0 7px currentColor;
+    box-shadow: 0 0 6px color-mix(in srgb, currentColor 45%, transparent);
+}
 
 /* Cyberpunk's logs — the Events page and a node's History tab, each a `.ls-log` —
    and nothing else (ADR-0028). The theme's near-black tints
@@ -3663,66 +4339,6 @@ body[data-ls-theme="cyberpunk"] .ls-log .row-undefined .ls-log__status {
 .ls-links__none {
     margin-bottom: 1.5rem;
 }
-/* How fresh the reachability answers are (ADR-0030 §9). One line for the whole
-   page rather than a mark on sixty healthy rows: only a failure is drawn beside
-   its entry, so this is what tells a reader that a page showing none was actually
-   asked. `margin-left: auto` puts it at the far end of the filter row — the
-   opposite end from the search box, since it is a fact about the page rather than
-   about what was typed. */
-.ls-links__probe {
-    color: var(--ls-muted);
-    font-size: 0.8125rem;
-    margin-left: auto;
-}
-/* Every answer came back alive — the one state this page can report as *good*,
-   and it reports it in the status family's own green rather than a new one. That
-   ink is declared for the ok **tint**, and it is used here on the canvas because
-   it was measured there: 6.14:1 in the weakest theme (pastel), and higher in the
-   other five. `tests/test_contrast.py` keeps that true. Nothing turns this line
-   red: a failure is drawn on the row it belongs to, and a second red up here
-   would compete with it. */
-.ls-links__probe--ok {
-    color: var(--ls-tint-ok-ink);
-}
-.ls-links__tick {
-    vertical-align: -0.125em;
-}
-/* A pass that gave up on a host still holding the connection open (ADR-0030).
-   It takes **weight and not color**: the rule two comments up — nothing
-   turns this line red — is about not competing with the failures drawn on the rows
-   themselves, and a stalled pass is a fact about the page's own machinery rather
-   than about any entry on it. Inheriting the muted ink also means it needs no
-   contrast row of its own; `.ls-links__probe` already measures that pair. */
-.ls-links__stalled {
-    font-weight: 600;
-}
-/* *Check now*, at the far end of the row beside the line it refreshes. The form
-   is a flex item like everything else here, so it carries no width of its own and
-   the button decides the size. Secondary weight on purpose: the filter is this
-   page's primary control, and this one is the only thing on the instance a reader
-   can spend outbound requests with.
-
-   The **ink is ours**, and `btn-outline-secondary` is deliberately not used:
-   Bootstrap paints that #6c757d whatever the canvas, which measures 3.76:1 on the
-   dark one — the same trap the logout link fell into, and the accessibility bar
-   outranks the shade (ADR-0028). `btn btn-sm` keeps the shape and the metrics;
-   every color below comes from a token, so `tests/test_contrast.py` can measure
-   this row without a browser. */
-.ls-links__recheck {
-    margin: 0;
-    flex: 0 0 auto;
-}
-.ls-links__recheck .btn {
-    color: var(--ls-ink);
-    background: none;
-    border: 1px solid var(--ls-line);
-}
-.ls-links__recheck .btn:hover,
-.ls-links__recheck .btn:focus-visible {
-    color: var(--ls-ink);
-    background: var(--ls-rail-active);
-    border-color: var(--ls-muted);
-}
 
 /* ----- /links -----
 
@@ -3823,21 +4439,6 @@ body[data-bs-theme="dark"] .ls-links__icon--dark { display: block; }
     line-height: 1.3;
     color: var(--ls-muted);
 }
-/* A reachability failure, under the title it belongs to. It sits where the note
-   sits and reads at the note's size, because it is the same kind of aside — but
-   `dead` gets the danger ink, the one place on this page that is not muted: a
-   moved link is the failure the page exists to surface. *No answer* stays muted
-   on purpose, since a timeout or a 500 is this instance failing to find out
-   rather than a fact about the entry (ADR-0030 §10). */
-.ls-links__verdict {
-    display: block;
-    font-size: 0.8125rem;
-    line-height: 1.3;
-    color: var(--ls-muted);
-}
-.ls-links__verdict--dead {
-    color: var(--ls-danger-ink);
-}
 .ls-links__problems,
 .ls-links__empty { max-width: 46rem; }
 /* The setup guide's folds (ADR-0030): the browser's own disclosures, each a card.
@@ -3902,7 +4503,7 @@ body[data-bs-theme="dark"] .ls-links__icon--dark { display: block; }
 
 /* The page a path no node stands at is answered with (ADR-0116): sentences at a
    reading measure, and between them the pins held against the path, in the blocks
-   the Maintenance page states them in. */
+   *Handled* states them in. */
 .ls-no-node { max-width: 46rem; margin-top: 0.75rem; }
 .ls-no-node__lead { font-size: 1.05rem; }
 .ls-no-node__pins { margin-bottom: 1rem; }

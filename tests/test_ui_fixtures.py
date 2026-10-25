@@ -280,10 +280,11 @@ class WallFixtureTests(TestCase):
         self.assertGreaterEqual(sum(len(run.all("tree-node")) for run in runs), 2)
 
     def test_security_findings_flood_collapses_to_a_chip(self):
-        # Layout (ADR-0024): the OK "informational" leaf that floods 150 findings is a
-        # quiet leaf, so at the overview it collapses to a single name+color chip
-        # — the skyscraper is tamed and its findings live on the leaf's own page,
-        # not the card. Reasons ≠ bad status: an OK card no longer drowns the grid.
+        # Layout (ADR-0056): the OK "informational" leaf that floods 150 findings is a
+        # band of a card whose bands start as chips, as the wiz type proposes, so at
+        # the overview it collapses to a single name+color chip — the skyscraper is
+        # tamed and its findings live on the leaf's own page, not the card. Reasons ≠
+        # bad status: an OK card no longer drowns the grid.
         html = self._render("security_findings_150")
         page = parse(html)
         band = next(node for node in page.all("tree-node")

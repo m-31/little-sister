@@ -14,6 +14,7 @@ from little_sister import instants
 from little_sister.codes import StatusCode as StatusCode
 from little_sister.codes import is_valid_status_code as is_valid_status_code
 from little_sister.codes import worst_of as worst_of
+from little_sister.details import Details
 from little_sister.reasons import ReasonInput, normalize
 
 
@@ -93,7 +94,7 @@ def on_same_line(a: str, b: str) -> bool:
 # loader rejects a custom check owning nodes on it, so the subtree stays
 # engine-owned (leaving room for future engine children, e.g. connected
 # satellites) and the dashboard can lift the node out of the card grid into the
-# status strip (ADR-0024) knowing nothing user-configured hides behind it.
+# status strip (ADR-0056 decision 3) knowing nothing user-configured hides behind it.
 HEARTBEAT_PATH = "/little-sister"
 
 
@@ -165,6 +166,30 @@ class Status:
         # A short display label, briefer than `about` (ADR-0017); same sources. The
         # path/name identity stays the addressing key.
         self.title: str = ""
+        # What a team writes at length about this node — its runbook, how to sign
+        # in, its policy (ADR-0133 decision 3): Markdown, read on the node's own
+        # *Handbook* tab, where `about` is the short account in its card. A label
+        # like `about`, from the same sources, read at a restart; a snapshot copies
+        # only that there is one.
+        self.handbook: str = ""
+        # The node's details (ADR-0133 decision 6), named values each a line of
+        # Markdown, in three parts by who gives them, which the snapshot and the
+        # tree's `details` put together (`little_sister.details`). What the **type**
+        # gave with the last run — its object's — written through like
+        # `description`; what the **deployment** gives the node's name under its
+        # check's `subnodes:` block, written by the engine as it writes the node; and
+        # what the deployment declares for the node's path, `nodes.yaml` over the
+        # check's own file, seeded at startup like the labels. The deployment's two
+        # hold for every node beneath, key by key, the path's winning; the type's are
+        # the node's alone.
+        self.type_details: Details = ()
+        self.named_details: Details = ()
+        self.declared_details: Details = ()
+        # The tags the deployment gives the node's name under its check's
+        # `subnodes:` block (ADR-0139 decision 2), written by the engine as it writes
+        # the node, as its named details are. Those written for its path are the
+        # tree's, by path; both hold for every node beneath, and add up.
+        self.named_tags: tuple[str, ...] = ()
         # A declared rank among this node's siblings (ADR-0055); the snapshot sorts
         # by `(order, name)`, and an undeclared rank reads 0. `None` means **nobody
         # said**, which is what keeps a configured `order: 0` distinguishable from
@@ -213,17 +238,20 @@ class Status:
         return f"{self.path}: {self.code.name.lower()}{suffix}"
 
     def update(self, code: StatusCode | str, reason: ReasonInput = None,
-               members: bool = False) -> None:
+               members: bool = False, *, at: datetime | None = None) -> None:
         """Record a fresh observation of this node.
 
-        Updates the code and reason and re-stamps ``timestamp`` to now — the
-        timestamp is the *observation* time, set by the check on each run
-        (project.md §2.1). ``members`` marks the reasons as individually
-        suppressible entries rather than prose (ADR-0036).
+        Updates the code and reason and re-stamps ``timestamp`` — the timestamp is
+        the *observation* time, set by the check on each run (project.md §2.1):
+        ``at``, the one instant of the write that observed it, which every node a
+        stored run writes shares (ADR-0132 decision 2), and the clock's where none
+        is given. ``members`` marks the reasons as individually suppressible
+        entries rather than prose (ADR-0036).
         """
         self.code = _coerce_code(code)
         self.reason_entries, self.members = normalize(reason, members)
-        self.timestamp = instants.now()
+        self.timestamp = (instants.now() if at is None
+                          else instants.utc(at, "a node's observation"))
 
     def get_status_code(self) -> StatusCode:
         """Effective status of this node, rolled up per ADR-0039:

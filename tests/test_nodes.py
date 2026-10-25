@@ -11,6 +11,7 @@ from little_sister.checks.ssh.host_metrics import HostMetricsCheck
 from little_sister.errors import CheckError, ConfigError
 from little_sister.nodes import (
     ABOUT_NOTED_PAST,
+    DESCRIPTION_NOTED_PAST,
     NodeMeta,
     load_nodes,
     resolve_metadata,
@@ -336,8 +337,8 @@ class ConsistencyPassTests(TestCase):
         self.assertIn("nexus", "\n".join(logs.output))
 
     def test_an_about_past_400_characters_is_noted(self):
-        # The band shows a node's about open on every view of it (backlog #91
-        # §3.5): a short account, a sentence or a few. One past about 400
+        # A node's About card shows its about on its Status tab (ADR-0133
+        # decision 1): a short account, a sentence or a few. One past about 400
         # characters, some four lines at a desk's width, is named at startup as an
         # orphan is — the node and its length, and where the rest can go.
         self_report.startup.forget()
@@ -384,9 +385,36 @@ class ConsistencyPassTests(TestCase):
         self.assertEqual([line.slug for line in self_report.startup.lines()],
                          ["nodes-orphan-ghost"])
 
+    def test_a_checks_description_past_160_characters_is_noted(self):
+        # A description says what the check reads or checks, in a sentence, first
+        # in the node's About card (ADR-0133 decision 2): one past about 160
+        # characters is named as a long about is, with where the rest belongs.
+        self_report.startup.forget()
+        self.addCleanup(self_report.startup.forget)
+        description = "word " * 32 + "w"            # 161 characters
+        self.assertEqual(len(description), 161)
+        with self.assertLogs(level="WARNING") as logs:
+            run_consistency_pass([self._http(path="/web", description=description)],
+                                 {})
+        (line,) = self_report.startup.lines()
+        self.assertEqual(line.slug, "nodes-long-description-web")
+        for said in ("'/web'", "161 characters", "one sentence", "about",
+                     "handbook"):
+            self.assertIn(said, line.text)
+        self.assertIn("'/web'", "\n".join(logs.output))
+
+    def test_a_description_of_160_characters_is_not(self):
+        self_report.startup.forget()
+        self.addCleanup(self_report.startup.forget)
+        self.assertEqual(DESCRIPTION_NOTED_PAST, 160)
+        with self.assertNoLogs(level="WARNING"):
+            run_consistency_pass([self._http(path="/web", description="w" * 160)],
+                                 {})
+        self.assertEqual(self_report.startup.lines(), ())
+
     def test_heartbeat_declaration_is_not_an_orphan(self):
         # Titling the engine's heartbeat is legitimate (it feeds the status
-        # strip and its hover card, ADR-0024) although no check covers the path.
+        # strip and its hover card, ADR-0056) although no check covers the path.
         with self.assertNoLogs(level="WARNING"):
             run_consistency_pass(
                 [self._http(path="/web")],

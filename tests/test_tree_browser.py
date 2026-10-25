@@ -20,7 +20,8 @@ import json
 import re
 import threading
 import unittest
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from itertools import pairwise
 from pathlib import Path
@@ -46,6 +47,11 @@ try:  # pragma: no cover - environment probe
 except ImportError:  # pragma: no cover
     sync_playwright = None  # type: ignore[assignment]
 
+try:  # pragma: no cover - environment probe: the scanner is the browser group's
+    from axe_playwright_python.sync_playwright import Axe
+except ImportError:  # pragma: no cover
+    Axe = None  # type: ignore[assignment,misc]
+
 _SANDBOX_CHROMIUM = Path("/opt/pw-browsers/chromium-1194/chrome-linux/chrome")
 _BOOTSTRAP = (Path(__file__).resolve().parent.parent / "var" / "bootstrap"
               / "node_modules" / "bootstrap" / "dist")
@@ -55,10 +61,12 @@ _MAP = f"window.sessionStorage.getItem({_KEY!r})"
 _FRAGMENT = re.compile(r"[?&]fragment=1")
 _NOON = datetime(2026, 10, 16, 12, 0, 0, tzinfo=UTC)
 
-#: The estate: a card of five quiet aspects (three shown, two behind *+2 more*) and
-#: one erupting; a card whose children mix — two quiet leaves, a warning, a roster
+#: The estate: a card of five quiet aspects and one erupting, each aspect's probe a
+#: chip; a card whose children mix — three quiet leaves as chips, a warning, a roster
 #: that claims `show_when_quiet`, a leaf that fails and recovers under the hand —
-#: and a deep chain for a find to reach beneath two closed nodes.
+#: and a deep chain for a find to reach beneath two closed nodes. Its deployment
+#: says how those levels start (:data:`_ESTATE_LOOK`), since a level nobody speaks
+#: for starts open.
 _NAS = "/nas"
 _WEB = "/web"
 _API = "/web/api"
@@ -72,6 +80,18 @@ _DEEP_LEAF = "/deep/a/leaf"
 _DEEP_LINE = "the line beneath two closed nodes"
 _OTHER_LEAF = "/deep/b/leaf"
 _OTHER_LINE = "another line beneath another closed node"
+#: How the estate's deployment says its levels start, in its `nodes.yaml`
+#: (ADR-0128): every aspect's probe and every leaf of the deep chain as chips, and
+#: the web tier's children, its warning and its failure opening their way by the
+#: failure budget, its roster by its claim.
+_ESTATE_LOOK = {
+    _NAS: NodeMeta(look=Stated(children=Stated(chips=True))),
+    _WEB: NodeMeta(look=Stated(chips=True)),
+    _DEEP: NodeMeta(look=Stated(children=Stated(chips=True))),
+}
+#: The estate's look without its word for the web tier, which the built-in look then
+#: draws open, every box of it.
+_WEB_BUILT_IN = {path: meta for path, meta in _ESTATE_LOOK.items() if path != _WEB}
 
 #: Counts the MutationObserver callbacks of the page's scripts, by observer, from
 #: before the scripts run (an init script).
@@ -121,6 +141,9 @@ class _BrowserCase(unittest.TestCase):
     base = ""
     drawn_in: ClassVar[dict[str, Any]] = {
         "viewport": {"width": 1000, "height": 700}, "reduced_motion": "reduce"}
+    #: How the deployment says the estate's levels start, a class's to widen for the
+    #: levels it adds, or a test's to set before it draws the wall.
+    estate_look: Mapping[str, NodeMeta] = _ESTATE_LOOK
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -162,6 +185,11 @@ class _BrowserCase(unittest.TestCase):
         self.addCleanup(self.context.close)
         self.context.route("https://cdn.jsdelivr.net/**", self._vendored)
         self.page = self._signed_in(self.context)
+        # the estate's look, read with the configuration a test may patch; a test that
+        # says its own sets `app_module.first_looks`, which speaks instead
+        looks = mock.patch.object(app_module, "_first_looks", self._estate_looks)
+        looks.start()
+        self.addCleanup(looks.stop)
         self.fragments: list[str] = []
         self.page.on("request", lambda request: (
             self.fragments.append(request.url)
@@ -171,6 +199,13 @@ class _BrowserCase(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.assertEqual(self.errors, [])
+
+    def _estate_looks(self) -> FirstLooks:
+        """The first look the page draws: a test's own, or the estate's."""
+        if app_module.first_looks is not None:
+            return app_module.first_looks
+        return FirstLooks((), dict(self.estate_look), app_module.config,
+                          app_module.status_tree.named_by_run)
 
     def _signed_in(self, context: Any) -> Any:
         page = context.new_page()
@@ -233,15 +268,14 @@ class _BrowserCase(unittest.TestCase):
         """A level's top-level items as the DOM has them: `run(a,b)` or `node(c)`."""
         return (page or self.page).evaluate("""path => {
             const level = document.querySelector(`.tree-kids[data-branch="${path}"]`);
-            return Array.from(level.children).filter(item =>
-                !item.classList.contains('branch-more')).map(item => {
-                    const names = Array.from(item.classList.contains('tree-node')
-                        ? [item] : item.querySelectorAll(':scope > .tree-node'))
-                        .map(node => node.dataset.node.split('/').pop());
-                    const kind = item.classList.contains('tree-node') ? 'node'
-                               : item.classList.contains('tree-solo') ? 'solo' : 'run';
-                    return kind + '(' + names.join(',') + ')';
-                });
+            return Array.from(level.children).map(item => {
+                const names = Array.from(item.classList.contains('tree-node')
+                    ? [item] : item.querySelectorAll(':scope > .tree-node'))
+                    .map(node => node.dataset.node.split('/').pop());
+                const kind = item.classList.contains('tree-node') ? 'node'
+                           : item.classList.contains('tree-solo') ? 'solo' : 'run';
+                return kind + '(' + names.join(',') + ')';
+            });
         }""", path)
 
     def _swap(self, page: Any | None = None) -> None:
@@ -340,7 +374,13 @@ class ClickTests(_BrowserCase):
 
     def test_a_click_on_a_heads_title_closes_it_and_one_on_its_icons_does_not(self):
         self._wall()
-        self._head(_WEB).locator(".node-title").click()
+        # on the title's room past the toolbar, which lies over the title's start
+        # while the pointer is on the head
+        middle = self._head(_WEB).locator(":scope > .status-head__middle")
+        middle.scroll_into_view_if_needed()
+        box = middle.bounding_box()
+        self.page.mouse.click(box["x"] + box["width"] - 3,
+                              box["y"] + box["height"] / 2)
         self.assertEqual(self._state(_WEB), "closed")
         self._head(_WEB).locator(".status-card__name").click()
         self.assertEqual(self._state(_WEB), "open")
@@ -454,10 +494,14 @@ class FoldTests(_BrowserCase):
         self.assertEqual(self._level_items(_WEB),
                          ["run(api,cdn,dns,flaky,mail,roster)"])
         # the children's entries went, and the roster, whose claim would keep it
-        # open, got one of its own
+        # open, and the warning and the failure, as every failing child a fold
+        # closes, got their own
         self.assertEqual(self._map()["nodes"], {_WEB: {"chips": True},
+                                                _DNS: {"open": False},
+                                                _FLAKY: {"open": False},
                                                 _ROSTER: {"open": False}})
-        self.assertEqual(self._why(_DNS), "parent")
+        self.assertEqual(self._why(_API), "parent")
+        self.assertEqual(self._why(_DNS), "entry")
         self.assertEqual(self._why(_ROSTER), "entry")
         self.assertTrue(chips.evaluate(
             "button => button.classList.contains('is-changed')"))
@@ -477,6 +521,8 @@ class FoldTests(_BrowserCase):
         chips.click()
         self.assertEqual(chips.get_attribute("aria-pressed"), "true")
         self.assertEqual(self._map()["nodes"], {_WEB: {"chips": True},
+                                                _DNS: {"open": False},
+                                                _FLAKY: {"open": False},
                                                 _ROSTER: {"open": False}})
 
     def test_the_funnel_folds_the_healthy_and_a_press_takes_the_claims_too(self):
@@ -573,8 +619,77 @@ class FoldTests(_BrowserCase):
         self.assertEqual(self._icon(_DNS, "chips").count(), 0)           # a leaf
 
 
+#: Every card in a track of 170 pixels, as a desk narrower than the planner's widest
+#: gives the cards it plans one track each: what *Close all* leaves them, since a
+#: click never moves a card (ADR-0128 decision 6).
+_NARROW_TRACKS = """
+.status-grid { grid-template-columns: repeat(auto-fill, 170px) !important; }
+.status-grid > .status-card { grid-column: auto !important; }
+"""
+_LINES = """el => {
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    return new Set(Array.from(range.getClientRects(), r => Math.round(r.top))).size;
+}"""
+
+
 class BandTests(_BrowserCase):
     """The band's three buttons, and the count of what the viewer set."""
+
+    def test_a_closed_card_in_a_narrow_track_keeps_its_name_whole(self):
+        # Closed whole, a card in a narrow track squeezed its name to a letter a line
+        # beside its counts and its state; its head wraps instead, the name whole on its
+        # first line and the state beneath
+        self._wall()
+        self.page.click('.ls-band__mode[data-mode="closed"]')
+        self.page.add_style_tag(content=_NARROW_TRACKS)
+        beneath = []
+        for path in (_NAS, _WEB, _DEEP):
+            head = self.page.locator(
+                f'.status-card.tree-node[data-node="{path}"] > .status-card__head')
+            name = head.locator(".status-card__name").element_handle()
+            seen = name.bounding_box()
+            state = head.locator(".status-card__state").bounding_box()
+            with self.subTest(card=path):
+                self.assertEqual(self.page.evaluate(_LINES, name), 1)
+                # the state beside the name where the line holds both, else beneath
+                below = state["y"] + 0.5 >= seen["y"] + seen["height"]
+                self.assertTrue(below or state["x"] >= seen["x"] + seen["width"])
+                beneath.append(below)
+                # two lines at most: the name's, and the state's, at the right — the
+                # row's padding and the state's margin short of its edge
+                row = head.bounding_box()
+                self.assertLess(row["height"], 3 * seen["height"])
+                self.assertAlmostEqual(state["x"] + state["width"],
+                                       row["x"] + row["width"], delta=6)
+        # the narrow tracks put some state beneath its name
+        self.assertTrue(any(beneath))
+
+    def test_a_closed_card_with_room_keeps_its_one_line(self):
+        # where the track holds the whole head, wrapping changes nothing: one line,
+        # the title taking what is left and the state clear of it, as open
+        self._wall()
+        self.page.click('.ls-band__mode[data-mode="closed"]')
+        head = self.page.locator(
+            f'.status-card.tree-node[data-node="{_WEB}"] > .status-card__head')
+        name = head.locator(".status-card__name").bounding_box()
+        title = head.locator(".status-head__middle > .node-title").bounding_box()
+        middle = head.locator(".status-head__middle").bounding_box()
+        state = head.locator(".status-card__state").bounding_box()
+        self.assertTrue(title["width"] > 0)
+        self.assertLess(head.bounding_box()["height"], 1.5 * name["height"])
+        self.assertLess(abs(state["y"] - title["y"]), name["height"] / 2)
+        # the counts their own margin from the name, and not a pixel more
+        counts = head.locator(".tree-counts")
+        margin = counts.evaluate("el => parseFloat(getComputedStyle(el).marginLeft)")
+        self.assertAlmostEqual(counts.bounding_box()["x"] - (name["x"] + name["width"]),
+                               margin, delta=1)
+        # the controls' clearance, 0.4em, between the room the title may fill and
+        # the state's words
+        padding = head.locator(".status-card__state").evaluate(
+            "el => parseFloat(getComputedStyle(el).paddingLeft)")
+        self.assertGreaterEqual(
+            state["x"] + padding - (middle["x"] + middle["width"]), 5)
 
     def test_the_three_buttons_and_the_count(self):
         self._wall()
@@ -583,7 +698,8 @@ class BandTests(_BrowserCase):
                                         ("open", "false", "")])
         self._chip(_CDN).click()
         self._icon(_NAS, "chips").click()
-        self.assertEqual(self._band()[1], ("configured", "true", "· 2"))
+        # the chip, ▤, and the failure ▤ folded, which keeps a close of its own
+        self.assertEqual(self._band()[1], ("configured", "true", "· 3"))
         # *Close all*: everything the configuration opened closes, what the viewer
         # opened stays with the nodes above it
         self.page.click('.ls-band__mode[data-mode="closed"]')
@@ -614,20 +730,18 @@ class BandTests(_BrowserCase):
         self.assertEqual(self._state(_CDN), "closed")
         self.assertEqual(self._state(_WEB), "closed")
         self.assertEqual(self._band()[0], ("closed", "true", ""))
-        # *Open all* opens everything, the healthy shown and every level's surplus
+        # *Open all* opens everything, the healthy shown
         self.page.click('.ls-band__mode[data-mode="open"]')
         self.assertEqual(self._map(), {"v": 1, "mode": "open", "nodes": {}})
         for path in (_NAS, _WEB, _CDN, _MAIL, f"{_NAS}/epsilon"):
             self.assertEqual(self._state(path), "open", path)
             self.assertTrue(self._node(path).is_visible(), path)
         self.assertEqual(self._why(_CDN), "mode")
-        self.assertFalse(self.page.locator(
-            f'.tree-kids[data-branch="{_NAS}"] > .branch-more').is_visible())
         # *As configured* empties the map: the first look again, cdn now failing
-        # and drawn open, dns recovered and drawn as a chip
+        # and opened by its card's failure budget, dns recovered and drawn as a chip
         self.page.click('.ls-band__mode[data-mode="configured"]')
         self.assertIsNone(self._map())
-        self.assertEqual((self._state(_CDN), self._why(_CDN)), ("open", "drawn"))
+        self.assertEqual((self._state(_CDN), self._why(_CDN)), ("open", "budget"))
         self.assertEqual((self._state(_DNS), self._why(_DNS)), ("closed", "drawn"))
         self.assertEqual(self._why(_ROSTER), "swq")
         self.assertEqual(self._band()[1], ("configured", "true", ""))
@@ -687,8 +801,24 @@ class BandTests(_BrowserCase):
             "b => b.classList.contains('is-changed')"))
 
 
+#: Where the window stands the moment `tree.js` has put the map back on a swap, before
+#: anything paints: a scroll that glides has not moved yet.
+_AFTER_APPLY = """() => {
+    const tree = window.lsTree, apply = tree.apply;
+    tree.apply = container => { apply(container); window.__scrolled = window.scrollY; };
+}"""
+
+
+#: Each node the window shows, by its path, and its top in the window.
+_TOPS_SHOWN = """() => [...document.querySelectorAll('#status-grid .tree-node')]
+    .map(node => [node.dataset.node, node.getBoundingClientRect()])
+    .filter(([, box]) => box.height && box.bottom > 0 && box.top < innerHeight)
+    .map(([path, box]) => [path, box.top])"""
+
+
 class RefreshTests(_BrowserCase):
-    """Everything stands through a swap and a reload, the focus with it."""
+    """Everything stands through a swap and a reload, the focus with it, and through a
+    swap what the window shows."""
 
     def test_what_a_viewer_set_stands_through_a_swap_and_a_reload(self):
         self._wall()
@@ -730,6 +860,68 @@ class RefreshTests(_BrowserCase):
         self.assertEqual(self.page.evaluate("document.activeElement.className"),
                          "tree-chip s-ok")
 
+    def test_the_node_at_the_window_top_stands_through_a_swap(self):
+        # A wall scrolled down used to move at the next refresh. On a phone's width the
+        # cards stand in one column; the window scrolled until the last of them stands
+        # at its top, a card above it grows by two lines, and the swap scrolls by what
+        # it grew, so that the window shows what it showed — at once, where the page's
+        # stylesheet has a scroll glide, as Bootstrap's does for a viewer who has not
+        # asked for less motion
+        self.page.set_viewport_size({"width": 375, "height": 300})
+        self._wall()
+        self.page.add_style_tag(content=":root { scroll-behavior: smooth; }")
+        self.assertEqual(self._cards()[-1], _WEB)
+        self.page.evaluate("by => window.scrollBy({top: by, behavior: 'instant'})",
+                           self._top(_WEB))
+        scrolled = self.page.evaluate("window.scrollY")
+        self.assertGreater(scrolled, 0)
+        stood = self._top(_WEB)
+        self.page.evaluate(_AFTER_APPLY)
+        self.tree.upsert(f"{_NAS}/zeta/probe", StatusCode.ERROR,
+                         ["zeta is down", "zeta's disk is full", "zeta's fan stopped"])
+        self._swap()
+        self.assertAlmostEqual(self._top(_WEB), stood, delta=1)
+        now = self.page.evaluate("window.scrollY")
+        self.assertGreater(now, scrolled + 20)
+        self.assertEqual(self.page.evaluate("window.__scrolled"), now)
+        # and lines added beneath the node at the window's top, in the window, move
+        # nothing: the nearest node holds the window, not one the lines pushed down
+        self.assertLess(self._top(_DNS), 300)
+        self.tree.upsert(_DNS, StatusCode.WARN, ["slow", "slower", "slowest"])
+        self._swap()
+        self.assertAlmostEqual(self._top(_WEB), stood, delta=1)
+        self.assertEqual(self.page.evaluate("window.scrollY"), now)
+
+    def test_a_node_folded_away_hands_the_window_to_the_next(self):
+        # the node nearest the window's top recovers under its card's healthy fold, as a
+        # card above grows: the window goes by the next nearest still shown, the card
+        # it stood in
+        self.page.set_viewport_size({"width": 375, "height": 300})
+        self._wall()
+        self._icon(_NAS, "ok").click()
+        zeta = f"{_NAS}/zeta"
+        self.page.evaluate("by => window.scrollBy({top: by, behavior: 'instant'})",
+                           self._top(zeta) - 10)
+        tops = sorted(self.page.evaluate(_TOPS_SHOWN), key=lambda it: abs(it[1]))
+        self.assertEqual([path for path, _ in tops[:2]], [zeta, _NAS])
+        stood = self._top(_NAS)
+        self.tree.upsert(f"{zeta}/probe", StatusCode.OK)
+        self.tree.upsert(_DEEP_LEAF, StatusCode.ERROR, [_DEEP_LINE, "and the next"])
+        self._swap()
+        self.assertFalse(self._node(zeta).is_visible())
+        self.assertAlmostEqual(self._top(_NAS), stood, delta=1)
+
+    def test_a_window_at_the_page_top_stays_there(self):
+        # whatever comes to stand at the head of the wall: a card new before the first
+        self.page.set_viewport_size({"width": 375, "height": 700})
+        self._wall()
+        first = self._cards()[0]
+        self.assertLess(self._top(first), 700)
+        self.tree.upsert("/alpha/probe", StatusCode.ERROR, ["alpha is down"])
+        self._swap()
+        self.assertEqual(self._cards()[0], "/alpha")
+        self.assertEqual(self.page.evaluate("window.scrollY"), 0)
+
     def test_a_swap_and_a_click_wake_each_observer_once(self):
         # three scripts watch the grid where the card opens on a pause, a viewer's
         # choice: `inspection_card: off`, the library's look, binds no observer
@@ -749,6 +941,18 @@ class RefreshTests(_BrowserCase):
         self.page.wait_for_timeout(50)
         calls = self.page.evaluate("window.__observers.map(o => o.calls)")
         self.assertTrue(all(count <= 1 for count in calls), calls)
+
+    def _cards(self) -> list[str]:
+        """The wall's cards, by their paths, in the order they stand."""
+        return self.page.evaluate(
+            "[...document.querySelectorAll('#status-grid .status-card')]"
+            ".map(card => card.dataset.node)")
+
+    def _top(self, path: str) -> float:
+        """Where the node of ``path`` begins in the window."""
+        return self.page.evaluate(
+            "path => document.querySelector(`.tree-node[data-node=\"${path}\"]`)"
+            ".getBoundingClientRect().top", path)
 
 
 class IncidentTests(_BrowserCase):
@@ -775,11 +979,12 @@ class IncidentTests(_BrowserCase):
         self._tick(10)                                    # 600 s: held
         self.assertEqual(self._map()["nodes"][_FLAKY]["ok_held"], True)
         self.assertEqual(self._state(_FLAKY), "closed")
-        # a new failure: the close gives way, and the node opens as its look says
+        # a new failure: the close gives way, and the node opens as its look and the
+        # failure budget say — a chip its card's budget opens
         self.tree.upsert(_FLAKY, StatusCode.ERROR, ["flaky is down again"])
         self._tick(10)
         self.assertEqual(self._state(_FLAKY), "open")
-        self.assertEqual(self._why(_FLAKY), "drawn")
+        self.assertEqual(self._why(_FLAKY), "budget")
         self.assertIsNone(self._map())
 
     def test_a_pin_beneath_does_not_keep_the_node_in_failure(self):
@@ -927,7 +1132,8 @@ class WhyTests(_BrowserCase):
 
     def test_each_rule_names_itself(self):
         self._wall()
-        self.assertEqual(self._why(_DNS), "drawn")
+        self.assertEqual(self._why(_API), "drawn")              # a chip, configured
+        self.assertEqual(self._why(_DNS), "budget")             # a failure's way
         self.assertEqual(self._why(_ROSTER), "swq")             # the claim, configured
         self._chip(_API).click()
         self.assertEqual(self._why(_API), "entry")
@@ -938,7 +1144,8 @@ class WhyTests(_BrowserCase):
         self.assertEqual(self._why(_ROSTER), "mode")            # the claim gives way
         self.page.click('.ls-band__mode[data-mode="configured"]')
         self._icon(_WEB, "chips").click()
-        self.assertEqual(self._why(_DNS), "parent")
+        self.assertEqual(self._why(_API), "parent")
+        self.assertEqual(self._why(_DNS), "entry")              # a failure's own close
         self.assertEqual(self._why(_ROSTER), "entry")           # set with its siblings
 
     def test_a_pages_children_open_by_the_pages_rule(self):
@@ -1018,19 +1225,24 @@ class PageFrameTests(_BrowserCase):
         chips.click()
         self.assertEqual(chips.get_attribute("aria-pressed"), "true")
         self.assertEqual(self._cards_closed(), [True] * 6)
-        # the node's own entry, and the roster's, whose claim would keep it open
+        # the node's own entry; the roster's, whose claim would keep it open; and the
+        # warning's and the failure's, which the wall's failure budget would open
         self.assertEqual(self._map()["nodes"], {_WEB: {"chips": True},
+                                                _DNS: {"open": False},
+                                                _FLAKY: {"open": False},
                                                 _ROSTER: {"open": False}})
-        self.assertEqual(self._why(_DNS), "parent")
+        self.assertEqual(self._why(_API), "parent")
+        self.assertEqual(self._why(_DNS), "entry")
         # through a swap and a reload
         self._swap()
         self.assertEqual(self._cards_closed(), [True] * 6)
         self._reload()
         self.assertEqual(self._cards_closed(), [True] * 6)
-        # one state for the tab: on the wall the same node's children are chips
+        # one state for the tab: on the wall the same node's children are chips, the
+        # warning and the failure among them
         self._wall()
-        self.assertEqual(self._state(_DNS), "closed")
-        self.assertEqual(self._why(_DNS), "parent")
+        for path in (_DNS, _FLAKY):
+            self.assertEqual((self._state(path), self._why(path)), ("closed", "entry"))
         self.assertEqual(self._icon(_WEB, "chips").get_attribute("aria-pressed"),
                          "true")
         # and back on the page, pressed: a click opens every card again
@@ -1098,9 +1310,9 @@ class PageFrameTests(_BrowserCase):
         stops = self._head(_WEB).evaluate("""row => Array.from(row.querySelectorAll(
             '.node-controls a, .node-controls button')).filter(c => !c.hidden)
             .map(c => [c.dataset.control || c.textContent.trim(), c.tabIndex])""")
-        # ‖ among them for an admin, once the script shows the button that opens
-        # the editor the head keeps
-        self.assertEqual(stops, [["ok", 0], ["chips", -1], ["pin", -1]])
+        # ‖ and ✓ among them for an admin, once the script shows the buttons that
+        # open the editors the head keeps — ✓ where something fails, as here
+        self.assertEqual(stops, [["ok", 0], ["chips", -1], ["pin", -1], ["ack", -1]])
 
 
 #: What a page draws of what `tree.js` shows: the band's meta and its three buttons,
@@ -1285,7 +1497,7 @@ _ACTIONS = (
 #: A name a card on a desk holds on one line, but not beside its state; and one a
 #: phone's card holds so.
 _LONG_NAME = "/backup_of_the_primary_cluster"
-_PHONE_NAME = "/backup_of_the_cluster"
+_PHONE_NAME = "/backup_of_cluster"
 #: A box's name that breaks at its hyphen, its last line short.
 _QUEUE = "/web/collect-queue"
 
@@ -1293,15 +1505,27 @@ _QUEUE = "/web/collect-queue"
 class _HeadRowCase(_BrowserCase):
     """A wall where every node carries the three actions."""
 
+    #: Where the heads keep their buttons, the look `head_buttons` (ADR-0029): right
+    #: after the name, the library's, where the row's reading is tested; a line
+    #: beneath and the row's end have classes of their own.
+    look: ClassVar[str] = "pointer"
+
     def setUp(self) -> None:
         super().setUp()
         configured = mock.patch.object(actions_module, "_actions", _ACTIONS)
         configured.start()
         self.addCleanup(configured.stop)
+        self._choose()
+
+    def _choose(self, **chosen: str) -> None:
+        """The presentation cookie, choosing this class's `head_buttons` and the
+        ``chosen`` looks beside it."""
+        self.context.add_cookies([looks(self.base, head_buttons=self.look, **chosen)])
 
     def _parts(self, path: str) -> dict[str, Any]:
-        """The head's row of ``path`` as drawn: each part's box, the actions
-        folded, ⋯ shown, and the state's line."""
+        """The head's row of ``path`` as drawn: each part's box — ↗'s and the
+        toolbar's among them — the actions folded, ⋯ shown, the state's line and the
+        room the head was given for it."""
         return self._head(path).evaluate("""head => {
             const box = el => {
               if (!el) { return null; }
@@ -1325,12 +1549,14 @@ class _HeadRowCase(_BrowserCase):
                   .reduce((sum, a) => sum + a.getBoundingClientRect().width, 0),
               more: box(head.querySelector('.node-more:not([hidden])')),
               state: box(head.querySelector(
-                  '.node-controls > .status-card__state,'
-                  + ' .node-controls > .status-node__state')),
+                  ':scope > .status-card__state, :scope > .status-node__state')),
               icons: box(head.querySelector('.node-icons')),
+              page: box(head.querySelector('.node-icons > [data-control="page"]')),
+              toolbar: box(head.querySelector(':scope > .node-controls')),
               cue: box(head.querySelector(':scope > .status-cue')),
               below: head.classList.contains('is-state-below'),
               beside: head.classList.contains('is-state-beside'),
+              room: head.style.getPropertyValue('--ls-state-room'),
               opacity: actions.length
                   ? getComputedStyle(actions[0]).opacity : null,
             };
@@ -1364,8 +1590,7 @@ class _HeadRowCase(_BrowserCase):
             const width = el => el ? el.getBoundingClientRect().width : 0;
             const more = width(head.querySelector('.node-controls > .node-more'));
             const state = width(head.querySelector(
-                '.node-controls > .status-card__state,'
-                + ' .node-controls > .status-node__state'));
+                ':scope > .status-card__state, :scope > .status-node__state'));
             head.classList.remove('is-measuring');
             head.classList.toggle('is-state-below', below);
             return {need, inside, gap, actions: widths.reduce((a, b) => a + b, 0),
@@ -1443,11 +1668,21 @@ class _HeadRowCase(_BrowserCase):
                     ink: rgba(s.color), cursor: s.cursor};
         }""")
 
-    def _point_at(self, part: Any) -> None:
-        """The pointer to the middle of ``part``."""
+    def _point_at(self, part: Any, end: bool = False) -> None:
+        """The pointer to the middle of ``part`` — to its far end where ``end``, for
+        a title: under the pointer the toolbar lies over the title's start. A part in
+        the window but under the page's sticky bar is brought clear of it first."""
         part.scroll_into_view_if_needed()
+        part.evaluate("""part => {
+            const bar = document.querySelector('.ls-bar');
+            if (bar && part.getBoundingClientRect().top
+                    < bar.getBoundingClientRect().bottom) {
+                part.scrollIntoView({block: 'center'});
+            }
+        }""")
         box = part.bounding_box()
-        self.page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+        x = box["x"] + box["width"] - 3 if end else box["x"] + box["width"] / 2
+        self.page.mouse.move(x, box["y"] + box["height"] / 2)
 
     def _chip_look(self, path: str) -> dict[str, Any]:
         """The chip of ``path`` as the stylesheet paints it now: its outline, its
@@ -1482,10 +1717,10 @@ class _HeadRowCase(_BrowserCase):
         self.page.mouse.up()
         return look
 
-    def _pressed(self, part: Any) -> dict[str, Any]:
+    def _pressed(self, part: Any, end: bool = False) -> dict[str, Any]:
         """The look of the head ``part`` stands in while the button is held on it —
         let go away from the wall, so nothing toggles."""
-        self._point_at(part)
+        self._point_at(part, end)
         self.page.mouse.down()
         path = part.evaluate("p => p.closest('[data-path]').dataset.path")
         look = self._look(path)
@@ -1515,25 +1750,60 @@ class _HeadRowCase(_BrowserCase):
 class HeadRowTests(_HeadRowCase):
     """The head's row on a desk."""
 
-    def test_the_actions_stand_before_the_state_and_the_icons_shown_always(self):
+    def test_the_buttons_follow_the_name_and_the_state_ends_the_row(self):
+        # the look `head_buttons: pointer`, the library's (ADR-0029): right after the
+        # name the head's icons, ↗ the first of them — on every head the button that
+        # opens the node's page is the first after its name — then the node's actions,
+        # the title after them, and the state at the row's end; a card's as a box's
         self._wall()
         self.page.mouse.move(2, 2)
+        for path in (_DNS, _WEB):
+            parts = self._parts(path)
+            with self.subTest(path=path):
+                self.assertAlmostEqual(parts["page"]["x"], parts["name"]["right"],
+                                       delta=8)
+                self.assertAlmostEqual(parts["page"]["x"], parts["toolbar"]["x"],
+                                       delta=0.5)
+                self.assertLess(parts["page"]["right"], parts["icons"]["right"])
+                self.assertLess(parts["icons"]["right"], parts["actions"][0]["x"])
+                self.assertTrue(self._on_one_line(parts, "name", "icons", "state"))
         parts = self._parts(_DNS)                  # a box with room for all three
         self.assertEqual((parts["shown"], parts["folded"], parts["more"]),
                          (3, 0, None))
-        self.assertEqual(parts["opacity"], "1")
         self.assertLess(parts["actions"][-1]["right"], parts["state"]["x"])
-        self.assertLess(parts["state"]["right"], parts["icons"]["x"])
-        self.assertAlmostEqual(parts["icons"]["right"], parts["head"]["right"],
+        self.assertAlmostEqual(parts["state"]["right"], parts["head"]["right"],
                                delta=3)
-        self.assertTrue(self._on_one_line(parts, "name", "state", "icons"))
         self.assertFalse(parts["below"])
         self.assertEqual(parts["nameLines"], 1)
-        # the title gives way first, with an ellipsis, never laid under an action
+        # the toolbar takes no room in the row: the title stands right after the
+        # name, under where the buttons show, and gives way first, with an
+        # ellipsis, before the state
         web = self._parts(_WEB)
         self.assertTrue(web["title"])
-        self.assertLessEqual(web["title"]["right"], web["actions"][0]["x"] + 1)
+        self.assertEqual(web["toolbar"]["width"], 0)
+        self.assertLess(web["title"]["x"] - web["name"]["right"], 16)
+        self.assertLessEqual(web["title"]["right"], web["state"]["x"] + 1)
         self.assertEqual(web["nameLines"], 1)
+        # the state clear of the room the title may fill, by 0.4em
+        middle = self._head(_WEB).locator(
+            ":scope > .status-head__middle").bounding_box()
+        self.assertGreaterEqual(
+            web["state"]["x"] - (middle["x"] + middle["width"]), 5)
+
+    def test_a_head_without_icons_starts_its_toolbar_with_its_first_action(self):
+        # a leaf's own page has no ↗ in its head, being that page, and a leaf with a
+        # pin of its own no ‖: with no funnel and no ▤ either, its toolbar keeps no
+        # room for icons it has none of
+        self.tree.set_maintenance(_FLAKY, "planned", set_by="pan",
+                                  expires_at=_NOON + timedelta(days=1))
+        self.page.goto(f"{self.base}/status{_FLAKY}")      # a leaf's page has no grid
+        self.page.wait_for_selector(".node-frame .viewed-head")
+        head = self.page.locator(".node-frame .viewed-head > .status-node__self")
+        icons = head.locator(".node-icons")
+        self.assertEqual(icons.evaluate("el => el.children.length"), 0)
+        toolbar = head.locator(":scope > .node-controls").bounding_box()
+        first = head.locator(".node-actions > *").first.bounding_box()
+        self.assertAlmostEqual(first["x"], toolbar["x"], delta=0.5)
 
     def test_what_the_row_has_no_room_for_folds_behind_the_menu(self):
         self._wall()
@@ -1546,14 +1816,14 @@ class HeadRowTests(_HeadRowCase):
         self._overflowing(_WEB, last + wide["gap"] + (before + wide["gap"]) / 2 - 2)
         parts = self._parts(_WEB)
         self.assertEqual(parts["folded"], 2)
-        # some actions behind ⋯, the name whole, the icons ending the row
+        # some actions behind ⋯, the name whole, ⋯ ending the toolbar
         self.assertGreater(parts["folded"], 0)
         self.assertGreater(parts["shown"], 0)
         self.assertEqual(parts["foldedWidth"], 0)        # folded takes no room
         self.assertIsNotNone(parts["more"])
         self.assertEqual(parts["nameLines"], 1)
-        self.assertTrue(self._on_one_line(parts, "name", "more", "icons"))
-        self.assertAlmostEqual(parts["icons"]["right"], parts["head"]["right"],
+        self.assertTrue(self._on_one_line(parts, "name", "more", "icons", "state"))
+        self.assertAlmostEqual(parts["state"]["right"], parts["head"]["right"],
                                delta=3)
         self.assertFalse(parts["below"])
         self.assertLess(parts["actions"][0]["right"], parts["more"]["x"])
@@ -1613,7 +1883,7 @@ class HeadRowTests(_HeadRowCase):
     def test_a_lone_action_keeps_its_place_and_the_state_goes_beneath(self):
         # over by more than ⋯ gives back, so that the last action would fold
         # behind it alone: the state takes its line beneath instead, its room the
-        # action's, and ⋯ holds nothing (Lex's word of 2026-10-17)
+        # action's, and ⋯ holds nothing
         self._wall()
         self._narrow(_WEB, 700)
         wide = self._as_read(_WEB)
@@ -1712,7 +1982,12 @@ class HeadRowTests(_HeadRowCase):
         self.assertTrue(self._on_one_line(parts, "name", "state", "icons"))
         # a name the row cannot hold with the state, even with every action folded:
         # the state takes its own line beneath, right-aligned, and the actions get
-        # its room back
+        # its room back — the card as wide as leaves its row, as read, a few pixels
+        # over with every action folded
+        self._narrow(_LONG_NAME, 700)
+        read = self._as_read(_LONG_NAME)
+        self._overflowing(_LONG_NAME,
+                          read["actions"] + read["count"] * read["gap"] + 6)
         long = self._parts(_LONG_NAME)
         self.assertTrue(long["below"])
         self.assertEqual(long["nameLines"], 1)
@@ -1788,10 +2063,10 @@ class HeadRowTests(_HeadRowCase):
 
     def test_a_broken_name_carries_the_state_on_its_second_line(self):
         # where the name breaks anyway, the state stands on its second line beneath
-        # the icons, instead of on a third line of its own (Lex's word of
-        # 2026-10-16); a name of one line keeps the state's own line beneath — the
-        # widths are the plain theme's face, where this name breaks and has room
-        self.context.add_cookies([looks(self.base, theme="plain")])
+        # the icons, instead of on a third line of its own; a name of one line keeps the
+        # state's own line beneath — the widths are the plain theme's face, where this
+        # name breaks and has room
+        self._choose(theme="plain")
         self.tree.upsert(_QUEUE, StatusCode.ERROR, ["the queue's last job failed"])
         self._wall()
         one, two = self._breaking(_QUEUE, _WEB)
@@ -1801,12 +2076,14 @@ class HeadRowTests(_HeadRowCase):
         self.assertTrue(two["beside"])
         self.assertGreaterEqual(two["state"]["y"], two["icons"]["bottom"] - 1)
         self.assertAlmostEqual(two["state"]["bottom"], two["name"]["bottom"], delta=4)
+        # no taller than the name, and given no room for a line it does not take
         self.assertLessEqual(two["head"]["height"], two["name"]["height"] + 2)
+        self.assertEqual(two["room"], "")
         self.assertAlmostEqual(two["state"]["right"], two["head"]["right"], delta=3)
         # the icons level with the name's first line, not between its two
         self.assertAlmostEqual(two["icons"]["y"], two["name"]["y"], delta=5)
         # and with room again, the row is one line and nothing of it is left
-        self._narrow(_WEB, 900)
+        self._narrow(_WEB, 1000)
         wide = self._parts(_QUEUE)
         self.assertEqual((wide["below"], wide["beside"]), (False, False))
         self.assertTrue(self._on_one_line(wide, "name", "state", "icons"))
@@ -1817,7 +2094,7 @@ class HeadRowTests(_HeadRowCase):
         self._breaking(_QUEUE, _WEB)
         # a state as wide as the box: beside the name's last line it would lie on it
         self._head(_QUEUE).evaluate(
-            "head => head.querySelector('.node-controls > .status-node__state')"
+            "head => head.querySelector(':scope > .status-node__state')"
             ".insertAdjacentHTML('afterbegin',"
             " '<span style=\"display:inline-block;width:320px\"></span>')")
         self.page.evaluate("window.lsTree.apply(document.getElementById('status-grid'))")
@@ -1836,8 +2113,7 @@ class HeadRowTests(_HeadRowCase):
         for room, beside in ((1.0, True), (-1.0, False)):
             with self.subTest(room=room):
                 self._head(_QUEUE).evaluate("""(head, room) => {
-                    const state = head.querySelector(
-                        '.node-controls > .status-node__state');
+                    const state = head.querySelector(':scope > .status-node__state');
                     head.querySelectorAll('.probe').forEach(el => el.remove());
                     const name = head.querySelector('[data-control="toggle"]');
                     const range = document.createRange();
@@ -1847,8 +2123,8 @@ class HeadRowTests(_HeadRowCase):
                     // the end of the name's last line, the one the state shares
                     const end = lines
                         .reduce((a, b) => (b.bottom > a.bottom ? b : a)).right;
-                    const gap = parseFloat(
-                        getComputedStyle(state.parentElement).columnGap);
+                    const gap = parseFloat(getComputedStyle(
+                        head.querySelector(':scope > .node-controls')).columnGap);
                     const s = state.getBoundingClientRect();
                     // the state's left edge at the gap past the name's end, give
                     // or take a pixel
@@ -1880,6 +2156,7 @@ class HeadRowTests(_HeadRowCase):
         assert found is not None
         self.assertTrue(found["beside"])
         self.assertLessEqual(found["head"]["height"], found["name"]["height"] + 2)
+        self.assertEqual(found["room"], "")
         self.assertAlmostEqual(found["state"]["bottom"], found["name"]["bottom"],
                                delta=4)
 
@@ -1943,16 +2220,16 @@ class HeadRowTests(_HeadRowCase):
         self.assertGreater(squeezed, 0)
         self.assertGreater(shown, 0)
 
-    # --- the row under the pointer (Lex's word of 2026-10-16) ---
+    # --- the row under the pointer ---
 
     def test_a_head_under_the_pointer_wears_an_outline_of_its_own_ink(self):
         # the whole row opens and closes its node, and with the caret gone it says
         # so where the pointer is: a line of its surface's ink at 60 %, 3 pixels
         # out, no fill — on a card's head, a box's on a warning and a box's on a
-        # failure, from the title, the name, the cue and the state alike — under the
-        # look `toggle_hover: outline`, a viewer's choice, with the card on a pause
-        self.context.add_cookies([looks(self.base, toggle_hover="outline",
-                                        inspection_card="pause")])
+        # failure, from the title — past the toolbar lying over its start under the
+        # pointer — the name, the cue and the state alike — under the look
+        # `toggle_hover: outline`, a viewer's choice, with the card on a pause
+        self._choose(toggle_hover="outline", inspection_card="pause")
         self.tree.set_title(_FLAKY, "the flaky one")        # a card on a pause
         self._wall()
         for path in (_WEB, _DNS, _FLAKY):
@@ -1970,13 +2247,12 @@ class HeadRowTests(_HeadRowCase):
                              "help" if card else "pointer", path)
             self.assertEqual(card, path != _DNS, path)     # a title, or none
             parts = [":scope > .status-head__middle", '[data-control="toggle"]',
-                     ".node-controls > .status-card__state,"
-                     " .node-controls > .status-node__state"]
+                     ":scope > .status-card__state, :scope > .status-node__state"]
             if head.locator(":scope > .status-cue").count():
                 parts.append(":scope > .status-cue")
             for part in parts:
                 with self.subTest(path=path, part=part):
-                    self._point_at(head.locator(part))
+                    self._point_at(head.locator(part), end="middle" in part)
                     look = self._look(path)
                     self.assertEqual((look["outline"], look["width"], look["offset"]),
                                      ("solid", "1px", "3px"))
@@ -2037,7 +2313,8 @@ class HeadRowTests(_HeadRowCase):
         for path in (_WEB, _DNS):                          # a card's head, a box's
             with self.subTest(path=path):
                 head = self._head(path)
-                look = self._pressed(head.locator(":scope > .status-head__middle"))
+                look = self._pressed(head.locator(":scope > .status-head__middle"),
+                                     end=True)
                 self.assertEqual([round(v) for v in look["fill"][:3]],
                                  [round(v) for v in look["ink"][:3]])
                 self.assertAlmostEqual(look["fill"][3], 0.12, delta=0.01)
@@ -2065,16 +2342,16 @@ class HeadRowTests(_HeadRowCase):
         # settings menu writes it: under the pointer the outline's share of the ink
         # goes to nothing and a wash of 10 % takes its place, on a head's row and on
         # a chip, the press as it was
-        self.context.add_cookies([{"name": "ls_prefs", "value": "toggle_hover=wash",
-                                   "url": self.base}])
+        self._choose(toggle_hover="wash")
         self._wall()
         middle = self._head(_DNS).locator(":scope > .status-head__middle")
-        self._point_at(middle)
+        self._point_at(middle, end=True)
         look = self._look(_DNS)
         self.assertEqual(look["line"][3], 0)
         self.assertAlmostEqual(look["fill"][3], 0.10, delta=0.01)
         self.assertRegex(look["ring"], r" 0px 0px 0px 4px$")
-        self.assertAlmostEqual(self._pressed(middle)["fill"][3], 0.12, delta=0.01)
+        self.assertAlmostEqual(self._pressed(middle, end=True)["fill"][3], 0.12,
+                               delta=0.01)
         self._point_at(self._chip(_CDN))
         look = self._chip_look(_CDN)
         self.assertEqual(look["line"][3], 0)
@@ -2084,7 +2361,7 @@ class HeadRowTests(_HeadRowCase):
         # which would be the system's background at a tenth
         self.page.emulate_media(forced_colors="active")
         self.page.mouse.move(2, 2)
-        self._point_at(middle)
+        self._point_at(middle, end=True)
         forced = self._look(_DNS)
         self.assertEqual(forced["outline"], "solid")
         self.assertGreater(forced["line"][3], 0.5)
@@ -2098,13 +2375,14 @@ class HeadRowTests(_HeadRowCase):
                                         " --ls-toggle-hover-wash: 10%;"
                                         " --ls-toggle-press-wash: 20%; }")
         middle = self._head(_DNS).locator(":scope > .status-head__middle")
-        self._point_at(middle)
+        self._point_at(middle, end=True)
         look = self._look(_DNS)
         self.assertEqual(look["line"][3], 0)
         self.assertAlmostEqual(look["fill"][3], 0.10, delta=0.01)
         self.assertRegex(look["ring"], r" 0px 0px 0px 4px$")
         self.assertAlmostEqual(look["ringInk"][3], 0.10, delta=0.01)
-        self.assertAlmostEqual(self._pressed(middle)["fill"][3], 0.20, delta=0.01)
+        self.assertAlmostEqual(self._pressed(middle, end=True)["fill"][3], 0.20,
+                               delta=0.01)
         # and a chip from the same tokens
         chip = self._chip(_CDN)
         self._point_at(chip)
@@ -2142,12 +2420,12 @@ class HeadRowTests(_HeadRowCase):
                 self.assertEqual((round(glyph_w), round(glyph_h)), (20, 20))
 
     def test_a_chip_under_the_pointer_wears_the_rows_outline_a_pixel_out(self):
-        # a chip opens its node as the row closes it, and says so as the row does
-        # (Lex's word of 2026-10-16): an outline of its own ink at 60 %, a pixel
-        # out where chips stand close; its tint stays, and neither it nor its name
-        # underlines — a quiet chip on a card and in a box, and a failing one closed
-        # by a click; under the look `toggle_hover: outline`, a viewer's choice
-        self.context.add_cookies([looks(self.base, toggle_hover="outline")])
+        # a chip opens its node as the row closes it, and says so as the row does: an
+        # outline of its own ink at 60 %, a pixel out where chips stand close; its tint
+        # stays, and neither it nor its name underlines — a quiet chip on a card and in
+        # a box, and a failing one closed by a click; under the look
+        # `toggle_hover: outline`, a viewer's choice
+        self._choose(toggle_hover="outline")
         self._wall()
         self._head(_FLAKY).locator('[data-control="toggle"]').click()
         self.assertEqual(self._state(_FLAKY), "closed")
@@ -2194,8 +2472,8 @@ class HeadRowTests(_HeadRowCase):
 
     def test_a_long_name_breaks_where_its_words_meet_and_copies_whole(self):
         # `backup_of_the_primary_cluster` on a card too narrow for it breaks after
-        # an underscore, never inside a word (Lex's word of 2026-10-16), and a copy
-        # of it carries no break of its own
+        # an underscore, never inside a word, and a copy of it carries no break of its
+        # own
         self.tree.upsert(_LONG_NAME, StatusCode.ERROR, ["the nightly run failed"])
         self._wall()
         name = self._head(_LONG_NAME).locator('[data-control="toggle"]')
@@ -2270,23 +2548,27 @@ class HeadRowTests(_HeadRowCase):
         toolbar = self._head(_WEB).locator(".node-controls")
         self.assertEqual(toolbar.get_attribute("role"), "toolbar")
         self.assertEqual(toolbar.get_attribute("aria-label"), "web controls")
-        # one stop: Tab from the name reaches the first control, and Tab again
+        # one stop: Tab from the name reaches the first control, ↗, and Tab again
         # leaves the toolbar for the next node
         self._head(_WEB).locator(".status-card__name").focus()
         page.keyboard.press("Tab")
-        self.assertEqual(self._focused(), "File")
+        self.assertEqual(self._focused(), "page")
         self.assertEqual(toolbar.locator('[tabindex="0"]').count(), 1)
-        page.keyboard.press("ArrowRight")
-        self.assertEqual(self._focused(), "Mute")
+        # the head's icons, then the node's actions
+        for control in ("ok", "chips", "pin", "ack", "File", "Mute"):
+            page.keyboard.press("ArrowRight")
+            self.assertEqual(self._focused(), control)
         page.keyboard.press("End")
-        self.assertEqual(self._focused(), "pin")
+        self.assertEqual(self._focused(), "Escalate")
         page.keyboard.press("ArrowRight")
-        self.assertEqual(self._focused(), "pin")           # the end stays the end
+        self.assertEqual(self._focused(), "Escalate")      # the end stays the end
         page.keyboard.press("ArrowLeft")
-        self.assertEqual(self._focused(), "chips")
+        self.assertEqual(self._focused(), "Mute")
         page.keyboard.press("Home")
-        self.assertEqual(self._focused(), "File")
-        page.keyboard.press("End")
+        self.assertEqual(self._focused(), "page")
+        for _ in range(3):
+            page.keyboard.press("ArrowRight")
+        self.assertEqual(self._focused(), "pin")
         page.keyboard.press("Tab")
         self.assertEqual(page.evaluate(
             "document.activeElement.closest('.tree-node').dataset.node"), _API)
@@ -2376,13 +2658,134 @@ class HeadRowTests(_HeadRowCase):
         self.assertEqual(drawn.inner_text().strip(), "\u2304 all 2")
         self.assertEqual(drawn.get_attribute("aria-controls"), cdn.get_attribute("id"))
 
+    def test_the_lines_all_n_opens_scroll_inside_about_half_a_window(self):
+        # The lines *⌄ all N* opens stand no taller than about half a window, the rest
+        # scrolling inside the box — a region the keyboard reaches and a screen reader
+        # names, standing where its viewer left it through the swap — and *⌃ less* folds
+        # them to their first lines as before; a block whose lines fit opens to its
+        # height and is no region
+        probe = f"{_NAS}/zeta/probe"
+        self.tree.upsert(probe, StatusCode.ERROR, [
+            f"line {n} of zeta, long enough to wrap in a box of the wall's track"
+            for n in range(120)])
+        self.tree.upsert(_MAIL, StatusCode.OK, [f"fine {n}" for n in range(12)])
+        self._wall()
+        page = self.page
+        block = page.locator(f'.reason-block[data-reason-node="{probe}"]')
+        button = block.locator("xpath=following-sibling::*[1]")
+        closed = block.evaluate("b => b.getBoundingClientRect().height")
+        self.assertIsNone(block.get_attribute("role"))
+        button.click()
+        drawn = block.evaluate("""b => ({
+            height: b.getBoundingClientRect().height, half: innerHeight / 2,
+            scrolls: b.scrollHeight > b.clientHeight + 1,
+            role: b.getAttribute('role'), tabindex: b.getAttribute('tabindex'),
+            label: b.getAttribute('aria-label'),
+            overscroll: getComputedStyle(b).overscrollBehaviorY})""")
+        self.assertLessEqual(drawn["height"], drawn["half"] + 1, drawn)
+        self.assertGreater(drawn["height"], closed + 1, drawn)
+        self.assertTrue(drawn["scrolls"], drawn)
+        self.assertEqual((drawn["role"], drawn["tabindex"]), ("region", "0"))
+        self.assertEqual(drawn["label"], "All 120 lines of probe")
+        # nothing holds the wheel at its ends: the page goes on past it
+        self.assertEqual(drawn["overscroll"], "auto")
+        # the keyboard reaches it and scrolls it
+        block.focus()
+        self.assertTrue(block.evaluate("b => b === document.activeElement"))
+        page.keyboard.press("End")
+        page.wait_for_function(
+            "b => b.scrollTop > 0", arg=block.element_handle(), timeout=2000)
+        page.keyboard.press("Home")
+        # the key's scroll is animated: read it once it has stood still a few frames
+        page.wait_for_function("""b => {
+            const top = b.scrollTop;
+            b.dataset.still = b.dataset.last === String(top)
+                ? String(Number(b.dataset.still || 0) + 1) : "0";
+            b.dataset.last = String(top);
+            return top === 0 && Number(b.dataset.still) >= 5;
+        }""", arg=block.element_handle(), timeout=3000)
+        # where its viewer left it, through the swap: somewhere in the middle. Set there
+        # directly, since a PageDown pressed as Home's scroll came to rest was seen to
+        # scroll nothing at all, and the page hears a scroll alike however it was made;
+        # what it heard is what the swap has to keep
+        left = block.evaluate("""b => new Promise(heard => {
+            b.addEventListener("scroll", () => heard(b.scrollTop), {once: true});
+            b.scrollTop = Math.round((b.scrollHeight - b.clientHeight) / 2);
+        })""")
+        self.assertGreater(left, 0)
+        self.assertLess(left, block.evaluate("b => b.scrollHeight - b.clientHeight"))
+        self._swap()
+        self.assertTrue(block.evaluate("b => b.classList.contains('is-open')"))
+        self.assertAlmostEqual(block.evaluate("b => b.scrollTop"), left, delta=2)
+        self.assertEqual(block.get_attribute("tabindex"), "0")
+        # *⌃ less* folds them to their first lines, a region no more; opened again
+        # they start at the first
+        button.click()
+        folded = block.evaluate("""b => ({top: b.scrollTop,
+            role: b.getAttribute('role'), tabindex: b.getAttribute('tabindex'),
+            height: b.getBoundingClientRect().height})""")
+        self.assertEqual(folded["top"], 0)
+        self.assertIsNone(folded["role"])
+        self.assertIsNone(folded["tabindex"])
+        self.assertAlmostEqual(folded["height"], closed, delta=1)
+        button.click()
+        self.assertEqual(block.evaluate("b => b.scrollTop"), 0)
+        # a block whose lines fit opens to its height, and is no region
+        self._chip(_MAIL).click()
+        mail = page.locator(f'.reason-block[data-reason-node="{_MAIL}"]')
+        mail.locator("xpath=following-sibling::*[1]").click()
+        fits = mail.evaluate("""b => ({open: b.classList.contains('is-open'),
+            scrolls: b.scrollHeight > b.clientHeight + 1,
+            role: b.getAttribute('role'), tabindex: b.getAttribute('tabindex')})""")
+        self.assertEqual(fits, {"open": True, "scrolls": False, "role": None,
+                                "tabindex": None})
+
+    def test_a_budget_taller_than_half_a_window_never_shrinks_as_it_opens(self):
+        # where a deployment's line budget is taller than half the window, the lines
+        # *⌄ all N* opens stand at least as tall as the budget did, and scroll beyond
+        probe = f"{_NAS}/zeta/probe"
+        self.tree.upsert(probe, StatusCode.ERROR,
+                         [f"line {n} of zeta" for n in range(120)])
+        with mock.patch.object(app_module, "config",
+                               replace(app_module.config, reason_cap=30)):
+            self._wall()
+            block = self.page.locator(f'.reason-block[data-reason-node="{probe}"]')
+            closed = block.evaluate("b => b.getBoundingClientRect().height")
+            self.assertGreater(closed, self.page.evaluate("innerHeight / 2"))
+            block.locator("xpath=following-sibling::*[1]").click()
+            opened = block.evaluate("""b => ({height: b.getBoundingClientRect().height,
+                scrolls: b.scrollHeight > b.clientHeight + 1})""")
+        self.assertGreaterEqual(opened["height"], closed - 1, opened)
+        self.assertTrue(opened["scrolls"], opened)
+
+    def test_an_opened_scrolling_block_passes_axe(self):
+        # a scroll area the keyboard cannot reach, or a name on a block that is no
+        # region, is what axe-core's WCAG 2 rules find: the opened block is scanned
+        if Axe is None:
+            self.skipTest("axe-playwright-python is not installed")
+        probe = f"{_NAS}/zeta/probe"
+        self.tree.upsert(probe, StatusCode.ERROR,
+                         [f"line {n} of zeta" for n in range(120)])
+        # the page's own clock, not the held one `_wall` installs: axe-core schedules
+        # its work on the page's timers, which a held clock never runs
+        self.page.goto(f"{self.base}/status")
+        self.page.wait_for_selector("#status-grid .status-card")
+        selector = f'.reason-block[data-reason-node="{probe}"]'
+        block = self.page.locator(selector)
+        block.locator("xpath=following-sibling::*[1]").click()
+        self.assertEqual(block.get_attribute("role"), "region")
+        found = Axe().run(self.page, context=selector, options={
+            "runOnly": {"type": "tag", "values": [
+                "wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"]}}).response
+        self.assertEqual([violation["id"] for violation in found["violations"]], [])
+
     def test_an_admins_pin_mark_clones_the_editor_into_the_box_and_holds_the_swap(self):
         self._wall()
         page = self.page
         mark = self._icon(_DNS, "pin")
         self.assertEqual(mark.get_attribute("href"), f"/status{_DNS}")
         mark.click()
-        page.wait_for_function("document.activeElement.name === 'reason'")
+        page.wait_for_function("document.activeElement.name === 'note'")
         box = self._node(_DNS).locator(":scope > .tree-hold > .tree-box")
         clone = box.locator(":scope > details.pin-setter")
         self.assertEqual(clone.count(), 1)
@@ -2418,7 +2821,8 @@ _DRAWN_ROWS = """() => """ + _ROWS + """
                   head.querySelectorAll('.node-actions > .is-folded').length,
                   !!head.querySelector('.node-controls > .node-more:not([hidden])'),
                   head.classList.contains('is-state-below'),
-                  head.classList.contains('is-state-beside')])"""
+                  head.classList.contains('is-state-beside'),
+                  head.style.getPropertyValue('--ls-state-room')])"""
 
 #: Which rows `tree.js` reads from here on: a head wears `is-measuring` while its row
 #: is read, so a change of its class whose old value carried it names a row read.
@@ -2546,23 +2950,24 @@ class RefreshRowTests(_HeadRowCase):
         # neither its markup nor its width: only a row as the server drew it is drawn
         # from a reading, and the rows this page drew are read again when asked for
         self.page.add_style_tag(content=(
-            ".node-controls > .status-card__state,"
-            " .node-controls > .status-node__state { padding-left: 40px; }"))
+            ":is(.status-card__head, .status-node__self) > .status-card__state,"
+            " :is(.status-card__head, .status-node__self) > .status-node__state"
+            " { padding-left: 40px; }"))
         self.assertEqual(self._reads(self._read_all_again), rows)
 
     def test_a_refresh_reads_each_row_at_the_width_its_card_is_planned_to(self):
-        # at 1,280 pixels the planner spans the web card over three tracks, where the
+        # at 1,280 pixels the planner spans the web card over two tracks, where the
         # grid's own columns would give it one: the refresh has the grid planned
         # before it reads a row, so the web's boxes are drawn after it as on the load
         self.tree.upsert(_LONG_NAME, StatusCode.ERROR, ["the nightly run failed"])
         self.page.set_viewport_size({"width": 1280, "height": 700})
         self._wall()
         web = self._node(_WEB)
-        self.assertEqual(web.get_attribute("data-layout-span"), "3")
+        self.assertEqual(web.get_attribute("data-layout-span"), "2")
         loaded = self.page.evaluate(_DRAWN_ROWS)
         self._swap()
         # planned before the frame after the swap, which the page's clock holds back
-        self.assertEqual(web.get_attribute("data-layout-span"), "3")
+        self.assertEqual(web.get_attribute("data-layout-span"), "2")
         self.assertEqual(self.page.evaluate(_DRAWN_ROWS), loaded)
         self.page.clock.run_for(100)
         self.assertEqual(self.page.evaluate(_DRAWN_ROWS), loaded)
@@ -2571,11 +2976,11 @@ class RefreshRowTests(_HeadRowCase):
         # the plan the refresh laid on the grid is the one its width selects, so the
         # planner's frame after the swap finds it there and writes nothing — at
         # 1,000 pixels, where the band leaves the count to the grid's own columns and
-        # every card spans one, and at 1,280, where the web spans three of three
+        # every card spans one, and at 1,280, where the web spans two of three
         self.tree.upsert(_LONG_NAME, StatusCode.ERROR, ["the nightly run failed"])
         self._wall()
         grid = self.page.locator("#status-grid .status-grid")
-        for width, tracks, web in ((1000, None, "1"), (1280, "3", "3")):
+        for width, tracks, web in ((1000, None, "1"), (1280, "3", "2")):
             with self.subTest(width=width):
                 if width != 1000:
                     self._resized_to(width)
@@ -2649,9 +3054,16 @@ class HeadRowPhoneTests(_HeadRowCase):
         "viewport": {"width": 375, "height": 667}, "device_scale_factor": 2,
         "is_mobile": True, "has_touch": True, "reduced_motion": "reduce"}
 
+    def test_a_touch_screen_shows_the_buttons_always(self):
+        # no pointer rests on a head there (`head_buttons: pointer`, ADR-0029)
+        self._wall()
+        for path in (_WEB, _DNS):
+            with self.subTest(path=path):
+                self.assertEqual(self._head(path).evaluate(_BAR), "1")
+
     def test_a_card_of_three_actions_keeps_its_name_whole(self):
         # names the plain theme's face holds on one line beside the row's controls
-        self.context.add_cookies([looks(self.base, theme="plain")])
+        self._choose(theme="plain")
         self.tree.upsert(_PHONE_NAME, StatusCode.ERROR, ["the nightly run failed"])
         self._wall()
         page = self.page
@@ -2659,22 +3071,24 @@ class HeadRowPhoneTests(_HeadRowCase):
         for path in (_WEB, _PHONE_NAME):
             with self.subTest(path=path):
                 parts = self._parts(path)
-                # the actions before the state and the icons; the icons end the
-                # first row; the name whole; what does not fit behind ⋯
+                # the icons, the actions and ⋯ after the name, the state ending the
+                # row or on a line of its own beneath; the name whole; what does not
+                # fit behind ⋯
                 self.assertGreater(parts["folded"], 0)
                 self.assertIsNotNone(parts["more"])
                 self.assertEqual(parts["nameLines"], 1)
-                self.assertAlmostEqual(parts["icons"]["right"], parts["head"]["right"],
-                                       delta=3)
-                self.assertTrue(self._on_one_line(parts, "name", "more", "icons"))
+                self.assertTrue(self._on_one_line(parts, "name", "icons", "more"))
                 for action in parts["actions"][:parts["shown"]]:
+                    self.assertLess(parts["icons"]["right"], action["x"])
                     self.assertLess(action["right"], parts["more"]["x"] + 1)
+                self.assertLess(parts["icons"]["right"], parts["more"]["x"])
+                self.assertAlmostEqual(parts["state"]["right"], parts["head"]["right"],
+                                       delta=3)
                 if parts["below"]:
                     self.assertGreaterEqual(parts["state"]["y"],
                                             parts["icons"]["bottom"] - 1)
                 else:
                     self.assertLess(parts["more"]["right"], parts["state"]["x"])
-                    self.assertLess(parts["state"]["right"], parts["icons"]["x"])
         # the long name has no room beside the state: its state is beneath; the
         # short one keeps it in the row
         self.assertTrue(self._parts(_PHONE_NAME)["below"])
@@ -2720,6 +3134,48 @@ class HeadRowPhoneTests(_HeadRowCase):
             self.assertAlmostEqual(right["x"] - (left["x"] + left["width"]), 8,
                                    delta=0.5)
 
+    def test_no_tap_reaches_past_the_toolbars_ends(self):
+        # a tap at the toolbar's first square stops at its edge on the name's side,
+        # and at its last on the title's — ⋯ where an action folds, the last action
+        # where none does, the last icon where the node has no action — so that what
+        # lies beside the toolbar stays the row's
+        for actions in (_ACTIONS, ()):
+            with self.subTest(actions=len(actions)), \
+                    mock.patch.object(actions_module, "_actions", actions):
+                self._wall()
+                self._assert_taps_stop_at_the_ends(self._head(_DNS))
+        # and where a head has no icon at all — a leaf's own page, the leaf with a pin
+        # of its own — at its first action
+        self.tree.set_maintenance(_FLAKY, "planned", set_by="pan",
+                                  expires_at=_NOON + timedelta(days=1))
+        self.page.goto(f"{self.base}/status{_FLAKY}")      # a leaf's page has no grid
+        self.page.wait_for_selector(".node-frame .viewed-head")
+        head = self.page.locator(".node-frame .viewed-head > .status-node__self")
+        icons = head.locator(".node-icons")
+        self.assertEqual(icons.evaluate("el => el.children.length"), 0)
+        self._assert_taps_stop_at_the_ends(head)
+
+    def _assert_taps_stop_at_the_ends(self, head: Any) -> None:
+        """A tap two pixels past the first and the last square ``head``'s toolbar
+        shows lands on none of its controls, and two pixels inside each on it."""
+        head.scroll_into_view_if_needed()
+        first, last = head.evaluate("""head => {
+            const shown = Array.from(head.querySelectorAll(
+                ':scope > .node-controls :is(.node-icon, .node-action)'))
+                .filter(el => el.getBoundingClientRect().width > 1);
+            const box = el => {
+              const r = el.getBoundingClientRect();
+              return {x: r.x, right: r.right, y: r.y + r.height / 2};
+            };
+            return [box(shown[0]), box(shown[shown.length - 1])];
+        }""")
+        on = ("([x, y]) => !!document.elementFromPoint(x, y)"
+              ".closest('.node-icon, .node-action')")
+        for x, y, inside in ((first["x"] - 2, first["y"], first["x"] + 2),
+                             (last["right"] + 2, last["y"], last["right"] - 2)):
+            self.assertFalse(self.page.evaluate(on, [x, y]), (x, y))
+            self.assertTrue(self.page.evaluate(on, [inside, y]), (inside, y))
+
     def test_a_head_under_a_finger_wears_no_outline_and_a_press_its_wash(self):
         # a touch screen has no pointer to show the row first, and a finger lifted
         # leaves the hover behind on the row it tapped: no outline where
@@ -2738,6 +3194,246 @@ class HeadRowPhoneTests(_HeadRowCase):
         self.assertAlmostEqual(self._chip_pressed(_API)["wash"][3], 0.12, delta=0.01)
 
 
+#: A box whose state is long: a failure held back says how near it is to escalating,
+#: beside its word.
+_GATE = "/web/gateway"
+#: A card whose state is long: its time says when it runs next.
+_NEXT = "/nightly"
+
+#: A head's state as drawn: its box and its parts', the lines its reading beside the
+#: word stands on, the word's place where it is bare text — a box's — and the room the
+#: head keeps for it.
+_STATE_PARTS = """head => {
+    const box = el => {
+      if (!el) { return null; }
+      const r = el.getBoundingClientRect();
+      return {x: r.x, y: r.y, right: r.right, bottom: r.bottom, width: r.width,
+              height: r.height};
+    };
+    const state = head.querySelector(
+        ':scope > .status-card__state, :scope > .status-node__state');
+    // the lines an element's contents stand on: a rect that starts below the line
+    // before begins the next
+    const lines = el => {
+      if (!el) { return 0; }
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      const rects = Array.from(range.getClientRects())
+          .filter(r => r.width > 0 && r.height > 0).sort((a, b) => a.top - b.top);
+      let count = 0;
+      let bottom = -Infinity;
+      for (const r of rects) {
+        if (r.top >= bottom - 1) { count += 1; bottom = r.bottom; }
+        else { bottom = Math.max(bottom, r.bottom); }
+      }
+      return count;
+    };
+    const bare = Array.from(state.childNodes)
+        .find(node => node.nodeType === 3 && node.textContent.trim());
+    let word = box(state.querySelector('.status-word'));
+    if (!word && bare) {
+      const range = document.createRange();
+      range.selectNodeContents(bare);
+      word = box(range);
+    }
+    const next = head.nextElementSibling;
+    return {head: box(head), state: box(state),
+            name: box(head.querySelector('[data-control="toggle"]')),
+            time: box(state.querySelector('.status-card__time')), word: word,
+            wordLines: lines(state.querySelector('.status-word')),
+            suffix: box(state.querySelector('.status-reported')),
+            suffixLines: lines(state.querySelector('.status-reported')),
+            next: next ? box(next) : null,
+            room: head.style.getPropertyValue('--ls-state-room'),
+            below: head.classList.contains('is-state-below'),
+            beside: head.classList.contains('is-state-beside')};
+}"""
+
+
+class StateBreakTests(_HeadRowCase):
+    """A state wider than the line it has to itself breaks between its parts, right-
+    aligned, and inside one only where that part alone is wider than the line, and its
+    head makes room for every line it takes: github's *01:08 → 01:23 error · 1 of 2 to
+    escalate* ran out of its box at the left."""
+
+    #: The web tier's boxes open, the gateway's among them: a failure its damping
+    #: counter still holds back spends no failure budget, so beneath chips it would
+    #: stay one (ADR-0128).
+    estate_look = _WEB_BUILT_IN
+
+    def setUp(self) -> None:
+        super().setUp()
+        for code in (StatusCode.OK, StatusCode.ERROR):
+            self.tree.upsert(_GATE, code, f"it reads {code.name.lower()}",
+                             escalate_after=2)
+
+    def _state_of(self, path: str) -> dict[str, Any]:
+        return self._head(path).evaluate(_STATE_PARTS)
+
+    def _assert_inside(self, parts: dict[str, Any]) -> None:
+        """The state within its head, at its right, beneath its row, and clear of
+        what follows the head."""
+        state, head = parts["state"], parts["head"]
+        self.assertGreaterEqual(state["x"], head["x"] - 0.5)
+        self.assertAlmostEqual(state["right"], head["right"], delta=2.5)
+        self.assertLessEqual(state["bottom"], head["bottom"] + 0.5)
+        self.assertGreaterEqual(state["y"], parts["name"]["bottom"] - 1)
+        if parts["next"]:
+            self.assertGreaterEqual(parts["next"]["y"], state["bottom"] - 0.5)
+
+    def test_a_state_wider_than_its_line_breaks_between_its_parts(self):
+        self._wall()
+        self.page.mouse.move(2, 2)
+        # with room enough: a line of its own, whole, and no more room asked
+        self._narrow(_WEB, 360)
+        whole = self._state_of(_GATE)
+        self.assertTrue(whole["below"])
+        self.assertEqual(whole["room"], "")
+        self._assert_inside(whole)
+        line = whole["state"]["height"]
+        # narrower than the state: the reading beside the word takes a line of its
+        # own, whole, beneath the time and the word, all at the right
+        for width in (260, 220):
+            self._narrow(_WEB, width)
+            parts = self._state_of(_GATE)
+            with self.subTest(width=width):
+                self.assertGreater(parts["state"]["height"], 1.5 * line)
+                self.assertNotEqual(parts["room"], "")
+                self._assert_inside(parts)
+                self.assertGreater(parts["suffix"]["y"], parts["time"]["y"] + line / 2)
+                self.assertEqual(parts["suffixLines"], 1)
+                self.assertAlmostEqual(parts["suffix"]["right"], parts["head"]["right"],
+                                       delta=2.5)
+                self.assertLess(abs(parts["word"]["y"] - parts["time"]["y"]), line / 2)
+        # a part alone wider than the line breaks at its own spaces, within it
+        self._narrow(_WEB, 170)
+        narrowest = self._state_of(_GATE)
+        self.assertGreater(narrowest["suffixLines"], 1)
+        self._assert_inside(narrowest)
+        self.assertGreaterEqual(narrowest["suffix"]["x"], narrowest["head"]["x"] - 0.5)
+        # and with room again, one line once more
+        self._narrow(_WEB, 360)
+        self.assertEqual(self._state_of(_GATE), whole)
+
+    def test_a_cards_time_and_word_part_where_even_they_do_not_fit(self):
+        # a card's cue and word are one part, and its time another
+        self.tree.upsert(_NEXT, StatusCode.ERROR, "the run failed")
+        self.tree.set_run_facts(_NEXT, wall_seconds=12.0,
+                                next_run_at=_NOON + timedelta(minutes=5))
+        self._wall()
+        self.page.mouse.move(2, 2)
+        self._narrow(_NEXT, 700)
+        whole = self._state_of(_NEXT)
+        line = whole["state"]["height"]
+        self.assertIn("\u2192", self._head(_NEXT).locator(
+            ".status-card__time").inner_text())
+        # on one line, the time its gap before the cue and the word, as ever
+        self.assertAlmostEqual(whole["word"]["y"], whole["time"]["y"], delta=line / 2)
+        self.assertGreaterEqual(whole["word"]["x"] - whole["time"]["right"], 5)
+        # as narrow as the time and the word no longer share a line
+        self._narrow(_NEXT, whole["time"]["width"] + whole["word"]["width"] / 2 + 40)
+        parts = self._state_of(_NEXT)
+        self.assertGreater(parts["word"]["y"], parts["time"]["y"] + line / 2)
+        self.assertEqual(parts["wordLines"], 1)
+        self._assert_inside(parts)
+        for part in ("time", "word"):
+            self.assertAlmostEqual(parts[part]["right"], parts["head"]["right"],
+                                   delta=2.5)
+        # and under `card_status_line: below` the standing line makes the same room
+        self.page.evaluate("document.body.dataset.lsCardState = 'below'")
+        self.page.evaluate("window.lsTree.apply(document.getElementById('status-grid'))")
+        below = self._state_of(_NEXT)
+        self.assertNotEqual(below["room"], "")
+        self._assert_inside(below)
+
+    def test_a_closed_cards_state_breaks_between_its_parts_too(self):
+        self.tree.upsert(_NEXT, StatusCode.ERROR, "the run failed")
+        self.tree.set_run_facts(_NEXT, wall_seconds=12.0,
+                                next_run_at=_NOON + timedelta(minutes=5))
+        self._wall()
+        self.page.click('.ls-band__mode[data-mode="closed"]')
+        self._narrow(_NEXT, 700)
+        whole = self._state_of(_NEXT)
+        line = whole["state"]["height"]
+        self._narrow(_NEXT, whole["time"]["width"] + whole["word"]["width"] / 2 + 40)
+        parts = self._state_of(_NEXT)
+        self.assertGreater(parts["word"]["y"], parts["time"]["y"] + line / 2)
+        state, head = parts["state"], parts["head"]
+        self.assertGreaterEqual(state["x"], head["x"] - 0.5)
+        self.assertLessEqual(state["right"], head["right"] + 0.5)
+        self.assertLessEqual(state["bottom"], head["bottom"] + 0.5)
+        self.assertAlmostEqual(parts["word"]["right"], state["right"], delta=1)
+
+    def test_a_closed_cards_state_keeps_a_line_of_its_own_under_below(self):
+        # under `card_status_line: below` a closed card's state takes its line in the
+        # head's flow, beneath the name, at the right, and as many lines as it breaks
+        # into: the room the card had open goes with its opening
+        self.tree.upsert(_NEXT, StatusCode.ERROR, "the run failed")
+        self.tree.set_run_facts(_NEXT, wall_seconds=12.0,
+                                next_run_at=_NOON + timedelta(minutes=5))
+        self._wall()
+        self.page.mouse.move(2, 2)
+        self.page.evaluate("document.body.dataset.lsCardState = 'below'")
+        self._narrow(_NEXT, 700)
+        whole = self._state_of(_NEXT)
+        line = whole["state"]["height"]
+        narrow = whole["time"]["width"] + whole["word"]["width"] / 2 + 40
+        self._narrow(_NEXT, narrow)
+        self.assertNotEqual(self._state_of(_NEXT)["room"], "")
+        self.page.click('.ls-band__mode[data-mode="closed"]')
+        for width in (700, narrow):
+            self._narrow(_NEXT, width)
+            parts = self._state_of(_NEXT)
+            state, head = parts["state"], parts["head"]
+            with self.subTest(width=width):
+                self.assertEqual(parts["room"], "")
+                self.assertGreaterEqual(state["y"], parts["name"]["bottom"] - 1)
+                self.assertGreaterEqual(state["x"], head["x"] - 0.5)
+                self.assertAlmostEqual(state["bottom"], head["bottom"], delta=1)
+                self.assertAlmostEqual(parts["word"]["right"], head["right"],
+                                       delta=2.5)
+        self.assertGreater(parts["word"]["y"], parts["time"]["y"] + line / 2)
+
+    def test_the_room_holds_through_a_refresh(self):
+        # the card drawn narrow by a stylesheet, which a refresh keeps: once a refresh
+        # has read the row as the server drew it, the next draws it from what was
+        # read, its room with it
+        self._wall()
+        self.page.add_style_tag(content=(
+            f'.status-card[data-node="{_WEB}"] {{ width: 220px; min-width: 0;'
+            " justify-self: start; }"))
+        self._swap()
+        drawn = self._state_of(_GATE)
+        self.assertNotEqual(drawn["room"], "")
+        self.page.evaluate(_WATCH_READS)
+        self._swap()
+        self.assertEqual(self.page.evaluate(_READS), [])
+        self.assertEqual(self._state_of(_GATE), drawn)
+        # and when the page reads every row again, as a resize does
+        self.page.evaluate("window.lsTree.apply(document.getElementById('status-grid'))")
+        self.assertEqual(self._state_of(_GATE), drawn)
+
+    def test_the_stale_mark_breaks_only_where_it_alone_is_wider_than_the_line(self):
+        # a reading past its tolerance says so first, in a mark of its own: on a line
+        # too narrow for the state the mark keeps its words together, and on one
+        # narrower than the mark alone it breaks at its spaces, within the box
+        self.tree.upsert(_CDN, StatusCode.OK, "served", frequency_seconds=60)
+        self.server_now = _NOON + timedelta(hours=2)
+        self._wall()
+        self.page.mouse.move(2, 2)
+        self._narrow(_WEB, 220)
+        mark = self._head(_CDN).locator(":scope > .status-node__state > .status-stale")
+        self.assertIn("ago", mark.inner_text().lower())
+        self.assertEqual(mark.evaluate(_LINES), 1)
+        parts = self._state_of(_CDN)
+        self._assert_inside(parts)
+        box = mark.bounding_box()
+        assert box is not None
+        self._narrow(_WEB, 220 - (parts["head"]["width"] - box["width"]) - 8)
+        self.assertEqual(mark.evaluate(_LINES), 2)
+        self._assert_inside(self._state_of(_CDN))
+
+
 #: What a surface wears, as the browser computes it: its shadow, its ink and its words'
 #: halo; and a token resolved to the color the browser paints it as.
 _LOOK = """selector => {
@@ -2754,6 +3450,344 @@ _RESOLVED = """token => {
     probe.remove();
     return color;
 }"""
+
+
+_BAR = "head => getComputedStyle(head.querySelector(':scope > .node-controls')).opacity"
+
+
+class PointerHeadTests(_HeadRowCase):
+    """The head's buttons under the look `head_buttons: pointer`, the library's
+    (ADR-0029): seen while the pointer is on the head, the keyboard's focus is in it or
+    its menu is open; taking no room in the row, the title right after the name and the
+    buttons over it when shown, but where the name gives way."""
+
+    def test_the_title_keeps_to_the_name_and_the_buttons_lie_over_it(self):
+        # at rest the toolbar has no width in the row and the title follows the name;
+        # under the pointer the squares stand over the title's start on the card's
+        # own fill, so what they cover does not read through, and nothing moves
+        self.tree.upsert(_QUEUE, StatusCode.ERROR, ["the queue's last job failed"])
+        self._wall()
+        self.page.mouse.move(2, 2)
+        rest = self._parts(_WEB)
+        self.assertEqual(rest["toolbar"]["width"], 0)
+        self.assertLess(rest["title"]["x"] - rest["name"]["right"], 16)
+        self.assertLess(rest["icons"]["x"], rest["title"]["right"])
+        self.assertGreater(rest["icons"]["right"], rest["title"]["x"])
+        self._point_at(self._head(_WEB).locator('[data-control="toggle"]'))
+        self.assertEqual(self._head(_WEB).evaluate(_BAR), "1")
+        shown = self._parts(_WEB)
+        for side in ("x", "y", "width", "height"):
+            place = shown["title"][side] - (shown["head"][side] if side in "xy" else 0)
+            was = rest["title"][side] - (rest["head"][side] if side in "xy" else 0)
+            self.assertAlmostEqual(place, was, delta=0.5, msg=f"title {side}")
+        on_top = self._head(_WEB).evaluate("""head => {
+            const icon = head.querySelector('.node-icons > .node-icon');
+            const r = icon.getBoundingClientRect();
+            const hit = document.elementFromPoint(r.x + r.width / 2,
+                                                  r.y + r.height / 2);
+            const fill = el => getComputedStyle(el).backgroundColor;
+            return {hit: !!hit && hit.closest('.node-icon') === icon,
+                    icons: fill(head.querySelector('.node-icons')),
+                    card: fill(head.closest('.status-card'))};
+        }""")
+        self.assertTrue(on_top["hit"])
+        self.assertEqual(on_top["icons"], on_top["card"])
+        # where the name gives way, the toolbar keeps its room, so that the name
+        # breaks beside it rather than the shown buttons running past the row
+        _one, broken = self._breaking(_QUEUE, _WEB)
+        self.assertGreater(broken["toolbar"]["width"], 0)
+        self.assertTrue(self._head(_QUEUE).evaluate(
+            "head => head.classList.contains('is-crowded')"))
+
+    def test_a_click_leaves_no_buttons_shown_once_the_pointer_leaves(self):
+        # a click's focus stays where it landed, and the buttons showed for any
+        # focus in the head, so they stood shown after the pointer left: they show for
+        # the keyboard's focus, as they always said
+        self._wall()
+        chips = self._head(_WEB).locator('[data-control="chips"]')
+        self._point_at(chips)
+        chips.click()
+        self.assertTrue(self._head(_WEB).evaluate(
+            "head => head.matches(':focus-within')"))
+        self.page.mouse.move(2, 2)
+        self.assertEqual(self._head(_WEB).evaluate(_BAR), "0")
+        # the keyboard moving along the toolbar shows them again
+        self.page.keyboard.press("ArrowLeft")
+        self.assertEqual(self._head(_WEB).evaluate(_BAR), "1")
+
+    def test_the_buttons_show_under_the_pointer_and_nothing_moves(self):
+        self._wall()
+        self.page.mouse.move(2, 2)
+        rest = self._parts(_DNS)
+        self.assertEqual(self._head(_DNS).evaluate(_BAR), "0")
+        self.assertEqual(self._head(_WEB).evaluate(_BAR), "0")
+        # anywhere on the head, its own buttons and no other head's
+        self._point_at(self._head(_DNS).locator(":scope > .status-node__state"))
+        self.assertEqual(self._head(_DNS).evaluate(_BAR), "1")
+        self.assertEqual(self._head(_WEB).evaluate(_BAR), "0")
+        shown = self._parts(_DNS)
+        for part in ("name", "icons", "state"):
+            for side in ("x", "y", "width", "height"):
+                place = shown[part][side] - (shown["head"][side] if side in "xy" else 0)
+                was = rest[part][side] - (rest["head"][side] if side in "xy" else 0)
+                self.assertAlmostEqual(place, was, delta=0.5, msg=f"{part} {side}")
+        # the keyboard's focus in the head shows them too, the name's as a button's
+        self.page.mouse.move(2, 2)
+        self._head(_DNS).locator('[data-control="toggle"]').focus()
+        self.assertEqual(self._head(_DNS).evaluate(_BAR), "1")
+        self.page.keyboard.press("Tab")
+        self.assertEqual(self._head(_DNS).evaluate(_BAR), "1")
+        self.assertEqual(self.page.evaluate(
+            "document.activeElement.closest('.node-controls') !== null"), True)
+
+    def test_an_open_menu_keeps_its_buttons_shown(self):
+        self._wall()
+        self._narrow(_WEB, 700)
+        wide = self._as_read(_WEB)
+        self._overflowing(_WEB, wide["widths"][-1] + wide["gap"] + 4)
+        more = self._head(_WEB).locator(".node-more")
+        more.click()
+        self.assertEqual(more.get_attribute("aria-expanded"), "true")
+        self.page.mouse.move(2, 2)
+        self.page.evaluate("document.activeElement.blur()")
+        self.assertEqual(self._head(_WEB).evaluate(_BAR), "1")
+        self.page.keyboard.press("Escape")
+
+
+class LineHeadTests(_HeadRowCase):
+    """The head's buttons under the look `head_buttons: line` (ADR-0029): a line of
+    their own beneath the row, from under the name."""
+
+    look = "line"
+
+    def test_the_buttons_have_a_line_beneath_the_row(self):
+        self._wall()
+        self.page.mouse.move(2, 2)
+        for path in (_WEB, _DNS):
+            parts = self._parts(path)
+            with self.subTest(path=path):
+                self.assertEqual(self._head(path).evaluate(_BAR), "1")
+                self.assertTrue(self._on_one_line(parts, "name", "state"))
+                self.assertAlmostEqual(parts["state"]["right"], parts["head"]["right"],
+                                       delta=3)
+                self.assertGreaterEqual(parts["icons"]["y"],
+                                        parts["name"]["bottom"] - 1)
+                self.assertTrue(self._on_one_line(parts, "icons") and abs(
+                    parts["icons"]["y"] - parts["actions"][0]["y"]) < 8)
+                # from under the name, past a box's cue, ↗ the first
+                self.assertAlmostEqual(parts["page"]["x"], parts["name"]["x"],
+                                       delta=4)
+                self.assertLess(parts["icons"]["right"], parts["actions"][0]["x"])
+                self.assertEqual((parts["shown"], parts["folded"], parts["more"]),
+                                 (3, 0, None))
+                self.assertFalse(parts["below"])
+                # the state's words clear of the room the title may fill, by 0.4em
+                head = self._head(path)
+                middle = head.locator(":scope > .status-head__middle").bounding_box()
+                padding = head.locator(
+                    ":scope > .status-card__state, :scope > .status-node__state"
+                ).evaluate("el => parseFloat(getComputedStyle(el).paddingLeft)")
+                self.assertGreaterEqual(
+                    parts["state"]["x"] + padding - (middle["x"] + middle["width"]), 5)
+
+    def test_a_narrow_row_wraps_its_state_beneath_and_folds_nothing(self):
+        # a name the row holds, but not with its state beside it
+        self.tree.upsert(_LONG_NAME, StatusCode.ERROR, ["the nightly run failed"])
+        self._wall()
+        self._narrow(_LONG_NAME, 700)
+        wide = self._parts(_LONG_NAME)
+        # the row as wide as the name, and half the state, beside its padding
+        self._narrow(_LONG_NAME, wide["name"]["right"] - wide["head"]["x"]
+                     + wide["state"]["width"] / 2 + 24)
+        parts = self._parts(_LONG_NAME)
+        self.assertEqual(parts["nameLines"], 1)
+        self.assertEqual((parts["folded"], parts["more"]), (0, None))
+        self.assertGreaterEqual(parts["state"]["y"], parts["name"]["bottom"] - 1)
+        self.assertAlmostEqual(parts["state"]["right"], parts["head"]["right"],
+                               delta=3)
+        self.assertGreaterEqual(parts["actions"][0]["y"], parts["state"]["bottom"] - 1)
+        self.assertFalse(parts["below"])
+
+    def test_a_state_wider_than_its_line_stays_in_the_box(self):
+        # the row wraps the state beneath at the right, and where even that line is
+        # narrower than the state, it breaks between its parts there too — in the
+        # gateway's box, open where its level is the built-in look's, as
+        # StateBreakTests draws it
+        self.estate_look = _WEB_BUILT_IN
+        for code in (StatusCode.OK, StatusCode.ERROR):
+            self.tree.upsert(_GATE, code, f"it reads {code.name.lower()}",
+                             escalate_after=2)
+        self._wall()
+        self.page.mouse.move(2, 2)
+        self._narrow(_WEB, 220)
+        parts = self._head(_GATE).evaluate(_STATE_PARTS)
+        state, head = parts["state"], parts["head"]
+        self.assertGreaterEqual(state["x"], head["x"] - 0.5)
+        self.assertLessEqual(state["right"], head["right"] + 0.5)
+        self.assertGreater(parts["suffix"]["y"], parts["time"]["y"] + 4)
+        self.assertEqual(parts["suffixLines"], 1)
+
+    def test_under_below_a_cards_state_takes_the_buttons_line(self):
+        # `card_status_line: below` gives a card's state a second line, which here
+        # is the buttons': at its right, and no third line for it
+        self.tree.upsert(_LONG_NAME, StatusCode.ERROR, ["the nightly run failed"])
+        self._wall()
+        self.page.mouse.move(2, 2)
+        drawn = {path: self._parts(path) for path in (_NAS, _WEB)}
+        self.page.evaluate("document.body.dataset.lsCardState = 'below'")
+        self.page.evaluate("window.lsTree.apply(document.getElementById('status-grid'))")
+        for path in (_NAS, _WEB):
+            parts = self._parts(path)
+            state, icons = parts["state"], parts["icons"]
+            with self.subTest(path=path):
+                self.assertAlmostEqual(state["y"] + state["height"] / 2,
+                                       icons["y"] + icons["height"] / 2, delta=2)
+                self.assertGreater(state["x"], icons["right"])
+                self.assertAlmostEqual(state["right"], parts["head"]["right"], delta=3)
+                # the head as tall as without the deployment's word, the buttons'
+                # line where it was
+                was = drawn[path]
+                self.assertAlmostEqual(parts["head"]["height"], was["head"]["height"],
+                                       delta=0.5)
+                self.assertAlmostEqual(icons["y"] - parts["head"]["y"],
+                                       was["icons"]["y"] - was["head"]["y"], delta=0.5)
+        # where that line has no room for it, it wraps beneath, at the right
+        self._narrow(_LONG_NAME, 300)
+        parts = self._parts(_LONG_NAME)
+        self.assertGreaterEqual(parts["state"]["y"], parts["icons"]["bottom"] - 1)
+        self.assertAlmostEqual(parts["state"]["right"], parts["head"]["right"], delta=3)
+        self.assertLessEqual(parts["state"]["bottom"], parts["head"]["bottom"] + 1)
+
+
+class _NameOpensThePage:
+    """What the looks `name` and `pointer-name` share (ADR-0029): the pointer's click
+    on an open head's name opens the node's page, the keyboard's Enter and Space on it
+    open and close the node, and ↗, the toolbar's first control, is the keyboard's
+    alone. A mixin of the two classes below, so that each look is held to it."""
+
+    def test_the_pointer_opens_the_page_by_the_name_and_the_keyboard_the_node(self):
+        self._wall()
+        name = self._head(_DNS).locator('[data-control="toggle"]')
+        # the keyboard's Enter and Space on the name open and close the node
+        name.focus()
+        self.page.keyboard.press("Enter")
+        self.assertEqual(self._state(_DNS), "closed")
+        self._chip(_DNS).click()                    # a chip opens by the pointer
+        self.assertEqual(self._state(_DNS), "open")
+        name.focus()
+        self.page.keyboard.press(" ")
+        self.assertEqual(self._state(_DNS), "closed")
+        self._chip(_DNS).click()
+        # the rest of the row closes the node under the pointer, as ever
+        self._head(_DNS).locator(":scope > .status-node__state").click()
+        self.assertEqual(self._state(_DNS), "closed")
+        self._chip(_DNS).click()
+        # a closed card's name opens the card
+        self._head(_NAS).locator(":scope > .status-card__state").click()
+        self.assertEqual(self._state(_NAS), "closed")
+        self._head(_NAS).locator(".status-card__name").click()
+        self.assertEqual(self._state(_NAS), "open")
+        # and the pointer's click on an open head's name opens the node's page
+        with self.page.expect_navigation():
+            name.click()
+        self.assertTrue(self.page.url.endswith(f"/status{_DNS}"), self.page.url)
+
+    def test_the_arrow_shows_when_the_keyboard_reaches_it(self):
+        # ↗ is the toolbar's first control: out of sight, taking no room, until the
+        # keyboard's Tab from the name lands on it
+        self._wall()
+        arrow = self._head(_DNS).locator('.node-icons > [data-control="page"]')
+        self.assertLessEqual(arrow.bounding_box()["width"], 1)
+        self._head(_DNS).locator('[data-control="toggle"]').focus()
+        self.page.keyboard.press("Tab")
+        self.assertEqual(self._focused(), "page")
+        self.assertGreater(arrow.bounding_box()["width"], 20)
+
+    def test_the_name_says_it_is_a_link_under_the_pointer(self):
+        self._wall()
+        name = self._head(_DNS).locator('[data-control="toggle"]')
+        self._point_at(name)
+        self.assertEqual(name.evaluate("n => getComputedStyle(n).textDecorationLine"),
+                         "underline")
+        on_name = self._look(_DNS)
+        self._point_at(self._head(_DNS).locator(":scope > .status-node__state"))
+        on_row = self._look(_DNS)
+        self.assertEqual(on_name["fill"][3], 0)
+        self.assertGreater(on_row["fill"][3], 0)
+        self.assertEqual(name.evaluate("n => getComputedStyle(n).textDecorationLine"),
+                         "none")
+
+
+class NameHeadTests(_NameOpensThePage, _HeadRowCase):
+    """The head's buttons under the look `head_buttons: name` (ADR-0029): at the
+    row's end, the pointer's click on the name opening the node's page and ↗ the
+    keyboard's alone."""
+
+    look = "name"
+
+    def test_the_title_and_the_state_follow_the_name_and_the_buttons_end_the_row(self):
+        self._wall()
+        self.page.mouse.move(2, 2)
+        parts = self._parts(_DNS)
+        self.assertEqual(self._head(_DNS).evaluate(_BAR), "1")
+        # the head's icons first, then the node's actions, which end the row
+        self.assertLess(parts["state"]["right"], parts["icons"]["x"])
+        self.assertLess(parts["icons"]["right"], parts["actions"][0]["x"])
+        self.assertAlmostEqual(parts["actions"][-1]["right"], parts["head"]["right"],
+                               delta=3)
+        self.assertTrue(self._on_one_line(parts, "name", "state", "icons"))
+        # ↗ out of sight, and no room taken in the row
+        self.assertLessEqual(parts["page"]["width"], 1)
+
+    def test_a_state_that_would_touch_the_buttons_keeps_a_line_of_its_own(self):
+        # at the row's end the buttons stand above the state's place beside the
+        # name's last line: where they reach down to it, the state keeps its own line
+        self._choose(theme="plain")
+        self.tree.upsert(_QUEUE, StatusCode.ERROR, ["the queue's last job failed"])
+        self._wall()
+        _one, two = self._breaking(_QUEUE, _WEB)
+        self.assertTrue(two["beside"])
+        self._head(_QUEUE).evaluate(
+            "head => { head.querySelector('.node-actions').style.minHeight ="
+            " head.getBoundingClientRect().height + 'px'; }")
+        self.page.evaluate("window.lsTree.apply(document.getElementById('status-grid'))")
+        parts = self._parts(_QUEUE)
+        self.assertEqual(parts["nameLines"], 2)
+        self.assertTrue(parts["below"])
+        self.assertFalse(parts["beside"])
+
+
+class PointerNameHeadTests(_NameOpensThePage, _HeadRowCase):
+    """The head's buttons under the look `head_buttons: pointer-name` (ADR-0029): where
+    `pointer` puts them, right after the name and shown under the pointer, without ↗ —
+    the name is the link to the node's page, and the rest of the head opens and closes
+    the node."""
+
+    look = "pointer-name"
+
+    def test_the_buttons_follow_the_name_without_the_arrow_and_nothing_moves(self):
+        self._wall()
+        self.page.mouse.move(2, 2)
+        rest = self._parts(_DNS)
+        self.assertEqual(self._head(_DNS).evaluate(_BAR), "0")
+        # ↗ takes no room, so the first square after the name is the next of the
+        # head's icons, then the node's actions, over the title, and the state
+        self.assertLessEqual(rest["page"]["width"], 1)
+        self.assertAlmostEqual(rest["icons"]["x"], rest["name"]["right"], delta=8)
+        self.assertGreater(rest["icons"]["width"], 20)
+        self.assertLess(rest["icons"]["right"], rest["actions"][0]["x"])
+        self.assertLess(rest["actions"][-1]["right"], rest["state"]["x"])
+        self.assertAlmostEqual(rest["state"]["right"], rest["head"]["right"], delta=3)
+        self.assertTrue(self._on_one_line(rest, "name", "icons", "state"))
+        # under the pointer they show, and nothing moves
+        self._point_at(self._head(_DNS).locator(":scope > .status-node__state"))
+        self.assertEqual(self._head(_DNS).evaluate(_BAR), "1")
+        shown = self._parts(_DNS)
+        for part in ("name", "icons", "state"):
+            for side in ("x", "y", "width", "height"):
+                place = shown[part][side] - (shown["head"][side] if side in "xy" else 0)
+                was = rest[part][side] - (rest["head"][side] if side in "xy" else 0)
+                self.assertAlmostEqual(place, was, delta=0.5, msg=f"{part} {side}")
 
 
 class CyberpunkCulpritTests(_BrowserCase):
@@ -2797,7 +3831,7 @@ class CyberpunkCulpritTests(_BrowserCase):
     def test_every_failing_box_and_the_heartbeat_are_tubes(self):
         self._wall()
         name = ".status-node__self > .status-node__name"
-        state = ".status-node__self > .node-controls > .status-node__state"
+        state = ".status-node__self > .status-node__state"
         self._assert_tube(self._box(_FLAKY), (name, state), "error")
         self._assert_tube(self._box(_DNS), (name, state), "warn")
         self._assert_tube(self._box(f"{_NAS}/alpha"), (name, state), "maintenance")
@@ -2808,7 +3842,7 @@ class CyberpunkCulpritTests(_BrowserCase):
         self._wall(f"/status{_WEB}")
         card = f'.status-card.tree-node[data-node="{_FLAKY}"]'
         name = ".status-card__head > .status-card__name"
-        state = ".status-card__head > .node-controls > .status-card__state"
+        state = ".status-card__head > .status-card__state"
         self._assert_tube(card, (name, state), "error")
         # the wall closed, its failing cards closed with it
         self._wall()
@@ -2843,6 +3877,89 @@ class CyberpunkCulpritTests(_BrowserCase):
         name = self._look(f"{self._box(_FLAKY)} > .status-node__self"
                           " > .status-node__name")
         self.assertEqual(name["halo"], "none")
+
+
+_FILL = """selector => {
+    const element = document.querySelector(selector);
+    return element ? getComputedStyle(element).backgroundColor : null;
+}"""
+
+
+class SteppedFillTests(_BrowserCase):
+    """Every other level of box steps its pale fill (ADR-0028): a card's own boxes step,
+    the boxes in them step back, so a box stands apart from the box around it — a
+    failing host's in its failing card as a healthy one's in its healthy box — while a
+    culprit keeps its vivid fill; in the library's theme and the plain one."""
+
+    def _fill(self, selector: str) -> str:
+        fill = self.page.evaluate(_FILL, selector)
+        self.assertIsNotNone(fill, f"nothing at {selector}")
+        return fill
+
+    @staticmethod
+    def _box(path: str) -> str:
+        return f'.tree-node[data-node="{path}"] > .tree-hold > .tree-box'
+
+    @staticmethod
+    def _card(path: str) -> str:
+        return f'.status-card.tree-node[data-node="{path}"]'
+
+    def test_a_cards_boxes_step_and_the_boxes_in_them_step_back(self):
+        for theme in ("cyberpunk", "plain"):
+            with self.subTest(theme=theme):
+                self.context.add_cookies([looks(self.base, theme=theme)])
+                self._wall()
+                self.page.click('.ls-band__mode[data-mode="open"]')
+                card = self._fill(self._card(_DEEP))
+                self.assertNotEqual(self._fill(self._box(f"{_DEEP}/a")), card)
+                self.assertEqual(self._fill(self._box(_DEEP_LEAF)), card)
+                # a failing box in its failing card
+                self.assertNotEqual(self._fill(self._box(f"{_NAS}/zeta")),
+                                    self._fill(self._card(_NAS)))
+                # a culprit keeps its vivid fill wherever it stands
+                self.assertEqual(self._fill(self._box(_FLAKY)),
+                                 self.page.evaluate(_RESOLVED, "--ls-error"))
+
+    def test_a_nodes_page_counts_its_levels_from_its_cards(self):
+        # on the deep card's page its children are the cards, so their boxes step
+        self._wall(f"/status{_DEEP}")
+        self.page.click('.ls-band__mode[data-mode="open"]')
+        self.assertNotEqual(self._fill(self._box(_DEEP_LEAF)),
+                            self._fill(self._card(f"{_DEEP}/a")))
+
+    def test_a_chip_steps_with_its_level(self):
+        # A chip in a card steps as the card's own boxes do, its words with it, and a
+        # chip in a stepped box does not, so a chip stands apart from the box it stands
+        # in; a failing chip is vivid and never steps
+        for theme in ("cyberpunk", "plain"):
+            with self.subTest(theme=theme):
+                self.context.add_cookies([looks(self.base, theme=theme)])
+                self._wall()
+                # quiet, a chip in the web card and a box in the nas card, each a
+                # card's own
+                chip = self._paint(self._chip(_API))
+                box = self._paint(self.page.locator(self._box(f"{_NAS}/alpha")))
+                self.assertEqual(chip, box)
+                # and a chip in that box, a level further, as the healthy card
+                inner = self._paint(self._chip(f"{_NAS}/alpha/probe"))
+                self.assertNotEqual(inner["fill"], box["fill"])
+                self.assertEqual(inner["fill"], self._fill(self._card(_DEEP)))
+                # a failing chip in a card: closed, as vivid as where nothing steps
+                self._head(_FLAKY).locator(".status-node__state").click()
+                flaky = self._chip(_FLAKY)
+                vivid = self._paint(flaky)
+                flaky.evaluate(
+                    "chip => chip.parentElement.classList.remove('is-stepped')")
+                self.assertEqual(vivid, self._paint(flaky))
+                flaky.click()       # open again, as the next theme's wall starts
+
+    @staticmethod
+    def _paint(element: Any) -> dict[str, str]:
+        """What ``element`` is filled with and the color its words take."""
+        return element.evaluate("""el => {
+            const style = getComputedStyle(el);
+            return {fill: style.backgroundColor, ink: style.color};
+        }""")
 
 
 class KioskTests(_BrowserCase):
@@ -2986,6 +4103,13 @@ class ChipRunTests(_BrowserCase):
     name past the level's bound wraps inside its column, and counts that do not fit
     beside a name stand beneath it. Wrapped runs draw each chip at its own width, and
     without script the server's estimate stands."""
+
+    #: The zoo's, the grove's and the mix's children as chips, since a level nobody
+    #: speaks for starts open.
+    estate_look: Mapping[str, NodeMeta] = {
+        **_ESTATE_LOOK, "/zoo": NodeMeta(look=Stated(chips=True)),
+        "/grove": NodeMeta(look=Stated(chips=True)),
+        "/mix": NodeMeta(look=Stated(chips=True))}
 
     def setUp(self) -> None:
         super().setUp()
@@ -3234,6 +4358,12 @@ class OneColumnRunTests(_BrowserCase):
     after — read by the stylesheet off the run itself, so a run wraps or stands in
     columns from the first paint."""
 
+    #: The pier's children as chips, and those of the level of narrow letters one
+    #: test adds, since a level nobody speaks for starts open.
+    estate_look: Mapping[str, NodeMeta] = {
+        **_ESTATE_LOOK, "/pier": NodeMeta(look=Stated(chips=True)),
+        "/lilt": NodeMeta(look=Stated(chips=True))}
+
     def setUp(self) -> None:
         super().setUp()
         # eight short names and two of thirty-nine: the 90th percentile is a long
@@ -3444,9 +4574,11 @@ class HoverCardTests(_BrowserCase):
     def test_no_card_while_a_click_is_under_way_or_just_after_one(self):
         # (each wait past the pause, all of them short of the refresh at ten
         # seconds, which draws the name again; in the plain theme's face, where the
-        # name the click closed still stands under the pointer)
+        # name the click closed still stands under the pointer, in a window the whole
+        # wall fits, so that the card the click closes shortens no scrolled page)
         self.context.add_cookies([looks(self.base, inspection_card="pause",
                                         theme="plain")])
+        self.page.set_viewport_size({"width": 1000, "height": 1400})
         self._wall()
         name = self._head(_WEB).locator(".status-card__name")
         box = self._in_view(name)

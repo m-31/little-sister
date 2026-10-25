@@ -111,10 +111,11 @@ BASELINE: dict[tuple[str, str], str] = {
     ("color-contrast", ".node-title"):
         "the muted title ink on a head's state tint, 3.4:1 on the pale error tint — "
         "the title's own look, which the head's row kept",
-    ("color-contrast", ".status-card__state"):
-        "the state cluster's small words at 80 % on a pale error tint, 3.9:1 — the "
-        "cluster's own look, kept in the head's row; a vivid card's words are lifted "
-        "to the full ink",
+    ("color-contrast", ".status-word"):
+        "a card's state word at 80 % on the quiet OK's pale tint, 3.75:1 — ADR-0028's "
+        "exception, the cluster's own look, kept in the head's row; a vivid card's "
+        "words are lifted to the full ink. It stood on the cluster itself, "
+        "`.status-card__state`, until a card's cue and word became one of its parts",
     ("color-contrast", ".status-node__state"):
         "a nested box's state cluster on a vivid fill, as the card's",
     ("color-contrast", ".status-card__time"):
@@ -125,10 +126,6 @@ BASELINE: dict[tuple[str, str], str] = {
     ("color-contrast", ".reason-action"):
         "a line's chip inks in currentColor at 60 % to 75 % opacity until hovered, "
         "which the scanner reads as its resting color",
-    ("color-contrast", ".branch-more__show"):
-        "a level's \"+N more\" is a subtle text button in currentColor at 80 % "
-        "opacity until hovered, 3.8:1 on a card's tint; on the demo since stage 2's "
-        "fleet, the fold the tab's map keeps — stage 3 redraws the level's controls",
 }
 
 #: The entries that stand in the plain theme alone: a light canvas's pale tints and
@@ -136,10 +133,9 @@ BASELINE: dict[tuple[str, str], str] = {
 PLAIN_ONLY = frozenset({
     ("color-contrast", ".ls-brand__tagline"),
     ("color-contrast", ".ls-accent"),
-    ("color-contrast", ".status-card__state"),
+    ("color-contrast", ".status-word"),
     ("color-contrast", ".status-node__state"),
     ("color-contrast", "code"),
-    ("color-contrast", ".branch-more__show"),
 })
 
 

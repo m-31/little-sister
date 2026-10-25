@@ -1,13 +1,13 @@
 {#- The pins held against a path **no node stands at** (ADR-0109 decision 4), as
     blocks: what each will silence *when the node is reported*, why, how long is
     left, and for an admin its editor and its Clear. One wording for the two places
-    that state such a pin: the Maintenance page, under the path, and the page a
+    that state such a pin: *Handled*, under the path, and the page a
     path with no node is answered with (ADR-0116). A line's pin names no line, the
     lines having gone with the node. `place` keeps the editors' ids apart on a page
     with several paths, and `back` is where a save or a clear comes back to. -#}
 {% from '_rule_block.html' import pin_block with context %}
 {% macro suspended_sentence(group) -%}
-This node is not reported at present, so {% if group | length == 1 %}its pin silences nothing. It holds again when the node returns, and ends at its expiry.{% else %}its pins silence nothing. They hold again when the node returns, and each ends at its expiry.{% endif %}
+This node is not reported at present, so {% if group | length == 1 %}its pin holds nothing. It holds again when the node returns, and ends at its expiry.{% else %}its pins hold nothing. They hold again when the node returns, and each ends at its expiry.{% endif %}
 {%- endmacro %}
 {% macro suspended_pins(path, group, place, back, editable) -%}
 {%- set covered = group | rejectattr('slug') | list | length > 0 %}

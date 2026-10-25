@@ -1,12 +1,10 @@
 # ADR-0041 — Maintenance is a contribution rule, not a value
 
 - **Status:** Accepted
-- **Date:** 2026-10-04 (accepted 2026-08-02)
-- **Supersedes:** [ADR-0004](0004-status-aggregation-semantics.md)'s `MAINTENANCE` half
-  (its §3 and its *Implemented (`tree.py`)* note); the other two pieces are
-  [ADR-0039](0039-status-rollup-semantics.md) and
-  [ADR-0040](0040-what-a-failing-check-becomes.md)
-- **Related:** [ADR-0032](0032-status-contribution-boundary.md) (the boundary this is
+- **Date:** 2026-10-25 (accepted 2026-08-02)
+- **Related:** [ADR-0039](0039-status-rollup-semantics.md) (rule 3: what a parent
+  does with a node in `MAINTENANCE`),
+  [ADR-0032](0032-status-contribution-boundary.md) (the boundary this is
   the first real instance of — it named this implementation as its one deviation),
   [ADR-0036](0036-addressable-reasons.md) (the same move one level down, which landed
   first and left the transform in place), [ADR-0014](0014-maintenance-persistence.md)
@@ -93,8 +91,9 @@ raised.
    check reported.
 
 Default behavior is unchanged where it was correct: a pinned node still contributes
-nothing to its parent, an existing `var/maintenance.json` loads untouched, and every
-value of `own_code` and `code` the API published before is the value it publishes now.
+nothing to its parent, this record changes nothing in the file the pins are kept in, and
+every value of `own_code` and `code` the API published before is the value it publishes
+now.
 
 ## Consequences
 

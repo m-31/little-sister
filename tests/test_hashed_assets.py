@@ -48,7 +48,7 @@ _FOR_GOOD = "public, max-age=31536000, immutable"
 
 #: The pages a signed-in admin reads, each of which takes the shared head.
 _PAGES = ("/status", f"/status{HOST}", f"/series{HOST}", "/series", "/events",
-          "/maintenance", "/links", "/system", "/system/installed", "/about",
+          "/handled", "/links", "/system", "/system/installed", "/about",
           f"/history{HOST}", "/copy")
 
 

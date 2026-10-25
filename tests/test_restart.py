@@ -27,6 +27,7 @@ from little_sister.tree import (
     last_alive,
     stopped_at_of,
 )
+from tests.state_files import on_disk
 
 #: Yesterday, as a restored log dates it: every event restored below lies before
 #: anything the restarted tree writes.
@@ -248,16 +249,16 @@ class StopStampTests(TestCase):
             tree.upsert("/web", StatusCode.OK)
             layer.keep(EVENTS_FILE, tree.events_payload)
             layer.flush()
-            written = layer.path(EVENTS_FILE).read_text()
+            written = on_disk(layer.path(EVENTS_FILE))
             layer.path(EVENTS_FILE).write_text("untouched")
             layer.flush()
             self.assertEqual(layer.path(EVENTS_FILE).read_text(), "untouched",
                              "an unchanged log is not written again")
             tree.note_stop(_at(90))
             layer.flush()
-            stamped = json.loads(layer.path(EVENTS_FILE).read_text())
+            stamped = on_disk(layer.path(EVENTS_FILE))
             self.assertEqual(stamped["stopped_at"], instants.stamp(_at(90)))
-            self.assertEqual(stamped["events"], json.loads(written)["events"])
+            self.assertEqual(stamped["events"], written["events"])
 
     def test_the_engines_stop_stamps_the_log_it_saves(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -267,7 +268,7 @@ class StopStampTests(TestCase):
             layer.keep(EVENTS_FILE, tree.events_payload)
             before = datetime.now(UTC)
             engine.stop(trigger="the test")
-            payload = json.loads(layer.path(EVENTS_FILE).read_text())
+            payload = on_disk(layer.path(EVENTS_FILE))
             stamp = datetime.fromisoformat(payload["stopped_at"])
             self.assertLessEqual(before, stamp)
             self.assertLessEqual(stamp, datetime.now(UTC))

@@ -394,5 +394,6 @@ class EnvelopeTests(TestCase):
             _write(self.tree, deploy=ERROR, tests=OK)
         _write(self.tree, deploy=ERROR, tests=ERROR)
         node = self._node()
+        # a mechanism decided, and no rule: ``rule`` is null (ADR-0141 decision 3)
         self.assertEqual((node["code"], node["contribution"]),
-                         ("ERROR", {"code": "OK", "by": "damping"}))
+                         ("ERROR", {"code": "OK", "by": "damping", "rule": None}))

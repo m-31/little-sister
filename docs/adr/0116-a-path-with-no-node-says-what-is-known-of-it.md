@@ -1,7 +1,7 @@
 # ADR-0116 — A path with no node has one page, and it says what is known of the path
 
 - **Status:** Accepted
-- **Date:** 2026-10-03
+- **Date:** 2026-10-25 (accepted 2026-10-03)
 - **Related:** [ADR-0109](0109-a-node-says-its-children-are-complete.md) (a node its
   check no longer returns is removed; decision 4, its pins stay; decision 5, its
   removal is an event), [ADR-0097](0097-a-nodes-series-have-a-view-of-their-own.md)
@@ -14,7 +14,12 @@
   to a path), [ADR-0106](0106-a-subject-with-a-history-has-a-node-of-its-own.md)
   (decision 4: the readings kept of a removed subject are listed on its check's
   History), [ADR-0005](0005-dashboard-freshness-and-self-monitoring.md) (a page refreshes a part of
-  itself)
+  itself),
+  [ADR-0140](0140-a-nodes-notes-stand-on-a-tab-of-their-own.md) (decision 5: the notes
+  of a path no node stands at) and
+  [ADR-0047](0047-node-notes-and-their-retention.md) (decision 7: a note outlives its
+  node), [ADR-0135](0135-a-handled-part-keeps-its-true-color-and-every-surface-says-by-what.md)
+  (decision 8: *Handled*, where a suspended pin is stated)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -48,23 +53,31 @@ on, and such a page said that there is no such node.
    the page says. A page that was a node's when it loaded asks for that part every
    few seconds; a node that leaves and returns under it shows as gone and as back,
    and never as a refresh that failed.
-3. **The page says what the event log and the pins know of the path, and no more.**
+3. **The page says what the event log, the pins and the notes know of the path, and no
+   more.**
    - Where the last event the log holds at the path is its removal: *removed*, when,
      and the sentence the removal was logged with, with a link to the Events page
      narrowed to the path. Where the log holds other events of it — a node no check
      has written yet since the start — that it is not reported at present, and the
      same link. Where it holds none, that nothing is recorded of it.
-   - Every pin held against the path or beneath it, as the Maintenance page states a
-     suspended pin, each under the path it is held against, with *Edit* and *Clear*
-     for an admin. A write from there comes back to the page.
+   - Every pin held against the path or beneath it, as *Handled* states a suspended pin
+     ([ADR-0135](0135-a-handled-part-keeps-its-true-color-and-every-surface-says-by-what.md)
+     decision 8), each under the path it is held against, with *Edit* and *Clear* for
+     an admin. A write from there comes back to the page.
+   - The notes written for the path and for the paths beneath it, newest first, as they
+     were written ([ADR-0140](0140-a-nodes-notes-stand-on-a-tab-of-their-own.md)
+     decision 5): a note outlives its node
+     ([ADR-0047](0047-node-notes-and-their-retention.md) decision 7), and until their
+     index this is where a gone path's notes are found.
    - The nearest path above it that a node stands at, with that node's Status, its
      History and, where it has one, its Series view — and, where the page says
      *removed*, that readings kept of a removed subject are listed on its History:
      of a path nothing is recorded of, the page promises no readings. Where no node
      stands above, the first level.
-4. **Nothing is stored for it.** The kept readings are still not found by path: the
-   page sends a reader to where they are listed and does not list them.
-5. **Events and Maintenance write a path with no node as text**, as before: a link
+4. **Nothing is stored for it** that the notes do not keep already. The kept readings
+   are still not found by path: the page sends a reader to where they are listed and
+   does not list them.
+5. **Events and *Handled* write a path with no node as text**, as before: a link
    there would open this page, which says less than the row it was followed from.
 
 ## Consequences
@@ -76,11 +89,11 @@ on, and such a page said that there is no such node.
   is a reload away, and a Status page that was open when the node left shows the
   return by itself (decision 2).
 - A sentence a refused write flashes is shown on the page, as on any node's.
-- The Maintenance page's wording for a suspended pin is one macro
-  (`_pin_sections.html`), used by both pages.
+- *Handled*'s wording for a suspended pin is one macro (`_pin_sections.html`), used by
+  both pages.
 - What the page says of a removal lasts as long as the log holds the row; after that
   a removed node's path reads as one nothing is recorded of, unless a pin is held
-  against it.
+  against it or a note was written for it.
 
 ## Alternatives considered
 
@@ -99,5 +112,5 @@ on, and such a page said that there is no such node.
   path, and two of its tabs led to the page that does.
 - **The kept readings listed on the page.** Each reading would need the path it stood
   on: a stored key (ADR-0109's alternative), for a list its check's History has.
-- **Links from Events and Maintenance to the page.** Every removed row would lead to a
+- **Links from Events and *Handled* to the page.** Every removed row would lead to a
   page that repeats it.

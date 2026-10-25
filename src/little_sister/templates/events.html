@@ -8,14 +8,14 @@
     <div class="container-fluid mt-3 px-4 ls-log">
         <h1 class="h4 mb-3">Events</h1>
         {#- What the log shows is what the URL names (ADR-0101): a node and everything
-            beneath it, words in the reason, a switch per status an event moved to,
-            one each for *reached* and *held back*, one per kind of cause, and the
-            window the Series view reads, with its bar. The switches submit their
-            form as they change (prefs.js, `data-ls-submit`); the fields submit on
-            Enter; a browser without script has Apply. The form carries the window,
-            and every link the bar draws carries the filters. Nothing remembers them:
-            `/events` alone is the whole log. A log with nothing in it has nothing to
-            filter, and says so below. -#}
+            beneath it, a tag its node carries, words in the reason, a switch per status
+            an event moved to, one each for *reached* and *held back*, one per kind of
+            cause, and the window the Series view reads, with its bar. The switches and
+            the tag submit their form as they change (prefs.js, `data-ls-submit`); the
+            fields submit on Enter; a browser without script has Apply. The form carries
+            the window, and every link the bar draws carries the filters. Nothing
+            remembers them: `/events` alone is the whole log. A log with nothing in it
+            has nothing to filter, and says so below. -#}
         {%- if bar %}
         {%- set statuses_on = wanted.statuses or status_words %}
         {%- set held_on = [wanted.held] if wanted.held else held_words %}
@@ -26,6 +26,23 @@
                     <span class="ls-events-filter__label">under</span>
                     <input class="form-control form-control-sm" type="search" name="under" value="{{ wanted.under }}" placeholder="a node's path" spellcheck="false" autocomplete="off">
                 </label>
+                {#- The tag a node must carry (ADR-0139 decision 7), as the wall's band
+                    offers it: the known tags in their order, then any other the
+                    configuration writes; offered where a tag is written or asked for. -#}
+                {%- if tag_options or wanted.tag %}
+                <label class="ls-events-filter__field">
+                    <span class="ls-events-filter__label">tag</span>
+                    <select class="form-select form-select-sm" name="tag" data-ls-submit>
+                        <option value=""{% if not wanted.tag %} selected{% endif %}>any</option>
+                        {%- for offered, meaning in tag_options %}
+                        <option value="{{ offered }}"{% if offered == wanted.tag %} selected{% endif %}{% if meaning %} title="{{ meaning }}"{% endif %}>{{ offered }}</option>
+                        {%- endfor %}
+                        {%- if wanted.tag and wanted.tag not in tag_options | map('first') | list %}
+                        <option value="{{ wanted.tag }}" selected>{{ wanted.tag }}</option>
+                        {%- endif %}
+                    </select>
+                </label>
+                {%- endif %}
                 <label class="ls-events-filter__field">
                     <span class="ls-events-filter__label">words</span>
                     <input class="form-control form-control-sm" type="search" name="words" value="{{ wanted.words }}" placeholder="words in the reason" spellcheck="false" autocomplete="off">
@@ -100,10 +117,13 @@
 
                     A row that a pin caused says so in a chip of its own (ADR-0107
                     decision 3) — *set*, *edited*, *maintenance ended* for the
-                    node's, *line silenced* and *line's maintenance ended* for a
-                    line's: a silenced line turns its node green, and that row is
-                    no recovery. A reading's row has none, and neither has one from
-                    a log written before an event said its cause.
+                    node's, *line's pin set* and *line's maintenance ended* for a
+                    line's (ADR-0135 decision 2): a pinned line turns its node
+                    green, and that row is no recovery. A *seen*'s rows say *seen*,
+                    *seen changed* and *seen ended*, a line's *line seen* and so on,
+                    and an end says why after it — *seen ended · worse* (ADR-0142).
+                    A reading's row has none, and neither has one from a log written
+                    before an event said its cause.
 
                     A removal's row says *removed* (ADR-0109 decision 5): the node
                     left the tree, which is another thing than a check that read
@@ -124,9 +144,9 @@
                 {% for e in events %}
                     <tr class="row-{{ e.new | status_slug }}">
                         <td class="text-nowrap">{{ e.timestamp | localtime }}</td>
-                        <td><span class="ls-log__status">{{ e.new.name.lower() }}</span>{% if cause_chips.get(e.cause) %} <span class="event-cause{% if e.cause == 'removed' %} event-cause--removed{% elif e.cause == 'reached' %} event-cause--reached{% endif %}">{{ cause_chips[e.cause] }}</span>{% endif %}{% if e.suppressed_by %} <span class="event-suppressed">{{ e.suppressed_by }}</span>{% endif %}</td>
+                        <td><span class="ls-log__status">{{ e.new.name.lower() }}</span>{% set chip = cause_chip(e) %}{% if chip %} <span class="event-cause{% if e.cause == 'removed' %} event-cause--removed{% elif e.cause == 'reached' %} event-cause--reached{% endif %}">{{ chip }}</span>{% endif %}{% if e.suppressed_by %} <span class="event-suppressed">{{ e.suppressed_by }}</span>{% endif %}</td>
                         <td class="text-muted">{% if e.path in existing_paths %}<a href="{{ url_for('status', branch=(e.path | url_branch) or none) }}">{{ e.path }}</a>{% else %}{{ e.path }}{% endif %}</td>
-                        <td class="md-body">{{ e.reason | join('; ') | markdown_inline }}</td>
+                        <td class="md-body">{{ e.reason | join('; ') | markdown_inline(node=e.path) }}</td>
                     </tr>
                 {% else %}
                     {#- Which empty it is (ADR-0101 decision 5): an empty log, a window

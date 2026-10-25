@@ -1,11 +1,7 @@
 # ADR-0046 — The user list comes from the configuration roots, and nowhere else
 
 - **Status:** Accepted
-- **Date:** 2026-08-08 (restating the decisions ADR-0020 took on 2026-07-11)
-- **Supersedes:** [ADR-0020](0020-user-list-location.md) — wholly, as this project
-  supersedes: its still-live decisions (a deployment-controlled location, the shipped
-  example, fail-fast, the unchanged format) are restated below with their original
-  date, and only its **path resolution** changes.
+- **Date:** 2026-08-08 (decisions 1 to 4 taken 2026-07-11)
 - **Related:** [ADR-0031](0031-deployment-config-directory.md) (the configuration
   path-list, and the first-root-wins rule for `users` — the mechanism that makes a
   separate override redundant),
@@ -19,7 +15,7 @@
 
 ## Context
 
-**Why the list left the package** *(2026-07-11, restated from ADR-0020).* The allowed
+**Why the list left the package** *(2026-07-11).* The allowed
 users were once read from **inside** the package — `app.py` loaded
 `importlib.resources.files("little_sister")/"users.yaml"`, shipped as git-ignored
 package data. The repo split turned little-sister into a **library** consumed by a
@@ -27,7 +23,7 @@ separate deployment repository, and a deployment must define **its own** users w
 the library carries **none**. While the file lived inside the package, a deployment
 could not supply its user list without editing installed package files.
 
-**Why one door is now enough** *(2026-08-08).* ADR-0020 answered that with two paths:
+**Why one door is now enough** *(2026-08-08).* The answer of 2026-07-11 had two paths:
 `LITTLE_SISTER_USERS` if set, otherwise a conventional location beside the process's
 other runtime files. Two later records moved the conventional half —
 [ADR-0031](0031-deployment-config-directory.md) made it the `users` **aspect** of a

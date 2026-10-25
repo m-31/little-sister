@@ -40,6 +40,11 @@ rather than features already shipped. What *is* shipped is the surface they rest
 check type, an extra page, or a connection to the ticket system of your choice can live
 in a package of its own and register itself at startup.
 
+How the wall is used — what you see on it and what a click does — is
+[`src/little_sister/help/using-the-wall.md`](src/little_sister/help/using-the-wall.md),
+which the package ships and every instance shows at `/help`, behind *Using the wall* at
+the foot of the settings menu.
+
 See `docs/` for the full picture — `project.md` (what it is), `architecture.md`
 (how the code is built), `use-cases.md` (the vision, in concrete scenes),
 `implementing-checks.md` (how to build a check type of your own),
@@ -217,8 +222,8 @@ person, one machine, nothing else to run.
 #### The configuration directory (`config/`)
 
 Everything a deployment authors lives in one place — **`config/`**, whose entries are
-*aspects*: `checks/`, `nodes.yaml`, `settings.yaml`, `csp.yaml` and `users.yaml` or
-`users/` ([ADR-0031](docs/adr/0031-deployment-config-directory.md)). `LITTLE_SISTER_CONFIG_DIR`
+*aspects*: `checks/`, `nodes.yaml`, `settings.yaml`, `csp.yaml`, `aggregation.yaml` and
+`users.yaml` or `users/` ([ADR-0031](docs/adr/0031-deployment-config-directory.md)). `LITTLE_SISTER_CONFIG_DIR`
 selects it and is a **path-list**: `base:sites/alpha` composes a shared base with a
 site's own additions, and each aspect combines its layers in the way that suits it —
 checks union, settings merge per key, the user list is taken whole from the first root
@@ -264,20 +269,33 @@ zone, now or from a day within the year ahead, the start says so once in the log
 gunicorn's own lines are stamped on the machine's clock.
 
 The shipped file documents the rest inline — the dashboard caps (`reason_cap`,
-`branch_cap`, `maintenance_cap`, and `reading_cap`, the newest readings a Series view
-lists beneath its curves), whether a failing check keeps its `stacktrace`,
+`maintenance_cap`, and `reading_cap`, the newest readings a Series view lists beneath
+its curves), whether a failing check keeps its `stacktrace`,
 the card-head placement (`card_status_line`: compact `beside` by default, or the
 standing second line `below`), how cards spend a wide grid's columns
 (`dashboard_columns`: `flow` by default, or `plain` for the fixed one-track
 grid), the looks a browser draws until it chooses its own in the settings menu
 (`theme`: `cyberpunk` by default, or `plain`, `vivid`, `pastel`, `dark` or `auto`;
 `chip_runs`: `aligned` by default, or `wrapped` for runs of chips as they come;
+`boxes`: `rows` by default, every box in its place, or `packed`, each box beneath the
+shortest column, so that a tall box leaves no gap beside it;
 `inspection_card`: `off` by default, or `pause` for the hover card on a pause over a
 name; `toggle_hover`: `wash` by default, or `outline`, how a head's row and a chip
-answer the pointer), the
+answer the pointer; `head_buttons`: `pointer` by default, an open head's buttons right
+after its name and shown under the pointer, or `pointer-name`, there too with the name
+opening the node's page in ↗'s stead, or `line`, on a line of their own beneath it, or
+`name`, at the row's end, the name opening the node's page; `failures`: `open` by
+default, a failure the first look hides opening its way, or `chips`, where it stays a
+chip and the wall keeps its size — keep `open`, on a kiosk too), how the wall first
+draws what no check's file, check type or
+`nodes.yaml` entry speaks for (`chips` and `fold_ok`, unset by default: every node open,
+its healthy shown, but a level that, opened, would draw more than thirty boxes as
+chips), the
 failure-retry budget (`retry_interval`, `retry_attempts`), how often
 the kept state files are written (`state_interval`), how many consecutive worse
-readings a node needs before the level above counts it (`escalate_after`), and the
+readings a node needs before the level above counts it (`escalate_after`), how long
+a node's notes are kept (`notes_keep`, `notes_cap`, `notes_min_age` and
+`notes_max_age`), and the
 engine's five sizing numbers — `max_workers`, `entry_limit`, `memory_share`,
 `record_limit` and `series_limit`, which are what the instance measures itself against
 while it runs, and three of them what a check type's declarations are measured against
@@ -289,9 +307,9 @@ The shared toolbox `/links` shows — the dashboards and tools a team reaches fo
 something is on fire — is an optional aspect of the same directory
 ([ADR-0030](docs/adr/0030-curated-links.md)): one flat level of `groups:`, each an
 ordered list of entries with a `title`, a `url`, an icon **name** and an optional
-one-line `note`. Seventeen marks are built in and need no configuration; a `check:`
-block turns on reachability probing, which runs when somebody **opens** the page and
-the answers are older than its `interval:`, never on a timer.
+one-line `note`. Seventeen marks are built in and need no configuration. Nothing on the
+page is probed: a dead link is found by clicking it, and a tool whose availability
+matters is an `http` check.
 
 **Shipping marks of your own makes this aspect a directory.** The two legal forms are
 `config/links.yaml` on its own, and `config/links/` holding `links.yaml` beside an
@@ -336,6 +354,37 @@ mark — need no line here: the page allows them itself, taken from `links.yaml`
 renders. `/system/installed` prints the effective policy with the contributor of every
 source, and what `/links` adds, so what this file did is visible from the running
 instance. The shipped copy is an example with every entry commented out.
+
+#### Configured rules (`config/aggregation.yaml`)
+
+A parent counts the worst of its children, everywhere — right for a house, and wrong for
+an estate, where one red leaf on a test account turns the root red for good. This
+optional file says how a part of the tree counts **one level up**, as a fact about how
+the estate is built
+([ADR-0137](docs/adr/0137-a-deployment-says-in-a-table-how-a-part-counts-above-it.md)).
+Each rule picks a part with `under:`, `*` standing for one segment, and writes a table
+of what a `WARN` or `ERROR` there counts as — or `nothing`, the part left out — on what
+the part passes up, on its nodes' lines (`lines:`), or over its children while fewer
+than a number of them fail (`children:`, `while_fewer_than:`); a name, a note and the
+day it began to stand are required:
+
+```yaml
+rules:
+  - name: develop advises
+    under: /aws/develop
+    counts_as: {ERROR: WARN}
+    note: The develop account is no production; it turns the root amber at most.
+    since: 2026-10-24
+```
+
+Every part keeps its true color — a red function stays red, and so does its account,
+under §, while `/aws` counts the account amber — and every page says by which rule;
+*Handled* lists them all. Every root's file is read, the root named last first, and
+where two rules pick one place the first written decides. A part whose check stopped
+running still counts at least a warning, the instance's own branch is out of every
+rule's reach, and a rule that cannot apply is named on `/little-sister` at the start and
+applies nothing. The shipped copy is an example with every rule commented out, each key
+explained.
 
 ### Installation
 
@@ -403,10 +452,14 @@ or more, naming the runs that were in flight beside it. Set
 `SECRET_KEY` before
 anyone relies on staying logged in: without one a random key is made per start, so
 sessions end with the process. Runtime state is written to `var/` beside the
-configuration: the log, and under `var/state/` what a restart keeps — the maintenance
-pins, the event log and the series. That is what a **keeper** carries: a deployment that
-registers one has it restored from there at startup and mirrored back to it while the
-instance runs, so a redeployment onto a fresh machine comes up with the state it left
+configuration: the log, and under `var/state/` what a restart keeps — the pins in
+`pins.json` and the notes in `notes.json`, and the event log and the
+series as compact JSON under gzip,
+`events.json.gz` and `series.json.gz`, which `gzip -dc` reads. That is what a
+**keeper** carries: a deployment that registers one has it restored from there at
+startup and mirrored back to it while the instance runs — the pins as they change, and
+the event log and the series every `keeper_interval` while no other instance stands by
+— so a redeployment onto a fresh machine comes up with the state it left
 on the old one. Where two instances share a keeper's store, whoever holds its lease is
 the authority: an instance that takes the lease over adopts what the store changed
 while it stood by, keeps what it had beside each file as `.bak`, and lists them on

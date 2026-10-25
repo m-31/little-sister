@@ -1,20 +1,24 @@
 # ADR-0085 — A measure is read out of a record, not declared into it
 
 - **Status:** Accepted
-- **Date:** 2026-10-04 (accepted 2026-09-19)
+- **Date:** 2026-10-25 (accepted 2026-09-19)
 - **Related:** [ADR-0082](0082-a-line-carries-what-it-is-about-and-what-it-read.md)
   (the record this reads from, and the `subject` this finally uses),
   [ADR-0042](0042-entries-carry-their-own-code.md) (why the line carries no code),
   [ADR-0036](0036-addressable-reasons.md) (the slug a pin holds),
   [ADR-0044](0044-run-facts-on-the-node.md) (the run's own time, which this is not),
-  [ADR-0024](0024-dashboard-layout.md) (the density rule that made a healthy line
-  free), [ADR-0063](0063-declining-the-density-trade.md) (the lever a deployment has
+  [ADR-0056](0056-stable-useful-dashboard-flow.md) (the density rule that made a
+  healthy line free), [ADR-0063](0063-declining-the-density-trade.md) (the lever a deployment has
   where it is not), [ADR-0075](0075-a-check-declares-what-it-costs.md) (the cost this
   declares), [ADR-0058](0058-transport-policy-vocabulary.md) (this check's readings),
   [ADR-0086](0086-a-check-measures-and-grades.md) (the `Measurement` that holds the
   record, and the object a check declares),
   [ADR-0096](0096-a-measure-names-its-node-and-its-things.md) (the `error` a curve
-  marks, and the things one reading counts)
+  marks, and the things one reading counts),
+  [ADR-0092](0092-a-check-declares-its-measures.md) (the curve drawn over this
+  measurement, and its unit as free text),
+  [ADR-0135](0135-a-handled-part-keeps-its-true-color-and-every-surface-says-by-what.md)
+  (decision 2, maintenance's own words, which the decisions here take)
 - **Register:** [`../decisions.md`](../decisions.md)
 - **Contract:** [`../api/openapi.yaml`](../api/openapi.yaml) — a node's `subject` and
   `record`, from 2.5.0.
@@ -135,7 +139,7 @@ itself.
 
 Its slug is a constant. Addressing exists to tell sibling lines apart (ADR-0036) and
 there are no siblings here; what a slug must be is **the same across readings**, because
-a pin holds one and the line an operator silenced has to be the line the next run
+a pin holds one and the line an operator pinned has to be the line the next run
 reports. A *derived* slug is SHA-1 of the sentence, so it would mint a new one every
 poll as the number in it moves.
 
@@ -144,7 +148,7 @@ poll as the number in it moves.
 This was held back for a year on the grounds that a line on the healthy path is a
 visible change to every dashboard running it. Measured against the grid rendered
 with and without one: **byte-identical** in the default dashboard and under hide-ok,
-because a quiet `OK` leaf already collapses to a chip (ADR-0024) and its lines live on
+because a quiet `OK` leaf already collapses to a chip (ADR-0056 decision 2) and its lines live on
 its own page. It differs in one layout — chips off — where the line joins the card, and
 there `show_when_quiet` (ADR-0063) is the lever a deployment already has, without the
 check's cooperation.
@@ -173,8 +177,10 @@ What it holds is one entry and one record per check, declared to the startup sum
 - **The series inherits a decision it did not have to make.** It keeps **whole
   records** with a count ceiling, in memory for now (a store sits behind #65's seam
   later), because mapping-when-drawn is only possible if what was read is what is kept.
-- **A curve is still not drawn.** That is the series' half, and it now has one real
-  case to be designed against.
+- **A curve is the series' half**, designed against this one real case: the `http`
+  type declares `response_ms` in `ms`, labeled *Response time*, and the node that
+  stands for its subject draws it
+  ([ADR-0092](0092-a-check-declares-its-measures.md)).
 
 ## Alternatives considered
 
@@ -195,8 +201,9 @@ What it holds is one entry and one record per check, declared to the startup sum
   free.
 - **A unit vocabulary** — a closed set of physical units plus an escape for counts,
   where 12 deployments have the counted thing as their unit. Not needed once the unit
-  belongs to the projection; the question returns when a curve is declared, which is
-  where it can be answered against a real axis.
+  belongs to the projection; the question is answered where a curve is declared,
+  against a real axis: a unit is free text
+  ([ADR-0092](0092-a-check-declares-its-measures.md) decision 3).
 - **Waiting for the series.** Rejected once the density cost was measured rather than
   assumed: nothing about this needs a store, and the series is better designed with a
   measurement in hand.

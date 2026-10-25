@@ -17,8 +17,9 @@ adding another. A deployment that wants a second population wants a provider on 
 of its own, which :func:`little_sister.identity.use` already gives it.
 
 **It is visible while it is in use** — a distinct packaged avatar and a display name
-in the chrome of every page, a ``WARNING`` per login, and a row on ``/system``.
-Deliberately no page banner: three channels are enough and the fourth is shouting.
+in the chrome of every page, a ``WARNING`` per login, and a row on
+``/system/installed``. Deliberately no page banner: three channels are enough and the
+fourth is shouting.
 The risk this guards is not the login, it is the session left open for a week after
 the incident.
 """
@@ -57,8 +58,8 @@ DISPLAY_NAME = "System admin"
 #: somebody reads once, under pressure, deciding whether it is the one they want.
 LABEL = "System administrator"
 
-#: Which keyword configured the account — shown on ``/system`` and logged at
-#: startup, so a deployment that took the discouraged shortcut can be seen to have
+#: Which keyword configured the account — shown on ``/system/installed`` and logged
+#: at startup, so a deployment that took the discouraged shortcut can be seen to have
 #: taken it by somebody who is not reading ``wsgi.py``.
 BY_REFERENCE = "reference"
 BY_PASSWORD = "password"
@@ -79,10 +80,10 @@ class SystemAdmin:
         #: :data:`BY_PASSWORD`.
         self.keyword = keyword
         #: The address, when the credential was named rather than handed over. Shown
-        #: on ``/system``, because *the address is wrong* is the failure this account
-        #: has, and a reference is not a secret ("a config field names a secret, it
-        #: never carries one", ADR-0023). Empty for :data:`BY_PASSWORD`, where the
-        #: only thing there is to print would be the password itself.
+        #: on ``/system/installed``, because *the address is wrong* is the failure
+        #: this account has, and a reference is not a secret ("a config field names a
+        #: secret, it never carries one", ADR-0023). Empty for :data:`BY_PASSWORD`,
+        #: where the only thing there is to print would be the password itself.
         self.reference = reference
         #: Why the credential could not be resolved, or ``""``.
         self.problem = problem
@@ -93,8 +94,8 @@ class SystemAdmin:
 
         ``False`` when the credential did not resolve: the store was unreachable, or
         the secret is not there. The door stays **registered** in that case, so
-        ``/system`` can say *configured but unavailable* rather than looking like a
-        deployment that never configured one — and it answers ``404`` like an
+        ``/system/installed`` can say *configured but unavailable* rather than looking
+        like a deployment that never configured one — and it answers ``404`` like an
         unconfigured door, because there is nothing to check a password against and a
         form that refuses everything would be a crueller way of saying the same thing.
         """
@@ -202,7 +203,7 @@ def use_system_admin(*, reference: str = "", password: str = "") -> None:
     ``password=`` exists at all because a deployment whose secret store has no
     little-sister resolver would otherwise be shut out of a feature that exists for
     emergencies — a poor trade. It is discouraged **operationally rather than only in
-    prose**: which keyword was used is logged here and shown on ``/system``.
+    prose**: which keyword was used is logged here and shown on ``/system/installed``.
 
     **A failed resolution closes the door and the application keeps serving.**
     Refusing to start would mean an unreachable parameter store takes the dashboard

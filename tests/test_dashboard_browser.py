@@ -17,6 +17,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from little_sister.looks import LOOKS
+
 try:  # pragma: no cover - environment probe
     from playwright.sync_api import sync_playwright
 except ImportError:  # pragma: no cover
@@ -693,8 +695,12 @@ class ChromiumBoundaryTests(unittest.TestCase):
                 () => {
                   const panel = document.querySelector('.ls-menu__panel');
                   panel.scrollTop = panel.scrollHeight;
-                  const choices = panel.querySelectorAll('input[type=radio]');
-                  const choice = choices[choices.length - 1].closest('label');
+                  // the lowest choice, wherever its group stands: in columns the
+                  // last in the order can end higher than an earlier column
+                  const choice = [...panel.querySelectorAll('input[type=radio]')]
+                      .map(radio => radio.closest('label'))
+                      .reduce((low, label) => label.getBoundingClientRect().bottom
+                          > low.getBoundingClientRect().bottom ? label : low);
                   const box = panel.getBoundingClientRect();
                   const item = choice.getBoundingClientRect();
                   const maxHeight = parseFloat(
@@ -724,6 +730,179 @@ class ChromiumBoundaryTests(unittest.TestCase):
             self.assertTrue(menu["visible"])
         finally:
             page.close()
+
+    def test_each_groups_line_wraps_inside_the_menu_and_never_widens_it(self):
+        # The line beneath each heading says what the group changes (backlog #91). It
+        # wraps in the panel's width, as a long choice does, a long one taking a second
+        # row, and the panel is as wide with the lines as without them.
+        page = self.browser.new_page()
+        try:
+            page.set_viewport_size({"width": 1280, "height": 800})
+            self._open_fixture(page, "two_equal_large_roots", bootstrap=True,
+                               javascript=True, rail_script=True)
+            page.click("#ls-settings")
+            measured = page.evaluate(
+                """
+                () => {
+                  const panel = document.querySelector('.ls-menu__panel');
+                  const box = panel.getBoundingClientRect();
+                  const lines = [...panel.querySelectorAll('.ls-menu__line')].map(
+                    line => {
+                      const own = line.getBoundingClientRect();
+                      const heading = line.previousElementSibling;
+                      const choice = line.nextElementSibling;
+                      return {
+                        id: line.id,
+                        height: own.height,
+                        rows: Math.round(own.height / parseFloat(
+                            getComputedStyle(line).lineHeight)),
+                        inside: own.left >= box.left - 0.5
+                            && own.right <= box.right + 0.5,
+                        overflows: line.scrollWidth > line.clientWidth + 1,
+                        afterHeading: heading.classList.contains('ls-menu__heading')
+                            && own.top >= heading.getBoundingClientRect().bottom - 0.5,
+                        beforeChoice: choice.classList.contains('ls-menu__item')
+                            && own.bottom <= choice.getBoundingClientRect().top + 0.5,
+                      };
+                    });
+                  const withLines = box.width;
+                  for (const line of panel.querySelectorAll('.ls-menu__line')) {
+                    line.style.display = 'none';
+                  }
+                  const without = panel.getBoundingClientRect().width;
+                  return {withLines, without, lines};
+                }
+                """
+            )
+            # the layout's line and each look's
+            self.assertEqual(len(measured["lines"]), len(LOOKS) + 1)
+            for line in measured["lines"]:
+                with self.subTest(line=line["id"]):
+                    self.assertGreater(line["height"], 0)
+                    self.assertTrue(line["inside"], line)
+                    self.assertFalse(line["overflows"], line)
+                    self.assertTrue(line["afterHeading"], line)
+                    self.assertTrue(line["beforeChoice"], line)
+            self.assertAlmostEqual(measured["withLines"], measured["without"],
+                                   delta=0.5)
+            # a line longer than the choices wraps rather than widening the panel
+            self.assertTrue(any(line["rows"] >= 2 for line in measured["lines"]),
+                            measured["lines"])
+        finally:
+            page.close()
+
+    def test_the_groups_stand_in_columns_where_the_window_has_room(self):
+        # The menu's groups stand in columns, read down each in turn — the keyboard's
+        # order — each group whole, so the menu fits a laptop's window without
+        # scrolling: in three at a desk, 72rem or wider, since its eighth group, in two
+        # where the window has room for them, and in one on a phone, as before.
+        for width, height, columns in ((1280, 800, 3), (1000, 1000, 2), (390, 800, 1)):
+            page = self.browser.new_page()
+            try:
+                page.set_viewport_size({"width": width, "height": height})
+                self._open_fixture(page, "two_equal_large_roots", bootstrap=True,
+                                   javascript=True, rail_script=True)
+                page.click("#ls-settings")
+                measured = page.evaluate(
+                    """
+                    () => {
+                      const panel = document.querySelector('.ls-menu__panel');
+                      const box = panel.getBoundingClientRect();
+                      const groups = [...panel.querySelectorAll('.ls-menu__group')]
+                        .map(group => {
+                          const own = group.getBoundingClientRect();
+                          const heading = group.querySelector('.ls-menu__heading')
+                            .getBoundingClientRect();
+                          const last = [...group.querySelectorAll('.ls-menu__item')]
+                            .pop().getBoundingClientRect();
+                          return {left: Math.round(own.left), top: own.top,
+                                  whole: last.left - heading.left < own.width
+                                      && last.top > heading.top,
+                                  inside: own.left >= box.left - 0.5
+                                      && own.right <= box.right + 0.5};
+                        });
+                      return {groups, scroll: panel.scrollHeight,
+                              client: panel.clientHeight};
+                    }
+                    """
+                )
+                with self.subTest(width=width):
+                    lefts = [group["left"] for group in measured["groups"]]
+                    self.assertEqual(len(set(lefts)), columns, lefts)
+                    # down the first column, then the second: the DOM's order
+                    self.assertEqual(lefts, sorted(lefts), lefts)
+                    pairs = zip(measured["groups"], measured["groups"][1:],
+                                strict=False)
+                    for one, two in pairs:
+                        if one["left"] == two["left"]:
+                            self.assertGreater(two["top"], one["top"])
+                    for group in measured["groups"]:
+                        self.assertTrue(group["whole"], group)
+                        self.assertTrue(group["inside"], group)
+                    if columns > 1:
+                        # the menu fits the window: nothing to scroll inside it
+                        self.assertLessEqual(measured["scroll"],
+                                             measured["client"] + 1, measured)
+            finally:
+                page.close()
+
+    def test_the_way_out_stands_first_and_in_reach_however_short_the_window(self):
+        # Log out is the menu's first row, a button at the far end of the name it signs
+        # out: as the menu opens it is there to press, without scrolling the menu, at a
+        # desk and on a phone, in a window too short for the looks beneath it.
+        for width in (1280, 390):
+            page = self.browser.new_page()
+            try:
+                page.set_viewport_size({"width": width, "height": 300})
+                self._open_fixture(page, "two_equal_large_roots", bootstrap=True,
+                                   javascript=True, rail_script=True)
+                page.click("#ls-settings")
+                measured = page.evaluate(
+                    """
+                    () => {
+                      const panel = document.querySelector('.ls-menu__panel');
+                      const box = panel.getBoundingClientRect();
+                      const out = panel.querySelector('.ls-menu__logout');
+                      const own = out.getBoundingClientRect();
+                      const name = panel.querySelector('.ls-menu__who-name');
+                      const named = name.getBoundingClientRect();
+                      const hit = document.elementFromPoint(
+                          own.left + own.width / 2, own.top + own.height / 2);
+                      return {
+                        first: panel.firstElementChild.contains(out),
+                        name: name.textContent.trim(),
+                        scrollTop: panel.scrollTop,
+                        scrolls: panel.scrollHeight > panel.clientHeight + 1,
+                        pressed: out.contains(hit),
+                        top: own.top, bottom: own.bottom, right: own.right,
+                        panelTop: box.top, panelRight: box.right,
+                        nameTop: named.top, nameBottom: named.bottom,
+                        nameRight: named.right,
+                        edge: getComputedStyle(out).borderTopStyle,
+                        height: innerHeight,
+                      };
+                    }
+                    """
+                )
+                with self.subTest(width=width):
+                    self.assertTrue(measured["first"], measured)
+                    self.assertEqual(measured["name"], "Signed in as harness")
+                    # the window is short: the looks beneath it scroll in the menu,
+                    # and the way out is in reach before they do
+                    self.assertTrue(measured["scrolls"], measured)
+                    self.assertEqual(measured["scrollTop"], 0)
+                    self.assertTrue(measured["pressed"], measured)
+                    self.assertGreaterEqual(measured["top"], measured["panelTop"])
+                    self.assertLessEqual(measured["bottom"], measured["height"])
+                    # a button, on the name's row, at its far end
+                    self.assertEqual(measured["edge"], "solid")
+                    self.assertLess(measured["nameTop"], measured["bottom"])
+                    self.assertGreater(measured["nameBottom"], measured["top"])
+                    self.assertLess(measured["nameRight"], measured["right"])
+                    self.assertGreater(measured["right"],
+                                       measured["panelRight"] - 24, measured)
+            finally:
+                page.close()
 
     def test_an_open_editor_slides_beneath_the_bar(self):
         # A line's editor stands in the flow (ADR-0104), so it scrolls under
@@ -888,7 +1067,7 @@ class ChromiumBoundaryTests(unittest.TestCase):
             # after the click returns; a wait that never comes true fails
             page.wait_for_function(
                 "document.activeElement !== null"
-                " && document.activeElement.name === 'reason'")
+                " && document.activeElement.name === 'note'")
             field = page.locator("#head-maintenance-duration")
             was = field.input_value()
             self.assertRegex(was, r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
@@ -902,7 +1081,7 @@ class ChromiumBoundaryTests(unittest.TestCase):
             page.keyboard.type("3d")
             self.assertEqual(field.input_value(), "3d")
             # changed, it is somebody's text: entering it again selects nothing
-            page.click("#head-maintenance-reason")
+            page.click("#head-maintenance-note")
             field.click()
             page.wait_for_timeout(150)
             ends = page.evaluate(
@@ -921,19 +1100,22 @@ class ChromiumBoundaryTests(unittest.TestCase):
 
 
 class ActionRowTests(unittest.TestCase):
-    """A node's actions stand in the head's row, shown always, and nothing is laid
-    over the title any more (ADR-0127 decision 3).
+    """A node's actions stand in the head's toolbar, right after the name and the
+    head's own icons, and are laid over the title only while the toolbar shows
+    (ADR-0127 decision 3).
 
-    The rail of actions used to sit over the title's space on purpose and veil what
-    it covered, quiet until the card was hovered; a real deployment's `+ Jira` chip
-    once sat in the middle of the word "analysis" (ADR-0034). The head's row now
-    holds the actions among its controls, before the state and the head's own
-    icons: the title gives way to them, with an ellipsis, so no pixel of a title is
-    ever under a chip, and the chips are shown at rest as the icons are. Measured
-    in geometry, which is what the claim is about now, on the real Jinja pipeline
-    with the demo package filling the real slot — the fixture sheet registers no
-    filler, so it has no chip to collide with anything, which is exactly how the
-    collision shipped.
+    The rail of actions used to lie over the title's space always and veil what it
+    covered, quiet until the card was hovered; a real deployment's `+ Jira` chip once
+    sat in the middle of the word "analysis" (ADR-0034). Then the toolbar kept a room
+    of its own before the title, which left a short title — a band's colored circle —
+    standing apart from its name. Under the library's look, `head_buttons: pointer`,
+    where a pointer can rest on a head, the toolbar takes no room in the row now: the
+    title stands right after the name, and the toolbar, shown under the pointer, lies
+    over the title on the card's own fill, covering what it covers, and nothing moves
+    when it shows. Measured in geometry, which is what the claim is about, on the real
+    Jinja pipeline with the demo package filling the real slot — the fixture sheet
+    registers no filler, so it has no chip to collide with anything, which is exactly
+    how the collision shipped.
     """
 
     browser = None
@@ -1009,6 +1191,10 @@ class ActionRowTests(unittest.TestCase):
             "() => getComputedStyle(document.documentElement)"
             ".getPropertyValue('--ls-bar-height').trim().endsWith('px')")
         self.assertIn(_BOOTSTRAP_CSS, aborted)
+        # Bootstrap, which keeps a closed dropdown out of sight, is never loaded
+        # here, so the settings menu stands open in the bar and over the card: it is
+        # closed as Bootstrap would draw it
+        page.add_style_tag(content=".dropdown-menu:not(.show) { display: none; }")
         page.eval_on_selector(
             ".status-card",
             "element => element.scrollIntoView({block: 'center'})")
@@ -1030,32 +1216,44 @@ class ActionRowTests(unittest.TestCase):
                 return {x: b.x, y: b.y, width: b.width, height: b.height,
                         right: b.right, bottom: b.bottom};
               };
+              const c = chip.getBoundingClientRect();
+              const hit = document.elementFromPoint(c.x + c.width / 2,
+                                                    c.y + c.height / 2);
               return {
                 rail: box(rail), chip: box(chip), title: box(title), name: box(name),
-                state: box(head.querySelector('.node-controls > .status-card__state')),
+                bar: box(rail.parentElement),
+                state: box(head.querySelector(':scope > .status-card__state')),
                 icons: box(head.querySelector('.node-icons')),
                 titleCut: title.scrollWidth > title.clientWidth,
                 chipOpacity: getComputedStyle(chip).opacity,
-                railPosition: getComputedStyle(rail).position,
+                barOpacity: getComputedStyle(rail.parentElement).opacity,
+                chipOnTop: !!hit && hit.closest('.node-action') === chip,
+                railFill: getComputedStyle(rail).backgroundColor,
+                cardFill: getComputedStyle(card).backgroundColor,
               };
             }
             """
         )
 
-    def test_the_title_gives_way_to_the_chip_and_nothing_lies_under_it(self):
+    def test_the_title_keeps_to_the_name_and_the_chip_stands_over_it(self):
         page = self._open()
         try:
             page.mouse.move(0, 0)
             geometry = self._geometry(page)
-            # the premise: at card width the title would reach under the chip
+            # the premise: at card width the title has less room than it needs
             self.assertTrue(geometry["titleCut"])
-            # so it ends before the chip, which stands in the row's flow, before the
-            # state and the head's own icons
+            # the toolbar takes no room in the row: the title stands right after the
+            # name and ends before the state
+            self.assertEqual(geometry["bar"]["width"], 0)
+            self.assertLess(geometry["title"]["x"] - geometry["name"]["right"], 16)
             self.assertLessEqual(geometry["title"]["right"],
-                                 geometry["chip"]["x"] + 1)
-            self.assertEqual(geometry["railPosition"], "static")
-            self.assertLess(geometry["chip"]["right"], geometry["state"]["x"] + 1)
-            self.assertLess(geometry["state"]["right"], geometry["icons"]["x"] + 1)
+                                 geometry["state"]["x"] + 1)
+            # the chip after the name and the head's own icons, over the title, and
+            # ending before the state
+            self.assertGreaterEqual(geometry["icons"]["x"], geometry["name"]["right"])
+            self.assertGreaterEqual(geometry["chip"]["x"], geometry["icons"]["right"])
+            self.assertLess(geometry["chip"]["x"], geometry["title"]["right"])
+            self.assertLessEqual(geometry["chip"]["right"], geometry["state"]["x"])
             # on the name's line, whole
             chip_middle = geometry["chip"]["y"] + geometry["chip"]["height"] / 2
             name_middle = geometry["name"]["y"] + geometry["name"]["height"] / 2
@@ -1064,19 +1262,30 @@ class ActionRowTests(unittest.TestCase):
         finally:
             page.close()
 
-    def test_the_chip_is_shown_at_rest_and_the_same_under_the_pointer(self):
+    def test_the_chip_shows_under_the_pointer_and_nothing_moves(self):
         page = self._open()
         try:
             page.mouse.move(0, 0)
             at_rest = self._geometry(page)
-            self.assertEqual(at_rest["chipOpacity"], "1")
-            page.mouse.move(at_rest["title"]["x"] + 4,
-                            at_rest["title"]["y"] + at_rest["title"]["height"] / 2)
+            self.assertEqual((at_rest["barOpacity"], at_rest["chipOpacity"]),
+                             ("0", "1"))
+            # the pointer on the head's name, which nothing else covers there
+            point = [at_rest["name"]["x"] + at_rest["name"]["width"] / 2,
+                     at_rest["name"]["y"] + at_rest["name"]["height"] / 2]
+            self.assertTrue(page.evaluate(
+                "([x, y]) => !!document.elementFromPoint(x, y)"
+                ".closest('.status-card__head')", point))
+            page.mouse.move(*point)
             page.wait_for_timeout(200)
             hovered = self._geometry(page)
-            self.assertEqual(hovered["chipOpacity"], "1")
+            self.assertEqual((hovered["barOpacity"], hovered["chipOpacity"]),
+                             ("1", "1"))
             self.assertEqual(hovered["chip"], at_rest["chip"])
             self.assertEqual(hovered["title"], at_rest["title"])
+            # over the title, on the card's own fill: what it covers does not read
+            # through
+            self.assertTrue(hovered["chipOnTop"])
+            self.assertEqual(hovered["railFill"], hovered["cardFill"])
         finally:
             page.close()
 

@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 
 import little_sister.logger
 from little_sister.config import (
-    DEFAULT_BRANCH_CAP,
+    DEFAULT_KEEPER_INTERVAL,
     DEFAULT_MAINTENANCE_CAP,
     DEFAULT_MAX_WORKERS,
     DEFAULT_READING_CAP,
@@ -84,32 +84,25 @@ class ConfigTests(TestCase):
             self.assertIn("fold_ok 1 is not true or false", said)
             self.assertNotIn("unknown key", said)
 
-    def test_reads_branch_cap(self):
+    def test_branch_cap_is_named_as_no_longer_read(self):
+        # the interactive wall's flip took *+N more* away (backlog #91 §3.4): a file
+        # that still says `branch_cap` hears what took its place, in a line of its own
+        # and not among the keys nothing ever read
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "settings.yaml"
-            path.write_text("branch_cap: 5\n")
-            self.assertEqual(load_config(path).branch_cap, 5)
-
-    def test_branch_cap_defaults_when_absent(self):
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "settings.yaml"
-            path.write_text("timezone: UTC\n")            # key absent → the default
-            self.assertEqual(load_config(path).branch_cap, DEFAULT_BRANCH_CAP)
-
-    def test_invalid_branch_cap_falls_back(self):
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "settings.yaml"
-            path.write_text("branch_cap: lots\n")
-            self.assertEqual(load_config(path).branch_cap, DEFAULT_BRANCH_CAP)
-
-    def test_negative_branch_cap_clamped_to_zero(self):
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "settings.yaml"
-            path.write_text("branch_cap: -2\n")
-            self.assertEqual(load_config(path).branch_cap, 0)
+            path.write_text("branch_cap: 5\nreason_cap: 4\n")
+            with self.assertLogs("little_sister", level="WARNING") as logs:
+                cfg = load_config(path)
+        self.assertEqual(cfg.reason_cap, 4)
+        self.assertFalse(hasattr(cfg, "branch_cap"))
+        self.assertEqual(
+            [line.split(":", 2)[2] for line in logs.output],
+            [f"config: {path}: branch_cap is no longer read: a level nobody "
+             "configured starts open now, and a big one as chips; state `chips:` for "
+             "a level that should start otherwise (ADR-0128)"])
 
     def test_reads_maintenance_cap(self):
-        # the pill popover's count-cap, read like branch_cap
+        # the pill popover's count-cap, read like reason_cap
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "settings.yaml"
             path.write_text("maintenance_cap: 8\n")
@@ -130,7 +123,7 @@ class ConfigTests(TestCase):
                 load_config(path).maintenance_cap, DEFAULT_MAINTENANCE_CAP)
 
     def test_negative_maintenance_cap_clamped_to_zero(self):
-        # 0 is meaningful — it sends every pin straight to the /maintenance page
+        # 0 is meaningful — it sends every pin straight to /handled
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "settings.yaml"
             path.write_text("maintenance_cap: -3\n")
@@ -156,8 +149,8 @@ class ConfigTests(TestCase):
             self.assertEqual(load_config(path).reading_cap, 0)
 
     def test_invalid_reading_cap_is_logged_and_defaulted(self):
-        # a setting is logged and replaced, as every display cap's is (ADR-0006);
-        # it is the check's own key that refuses the start
+        # a setting is logged and replaced, as every display cap's is (ADR-0120
+        # decision 7); it is the check's own key that refuses the start
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "settings.yaml"
             path.write_text("reading_cap: plenty\n")
@@ -192,12 +185,17 @@ class ConfigTests(TestCase):
         self.assertTrue(any("card_status_line" in line for line in logs.output))
 
     def test_the_looks_default_to_the_librarys_own(self):
-        # since 2026-10-18 cyberpunk, the hover card off and the wash (Lex's word)
+        # since 2026-10-18 cyberpunk, the hover card off and the wash, since
+        # 2026-10-21 the head's buttons under the pointer, since 2026-10-24 the
+        # failures opening their way, and since 2026-10-25 the boxes in rows
         cfg = load_config(Path(tempfile.gettempdir()) / "ls-no-such-config.yaml")
         self.assertEqual(dict(cfg.looks), {"theme": "cyberpunk",
                                            "chip_runs": "aligned",
+                                           "boxes": "rows",
                                            "inspection_card": "off",
-                                           "toggle_hover": "wash"})
+                                           "toggle_hover": "wash",
+                                           "head_buttons": "pointer",
+                                           "failures": "open"})
 
     def test_a_look_reads_the_deployments_default(self):
         # `off` unquoted is YAML 1.1's false, and is read back as the word it was
@@ -205,14 +203,18 @@ class ConfigTests(TestCase):
             with self.subTest(written=written), \
                     tempfile.TemporaryDirectory() as directory:
                 path = Path(directory) / "settings.yaml"
-                path.write_text(f"theme: plain\nchip_runs: wrapped\n"
-                                f"inspection_card: {written}\ntoggle_hover: outline\n")
+                path.write_text(f"theme: plain\nchip_runs: wrapped\nboxes: packed\n"
+                                f"inspection_card: {written}\ntoggle_hover: outline\n"
+                                f"head_buttons: line\nfailures: chips\n")
                 with self.assertNoLogs("little_sister", level="WARNING"):
                     looks = dict(load_config(path).looks)
                 self.assertEqual(looks, {"theme": "plain",
                                          "chip_runs": "wrapped",
+                                         "boxes": "packed",
                                          "inspection_card": "off",
-                                         "toggle_hover": "outline"})
+                                         "toggle_hover": "outline",
+                                         "head_buttons": "line",
+                                         "failures": "chips"})
         # and a word as the look spells it, its case and the spaces round it folded,
         # as `card_status_line`'s are
         with tempfile.TemporaryDirectory() as directory:
@@ -224,18 +226,29 @@ class ConfigTests(TestCase):
     def test_a_look_it_does_not_have_falls_back_on_its_own_with_a_warning(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "settings.yaml"
-            path.write_text("theme: default\nchip_runs: columns\n"
-                            "inspection_card: sometimes\ntoggle_hover: outline\n")
+            path.write_text("theme: default\nchip_runs: columns\nboxes: masonry\n"
+                            "inspection_card: sometimes\ntoggle_hover: outline\n"
+                            "head_buttons: corner\nfailures: closed\n")
             with self.assertLogs("little_sister", level="WARNING") as logs:
                 cfg = load_config(path)
         self.assertEqual(dict(cfg.looks), {"theme": "cyberpunk",
                                            "chip_runs": "aligned",
+                                           "boxes": "rows",
                                            "inspection_card": "off",
-                                           "toggle_hover": "outline"})
+                                           "toggle_hover": "outline",
+                                           "head_buttons": "pointer",
+                                           "failures": "open"})
+        self.assertTrue(any("failures 'closed' is not one of open/chips; "
+                            "using 'open'" in line for line in logs.output))
+        self.assertTrue(any("head_buttons 'corner' is not one of "
+                            "pointer/pointer-name/line/name; using 'pointer'" in line
+                            for line in logs.output))
         self.assertTrue(any("inspection_card 'sometimes' is not one of pause/off; "
                             "using 'off'" in line for line in logs.output))
         self.assertTrue(any("chip_runs 'columns' is not one of aligned/wrapped; "
                             "using 'aligned'" in line for line in logs.output))
+        self.assertTrue(any("boxes 'masonry' is not one of rows/packed; "
+                            "using 'rows'" in line for line in logs.output))
         # the plain theme's name until 2026-10-18 is no theme now
         self.assertTrue(any("theme 'default' is not one of auto/plain/vivid/pastel/"
                             "dark/cyberpunk; using 'cyberpunk'" in line
@@ -312,7 +325,7 @@ class SettingsLayeringTests(TestCase):
         with tempfile.TemporaryDirectory() as directory:
             cfg = load_config(config_dir=directory)
             self.assertEqual(cfg.timezone, DEFAULT_TIMEZONE)
-            self.assertEqual(cfg.branch_cap, DEFAULT_BRANCH_CAP)
+            self.assertEqual(cfg.maintenance_cap, DEFAULT_MAINTENANCE_CAP)
 
     def test_a_broken_layer_costs_only_its_own_keys(self):
         with tempfile.TemporaryDirectory() as d1, tempfile.TemporaryDirectory() as d2:
@@ -350,6 +363,40 @@ class StateIntervalTests(TestCase):
                                      DEFAULT_STATE_INTERVAL)
 
 
+class KeeperIntervalTests(TestCase):
+    """`keeper_interval` (ADR-0134 decision 6): how often the event log and the
+    series go to a keeper while no other instance stands by."""
+
+    def test_reads_the_interval(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.yaml"
+            path.write_text("keeper_interval: 300\n")
+            self.assertEqual(load_config(path).keeper_interval, 300)
+
+    def test_defaults_to_a_quarter_of_an_hour(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.yaml"
+            path.write_text("timezone: UTC\n")
+            self.assertEqual(load_config(path).keeper_interval,
+                             DEFAULT_KEEPER_INTERVAL)
+            self.assertEqual(DEFAULT_KEEPER_INTERVAL, 900)
+
+    def test_a_bad_or_non_positive_value_falls_back_with_a_warning(self):
+        for value in ("rarely", "0", "-900"):
+            with tempfile.TemporaryDirectory() as directory, self.subTest(value=value):
+                path = Path(directory) / "settings.yaml"
+                path.write_text(f"keeper_interval: {value}\n")
+                with self.assertLogs(level="WARNING"):
+                    self.assertEqual(load_config(path).keeper_interval,
+                                     DEFAULT_KEEPER_INTERVAL)
+
+    def test_the_shipped_settings_name_it_with_its_default(self):
+        # config/settings.yaml is the file a deployment copies its keys from
+        shipped = Path(__file__).resolve().parents[1] / "config" / "settings.yaml"
+        self.assertEqual(load_config(shipped).keeper_interval, DEFAULT_KEEPER_INTERVAL)
+        self.assertIn("\nkeeper_interval: 900\n", shipped.read_text())
+
+
 class EngineSizingTests(TestCase):
     """`max_workers`, `entry_limit` and `memory_share` (ADR-0075): the three
     numbers the engine measures itself and its configuration against, which a
@@ -377,10 +424,10 @@ class EngineSizingTests(TestCase):
 
     def test_reads_the_record_limit_and_defaults_to_the_constant(self):
         # how heavy an entry's record may be: the deployment's answer to a refusal
-        # it disagrees with, and 2 KB where it says nothing
+        # it disagrees with, and 3 KB where it says nothing
         self.assertEqual(self._load("record_limit: 8192\n").record_limit, 8192)
         self.assertEqual(self._load("timezone: UTC\n").record_limit, RECORD_LIMIT)
-        self.assertEqual(RECORD_LIMIT, 2_048)
+        self.assertEqual(RECORD_LIMIT, 3_072)
 
     def test_a_bad_record_limit_falls_back_with_a_warning(self):
         # zero would refuse every record, including the ones this deployment

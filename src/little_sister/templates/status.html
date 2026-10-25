@@ -21,19 +21,21 @@
             node's block with *Edit* and *Clear*, and on a node's page the head's
             *Set maintenance*. The refresh waits while one of those editors is open
             (decision 7, `poll.js`). -#}
-        {#- The shapes of the status cues and of the heads' icons, drawn once for
-            the page (ADR-0127 decisions 2 and 3); every cue and mark in the grid
-            refers to them, so the refresh carries none of the paths. -#}
-        {% from '_status_cue.html' import cue_sprite %}{{ cue_sprite() }}
-        {% from '_rule_block.html' import icon_sprite, pin_editor with context %}{{ icon_sprite() }}
+        {#- The shapes of the heads' icons, drawn once for the page (ADR-0127
+            decisions 2 and 3), as the status cues' are by `_page_end.html`: every cue
+            and mark in the grid refers to them, so the refresh carries none of the
+            paths. -#}
+        {% from '_rule_block.html' import icon_sprite, pin_editor, ack_editor with context %}{{ icon_sprite() }}
         <div id="status-grid">
             {% include '_status_grid.html' %}
         </div>
         {#- The one editor of a pin still to be set, for an admin: ‖ in a head's
-            icons clones it into the node's box (ADR-0127 decision 3). Outside the
-            grid, so the refresh carries no editor and never takes this one away. -#}
+            icons clones it into the node's box (ADR-0127 decision 3) — and the ringed
+            check's, which marks what fails there seen (ADR-0142). Outside the grid,
+            so the refresh carries no editor and never takes these away. -#}
         {%- if is_admin and layout != 'kiosk' %}
         {{ pin_editor(here) }}
+        {{ ack_editor(here) }}
         {%- endif %}
     </div>
 {% include '_page_end.html' %}
@@ -49,14 +51,14 @@
     <script src="{{ url_for('static', filename='js/poll.js') }}"
             data-target="status-grid" data-assets="{{ assets_digest() }}"></script>
 
-    {# Topology-weighted card spans (ADR-0056, superseding ADR-0024): the server
+    {# Topology-weighted card spans (ADR-0056): the server
        sends stable plans; this measures the responsive grid and reapplies the
        matching one after initial render, a resize or the poll's fragment swap. #}
     <script src="{{ url_for('static', filename='js/dashboard-layout.js') }}"></script>
 
     {# The tab's map (ADR-0127 decisions 9 and 10): what a viewer opened stands
        through the ~10s fragment swap and a reload of the tab — every node's face,
-       the folds, a level's "+N more" and a box's *⌄ all N* — which this one script
+       the folds and a box's *⌄ all N* — which this one script
        owns, event-delegated on #status-grid (the ADR-0019 pattern); poll.js calls
        it around each swap, and tree-pending.js in the head holds the grid back
        until it has run on a load. After the grid, without `defer`. #}
@@ -72,6 +74,10 @@
     <script src="https://cdn.jsdelivr.net/npm/@floating-ui/core@1.6.8/dist/floating-ui.core.umd.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@floating-ui/dom@1.6.12/dist/floating-ui.dom.umd.min.js"></script>
     <script src="{{ url_for('static', filename='js/inspect.js') }}"></script>
+    {#- A block's note on the wall (ADR-0135 decision 3): the mark's card, outside the
+        grid the refresh swaps, in the inspection card's look. -#}
+    <div id="note-card" class="inspect-card note-card" role="dialog" aria-label="Note" tabindex="-1" hidden></div>
+    <script src="{{ url_for('static', filename='js/note-card.js') }}"></script>
 
     {# Maintenance click-popover (ADR-0019 machinery, ADR-0014 data): clicking
        a card's "contains maintenance" pip opens this card listing that subtree's pins as

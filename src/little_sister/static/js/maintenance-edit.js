@@ -40,7 +40,8 @@
         // the editor's own disclosure, so that no other the page may hold closes
         var disclosure = event.target.closest
             ? event.target.closest(
-                "details.maintenance-editor-disclosure[open], details.reason-pin[open]")
+                "details.maintenance-editor-disclosure[open], details.reason-pin[open], "
+                + "details.reason-ack[open]")
             : null;
         if (!disclosure) { return; }
         event.preventDefault();
@@ -55,10 +56,10 @@
     document.addEventListener("toggle", function (event) {
         var disclosure = event.target;
         if (!disclosure.open || !disclosure.matches || !disclosure.matches(
-                "details.maintenance-editor-disclosure, details.reason-pin")) {
+                "details.maintenance-editor-disclosure, details.reason-pin, details.reason-ack")) {
             return;
         }
-        var note = disclosure.querySelector('textarea[name="reason"]');
+        var note = disclosure.querySelector('textarea[name="note"]');
         if (!note) { return; }
         note.focus();
         note.setSelectionRange(note.value.length, note.value.length);
@@ -98,10 +99,10 @@
         entered = null;
     });
 
-    document.querySelectorAll("details.reason-pin").forEach(function (disclosure) {
+    document.querySelectorAll("details.reason-pin, details.reason-ack").forEach(function (disclosure) {
         disclosure.addEventListener("toggle", function () {
             if (!disclosure.open) { return; }
-            document.querySelectorAll("details.reason-pin[open]").forEach(
+            document.querySelectorAll("details.reason-pin[open], details.reason-ack[open]").forEach(
                 function (other) {
                     if (other !== disclosure) { other.open = false; }
                 });

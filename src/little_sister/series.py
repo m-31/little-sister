@@ -47,10 +47,12 @@ the tier holds fits. The engine sweeps on every tick and says what it evicted.
 
 The protocol is three operations — *add* a record, read the *window* of one
 series, *sweep* by retention — and nothing about a check: a check hands back
-measurements and never sees a store, so none of this is on the check-authoring
-surface. The memory tier answers one read more, the window **placed** — each
-record with the instant its series orders it by — because that is what the node
-standing for a subject draws and lists (ADR-0092), and the page reads this tier.
+measurements and writes to no store, so none of this is on the check-authoring
+surface. What a check's measuring half reads of its own subjects (``Check.kept``,
+ADR-0113) is the engine's *window* read, bound to the check's type and mount. The
+memory tier answers one read more, the window **placed** — each record with the
+instant its series orders it by — because that is what the node standing for a
+subject draws and lists (ADR-0092), and the page reads this tier.
 """
 from __future__ import annotations
 
@@ -248,7 +250,7 @@ class MemoryStore:
     is the unit that has a bound, an order and records to replace; the check only
     says how many, on every :meth:`add`. It knows what everything it holds weighs,
     which is what the ceiling is measured against, and it is what the state layer
-    writes to ``series.json`` (:meth:`payload`) and reads back at startup
+    writes to ``series.json.gz`` (:meth:`payload`) and reads back at startup
     (:meth:`restore`). Thread-safe: the engine adds from its pool's workers and
     sweeps from the scheduler, and a reader copies under the same lock.
     """
@@ -371,10 +373,10 @@ class MemoryStore:
         return {check: Usage(*numbers) for check, numbers in found.items()}
 
     def payload(self) -> dict[str, Any]:
-        """Every series as the state layer keeps it in ``series.json``: copied
+        """Every series as the state layer keeps it in ``series.json.gz``: copied
         under the lock, serialized outside it — the producer the layer calls on
         the scheduler tick. Series in key order and records in window order, so a
-        state that did not change writes the same text and is not written
+        state that did not change has the same content and is not written
         again."""
         with self._lock:
             held = [(key, list(series.kept))

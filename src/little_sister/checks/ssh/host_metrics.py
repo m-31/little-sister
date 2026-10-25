@@ -8,7 +8,9 @@ emits raw numbers); this check applies the OK/WARN/ERROR thresholds and reports 
 **branch**: a peer ``ssh`` transport leaf plus a node per aspect (``disk``,
 ``memory``, ``cpu``, ``load``), all siblings, each carrying its number even when OK
 (project.md §2.7). The host node itself is OK once the host is reachable; the worst
-aspect rolls up to it (ADR-0039).
+aspect rolls up to it (ADR-0039). Each aspect ships what its card says to do and a
+handbook, a Markdown file in ``handbook/host-metrics/`` beside this module, that says
+it at length (ADR-0133).
 
 The basic metrics need no elevated rights; ``sudo: true`` runs the script under
 ``sudo -n`` for deployments that extend it with root-only insights.
@@ -36,6 +38,7 @@ from little_sister.checks.ssh.base import (
     parse_descriptions,
 )
 from little_sister.checks.ssh.metrics import (
+    code_span,
     human_duration,
     human_kb,
     parse_metrics,
@@ -48,7 +51,23 @@ from little_sister.checks.ssh.metrics import (
 from little_sister.reasons import clip
 from little_sister.status import StatusCode, join_path
 
-SSH_NODE_DESCRIPTION = "SSH connection used to collect the metrics"
+#: What each node reads, in a sentence (ADR-0133 decision 2): the default of the
+#: ``descriptions:`` block, leaf by leaf (ADR-0012), and a volume's, whose node a run
+#: names.
+SSH_DESCRIPTION = ("Whether the host answers this check's SSH connection and runs its "
+                   "metrics script.")
+DISK_DESCRIPTION = ("The share of a filesystem's space in use, as the host's own `df` "
+                    "reports it.")
+VOLUMES_DESCRIPTION = ("The share of each filesystem's space in use, as the host's own "
+                       "`df` reports it.")
+VOLUME_DESCRIPTION = ("The share of this filesystem's space in use, as the host's own "
+                      "`df` reports it.")
+MEMORY_DESCRIPTION = ("The share of the host's memory in use, from `/proc/meminfo`, or "
+                      "`vm_stat` on a Mac.")
+CPU_DESCRIPTION = ("How busy the processor was over about a second: 100% less its idle "
+                   "time.")
+LOAD_DESCRIPTION = ("The one-minute load average, divided by the number of the host's "
+                    "cores.")
 
 # A host's ``profile`` selects the remote metrics script and the interpreter it's
 # piped to. macOS still ships bash 3.2; a busybox host (a QNAP, an ASUS/ash
@@ -131,52 +150,58 @@ RETIRED_THRESHOLDS = {"disk": ("max_disk", "%"), "memory": ("max_memory", "%"),
 # check does not own — a peer (e.g. ``qnap-metrics``) adds its own leaves (ADR-0015).
 METRIC_NODES = ("ssh", "disk", "memory", "cpu", "load")
 
-# Per-aspect ``about`` (ADR-0025): the **type-inherent** subject metadata for the
-# subnodes this check emits — what each aspect measures and how it grades — so every
-# deployment's hover cards (ADR-0019) explain these leaves out of the box. The grading
-# *thresholds* are deliberately not repeated here: they ride each leaf's ``config``
-# (ADR-0013). This is the **declared default**, handed to the library as
-# ``subnode_defaults`` and resolved there against the deployment's ``subnodes:``
-# block (which may override it, or extend it with ``{default}``); ``nodes.yaml``
-# still wins above both. This check reads none of that itself — under ADR-0025 the
-# declaration *is* the whole of its part in it.
+#: What each aspect's card says to do (ADR-0133 decision 2): the first steps that hold
+#: on every host, each leading into the section of the aspect's handbook that says them
+#: at length (decision 4). How to read a value is the description's and the handbook's,
+#: never the about's, and the levels ride each leaf's configuration (ADR-0013).
+#: Declared, as a type's labels are (ADR-0025): the library resolves them against the
+#: deployment's ``subnodes:`` block, which replaces one or places it with
+#: ``{default}``, and ``nodes.yaml`` still wins above both — so this check reads none
+#: of it itself. A volume a run names takes none of it (ADR-0118): what holds for every
+#: volume of a host reaches it as the details given down to it.
 ABOUT: dict[str, str] = {
     "ssh": (
-        "The SSH connection this check opens to collect the metrics — transport "
-        "health, not a resource on the host. **OK** when the host answers and the "
-        "script runs; **WARN** on an SSH advisory (e.g. the post-quantum key-exchange "
-        "banner); **ERROR** when the connection or script fails (the metric leaves "
-        "then can't be collected)."
-    ),
+        "{error}: try `ssh -o BatchMode=yes` to the host from the monitor's machine, "
+        "as the user it runs as, and fix what stops it there — "
+        "[what to try](handbook#when-it-fails). {warn}: update the host's SSH, or set "
+        "the check's `profile` to the host's kind, as its line says — "
+        "[what to do](handbook#when-it-warns)."),
     "disk": (
-        "Percentage of a filesystem's space in use, read from the host's own `df`. "
-        "Higher is worse — it grades **WARN** then **ERROR** as the volume fills. With "
-        "`disk_path: all` it fans out to one graded child per filesystem. The "
-        "warn/error thresholds are in this leaf's config."
-    ),
+        "{warn}: find what grows and clean it up, or plan more space. {error}: free "
+        "space now, before writes start to fail. [What to do](handbook#when-it-fills)"),
     "memory": (
-        "Percentage of RAM in use on the host. Higher is worse, grading **WARN** then "
-        "**ERROR** as free memory runs low. The thresholds are in this leaf's config."
-    ),
+        "{warn} and {error}: find what holds the memory and restart it, or give the "
+        "host more. [What to do](handbook#when-it-fills)"),
     "cpu": (
-        "How busy the processor is — 100% minus its idle time. Higher is worse, "
-        "grading **WARN** then **ERROR** as it saturates; each run is a one-shot "
-        "reading, so a brief spike can read high while a sustained high is the real "
-        "signal. The thresholds are in this leaf's config."
-    ),
+        "A {warn} or {error} that stays: find the process that keeps the processor "
+        "busy. [What to do](handbook#when-it-stays-high)"),
     "load": (
-        "The 1-minute load average **normalized per CPU core** (load ÷ cores), so one "
-        "number reads the same on a 2-core and a 32-core box. Around **1.0 per core** "
-        "the CPUs are fully subscribed; higher means work is queuing. Grades **WARN** "
-        "then **ERROR** upward; the thresholds are in this leaf's config."
-    ),
+        "{warn} and {error}: find what the work waits for — the processor, as the CPU "
+        "beside it says, or a disk. [What to do](handbook#when-it-climbs)"),
 }
 
-#: The same map in the shape the library takes — ``name -> {title, about}``. This
-#: family ships no ``title`` default (the aspect names read fine on their own), so
-#: every entry states the one field.
-SUBNODE_DEFAULTS: dict[str, dict[str, str]] = {
-    name: {"about": text} for name, text in ABOUT.items()}
+#: Each aspect's handbook (ADR-0133 decision 3): a Markdown file this package ships,
+#: named relative to this module's directory, its sections the ones the abouts above
+#: lead into.
+HANDBOOK: dict[str, str] = {
+    name: f"handbook/host-metrics/{name}.md" for name in ABOUT}
+
+#: How a host's levels first look on the wall (ADR-0128): a host's leaves as chips —
+#: five short readings on every host of a wall, each in sight with its state, a failure
+#: opened by the card's budget — and, where ``disk`` fans out, its filesystems too. A
+#: proposal: the deployment's file takes it back, ``chips: false`` at its top level for
+#: the leaves and in ``subnodes: {disk: …}`` for a disk's filesystems. On a host node
+#: another check shares it speaks for its own leaves alone, and the node's own look is
+#: ``nodes.yaml``'s (decision 5).
+NODE_DEFAULTS: dict[str, object] = {"chips": True}
+SUBNODE_LOOKS: dict[str, dict[str, object]] = {"disk": {"chips": True}}
+
+#: The same maps in the shape the library takes — ``name -> {title, about, handbook}``,
+#: a name's look beside its labels. This family ships no ``title`` default (the aspect
+#: names read fine on their own).
+SUBNODE_DEFAULTS: dict[str, dict[str, object]] = {
+    name: {"about": text, "handbook": HANDBOOK[name], **SUBNODE_LOOKS.get(name, {})}
+    for name, text in ABOUT.items()}
 
 
 @register("host-metrics")
@@ -191,8 +216,9 @@ class HostMetricsCheck(SshScriptCheck):
         # the library resolves them against the deployment's `subnodes:` block and
         # the engine writes the result per child name, so nothing below reads a
         # config key or layers a default. What it grades is declared the same way,
-        # and the library reads the deployment's levels (ADR-0131).
-        super().__init__(subnode_defaults=SUBNODE_DEFAULTS,
+        # and the library reads the deployment's levels (ADR-0131), and so is how
+        # its levels first look (ADR-0128).
+        super().__init__(subnode_defaults=SUBNODE_DEFAULTS, node_defaults=NODE_DEFAULTS,
                          measure_defaults=MEASURES, gradings=GRADINGS, **kwargs)
         self.descriptions = descriptions or {}
         self.disk_path = disk_path
@@ -232,21 +258,17 @@ class HostMetricsCheck(SshScriptCheck):
         default (ADR-0012)."""
         return self.descriptions.get(leaf, default)
 
-    def _volume_about(self) -> str:
-        """The ``disk`` aspect's resolved ``about``, for the **per-volume** children
-        of a ``disk_path: all`` run.
+    @property
+    def _host_details(self) -> dict[str, str]:
+        """The details of the object the host node stands for (ADR-0133 decision 6):
+        the host, as this check reaches it. Withheld where another check shares the
+        node, as every text one check's run writes there is."""
+        return {"host": code_span(self.host)}
 
-        Every other leaf here is named by the type — ``ssh``, ``disk``, ``memory``
-        — so the library labels it from ``SUBNODE_DEFAULTS`` and this check hands
-        over nothing. A volume is named by the *host* (``root``, ``data``, whatever
-        `df` reported), which no declaration could have anticipated, so it takes
-        the one channel left for a dynamic child: the label rides its
-        ``CheckResult``, which says that a run names it (ADR-0118) — so a volume
-        the host calls ``memory`` is not labeled as that aspect. It reads the
-        aspect's **resolved** text — the deployment's override included — rather
-        than ``ABOUT``, so a `subnodes: {disk: …}` entry reaches the volumes exactly
-        as it reaches the branch above them."""
-        return self.subnode_labels.get("disk", {}).get("about", "")
+    @staticmethod
+    def _mount(path: object) -> dict[str, str]:
+        """A filesystem's details: its mount point, where the reading names one."""
+        return {"mount": code_span(str(path))} if path else {}
 
     def _script_args(self) -> list[str]:
         # $1 = disk path to measure (empty → the script's per-OS default).
@@ -369,7 +391,8 @@ class HostMetricsCheck(SshScriptCheck):
                 f"connected, but no metrics from {plain(self._target)}: {said}",
                 record)
         return CheckResult(StatusCode.UNDEFINED, children=(
-            self._ssh_node(record), *self._children(record)))
+            self._ssh_node(record), *self._children(record)),
+            details=self._host_details)
 
     def expected_record(self) -> int | None:
         """One flat reading, declared where its size is knowable (ADR-0075).
@@ -395,8 +418,8 @@ class HostMetricsCheck(SshScriptCheck):
         reasons = [reason, *self._debug_lines(record)]
         return CheckResult(StatusCode.UNDEFINED, children=(
             CheckResult(code, reasons, name="ssh",
-                        description=self._describe("ssh", SSH_NODE_DESCRIPTION),
-                        config=self._ssh_config()),))
+                        description=self._describe("ssh", SSH_DESCRIPTION),
+                        config=self._ssh_config()),), details=self._host_details)
 
     def _ssh_node(self, record: Mapping[str, Any]) -> CheckResult:
         """The ``ssh`` transport leaf: OK, or WARN when ssh emitted an advisory
@@ -408,7 +431,7 @@ class HostMetricsCheck(SshScriptCheck):
         reasons += self._debug_lines(record)
         return CheckResult(StatusCode.WARN if notice else StatusCode.OK,
                            reasons, name="ssh",
-                           description=self._describe("ssh", SSH_NODE_DESCRIPTION),
+                           description=self._describe("ssh", SSH_DESCRIPTION),
                            config=self._ssh_config())
 
     # --- reading the record into a branch ---
@@ -417,10 +440,10 @@ class HostMetricsCheck(SshScriptCheck):
         return (
             self._disk_aspect(record),
             self._percent_child(
-                record, "memory", "mem_pct", "Memory in use",
+                record, "memory", "mem_pct", MEMORY_DESCRIPTION,
                 self._memory_reason),
             self._percent_child(
-                record, "cpu", "cpu_pct", "CPU busy (100% − idle)",
+                record, "cpu", "cpu_pct", CPU_DESCRIPTION,
                 lambda values, pct: f"{pct:.0f}% busy"),
             self._load_child(record),
         )
@@ -432,48 +455,55 @@ class HostMetricsCheck(SshScriptCheck):
         volumes = record.get("volumes")
         if not isinstance(volumes, Mapping):
             return self._percent_child(
-                record, "disk", "disk_pct",
-                "Disk space used on the monitored filesystem", self._disk_reason)
+                record, "disk", "disk_pct", DISK_DESCRIPTION, self._disk_reason,
+                details=self._mount(record.get("disk_path")))
         children = [self._volume_child(str(name), sub)
                     for name, sub in volumes.items() if isinstance(sub, Mapping)]
+        description = self._describe("disk", VOLUMES_DESCRIPTION)
         if not children:
-            return unavailable("disk", "Disk space per filesystem")
+            return unavailable("disk", description)
         return CheckResult(StatusCode.UNDEFINED, name="disk",
-                           description=self._describe(
-                               "disk", "Disk space used, per filesystem"),
+                           description=description,
                            config=self._threshold_md("disk"),
                            children=tuple(children))
 
     def _volume_child(self, name: str, sub: Mapping[str, Any]) -> CheckResult:
-        description = "Disk space used"
+        """A filesystem of a `disk_path: all` (or list) run, named by the host — a
+        node a run names (ADR-0118), so nothing declared for its name reaches it,
+        and it carries the details of its object, its mount point, and no label of
+        its own: what holds for every volume of a host reaches it as the details
+        given down to it (ADR-0133 decision 6)."""
+        description = VOLUME_DESCRIPTION
+        mount = str(sub.get("path") or "")
         pct = sub.get("pct")
         if pct is None:
-            return unavailable(name, description, self._volume_about(),
-                               dynamic=True)
+            return unavailable(name, description, dynamic=True,
+                               details=self._mount(mount))
         verdict = self.verdict("max_disk", value=float(pct))
         free = human_kb(sub.get("avail_kb"))
         total = human_kb(sub.get("total_kb"))
-        mount = str(sub.get("path") or "")
         detail = f" — {free} free of {total}" if free and total else ""
         suffix = f" on {plain(mount)}" if mount else ""
         return CheckResult(verdict.code,
                            [verdict.entry(f"{float(pct):.0f}% used{detail}{suffix}")],
                            name=name, description=description,
-                           about=self._volume_about(),
-                           config=self._threshold_md("disk"), dynamic=True)
+                           config=self._threshold_md("disk"), dynamic=True,
+                           details=self._mount(mount))
 
     def _percent_child(self, record: Mapping[str, Any], name: str, key: str,
                        description: str,
-                       reason: Callable[[Mapping[str, Any], float], str]
-                       ) -> CheckResult:
+                       reason: Callable[[Mapping[str, Any], float], str], *,
+                       details: Mapping[str, str] | None = None) -> CheckResult:
+        description = self._describe(name, description)
         value = record.get(key)
         if value is None:
-            return unavailable(name, description)
+            return unavailable(name, description, details=details)
         pct = float(value)
         verdict = self.verdict(f"max_{name}", value=pct)
         return CheckResult(verdict.code, [verdict.entry(reason(record, pct))],
-                           name=name, description=self._describe(name, description),
-                           config=self._threshold_md(name))
+                           name=name, description=description,
+                           config=self._threshold_md(name),
+                           details=dict(details or {}))
 
     @staticmethod
     def _disk_reason(record: Mapping[str, Any], pct: float) -> str:
@@ -493,7 +523,7 @@ class HostMetricsCheck(SshScriptCheck):
 
     def _load_child(self, record: Mapping[str, Any]) -> CheckResult:
         name = "load"
-        description = self._describe("load", "Load average per CPU core")
+        description = self._describe("load", LOAD_DESCRIPTION)
         per_core = record.get("load1_per_core")
         if not isinstance(per_core, (int, float)):
             return unavailable(name, description)

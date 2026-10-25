@@ -16,7 +16,6 @@ Three rules shape this module:
 * **Structural problems warn and continue** (ADR-0030 §8). A links page is a
   launcher, not the monitor: a typo in it must never take the instance down, so a bad
   entry is dropped, named in the log, and recorded in :attr:`LinksConfig.problems`.
-  *Reachability* is a network question and lives nowhere near load time.
 * **The file is re-read when it changes**, not loaded once — :func:`current_links`
   stats the layers per call and parses only when one moved. Status history is an
   in-memory ``deque`` (ADR-0001), so making an edit to a link cost a restart would
@@ -64,18 +63,10 @@ ICONS_DIRECTORY = "icons"
 #: ``img src`` on an operator's page.
 ALLOWED_SCHEMES = ("http", "https")
 
-#: Probe defaults (ADR-0030 §10). Icons are probed because a static asset fails
-#: unambiguously; links are not, because a corporate ``403`` may mean three different
-#: things. ``interval`` stays the raw duration string and is parsed where it is used,
-#: the way :data:`little_sister.config.DEFAULT_MAINTENANCE_EXPIRY` is.
-DEFAULT_PROBE_INTERVAL = "6h"
-DEFAULT_ALIVE = (200, 301, 302, 401, 403)
-
-_TOP_LEVEL_KEYS = ("groups", "icons", "check")
+_TOP_LEVEL_KEYS = ("groups", "icons")
 _GROUP_KEYS = ("title", "links")
-_LINK_KEYS = ("title", "url", "icon", "note", "check")
+_LINK_KEYS = ("title", "url", "icon", "note")
 _ICON_KEYS = ("on_light", "on_dark")
-_PROBE_KEYS = ("icons", "links", "interval", "alive")
 
 #: The value that turns a mark **off** rather than overriding it (ADR-0030 §3). YAML
 #: decodes a bare ``none`` to ``None``, so both spellings arrive here as absence —
@@ -86,17 +77,11 @@ _ICON_NONE = "none"
 
 @dataclass(frozen=True)
 class Link:
-    """One curated entry: a title, a URL, an icon name, one line of Markdown.
-
-    ``check`` is this entry opting **in** to reachability probing (off by default,
-    ADR-0030 §10) — not to be read as the ``check`` of a monitored subject; nothing
-    on this page reaches the status tree.
-    """
+    """One curated entry: a title, a URL, an icon name, one line of Markdown."""
     title: str
     url: str
     icon: str = ""
     note: str = ""
-    check: bool = False
 
 
 @dataclass(frozen=True)
@@ -105,20 +90,6 @@ class Group:
     mid-incident (ADR-0030), so there is exactly one level of these."""
     title: str
     links: tuple[Link, ...] = ()
-
-
-@dataclass(frozen=True)
-class ProbeSettings:
-    """The top-level ``check:`` block — how reachability is probed, if at all.
-
-    ``interval`` is kept as the raw duration string and parsed by the code that
-    schedules the probe, so this module needs no duration parser (and no import of
-    the ``checks`` package, which registers every check type as a side effect).
-    """
-    icons: bool = True
-    links: bool = False
-    interval: str = DEFAULT_PROBE_INTERVAL
-    alive: tuple[int, ...] = DEFAULT_ALIVE
 
 
 @dataclass(frozen=True)
@@ -169,7 +140,6 @@ class LinksConfig:
     """
     groups: tuple[Group, ...] = ()
     icons: Mapping[str, Icon] = field(default_factory=dict)
-    probe: ProbeSettings = ProbeSettings()
     problems: tuple[str, ...] = ()
     sources: tuple[Path, ...] = ()
 
@@ -267,7 +237,7 @@ def load_links(config_dir: str | Path | None = None) -> LinksConfig:
     The aspect is **optional**: no root need carry it, and a deployment that carries
     none gets an empty configuration rather than an error. Groups merge by title and
     concatenate base-first; the deployment's ``icons:`` entries resolve **per name**,
-    a later root replacing an earlier one whole; the ``check:`` block merges per key.
+    a later root replacing an earlier one whole.
 
     This always reads the files. :func:`current_links` is the caller a request
     should use — it stats first and reuses the last parse when nothing moved.
@@ -276,7 +246,6 @@ def load_links(config_dir: str | Path | None = None) -> LinksConfig:
     index: dict[str, int] = {}
     icon_map: dict[str, Icon] = {}
     icon_source: dict[str, Path] = {}
-    probe = ProbeSettings()
     problems: list[str] = []
     sources: list[Path] = []
 
@@ -296,10 +265,9 @@ def load_links(config_dir: str | Path | None = None) -> LinksConfig:
         _merge_icons({**_discover_icons(layer, problems),
                       **_parse_icons(body, document, problems)},
                      icon_map, icon_source, document)
-        probe = _parse_probe(body, document, probe, problems)
 
     _report_undefined_icons(groups, icon_map, problems)
-    return LinksConfig(groups=tuple(groups), icons=icon_map, probe=probe,
+    return LinksConfig(groups=tuple(groups), icons=icon_map,
                        problems=tuple(problems), sources=tuple(sources))
 
 
@@ -454,8 +422,7 @@ def _parse_links(raw: Mapping[str, object], where: str,
             continue
         links.append(Link(title=title, url=url,
                           icon=values.text(entry, "icon").strip(),
-                          note=values.text(entry, "note").strip(),
-                          check=values.flag(entry, "check")))
+                          note=values.text(entry, "note").strip()))
     _warn_duplicate_titles(links, where, problems)
     return tuple(links)
 
@@ -638,41 +605,6 @@ def _icon_file(source: str, document: Path, where: str,
                             f"({', '.join(sorted(icons.ICON_TYPES))})")
         return None
     return IconFile(path=path)
-
-
-def _parse_probe(body: Mapping[str, object], document: Path, inherited: ProbeSettings,
-                 problems: list[str]) -> ProbeSettings:
-    """The ``check:`` block, merged over the layers before it, per key.
-
-    Same rule as ``settings`` (ADR-0031): the block is a flat mapping of scalars, so
-    "later root wins per key" is well defined. A key a later root stays quiet about
-    keeps the earlier root's value.
-    """
-    raw = body.get("check")
-    if raw is None:
-        return inherited
-    if not isinstance(raw, Mapping):
-        _complain(problems, f"{document}: 'check' must be a mapping, got "
-                            f"{type(raw).__name__}")
-        return inherited
-    where = f"{document}: check"
-    _warn_unknown_keys(raw, _PROBE_KEYS, where, problems)
-
-    merged = replace(
-        inherited,
-        icons=values.flag(raw, "icons", default=inherited.icons),
-        links=values.flag(raw, "links", default=inherited.links),
-        interval=values.text(raw, "interval", default=inherited.interval).strip(),
-    )
-    if "alive" not in raw:
-        return merged
-    codes: list[int] = []
-    for code in _sequence(raw, "alive", where, problems):
-        try:
-            codes.append(values.number({"code": code}, "code", where=where))
-        except CheckError as error:
-            _complain(problems, f"{where}.alive: {error}")
-    return replace(merged, alive=tuple(codes))
 
 
 def _merge_groups(parsed: list[Group], groups: list[Group], index: dict[str, int],

@@ -1,7 +1,7 @@
 # ADR-0115 — A Copy document says where it is from, when it was made and since when
 
 - **Status:** Accepted
-- **Date:** 2026-10-10 (accepted 2026-10-03)
+- **Date:** 2026-10-25 (accepted 2026-10-03)
 - **Related:** [ADR-0036](0036-addressable-reasons.md) (decision 12: a line is
   addressed by a query value, never by a path),
   [ADR-0099](0099-a-status-that-still-holds-says-since-when.md) (a status that still
@@ -19,7 +19,17 @@
   [ADR-0123](0123-a-node-says-one-status-wherever-it-is-read.md) (a branch's period is
   its own status's),
   [ADR-0124](0124-a-node-whose-lines-are-all-silenced-still-counts-the-nodes-beneath-it.md)
-  (a branch whose own lines are all silenced)
+  (a branch whose own lines are all in maintenance),
+  [ADR-0135](0135-a-handled-part-keeps-its-true-color-and-every-surface-says-by-what.md) (decisions 2 and 7, maintenance's
+  own words and a branch's list of what is handled beneath it),
+  [ADR-0132](0132-a-branch-keeps-the-period-of-what-it-shows-beside-the-log.md)
+  (decision 6, the period of what a branch shows, and what began it in History's
+  words), [ADR-0133](0133-a-node-says-what-it-is-in-a-card-and-at-length-in-a-handbook.md)
+  (decisions 3 to 6: the handbook's address, a link and a status written out, and a
+  node's details), [ADR-0139](0139-a-node-carries-every-tag-written-for-it-or-above-it.md)
+  (decision 4, a node's tags with their lines),
+  [ADR-0140](0140-a-nodes-notes-stand-on-a-tab-of-their-own.md) (decision 4, the
+  newest note, and how many more its Notes view lists)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -71,6 +81,10 @@ and the tree's document opens with them:
   offset. It is not the instant a button was pressed: a Copy page makes its document
   when it is opened, and the line says how old that is.
 
+Between the two, a node's document and a line's say **Handbook:**, the absolute address
+of the node's handbook where it has one, from the address the request came by
+([ADR-0133](0133-a-node-says-what-it-is-in-a-card-and-at-length-in-a-handbook.md) decision 3).
+
 A caller with no request to take an address from — a fixture sheet, a test — passes
 none, and the document claims none.
 
@@ -81,8 +95,8 @@ In an outline, a node that is listed says the status it shows and since when: *d
 period as its page states it
 ([ADR-0099](0099-a-status-that-still-holds-says-since-when.md)): *since before* where
 the tree can only vouch for a bound, and with what began it where a pin did — *when its
-maintenance ended*. A node the tree keeps no period of says nothing. A line carries no
-instant: a line has no period of its own.
+maintenance ended*, *when a line's pin was set*. A node the tree keeps no period of says
+nothing. A line carries no instant: a line has no period of its own.
 
 ### 3. An outline says what a branch has of its own
 
@@ -105,38 +119,50 @@ says *Nothing needs attention — all 12 nodes are ok.*, and that is a document 
 state that is well is a state somebody documents.
 
 A pin on the tree itself is not set from the wall, and one that stands is stated like
-any other: in the head, above a count that says what it is silencing.
+any other: in the head, above a count that says what it holds.
 
 ### 5. A branch's document hands over what is beneath it
 
 For a node with nodes beneath it the document says, in this order:
 
-- its path, and the two lines of decision 1;
+- its path, and the lines of decision 1;
 - **Reported**, where the node declares a status of its own;
 - **Shown as**, where it shows something else, with the reason: *error ⛔ — rolled up
   from the 3 nodes beneath it. It reports nothing of its own.*; where every line of its
-  own is silenced, what it shows is rolled up from the nodes beneath it alone, *rolled
-  up from the 3 nodes beneath it. Every line of its own is silenced.*
+  own is pinned, what it shows is rolled up from the nodes beneath it alone, *rolled
+  up from the 3 nodes beneath it. Every line of its own is in maintenance.*
   ([ADR-0124](0124-a-node-whose-lines-are-all-silenced-still-counts-the-nodes-beneath-it.md));
   under a pin, *a maintenance pin is in force on it and on the 2 nodes beneath it*,
   followed by the pin. The sentence names where the status comes from and claims nothing
   of each node: a pinned node, one that waits and one reached through a failing check
   count for nothing in what their branch shows
   ([ADR-0039](0039-status-rollup-semantics.md));
-- its period and its observation, as far as it has them, and its run's facts. The period
-  is its own status's, and since what the branch shows counts the nodes beneath it, it
-  is written ***Its own status ok** since …*, beneath *Reported* and *Shown as*
+- the period of what it shows, said only where that period is of what the node shows,
+  in its own labels, with what began it in one clause after the instant, in History's
+  words — ***Status error** since 10:00, begun by a reading of load-fixtures beneath
+  it*, *begun by a line's pin set on web beneath it*
+  ([ADR-0132](0132-a-branch-keeps-the-period-of-what-it-shows-beside-the-log.md) decisions 3 and 6);
+- its own status's period and its observation, as far as it has them, and its run's
+  facts. Since what the branch shows counts the nodes beneath it, the period of its own
+  status is written ***Its own status ok** since …*, beneath *Reported* and *Shown as*
   ([ADR-0123](0123-a-node-says-one-status-wherever-it-is-read.md)); a branch in
-  maintenance keeps ***Status maintenance** since …* (decision 6). *Stale* is said of
-  its own reading only;
-- its own lines, if it has any;
+  maintenance keeps ***Status maintenance** since …*, its one period (decision 6).
+  *Stale* is said of its own reading only;
+- its *Details* and its *Tags* (decision 9);
+- its own lines, if it has any, and its *Notes* (decision 9);
 - **Beneath it** — how many of the nodes beneath it need attention, and the outline of
   those, each with its lines and since when; or *nothing needs attention*; under a
-  pin, what the pin is silencing;
+  pin, what the pin is holding;
+- **Handled beneath it**, as its page's *why* card lists it and where that card stands,
+  on a branch that shows an error, a warning or ok
+  ([ADR-0135](0135-a-handled-part-keeps-its-true-color-and-every-surface-says-by-what.md)
+  decisions 5 and 7): under its total and its job, each rule with the node it stands
+  on, a line's pin with that line, what its part reads where that is a failure, who set
+  it and until when;
 - what its own run found and ran with.
 
 Its heading carries the cue of what the node shows. A leaf's document is as it was,
-with the two lines added.
+with the lines of decision 1 and the blocks of decision 9 added.
 
 ### 6. A period is stated wherever there is one
 
@@ -149,10 +175,13 @@ observation nor a period.
 
 A branch's page draws its node's Time card where the node has a period, as it does
 where the node has an observation, a report or a configuration. A pinned container
-that nothing has written had no card: its page said who had silenced it and until
+that nothing has written had no card: its page said who had pinned it and until
 when, in the pin's block, and since when was said by its History and its document
-alone. A container that nothing has written and that is not pinned declares nothing,
-has no period, and has no card.
+alone. A container that declares nothing has the period of what it shows wherever a
+node beneath it has shown a status
+([ADR-0132](0132-a-branch-keeps-the-period-of-what-it-shows-beside-the-log.md)), and so
+has a card wherever that period is of what it shows: after a restart, until the units
+beneath it have run, it has none, as a container without a period has none.
 
 ### 7. Copy is a view of its node
 
@@ -181,6 +210,27 @@ awaited before that copy: a browser lets a page copy only while it is answering 
 click. Whether the two members were set is the event's to say — a browser that raises
 none has copied the Markdown alone — and where this rung fails as well, the button
 copies the Markdown and says so, as before.
+
+### 9. A node's document says what the node is, and what leaves the instance is written out
+
+A node's document carries what its *About* card says of the node: **Details**, the
+card's table as key and value, the details given down to it among them
+([ADR-0133](0133-a-node-says-what-it-is-in-a-card-and-at-length-in-a-handbook.md) decision 6),
+and after them **Tags**, every tag the node carries, in the card's order, each with the
+line its `tags.yaml` gives it
+([ADR-0139](0139-a-node-carries-every-tag-written-for-it-or-above-it.md) decision 4). After
+its reasons it carries **Notes**: the newest note whole — who wrote it and when, who
+changed it last, whether it is a pin's, the line it is on — and how many more its Notes
+view lists, at that view's address
+([ADR-0140](0140-a-nodes-notes-stand-on-a-tab-of-their-own.md) decision 4).
+
+What leaves the instance in a document is written out: a link written
+`handbook#<section>`, in any text the document carries — a line, a note, a title, what
+a run found and ran with, a detail — to the full address of the handbook of the node the
+text belongs to, from the address the document says it was made from; and a status
+written `{error}` as the document writes a status, *error ⛔* (ADR-0133 decisions 4 and
+5). Both go through the one function of the library that `little-sister-jira`'s draft
+calls too.
 
 ## Consequences
 

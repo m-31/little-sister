@@ -1,17 +1,24 @@
 # ADR-0025 — Check-provided subnode metadata (`about` / `title` on `CheckResult`)
 
 - **Status:** Accepted
-- **Date:** 2026-10-18 (accepted 2026-07-25)
+- **Date:** 2026-10-25 (accepted 2026-07-25)
 - **Related:** [ADR-0007](0007-check-result-branches.md) (recursive `CheckResult` —
   the branch shape this extends), [ADR-0012](0012-node-metadata.md) (`about`, its
   sources and precedence), [ADR-0017](0017-node-title.md) (`title`, same sources),
   [ADR-0013](0013-check-config-on-node.md) (`config` — the display-metadata-on-result
   sibling, but write-through), [ADR-0019](0019-inspection-popover.md) (the popover that
-  already renders these), [ADR-0008](0008-json-output-api.md) (JSON envelope, unchanged
-  here), [ADR-0118](0118-a-child-a-run-names-takes-nothing-declared-for-its-name.md)
+  already renders these), [ADR-0080](0080-the-envelope-is-the-snapshot-published.md)
+  (JSON envelope, unchanged here), [ADR-0118](0118-a-child-a-run-names-takes-nothing-declared-for-its-name.md)
   (a child that says a run names it takes its labels from its own result alone),
   [ADR-0128](0128-where-a-nodes-first-look-comes-from.md) (the first look's keys, which
-  ride the same block and the same declaration).
+  ride the same block and the same declaration),
+  [ADR-0133](0133-a-node-says-what-it-is-in-a-card-and-at-length-in-a-handbook.md)
+  (a node's `handbook`, a label on the same addresses, and its `details`, which are
+  none; what the block is for; the token names a type cannot offer),
+  [ADR-0139](0139-a-node-carries-every-tag-written-for-it-or-above-it.md) (decision 2:
+  the tags a check's file and its block write),
+  [ADR-0109](0109-a-node-says-its-children-are-complete.md) (the pruning of children a
+  run no longer returns, which this left aside).
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -111,6 +118,36 @@ engine or tree learning where a value came from.
    stays provenance-free: the paths a run named are kept for the page's resolver in a
    table beside the tree.
 
+   A node's `handbook` is a label as its `about` is
+   ([ADR-0133](0133-a-node-says-what-it-is-in-a-card-and-at-length-in-a-handbook.md)
+   decision 3), on the same addresses — `nodes.yaml` over the deployment's block over
+   what the type declares, a result's the fallback, seeded once, its tokens expanded —
+   with `{default}` placing the type's handbook in the deployment's; it is text, or a
+   file that a single line ending in `.md` names. The type's tokens expand in every
+   label a result carries, as in what it declares. A node's `details`, named values each
+   a line of Markdown, are no label (ADR-0133 decision 6): a type gives each node it
+   writes the details of its object on `CheckResult` with every run, written through as
+   `description` is, and a deployment writes its own in the check's file, an aspect's
+   under its name in the `subnodes:` block, and in `nodes.yaml`, which wins; these hold
+   for every node beneath, key by key, the nearest winning, so that the details under an
+   aspect's name reach every node a run names beneath it. The block is where a
+   deployment writes what is shown of an aspect — its title, about, handbook, details
+   and the first look's keys — and the type's own blocks what is checked (ADR-0133
+   decision 7). A type's `about` says what to do, in short, and its `description` what
+   is read (ADR-0133 decision 2). `{ok}`, `{warn}`, `{error}`, `{maintenance}` and
+   `{undefined}` name a status in a node's text (ADR-0133 decision 5), and `{default}`
+   is substituted before any token, so a type that offers a token by one of those
+   names, or by the name `default`, is refused: such a token would never expand as the
+   type means it.
+
+   A check's file may write `tags:` for its own node, and its `subnodes:` block under an
+   aspect's name ([ADR-0139](0139-a-node-carries-every-tag-written-for-it-or-above-it.md)
+   decision 2): the deployment's alone, of which a type declares none. They add up with
+   what `nodes.yaml` writes and hold for every node beneath — an aspect's for every node
+   of that name, at any depth, as its labels reach, a child a run names excepted
+   (ADR-0118), and what comes down from it reaching every node beneath it. A word that
+   is no tag is not read, the startup record naming it, the file still loading.
+
 ## Consequences
 - A reusable branch check ships its subnode legend **once, in code**, and every
   deployment's hover cards explain those leaves out of the box; a deployment still
@@ -159,4 +196,5 @@ engine or tree learning where a value came from.
   per-host copy-paste this closes; type-inherent identity has an obvious home on the
   type.
 - **Prune children a shrinking result stops reporting.** Unrelated to where a label
-  comes from, and still deferred ([ADR-0007](0007-check-result-branches.md)).
+  comes from: [ADR-0109](0109-a-node-says-its-children-are-complete.md) decides it,
+  ending the deferral [ADR-0007](0007-check-result-branches.md) made.

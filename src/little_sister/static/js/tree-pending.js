@@ -19,6 +19,13 @@
  * no blank wall. A tab with an empty map, as every first visit has, hides nothing,
  * and a page with neither is untouched.
  *
+ * Under the look `boxes: packed` (ADR-0138) the boxes take their columns once
+ * `tree.js` has put the map back, and `overview.css` hides `#status-grid` under
+ * `ls-script` until `tree.js` puts `ls-boxes-drawn` on <html>, lest the first paint
+ * stand them in rows for the packing to move; this file cannot tell the look, which
+ * is on the body still to be parsed, so its second timer puts the class there after
+ * a second whatever the look, for a script that never ran.
+ *
  * An external script rather than a second inline one: the content security policy
  * names one inline script by its hash, the theme's (`_theme_bootstrap.html`,
  * ADR-0048), and a second hash would be a change to the policy.
@@ -27,6 +34,7 @@
     "use strict";
     var html = document.documentElement;
     html.classList.add("ls-script");
+    setTimeout(function () { html.classList.add("ls-boxes-drawn"); }, 1000);
     var raw = null;
     try { raw = window.sessionStorage.getItem("ls-wall-map"); } catch (e) { return; }
     if (!raw) { return; }

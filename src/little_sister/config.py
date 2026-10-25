@@ -30,13 +30,17 @@ from little_sister.limits import (
 )
 from little_sister.logger import logger, stamp_in
 from little_sister.looks import LOOKS, Look
-from little_sister.state import DEFAULT_STATE_INTERVAL
+from little_sister.notes import DEFAULT_CAP as DEFAULT_NOTES_CAP
+from little_sister.notes import DEFAULT_KEEP as DEFAULT_NOTES_KEEP
+from little_sister.notes import DEFAULT_MAX_AGE as DEFAULT_NOTES_MAX_AGE
+from little_sister.notes import DEFAULT_MIN_AGE as DEFAULT_NOTES_MIN_AGE
+from little_sister.notes import Retention, parse_age
+from little_sister.state import DEFAULT_KEEPER_INTERVAL, DEFAULT_STATE_INTERVAL
 
 DEFAULT_TIMEZONE = "Europe/Berlin"
 DEFAULT_TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 DEFAULT_MAINTENANCE_EXPIRY = "7d"
 DEFAULT_REASON_CAP = 6
-DEFAULT_BRANCH_CAP = 3
 DEFAULT_MAINTENANCE_CAP = 5
 DEFAULT_READING_CAP = 10
 
@@ -69,9 +73,9 @@ class Config:
     # free). No indefinite — there is always an expiry.
     maintenance_default_expiry: str = DEFAULT_MAINTENANCE_EXPIRY
     # Reason *lines* a dashboard card shows before its header chevron reveals the
-    # rest (the reason-overflow budget, ADR-0024): the collapsed reason block is
-    # clamped to this many lines, so short reasons show that many reasons while a
-    # wrapped reason uses more of the budget.
+    # rest (the reason-overflow budget, ADR-0056 decision 1): the collapsed reason
+    # block is clamped to this many lines, so short reasons show that many reasons
+    # while a wrapped reason uses more of the budget.
     # A non-negative int (0 shows none up front); the _status_grid.html reason macro
     # passes it through as the block's --reason-lines. Not tree.js's CLIP_SLOP.
     reason_cap: int = DEFAULT_REASON_CAP
@@ -81,7 +85,7 @@ class Config:
     # compact look for both. The fourth of the first look's layers: a node's
     # `nodes.yaml` entry, the file of the check that writes it and that check's type
     # speak first (`little_sister.first_look`). Unset is `None`, nobody said, and the
-    # built-in look decides — until the interactive wall's last step, today's density.
+    # built-in look decides: open, its healthy shown, but a big level as chips.
     chips: bool | None = None
     fold_ok: bool | None = None
     # What this instance is called, on `/system` and in whatever a package writes
@@ -91,19 +95,13 @@ class Config:
     # fact about the *mark* it becomes and not about this file — and because this
     # module may not import that one, which reads this.
     instance: str = ""
-    # Quiet (non-warn/error) child *boxes* a branch shows in dense mode before a
-    # "+N more" control reveals the rest (extends ADR-0024): the count-cap sibling
-    # of reason_cap. A non-negative int (0 collapses every quiet box behind
-    # the control); warn/error boxes are never capped, so nothing urgent hides.
-    # Ignored when the density ("chips") switch is off — everything is spelled out.
-    branch_cap: int = DEFAULT_BRANCH_CAP
     # Maintenance pins the strip pill's popover shows before a "+N more" links to the
-    # full /maintenance page (extends ADR-0024): the count-cap sibling of reason_cap /
-    # branch_cap, plumbed to the full page and the ?fragment swap. A non-negative int
-    # (0 sends every pin straight to the /maintenance page).
+    # full list, *Handled* at /handled (ADR-0056): the count-cap sibling of
+    # reason_cap, plumbed to the full page and the ?fragment swap. A non-negative int
+    # (0 sends every pin straight to /handled).
     maintenance_cap: int = DEFAULT_MAINTENANCE_CAP
     # A subject's newest readings the node that stands for it shows, beneath its
-    # curves (ADR-0092): the count-cap sibling of the three above, and the one a
+    # curves (ADR-0092): the count-cap sibling of the two above, and the one a
     # check may state for itself (`reading_cap` in its own YAML wins). A
     # non-negative int; 0 shows the curves alone and leaves every reading to the
     # node's History page, which always lists them all.
@@ -148,6 +146,14 @@ class Config:
     # unclean shutdown loses at most this much. Maintenance pins are written
     # through as they change and never wait on it. A positive integer; default 60.
     state_interval: int = DEFAULT_STATE_INTERVAL
+    # How often the observed state — the event log and the series — goes to a
+    # keeper while no other instance stands by (ADR-0134 decision 6), in seconds:
+    # met at the first write of the kept files after it falls due, so never more
+    # often than ``state_interval``, which is its cadence while one does. The pins
+    # go at the next scheduler tick after they change, and the local files keep
+    # ``state_interval``. Without a keeper it does nothing. A positive integer;
+    # default 900.
+    keeper_interval: int = DEFAULT_KEEPER_INTERVAL
     # Worker threads the engine's pool is built with (ADR-0075): the ceiling, not
     # the size — a pool is never larger than the number of checks configured. It
     # is also the number startup measures the checks' *declared* cost against, so
@@ -169,7 +175,7 @@ class Config:
     # costs in, since that is what every client is sent. Refused at the
     # `CheckResult` seam, whole: a check shapes the record it hands over to fit; and
     # refused at startup for a type that declares more than this (ADR-0075).
-    # A positive integer; default 2,048, which leaves a composed record room to
+    # A positive integer; default 3,072, which leaves a composed record room to
     # grow and refuses a raw row from a provider's API.
     record_limit: int = RECORD_LIMIT
     # What every series together may weigh, in the bytes of the JSON the series
@@ -185,6 +191,17 @@ class Config:
     # default 1, which publishes at once and is what every deployment had before
     # there was a counter. A check may override it for itself.
     escalate_after: int = DEFAULT_ESCALATE_AFTER
+    # How long a node's notes are kept (ADR-0047 decisions 9 to 11): never one of
+    # the last ``notes_keep`` on a node; past ``notes_max_age`` by its age alone;
+    # past ``notes_min_age`` while its node holds more than ``notes_cap``, the
+    # oldest first. The two ages are written ``13mo``, ``400d`` — a bare ``m`` is
+    # minutes everywhere else, and refused here. Defaults 10, 50, 13mo and 25mo:
+    # more than a year, so that a yearly problem is recognizable when it recurs,
+    # and more than two.
+    notes_keep: int = DEFAULT_NOTES_KEEP
+    notes_cap: int = DEFAULT_NOTES_CAP
+    notes_min_age: str = DEFAULT_NOTES_MIN_AGE
+    notes_max_age: str = DEFAULT_NOTES_MAX_AGE
     # The deployment's default for each look a browser may choose for itself
     # (`looks.py`, ADR-0029): its theme, how a run of chips is drawn, whether a pause
     # on a node's name opens its card, how a row and a chip answer the pointer. Read
@@ -198,6 +215,14 @@ class Config:
     def tzinfo(self) -> ZoneInfo:
         """The configured timezone (validated at load time)."""
         return ZoneInfo(self.timezone)
+
+    @property
+    def notes_retention(self) -> Retention:
+        """The four keys as the notes' retention reads them (ADR-0047 decision 9),
+        each validated at load."""
+        return Retention(keep=self.notes_keep, cap=self.notes_cap,
+                         min_age=parse_age(self.notes_min_age),
+                         max_age=parse_age(self.notes_max_age))
 
 
 def _valid_timezone(name: str,
@@ -246,24 +271,9 @@ def _valid_switch(name: str, value: object) -> bool | None:
     return None
 
 
-def _valid_branch_cap(value: object) -> int:
-    """Coerce the branch box-cap to a non-negative int; a bad or negative value
-    falls back to the default (``0`` collapses every quiet box behind *+N more*)."""
-    try:
-        cap = int(str(value).strip())
-    except ValueError:
-        logger.warning("config: branch_cap %r is not an integer; using %d",
-                       value, DEFAULT_BRANCH_CAP)
-        return DEFAULT_BRANCH_CAP
-    if cap < 0:
-        logger.warning("config: branch_cap %d is negative; using 0", cap)
-        return 0
-    return cap
-
-
 def _valid_maintenance_cap(value: object) -> int:
     """Coerce the maintenance popover cap to a non-negative int; a bad or negative
-    value falls back to the default (``0`` sends every pin to the /maintenance page)."""
+    value falls back to the default (``0`` sends every pin to *Handled*)."""
     try:
         cap = int(str(value).strip())
     except ValueError:
@@ -367,6 +377,23 @@ def _valid_state_interval(value: object) -> int:
     return seconds
 
 
+def _valid_keeper_interval(value: object) -> int:
+    """Coerce the keeper's interval (ADR-0134) to a positive int; a bad or
+    non-positive value falls back to the default with a warning, as
+    ``state_interval`` does — a typo must not send every interval, or never."""
+    try:
+        seconds = int(str(value).strip())
+    except ValueError:
+        logger.warning("config: keeper_interval %r is not an integer; using %d",
+                       value, DEFAULT_KEEPER_INTERVAL)
+        return DEFAULT_KEEPER_INTERVAL
+    if seconds < 1:
+        logger.warning("config: keeper_interval %d is not positive; using %d",
+                       seconds, DEFAULT_KEEPER_INTERVAL)
+        return DEFAULT_KEEPER_INTERVAL
+    return seconds
+
+
 def _valid_max_workers(value: object) -> int:
     """Coerce the worker ceiling (ADR-0075) to a positive int; a bad or
     non-positive value falls back to the default with a warning — a typo must not
@@ -399,6 +426,34 @@ def _valid_entry_limit(value: object) -> int:
                        entries, ENTRY_LIMIT)
         return ENTRY_LIMIT
     return entries
+
+
+def _valid_notes_count(key: str, value: object, default: int) -> int:
+    """``notes_keep`` or ``notes_cap``: a whole number, at least 1; anything else
+    warns and gives way to the default."""
+    try:
+        count = int(str(value).strip())
+    except ValueError:
+        logger.warning("config: %s %r is not an integer; using %d", key, value,
+                       default)
+        return default
+    if count < 1:
+        logger.warning("config: %s %d is not positive; using %d", key, count,
+                       default)
+        return default
+    return count
+
+
+def _valid_notes_age(key: str, value: object, default: str) -> str:
+    """``notes_min_age`` or ``notes_max_age`` as the notes read it (ADR-0047 decision
+    10): an age, ``13mo`` or ``400d``; one that is none — a bare ``m`` among them,
+    which is minutes — warns and gives way to the default."""
+    try:
+        parse_age(value)
+    except ValueError as error:
+        logger.warning("config: %s: %s; using %s", key, error, default)
+        return default
+    return str(value).strip()
 
 
 def _valid_escalate_after(value: object) -> int:
@@ -490,18 +545,34 @@ def settings_files(config_dir: str | Path | None = None) -> list[Path]:
 #: say nothing (backlog #91 §7.10).
 SETTINGS_KEYS: tuple[str, ...] = (
     "timezone", "time_format", "maintenance_default_expiry", "instance",
-    "reason_cap", "chips", "fold_ok", "branch_cap", "maintenance_cap", "reading_cap",
+    "reason_cap", "chips", "fold_ok", "maintenance_cap", "reading_cap",
     "retry_interval", "retry_attempts", "stacktrace", "card_status_line",
-    "dashboard_columns", "state_interval", "max_workers", "entry_limit",
+    "dashboard_columns", "state_interval", "keeper_interval", "max_workers",
+    "entry_limit",
     "memory_share", "record_limit", "series_limit", "escalate_after",
+    "notes_keep", "notes_cap", "notes_min_age", "notes_max_age",
     *(look.key for look in LOOKS),
 )
 
 
+#: Keys ``settings.yaml`` had, which nothing reads any longer, each with what took
+#: its place: named at load in a line of their own rather than ignored in silence,
+#: so a deployment that still states one learns what it does now.
+RETIRED_SETTINGS: Mapping[str, str] = {
+    "branch_cap": ("a level nobody configured starts open now, and a big one as chips; "
+                   "state `chips:` for a level that should start otherwise (ADR-0128)"),
+}
+
+
 def _warn_unknown_settings(layer: Mapping[str, Any], source: Path) -> None:
     """Name the keys of one settings file that nothing reads, beside the ones that
-    are read, as `links.yaml`'s loader does for its own."""
-    unknown = sorted(str(key) for key in layer if str(key) not in SETTINGS_KEYS)
+    are read, as `links.yaml`'s loader does for its own — a key that was retired in a
+    line of its own, saying what took its place."""
+    for key in sorted(str(key) for key in layer if str(key) in RETIRED_SETTINGS):
+        logger.warning("config: %s: %s is no longer read: %s", source, key,
+                       RETIRED_SETTINGS[key])
+    unknown = sorted(str(key) for key in layer if str(key) not in SETTINGS_KEYS
+                     and str(key) not in RETIRED_SETTINGS)
     if unknown:
         logger.warning("config: %s: unknown key(s) %s (known: %s)", source,
                        ", ".join(unknown), ", ".join(SETTINGS_KEYS))
@@ -567,7 +638,6 @@ def load_config(path: str | Path | None = None, *,
         reason_cap=_valid_reason_cap(data.get("reason_cap", DEFAULT_REASON_CAP)),
         chips=_valid_switch("chips", data.get("chips")),
         fold_ok=_valid_switch("fold_ok", data.get("fold_ok")),
-        branch_cap=_valid_branch_cap(data.get("branch_cap", DEFAULT_BRANCH_CAP)),
         maintenance_cap=_valid_maintenance_cap(
             data.get("maintenance_cap", DEFAULT_MAINTENANCE_CAP)),
         reading_cap=_valid_reading_cap(
@@ -582,6 +652,8 @@ def load_config(path: str | Path | None = None, *,
             data.get("dashboard_columns", DEFAULT_DASHBOARD_COLUMNS)),
         state_interval=_valid_state_interval(
             data.get("state_interval", DEFAULT_STATE_INTERVAL)),
+        keeper_interval=_valid_keeper_interval(
+            data.get("keeper_interval", DEFAULT_KEEPER_INTERVAL)),
         max_workers=_valid_max_workers(
             data.get("max_workers", DEFAULT_MAX_WORKERS)),
         entry_limit=_valid_entry_limit(data.get("entry_limit", ENTRY_LIMIT)),
@@ -593,6 +665,17 @@ def load_config(path: str | Path | None = None, *,
             data.get("series_limit", SERIES_LIMIT)),
         escalate_after=_valid_escalate_after(
             data.get("escalate_after", DEFAULT_ESCALATE_AFTER)),
+        notes_keep=_valid_notes_count(
+            "notes_keep", data.get("notes_keep", DEFAULT_NOTES_KEEP),
+            DEFAULT_NOTES_KEEP),
+        notes_cap=_valid_notes_count(
+            "notes_cap", data.get("notes_cap", DEFAULT_NOTES_CAP), DEFAULT_NOTES_CAP),
+        notes_min_age=_valid_notes_age(
+            "notes_min_age", data.get("notes_min_age", DEFAULT_NOTES_MIN_AGE),
+            DEFAULT_NOTES_MIN_AGE),
+        notes_max_age=_valid_notes_age(
+            "notes_max_age", data.get("notes_max_age", DEFAULT_NOTES_MAX_AGE),
+            DEFAULT_NOTES_MAX_AGE),
         looks={look.key: _valid_look(look, data.get(look.key, look.default))
                for look in LOOKS},
     )
@@ -600,21 +683,23 @@ def load_config(path: str | Path | None = None, *,
         logger.info(
             "config: loaded %s — timezone=%s, time_format=%r, reason_cap=%d, "
             "chips=%s, fold_ok=%s, "
-            "branch_cap=%d, maintenance_cap=%d, reading_cap=%d, "
+            "maintenance_cap=%d, reading_cap=%d, "
             "maintenance_default_expiry=%s, "
             "retry_interval=%s, retry_attempts=%d, card_status_line=%s, "
-            "dashboard_columns=%s, state_interval=%d, max_workers=%d, "
+            "dashboard_columns=%s, state_interval=%d, keeper_interval=%d, "
+            "max_workers=%d, "
             "entry_limit=%d, memory_share=%s, record_limit=%d, "
-            "series_limit=%d, escalate_after=%d, looks=%s",
+            "series_limit=%d, escalate_after=%d, notes=%d/%d/%s/%s, looks=%s",
             ", ".join(str(source.resolve()) for source in sources),
             cfg.timezone, cfg.time_format, cfg.reason_cap,
             "unset" if cfg.chips is None else cfg.chips,
-            "unset" if cfg.fold_ok is None else cfg.fold_ok, cfg.branch_cap,
+            "unset" if cfg.fold_ok is None else cfg.fold_ok,
             cfg.maintenance_cap, cfg.reading_cap, cfg.maintenance_default_expiry,
             cfg.retry_interval or "off", cfg.retry_attempts,
             cfg.card_status_line, cfg.dashboard_columns, cfg.state_interval,
-            cfg.max_workers, cfg.entry_limit, cfg.memory_share,
+            cfg.keeper_interval, cfg.max_workers, cfg.entry_limit, cfg.memory_share,
             cfg.record_limit, cfg.series_limit, cfg.escalate_after,
+            cfg.notes_keep, cfg.notes_cap, cfg.notes_min_age, cfg.notes_max_age,
             ", ".join(f"{key}={value}" for key, value in cfg.looks.items()))
     return cfg
 

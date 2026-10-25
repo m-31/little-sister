@@ -1,20 +1,25 @@
 # ADR-0032 — The contribution boundary: what a node shows and what it publishes
 
 - **Status:** Accepted
-- **Date:** 2026-09-20 (accepted 2026-08-01)
-- **Related:** [ADR-0004](0004-status-aggregation-semantics.md) (the roll-up this
+- **Date:** 2026-10-25 (accepted 2026-08-01)
+- **Related:** [ADR-0039](0039-status-rollup-semantics.md) (the roll-up this
   names a second half of), [ADR-0005](0005-dashboard-freshness-and-self-monitoring.md)
-  (staleness — the first and, today, only transform),
+  (staleness — the first transform),
   [ADR-0002](0002-rlock-snapshot-synchronization.md) (the snapshot this happens in),
-  [ADR-0008](0008-json-output-api.md) (the envelope that already carries both codes),
+  [ADR-0080](0080-the-envelope-is-the-snapshot-published.md) (the envelope that already
+  carries both codes),
   [ADR-0014](0014-maintenance-persistence.md) (the one implementation that once
-  breaks the rule below), [ADR-0027](0027-observation-timestamp-semantics.md) (the
-  other per-node value resolved in the same snapshot pass).
+  breaks the rule below), [ADR-0041](0041-maintenance-is-a-contribution-rule.md) (the
+  maintenance policy this boundary implements),
+  [ADR-0027](0027-observation-timestamp-semantics.md) (the other per-node value
+  resolved in the same snapshot pass),
+  [ADR-0137](0137-a-deployment-says-in-a-table-how-a-part-counts-above-it.md) (the rules
+  a deployment declares at this boundary).
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
 
-[ADR-0004](0004-status-aggregation-semantics.md) says how a status is **derived**:
+[ADR-0039](0039-status-rollup-semantics.md) says how a status is **derived**:
 severity order, `UNDEFINED` ignored, `MAINTENANCE` cancels its subtree, never
 downgrade. What it does not describe is that the snapshot already **transforms** a
 node's status on the way up, and that the code has carried the vocabulary for it
@@ -31,8 +36,8 @@ a card precisely when they differ. ADR-0005 states the principle in a consequenc
 bullet — *"staleness is a view concern: `StatusTree.snapshot` degrades and flags
 it; `Status.get_status_code` / `effective` stay raw"* — but only for staleness.
 
-The same idea is present a second time, in a different disguise. ADR-0004 §2 and
-§3 — an `UNDEFINED` leaf is ignored when a parent accumulates, a `MAINTENANCE`
+The same idea is present a second time, in a different disguise. ADR-0039 rules 2
+and 3 — an `UNDEFINED` leaf is ignored when a parent accumulates, a `MAINTENANCE`
 node is ignored by its parent — are **not** statements about what those nodes are.
 They are statements about what those nodes *give their parent*, written from the
 parent's side. So the concept exists twice already: as parent-side skip rules and
@@ -55,24 +60,33 @@ record to answer from.
 | **reported status** | what the node itself reported — a check's result, or an explicit branch status | `StatusSnapshot.reported_code` |
 | **own status** | the first derived value — the worst of what its unsuppressed entries leave (decision 8) | `StatusSnapshot.own_code` |
 | **effective status** | what the node *is*, given its own status and its subtree | `StatusSnapshot.code` |
-| **contribution** | what its parent accumulates | implicit — equal to the effective status, except where ADR-0004 §2/§3 skip it |
+| **contribution** | what its parent accumulates | `StatusSnapshot.contribution` — where it is not the effective status, with the rule that made it so |
 
-The first three exist as fields. The last is promoted from an implicit parent-side
-rule to the value a policy acts on.
+The last is promoted from an implicit parent-side rule — the effective status, except
+where ADR-0039 rules 2 and 3 skip it — to the value a policy acts on, and the roll-up
+reads it.
 
 **2. The contribution is where policy applies.** A node's contribution defaults to
-its effective status. `UNDEFINED` and `MAINTENANCE` contribute nothing — ADR-0004
-§2 and §3 restated from the node's side, with no change in behavior. Any future
-rule that suppresses, caps, delays or promotes what a subtree reports upward is a
-**contribution rule**, and it composes with the others at this one point:
+its effective status. `UNDEFINED` and `MAINTENANCE` contribute nothing — ADR-0039
+rules 2 and 3 restated from the node's side, with no change in behavior. Any rule that
+suppresses, caps, delays or promotes what a subtree reports upward is a **contribution
+rule**, and it composes with the others at this one point:
 
 > given a node — its own reported status, its children's contributions, the clock
 > and the configuration — what does it **show**, and what does it **contribute**?
 
+A deployment declares such rules here
+([ADR-0137](0137-a-deployment-says-in-a-table-how-a-part-counts-above-it.md)): a table
+per status that never reorders — the cap, healing, the floor, a part left out — on what
+the top of a part of the tree passes up, on how a node's lines count in it, or over a
+node's children while fewer than a number of them fail, named `aggregation` in
+`contribution.by`. Its table comes last, after damping, and `contribution.by` names the
+first rule whose change the parent sees.
+
 **3. One evaluation point, and it is the snapshot.** Transforms happen in
 `StatusTree.snapshot`, where the clock and the configuration are available and
 where staleness already happens. The tree's stored `Status.code` stays the raw
-report and `Status.get_status_code()` stays the pure ADR-0004 derivation. **A
+report and `Status.get_status_code()` stays the pure ADR-0039 derivation. **A
 policy is never implemented by writing a different value into the tree**, because
 a tree that has forgotten what a check said cannot apply a policy that depends on
 it, cannot record an honest history, and cannot compose two policies.
@@ -96,12 +110,14 @@ report something must not also disable the freshness path
 ([ADR-0005](0005-dashboard-freshness-and-self-monitoring.md)). A check that
 stops running altogether has to escalate regardless of which policy is holding its
 result back — otherwise the suppression that was meant to quiet a known state
-silently covers a dead check.
+silently covers a dead check. No declared table makes a part whose check stopped
+running count for less than `WARN`.
 
 **7. An unusable rule does not apply.** When the input a policy depends on is
 missing or unparseable, the policy is skipped and the status is reported normally.
 Suppression is the failure direction that hides outages, and it is the one a naive
-implementation reaches by default.
+implementation reaches by default. A declared rule that cannot apply is named at the
+start and does not apply.
 
 **8. The boundary reaches one level below a node.** A node's **reasons** are
 addressable keyed entries ([ADR-0036](0036-addressable-reasons.md)), and an entry
@@ -110,7 +126,8 @@ unsuppressed entry contributes the node's reported status, a suppressed one
 contributes nothing, and the node's **own** status is the worst of what is left —
 `MAINTENANCE` when a node that reported entries has none unsuppressed remaining. A
 node that reported **no** entries is outside the rule, so a check with a code and no
-reason is unaffected.
+reason is unaffected. A declared rule on a node's lines changes what the node shows,
+as a line's pin does, each line keeping its true color.
 
 *Own status* is not simply *what the node itself reported*: the value the tree
 stores is the **reported** status, and `own` is the first derived one — the same
@@ -147,18 +164,15 @@ raw reading (6), and a suppression whose entry is not present simply does not ap
   what made rule 6 a two-word deletion. The guard that replaced it is on the
   **code**, which also closes the same latent crash for a check that reports
   `MAINTENANCE` itself.
-- Still open, and named below: the split of ADR-0004, the maintenance-policy record
-  this now implements, and the marked events for transitions that happen under a
-  pin.
-- **ADR-0004 was split when that landed.** Its derived-roll-up rules are
-  [ADR-0039](0039-status-rollup-semantics.md) and its separate *failing check*
-  decision [ADR-0040](0040-what-a-failing-check-becomes.md), with this one as the
-  third piece; the skip rules are restated above and the `MAINTENANCE` half is what
-  a policy replaced ([ADR-0041](0041-maintenance-is-a-contribution-rule.md)). One
-  obligation came with it:
-  its open edge case — a node whose children are **all** ignored — must be answered
-  the way decision 8 answers it for virtual children (`MAINTENANCE`, not
-  `UNDEFINED`), or real and virtual children would read differently in one model.
+- **The roll-up, a failing check and the maintenance policy are records of their
+  own.** The roll-up is [ADR-0039](0039-status-rollup-semantics.md), whose skip
+  rules decision 2 above restates from the node's side, and a failing check is
+  [ADR-0040](0040-what-a-failing-check-becomes.md). The maintenance policy this
+  boundary implements is [ADR-0041](0041-maintenance-is-a-contribution-rule.md), and
+  its decision 6 records the transitions under a pin and marks them. A node none of
+  whose children counts reads `MAINTENANCE` where one was silenced and `UNDEFINED`
+  where none has reported (ADR-0039 rule 5), as decision 8 has it for virtual
+  children, so real and virtual children read alike in one model.
 - **The envelope already carries `own_code` and `code`.** A contribution that
   differs from the effective status needs a field of its own and a `schema_version`
   decision, so it rides the client-facing contract round rather than arriving
@@ -166,7 +180,7 @@ raw reading (6), and a suppression whose entry is not present simply does not ap
   round: `reported`, `own` and `code` are published under their own names, and
   `contribution` beside them is what the parent counted — null where that was simply
   `code`, and otherwise naming the rule. Rule 5 reaches the API there.
-- `Status.get_status_code()` keeps its ADR-0004 unit tests unchanged, because the
+- `Status.get_status_code()` keeps its ADR-0039 unit tests unchanged, because the
   boundary deliberately sits outside it.
 
 ## Alternatives considered

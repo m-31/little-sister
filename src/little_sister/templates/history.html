@@ -3,6 +3,34 @@
 <head>
     {% from '_series.html' import readings_table %}
     {% set page_title = 'History' %}
+    {#- Periods of what a node above others showed (ADR-0132 decision 6), newest
+        first, each a row: its status, since when — *before* a bound — and until
+        when, *current* for the one that holds; the node whose change began it,
+        linked to that node's History, and what moved it, both empty where the
+        beginning is a bound or a tick found a difference no change explained. A
+        path may wrap; what moved it is a few words, kept on one line. -#}
+    {%- macro shown_table(rows) %}
+        <div class="table-responsive position-relative mb-3">
+        <table class="table table-sm align-middle mb-0 ls-history__shown">
+            <thead>
+                <tr><th>Status</th><th>Since</th><th>Until</th><th>From</th><th>What</th></tr>
+            </thead>
+            <tbody>
+                {%- for row in rows %}
+                    <tr class="row-{{ row.code | status_slug }}">
+                        <td><span class="ls-log__status">{{ row.code.name.lower() }}</span></td>
+                        <td class="text-nowrap">{% if row.before %}before {% endif %}{{ row.since | localtime }}</td>
+                        <td class="text-nowrap">{% if row.until is none %}current{% else %}{{ row.until | localtime }}{% endif %}</td>
+                        <td>{% if row.history %}<a href="{{ url_for('history', path=row.history) }}">{{ row.name }}</a>{% else %}{{ row.name }}{% endif %}</td>
+                        <td class="text-nowrap">{{ row.what }}</td>
+                    </tr>
+                {%- else %}
+                    <tr><td colspan="5" class="text-muted">No status changes recorded.</td></tr>
+                {%- endfor %}
+            </tbody>
+        </table>
+        </div>
+    {%- endmacro %}
     {% include '_header.html' %}
 
     <div class="container-fluid mt-3 px-4 ls-log">
@@ -20,11 +48,28 @@
         {#- A path the tree holds no node at is answered with a page of its own
             (ADR-0116), so there is a node here. -#}
         {%- if node is not none %}
+        {#- A node above others lists first the periods of what it shows (ADR-0132
+            decision 6): those that ended, derived from the rows at and beneath it as
+            far back as the log holds them, beneath the one that holds — from its
+            entry, and only where the snapshot says it is of what the node shows
+            (decision 3). The newest stay open, and the rest stand in one fold
+            beneath them that opens without a script. Then the periods of its own
+            status, since its own check failing is what that history is for. -#}
+        {%- if shown_open is not none %}
+        {{ shown_table(shown_open) }}
+        {%- if shown_folded %}
+        <details class="ls-history__earlier mb-3">
+            <summary class="small text-muted">{{ shown_folded | length }} earlier {{ "period" if shown_folded | length == 1 else "periods" }}</summary>
+            {{ shown_table(shown_folded) }}
+        </details>
+        {%- endif %}
+        <p class="small text-muted">The periods of what it shows: what it rolls up to, the nodes beneath it included.</p>
+        {%- endif %}
         {#- A long reason beside two times kept on one line is wider than a phone:
             the table scrolls sideways in this box, as the Events table does in its
             own, and the page does not. -#}
         <div class="table-responsive position-relative mb-3">
-        <table class="table table-sm align-middle mb-0">
+        <table class="table table-sm align-middle mb-0 ls-history__own">
             <thead>
                 <tr><th>Status</th><th>Since</th><th>Until</th><th>Reason</th></tr>
             </thead>
@@ -44,7 +89,7 @@
                             the Status tab states as when it was last observed
                             (ADR-0099 decision 2). -#}
                         <td class="text-nowrap">{% if loop.first and not declares_nothing_since %}current{% else %}{{ p.until | localtime }}{% endif %}</td>
-                        <td class="md-body">{{ p.reason | join('; ') | markdown_inline }}</td>
+                        <td class="md-body">{{ p.reason | join('; ') | markdown_inline(node=node.path) }}</td>
                     </tr>
                 {% else %}
                     {#- The tree has no period for the node (ADR-0102 decision 3). One

@@ -28,7 +28,7 @@ os.environ.setdefault("SECRET_KEY", "test-key")
 
 from little_sister import instants
 from little_sister import tree as tree_module
-from little_sister.maintenance import MaintenanceEntry
+from little_sister.pins import Pin
 from little_sister.reasons import Entry
 from little_sister.state import EVENTS_FILE, StateLayer
 from little_sister.status import HEARTBEAT_PATH, StatusCode, worst_of
@@ -41,6 +41,8 @@ from little_sister.tree import (
     StatusTree,
     events_from_payload,
 )
+from tests.state_files import on_disk
+from tests.test_branch_periods import as_before_the_key
 
 OK, WARN, ERROR = StatusCode.OK, StatusCode.WARN, StatusCode.ERROR
 MAINTENANCE, UNDEFINED = StatusCode.MAINTENANCE, StatusCode.UNDEFINED
@@ -68,17 +70,19 @@ class _Pins:
     """The pins file, as a store that remembers the last table saved."""
 
     def __init__(self) -> None:
-        self.nodes: dict[str, MaintenanceEntry] = {}
-        self.lines: dict[tuple[str, str], MaintenanceEntry] = {}
+        self.nodes: dict[str, Pin] = {}
+        self.lines: dict[tuple[str, str], Pin] = {}
 
-    def load(self) -> dict[str, MaintenanceEntry]:
+    def load(self) -> dict[str, Pin]:
         return {}
 
-    def load_entries(self) -> dict[tuple[str, str], MaintenanceEntry]:
+    def load_entries(self) -> dict[tuple[str, str], Pin]:
         return {}
 
-    def save(self, entries: dict[str, MaintenanceEntry],
-             entry_pins: dict[tuple[str, str], MaintenanceEntry] | None = None
+    def save(self, entries: dict[str, Pin],
+             entry_pins: dict[tuple[str, str], Pin] | None = None,
+             acknowledged: dict[str, Pin] | None = None,
+             lines_acknowledged: dict[tuple[str, str], Pin] | None = None
              ) -> None:
         self.nodes = dict(entries)
         self.lines = dict(entry_pins or {})
@@ -102,8 +106,12 @@ def _lines(tree: StatusTree, *, needed: int = NEEDED, **codes: StatusCode) -> No
 
 
 def _kept(tree: StatusTree) -> dict[str, Any]:
-    """What the tree writes to its file, through the file's own shape."""
+    """What the tree writes to its file, through the file's own shape — its table as
+    this record keeps it, without the period of what a branch shows, which is
+    ADR-0132's and ``tests/test_branch_period_kept.py``'s
+    (:func:`as_before_the_key`)."""
     kept: dict[str, Any] = json.loads(json.dumps(tree.events_payload()))
+    kept["nodes"] = as_before_the_key(kept["nodes"])
     return kept
 
 
@@ -129,7 +137,7 @@ def _started(payload: dict[str, Any], pins: _Pins | None = None, *,
              after: timedelta = timedelta(minutes=1)) -> StatusTree:
     """A new process on what the old one kept: its file — the table where the file
     carries one — and its pins, started ``after`` the old one stopped."""
-    new = StatusTree() if pins is None else StatusTree(maintenance_store=pins)
+    new = StatusTree() if pins is None else StatusTree(pin_store=pins)
     events = events_from_payload(payload)
     if "nodes" in payload:
         new.restore_events(events, tree_module.nodes_from_payload(payload))
@@ -264,7 +272,7 @@ class CountTests(TestCase):
     def test_a_pin_set_before_the_first_reading_ends_the_wait(self) -> None:
         # a change that a pin made is published at once (ADR-0108 decision 2)
         pins = _Pins()
-        new = _started(_kept(_was(StatusTree(maintenance_store=pins), OK, ERROR)),
+        new = _started(_kept(_was(StatusTree(pin_store=pins), OK, ERROR)),
                        pins)
         new.set_maintenance(PATH, "planned", set_by="ada",
                             expires_at=datetime.now(UTC) + _SOON)
@@ -287,7 +295,7 @@ class CountTests(TestCase):
     def test_it_is_what_the_node_showed_and_not_what_its_check_reported(self) -> None:
         # A silenced line was failing: the node showed ok, its check reported error.
         pins = _Pins()
-        old = StatusTree(maintenance_store=pins)
+        old = StatusTree(pin_store=pins)
         _lines(old, deploy=ERROR, tests=OK)
         old.set_entry_maintenance(PATH, "deploy", "being reworked", set_by="ada",
                                   expires_at=datetime.now(UTC) + _SOON)
@@ -331,7 +339,7 @@ class CountTests(TestCase):
         # down: its end uncovers it, and that is no new reading to doubt (ADR-0108
         # decision 2).
         pins = _Pins()
-        old = _was(StatusTree(maintenance_store=pins), OK, ERROR)
+        old = _was(StatusTree(pin_store=pins), OK, ERROR)
         old.set_maintenance(PATH, "planned", set_by="ada",
                             expires_at=datetime.now(UTC) + _SOON)
         new = _started(_kept(old), pins, after=timedelta(hours=2))
@@ -344,7 +352,7 @@ class CountTests(TestCase):
     def test_a_failure_found_where_a_pin_ran_out_is_published_with_its_end(
             self) -> None:
         pins = _Pins()
-        old = _was(StatusTree(maintenance_store=pins), OK)
+        old = _was(StatusTree(pin_store=pins), OK)
         old.set_maintenance(PATH, "planned", set_by="ada",
                             expires_at=datetime.now(UTC) + _SOON)
         new = _started(_kept(old), pins, after=timedelta(hours=2))
@@ -386,7 +394,7 @@ class TableTests(TestCase):
     """The kept log says what every node last showed, beside its rows (decision 2)."""
 
     def test_it_says_what_each_node_shows_and_what_its_check_reported(self) -> None:
-        tree = StatusTree(maintenance_store=_Pins())
+        tree = StatusTree(pin_store=_Pins())
         soon = datetime.now(UTC) + _SOON
         _read(tree, OK, path="/site/quiet")
         _read(tree, ERROR, path="/site/broken")
@@ -416,6 +424,9 @@ class TableTests(TestCase):
         tree.upsert(PARENT, UNDEFINED)        # a check's root that declares nothing
         _read(tree, OK)
         self.assertEqual(list(_kept(tree)["nodes"]), [PATH])
+        # but for the period of what it shows, which a branch keeps (ADR-0132)
+        self.assertEqual(tree.events_payload()["nodes"][PARENT].keys(),
+                         {"shows", "reported", "period"})
 
     def test_a_reading_that_changes_nothing_leaves_the_file_as_it_is(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -423,19 +434,18 @@ class TableTests(TestCase):
             tree = _was(StatusTree(), OK, ERROR)
             layer.keep(EVENTS_FILE, tree.events_payload)
             layer.flush()
-            written = layer.path(EVENTS_FILE).read_text()
-            self.assertIn(PATH, json.loads(written)["nodes"])
+            written = on_disk(layer.path(EVENTS_FILE))
+            self.assertIn(PATH, written["nodes"])
             layer.path(EVENTS_FILE).write_text("untouched")
             _read(tree, ERROR)                # the second of three: no row, no change
             layer.flush()
             self.assertEqual(layer.path(EVENTS_FILE).read_text(), "untouched")
             _read(tree, OK)                   # a row, and the table with it
             layer.flush()
-            kept = json.loads(layer.path(EVENTS_FILE).read_text())
+            kept = on_disk(layer.path(EVENTS_FILE))
             self.assertEqual(_two_codes(kept["nodes"])[PATH],
                              {"shows": "OK", "reported": "OK"})
-            self.assertEqual(len(kept["events"]),
-                             len(json.loads(written)["events"]) + 1)
+            self.assertEqual(len(kept["events"]), len(written["events"]) + 1)
 
     def test_what_was_restored_and_not_read_yet_stays_in_it(self) -> None:
         old = StatusTree()
@@ -530,7 +540,7 @@ class RestartTests(TestCase):
 
     def test_a_reading_beneath_a_pin_is_compared_with_what_was_reported(self) -> None:
         pins = _Pins()
-        old = _was(StatusTree(maintenance_store=pins), OK)
+        old = _was(StatusTree(pin_store=pins), OK)
         old.set_maintenance(PATH, "planned", set_by="ada",
                             expires_at=datetime.now(UTC) + _SOON)
         new = _started(_without_rows(_kept(old)), pins)
@@ -665,7 +675,7 @@ class StartTests(TestCase):
             state = self._yesterday(directory)
             with self.assertLogs(level="INFO") as logged:
                 self._app._restore_state(_Roots("/x"), state)  # type: ignore[arg-type]
-            self.assertEqual(sorted(self.tree.events_payload()["nodes"]),
+            self.assertEqual(sorted(_kept(self.tree)["nodes"]),
                              [f"{HEARTBEAT_PATH}/engine", "/x/probe"])
             self.assertTrue(any("/gone/probe" in line for line in logged.output))
             self.assertFalse(_read(self.tree, OK, path="/x/probe"),
@@ -683,7 +693,7 @@ class StartTests(TestCase):
             state.write(EVENTS_FILE, _before_the_table(_kept(written)))
             self._app._restore_state(_Roots(PARENT), state)  # type: ignore[arg-type]
             self.assertFalse(_read(self.tree, OK), "compared with the node's row")
-            self.assertEqual(_two_codes(self.tree.events_payload()["nodes"]),
+            self.assertEqual(_two_codes(_kept(self.tree)["nodes"]),
                              {PATH: {"shows": "OK", "reported": "OK"}})
             _read(self.tree, ERROR)
             self.assertEqual(_hold(self.tree), (ERROR, 1))

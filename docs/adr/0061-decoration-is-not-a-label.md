@@ -1,7 +1,7 @@
 # ADR-0061 — Decoration cannot substitute for the thing it decorates
 
 - **Status:** Accepted
-- **Date:** 2026-10-18 (accepted 2026-08-16)
+- **Date:** 2026-10-25 (accepted 2026-08-16)
 - **Related:** [ADR-0017](0017-node-title.md) (the title, and the rule that one which
   only repeats the name is not drawn; this is the second question that rule opened),
   [ADR-0019](0019-inspection-popover.md) (the inspection card, which names the node
@@ -10,7 +10,9 @@
   2: a chip draws no title), [ADR-0018](0018-markdown-rendering.md) (raw HTML in a title
   is escaped, which is why a package cannot solve this from outside),
   [ADR-0016](0016-node-addressing.md) (`name`, the thing a title may or may not stand
-  in for), [ADR-0055](0055-sibling-order.md) (the declared rank a glyph would render)
+  in for), [ADR-0055](0055-sibling-order.md) (the declared rank a glyph would render),
+  [ADR-0135](0135-a-handled-part-keeps-its-true-color-and-every-surface-says-by-what.md)
+  (decision 8, *Handled*, which names each node above its pins)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -20,9 +22,9 @@ title which only repeats the name is not drawn at all. Both rules
 live in one predicate, `titles.py`, and every surface calls it.
 
 **Most surfaces draw both halves.** An open node's head line, the inspection card, the
-heartbeat strip, the page band beside the breadcrumb and the `/maintenance` pin table
-each put the name (or the path, or the last crumb) down and then the title beside it,
-and a chip draws its name alone
+heartbeat strip, the page band beside the breadcrumb and *Handled*, above each node's
+pins, each put the name (or the path, or the last crumb) down and then the title beside
+it, and a chip draws its name alone
 ([ADR-0127](0127-the-wall-is-a-tree-and-a-click-opens-or-closes-a-node.md) decision 2).
 For those the only question is whether the title adds anything.
 
@@ -96,7 +98,7 @@ about *what a label is* should not become a rule about how a surface renders.
 ### 5. A view rule, never a data one
 
 As with ADR-0017. The **snapshot keeps the title**, and the **JSON API keeps
-emitting it** — dropping or rewriting a field is a contract change (ADR-0008), and a
+emitting it** — dropping or rewriting a field is a contract change (ADR-0080 decision 1), and a
 client drawing its own chips is entitled to its own decision about the glyph. What
 changes is only what `/copy` draws.
 

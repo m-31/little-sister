@@ -26,13 +26,14 @@ from __future__ import annotations
 
 import math
 import random
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass, replace
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from little_sister.checks import Check, CheckResult, Measurement, code
 from little_sister.checks.http import HttpCheck
+from little_sister.checks.metadata import Stated
 from little_sister.engine import Engine
 from little_sister.reasons import Entry
 from little_sister.series import MemoryStore, SeriesKey, SeriesRecord
@@ -59,9 +60,12 @@ class Fixture:
     ``status.html`` for that node with that breadcrumb. ``detail`` selects the
     member-leaf ``check.html`` surface instead. ``engine_error`` renders the page
     as if the engine had failed to start with that reason (the header banner).
-    ``dense`` mirrors the viewer's chips switch so a fixture can exercise either
-    tree shape. ``reason_cap`` overrides the harness configuration when a layout
-    case specifically exercises a deployment with a taller stable line budget.
+    ``chips`` is the fixture's ``settings.yaml`` word for every level nobody else
+    speaks for: unsaid, the built-in look — open, but a big level as chips — and
+    ``False`` every level open, the big ones too, so a layout case is drawn whole;
+    ``nodes`` its ``nodes.yaml``, each path's look, for a level a case wants closed.
+    ``reason_cap`` overrides the harness configuration when a layout case
+    specifically exercises a deployment with a taller stable line budget.
     """
 
     name: str
@@ -70,7 +74,8 @@ class Fixture:
     branch: str = ""
     engine_error: str | None = None
     detail: bool = False
-    dense: bool = True
+    chips: bool | None = None
+    nodes: Mapping[str, Stated] = field(default_factory=dict)
     reason_cap: int | None = None
     #: What the page is told is reached *through* this node. A registry fact rather
     #: than a snapshot one, so a fixture states it here instead of building it.
@@ -124,7 +129,7 @@ def _snapshot(tree: StatusTree, branch: str = "",
 
 
 def _hosts_ok(count: int) -> StatusSnapshot:
-    """``count`` all-OK leaf hosts — the overview at scale (leaf density, ADR-0024)."""
+    """``count`` all-OK leaf hosts — the overview at scale (leaf density, ADR-0056)."""
     tree = StatusTree()
     for index in range(1, count + 1):
         tree.upsert(f"/host{index:02d}", StatusCode.OK)
@@ -133,7 +138,7 @@ def _hosts_ok(count: int) -> StatusSnapshot:
 
 def _eruption() -> StatusSnapshot:
     """A CI host whose ``actions`` leaf lists twelve failed workflows, each a
-    link (the github-``actions`` case for the reason budget, ADR-0024) — beside
+    link (the github-``actions`` case for the reason budget, ADR-0056) — beside
     two calm neighbors so the eruption's effect on the grid is visible."""
     tree = StatusTree()
     tree.upsert("/web", StatusCode.OK)
@@ -172,7 +177,7 @@ def _long_link_eruption() -> StatusSnapshot:
 
 def _code_reason() -> StatusSnapshot:
     """A single 200-line ``code()`` reason (a captured traceback) — the vertical
-    overflow case for the reason budget (ADR-0024) — beside a calm neighbor."""
+    overflow case for the reason budget (ADR-0056) — beside a calm neighbor."""
     tree = StatusTree()
     tree.upsert("/web", StatusCode.OK)
     lines = "\n".join(
@@ -185,7 +190,7 @@ def _code_reason() -> StatusSnapshot:
 
 def _wide_host() -> StatusSnapshot:
     """One NAS host with fifteen leaf disks in a mixed state — the many-children
-    side of the overflow problem (ADR-0024)."""
+    side of the overflow problem (ADR-0056)."""
     tree = StatusTree()
     pattern = [
         StatusCode.OK, StatusCode.OK, StatusCode.WARN, StatusCode.OK,
@@ -200,10 +205,11 @@ def _wide_host() -> StatusSnapshot:
 
 def _branchy_host() -> StatusSnapshot:
     """One NAS host whose card stacks several all-OK sub-*branches* — each a boxed
-    chip-row (``disk`` / ``smart`` / ``system`` …) — the branch-density case
-    (ADR-0024): in the dense view the quiet sub-branches past ``branch_cap`` fold
-    behind a "+N more", while the one erupting sub-branch keeps its box. Beside a calm
-    neighbor so the fold's effect on the grid is visible."""
+    chip-row (``disk`` / ``smart`` / ``system`` …), its leaves chips as the NAS's type
+    proposes them (the fixture's ``nodes``) — the branch-density case (ADR-0056):
+    every sub-branch stands as its box, the one erupting among them, its failure
+    opening its way. Beside a calm neighbor so the card's effect on the grid is
+    visible."""
     tree = StatusTree()
     tree.upsert("/web", StatusCode.OK)
     aspects = {
@@ -217,7 +223,7 @@ def _branchy_host() -> StatusSnapshot:
     for aspect, leaves in aspects.items():
         for leaf in leaves:
             tree.upsert(f"/qnap/{aspect}/{leaf}", StatusCode.OK)
-    # One aspect erupts: its box must stay put, never fold behind "+N more".
+    # One aspect erupts: its box stays put, its failing leaf opened by the budget.
     tree.upsert("/qnap/fans/rpm-fan2", StatusCode.ERROR, "fan 2 stalled (0 rpm)")
     return _snapshot(tree)
 
@@ -234,7 +240,7 @@ def _deep_tree() -> StatusSnapshot:
 def _long_text() -> StatusSnapshot:
     """A host with an over-long name, an over-long child name, an ellipsable
     title and a long ``about`` on the branch head — viewed at the branch so the
-    header (title + about) and the card heads all take the strain (ADR-0024)."""
+    header (title + about) and the card heads all take the strain (ADR-0056)."""
     tree = StatusTree()
     leaf = f"/{_LONG_HOST}/{_LONG_LEAF}"
     tree.upsert(leaf, StatusCode.WARN,
@@ -342,7 +348,7 @@ def _maintenance_many() -> StatusSnapshot:
     """Twelve admin pins scattered across the tree — past the popover's
     ``maintenance_cap`` (5 by default), the case the count folds away: the strip
     **pill** reads "12 in maintenance", its popover lists the first five and folds
-    the rest behind a "+7 more" link to the dedicated **/maintenance page**. Varied
+    the rest behind a "+7 more" link to *Handled*, **/handled**. Varied
     depths, reasons and expiries exercise the page's path column and the coarse
     "time left" (days, hours, minutes). Beside the ``little-sister`` heartbeat and
     a few calm hosts, so the pill's place in the strip band — just left of the
@@ -927,7 +933,9 @@ def _two_equal_large_roots() -> StatusSnapshot:
 
 
 def _mixed_chip_branches() -> StatusSnapshot:
-    """One dense card with chip runs and several boxes at the same level.
+    """One dense card with chip runs and several boxes at the same level: its level
+    starts as chips (the fixture's ``nodes``), and its three branches claim
+    ``show_when_quiet``, so they stand open beside the chips of its two leaves.
 
     Before chip runs became full-row grid items, the direct chips disabled the
     entire nested grid and the three branch boxes stayed stacked however wide
@@ -937,6 +945,7 @@ def _mixed_chip_branches() -> StatusSnapshot:
     for branch in ("alpha", "beta", "gamma"):
         for leaf in ("one", "two", "three", "four"):
             tree.upsert(f"/mixed/{branch}/{leaf}", StatusCode.OK)
+        tree.set_show_when_quiet(f"/mixed/{branch}", True)
     tree.upsert("/mixed/summary", StatusCode.OK)
     tree.upsert("/mixed/uptime", StatusCode.OK)
     return _snapshot(tree)
@@ -992,11 +1001,12 @@ def _finding(index: int) -> str:
 
 def _security_findings() -> StatusSnapshot:
     """The real-deployment screenshot case: three roots — a small branch, the
-    ``little-sister`` heartbeat (now lifted into the status strip, ADR-0024), and a
+    ``little-sister`` heartbeat (now lifted into the status strip, ADR-0056), and a
     security card whose ``informational`` severity leaf is **OK yet floods 150
-    findings**. Once the skyscraper beside near-empty tiles; with ADR-0024 the quiet
-    leaf collapses to a chip and the flood moves to its detail page, so it now
-    proves the layout *tames* an OK card that would otherwise drown the grid."""
+    findings**. Once the skyscraper beside near-empty tiles; the bands start as chips
+    as the wiz type proposes them (the fixture's ``nodes``), the flood moved to its
+    detail page, so it proves the layout *tames* an OK card that would otherwise
+    drown the grid."""
     tree = StatusTree()
     tree.upsert("/github/actions", StatusCode.OK)
     tree.upsert("/github/pull_requests", StatusCode.OK, "6 open")
@@ -1060,8 +1070,8 @@ FIXTURES: tuple[Fixture, ...] = (
     Fixture("code_reason_200_lines", "a 200-line code() reason", _code_reason),
     Fixture("wide_host_15_leaves", "one host with 15 leaves", _wide_host),
     Fixture("branchy_host_subbranches",
-            "one host with 7 sub-branches, one erupting (branch-density +N more)",
-            _branchy_host),
+            "one host with 7 sub-branches, one erupting, each a box of chips",
+            _branchy_host, nodes={"/qnap": Stated(children=Stated(chips=True))}),
     Fixture("deep_tree_depth_8", "a branch nested to depth 8", _deep_tree),
     Fixture("long_names_titles",
             "long names, ellipsable title, long about on a branch head",
@@ -1081,7 +1091,7 @@ FIXTURES: tuple[Fixture, ...] = (
             _maintenance_deep),
     Fixture("maintenance_many_pins",
             "12 pins past the cap — the strip pill, its capped '+N more' popover, "
-            "and the /maintenance page", _maintenance_many),
+            "and /handled", _maintenance_many),
     Fixture("maintenance_editor_member_leaf",
             "admin member leaf with rendered node/entry explanations and stable "
             "read-to-edit controls",
@@ -1159,24 +1169,25 @@ FIXTURES: tuple[Fixture, ...] = (
     Fixture("two_large_roots",
             "2 tall roots with dozens of differently shaped descendants, "
             "chips off (spare columns)",
-            _two_large_roots, dense=False),
+            _two_large_roots, chips=False),
     Fixture("two_equal_large_roots",
             "2 tall roots of the *same* weight, chips off — the live overview "
             "shape used to waste width on span steps that opened no columns",
-            _two_equal_large_roots, dense=False),
+            _two_equal_large_roots, chips=False),
     Fixture("two_equal_large_roots_reason_cap_30",
             "the same 2-root topology with a 30-line reason budget, chips off",
-            _two_equal_large_roots, dense=False, reason_cap=30),
+            _two_equal_large_roots, chips=False, reason_cap=30),
     Fixture("mixed_chip_branches",
             "a dense card with a chip run beside 3 branch boxes",
-            _mixed_chip_branches),
+            _mixed_chip_branches, nodes={"/mixed": Stated(chips=True)}),
     Fixture("mixed_nested_flip",
             "15 leaf roots + one card of (3,3,3,7,5) chains, chips off — the "
             "nested column flip no outer track choice can dodge",
-            _mixed_nested_flip, dense=False),
+            _mixed_nested_flip, chips=False),
     Fixture("security_findings_150",
             "an OK severity leaf flooding 150 long findings beside near-empty "
-            "tiles (the wiz screenshot case)", _security_findings),
+            "tiles (the wiz screenshot case)", _security_findings,
+            nodes={"/wiz": Stated(chips=True)}),
     Fixture("unbreakable_tokens",
             "single-token reasons: ~300-char URL, image digest, 500-char "
             "code() line (width overflow)", _unbreakable_tokens),

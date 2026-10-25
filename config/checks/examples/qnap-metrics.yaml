@@ -5,8 +5,10 @@
 #
 # QNAP temperatures + per-drive SMART over SSH (QTS `getsysinfo`): a `temperature`
 # branch (system, cpu where the model exposes it, one drive<bay> per populated
-# bay, in °C) and a `smart` branch (GOOD→OK, Warning→WARN, else ERROR). It shares
-# the SSH transport with the `host-metrics` check and usually targets the SAME host node —
+# bay, in °C) and a `smart` branch (GOOD→OK, Warning→WARN, else ERROR), each with an
+# `about` that says what to do and a handbook that says it at length (ADR-0133); a
+# drive carries its bay among its details. It shares the SSH transport with the
+# `host-metrics` check and usually targets the SAME host node —
 # give it NO description so it doesn't overwrite the host's. The script is always
 # piped to `bash` (it's POSIX, so a busybox `bash` also works); there is no
 # `profile`. See checks/README.md.
@@ -44,3 +46,14 @@ host: mynas-ssh-alias        # SSH target — ~/.ssh/config alias or hostname/FQ
 # max_temperature_warn: 50
 # max_temperature_error: 60
 # smart_reason: "Replace the drive before the next one goes."
+
+# --- how it first looks on the wall (optional) ----------------------------
+# The type proposes the drives and the temperature sensors as chips, the two
+# branches open (ADR-0128); take either back by its name, beside the branch's labels
+# and the details its drives take:
+# subnodes:
+#   smart:
+#     chips: false
+#     about: "{default} Spare drives are in the cupboard by the rack."
+#     details:
+#       supplier: "[Hardware orders](https://orders.example.org)"

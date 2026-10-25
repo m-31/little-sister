@@ -1,7 +1,7 @@
 # ADR-0096 — A measure names its node and its things, and a curve marks only a reading that failed
 
 - **Status:** Accepted
-- **Date:** 2026-09-27
+- **Date:** 2026-10-25 (accepted 2026-09-27)
 - **Related:** [ADR-0092](0092-a-check-declares-its-measures.md) (the declaration this
   extends, and decisions 3 and 5, which this amends),
   [ADR-0085](0085-a-measure-is-read-out-of-a-record.md) (a measure is a projection over
@@ -44,12 +44,13 @@ not:
   `disk4_pct`, a NAS `drive1_temp_c` with `drive1_bay` beside it, a Mac its watched
   processes as `proc1_rss_kb` in the order of its configuration. The index is where a
   thing stood in one run's output; the node it becomes is named by what it is.
-- **What a mark means.** ADR-0092 decision 5 marks every reading whose measure is null,
-  and reads a missing field as null. A field a release adds is missing from every
-  reading kept before it; a sensor a model does not have is null in every reading, as
-  the one-shape rule asks ([ADR-0085](0085-a-measure-is-read-out-of-a-record.md)
-  decision 3); a host that reports its volumes has no `disk_pct` at all. Each would be a
-  row of failure marks — a gap taken for a measurement problem.
+- **What a mark means.** ADR-0092 decision 5, as it was first written, marked every
+  reading whose measure was null, and read a missing field as null. A field a release
+  adds is missing from every reading kept before it; a sensor a model does not have is
+  null in every reading, as the one-shape rule asks
+  ([ADR-0085](0085-a-measure-is-read-out-of-a-record.md) decision 3); a host that
+  reports its volumes has no `disk_pct` at all. Each would be a row of failure marks — a
+  gap taken for a measurement problem.
 - **What a type declares.** A curve for every field would repeat itself: a percentage
   and the size it is a percentage of draw one shape.
 

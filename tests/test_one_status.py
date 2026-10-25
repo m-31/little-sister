@@ -47,6 +47,10 @@ INSTANT = r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d"
 #: What History says under the table of a node above others.
 OWN_PERIODS = ("The periods of its own status: its page heads with what it rolls up "
                "to, the nodes beneath it included.")
+#: What it says under the table above that one, of what the node shows (ADR-0132
+#: decision 6).
+SHOWN_PERIODS = ("The periods of what it shows: what it rolls up to, the nodes "
+                 "beneath it included.")
 JSON = {"Accept": "application/json", "Authorization": f"Bearer {TOKEN}"}
 
 ACCOUNT = "/cloud/aws/staging"
@@ -123,13 +127,16 @@ def _color(box: Element) -> str:
 
 def _word(box: Element) -> str:
     """The status word a card, a box or a head says beside its name, in its state
-    cluster: the cluster's own text, without the time and the marks it also holds."""
+    cluster: the cluster's own text — a card's in the part that holds its cue and
+    word, `.status-word` — without the time and the marks it also holds."""
     line = box.first()
     states = [element for element in line.walk()
               if element.has("status-card__state") or element.has("status-node__state")
               or element.has("viewed-head__state")]
     assert len(states) == 1, f"{len(states)} state clusters in {box!r}"
-    said = [child.strip() for child in states[0].children
+    holders = [states[0], *(child for child in states[0].children
+                            if isinstance(child, Element) and child.has("status-word"))]
+    said = [child.strip() for holder in holders for child in holder.children
             if isinstance(child, str) and child.strip()]
     assert len(said) == 1, said
     return said[0]
@@ -193,11 +200,16 @@ class _Estate(TestCase):
         return [line.text() for line in self._time_card_body(path, query).all(tag="p")]
 
     def _period_said(self, path: str) -> str:
-        """The period its own Time card states of a node, in the card's words and
-        without whose it is: *error since …*, and what kind of beginning it had."""
-        said = [match.group(1) for line in self._time_card(path)
-                if (match := re.match(r"(?:Its own status|Status) ([a-z]+ since .+)$",
-                                      line))]
+        """The period of its own status its Time card states of a node, in the
+        card's words and without whose it is: *error since …*, and what kind of
+        beginning it had. On a node above others that is the line *Its own status
+        …*, beneath the period of what it shows (ADR-0132 decision 5); on a leaf, and
+        on a node whose pin cancels what is beneath it, its one line."""
+        lines = self._time_card(path)
+        own = [match.group(1) for line in lines
+               if (match := re.match(r"Its own status ([a-z]+ since .+)$", line))]
+        said = own or [match.group(1) for line in lines
+                       if (match := re.match(r"Status ([a-z]+ since .+)$", line))]
         self.assertEqual(len(said), 1, said)
         return said[0]
 
@@ -207,7 +219,7 @@ class _Estate(TestCase):
         return page.all(tag="textarea")[0].source().splitlines()
 
     def _history_says(self, path: str) -> list[str]:
-        """What the node's History page says in sentences beneath its table."""
+        """What the node's History page says in sentences beneath its tables."""
         page = self._page(f"/history/{_branch(path)}")
         return [line.text() for line in page.all("text-muted", tag="p")]
 
@@ -360,23 +372,25 @@ class OwnPeriodTests(_Estate):
         for query in ("depth=1", "depth=1&fragment=1", "depth=0"):
             with self.subTest(query=query):
                 card = self._time_card(ASPECT, query)
-                self.assertEqual(card[0],
-                                 f"Status error, from {FAILS} beneath it, {made}")
+                # the node beneath made the whole period: the instant is said once
+                # (ADR-0132 decision 5)
+                self.assertEqual(card[0], f"Status {made}, from {FAILS} beneath it")
                 self.assertRegex(
                     card[1], rf"^Its own status ok since before {INSTANT}$")
                 self.assertRegex(card[2], rf"^Last observed {INSTANT}$")
 
     def test_a_node_that_is_well_again_names_its_period_its_own_too(self) -> None:
         # *Status ok since before* its first reading was said of a node whose box
-        # stood red in between: the period was never the node's
+        # stood red in between: that period is its own status's, and what it shows
+        # has been ok since the run that mended it (ADR-0132 decision 5)
         self.check.mended = True
         app_module.engine.run_once()
         shot = self.tree.snapshot(ASPECT)
-        assert shot is not None
+        assert shot is not None and shot.period is not None
         self.assertIs(shot.code, StatusCode.OK)
         card = self._time_card(ASPECT)
-        self.assertRegex(card[0], rf"^Its own status ok since before {INSTANT}$")
-        self.assertEqual([line for line in card if line.startswith("Status")], [])
+        self.assertEqual(card[0], f"Status ok since {_shown(shot.period.began.at)}")
+        self.assertRegex(card[1], rf"^Its own status ok since before {INSTANT}$")
 
     def test_a_failure_of_its_own_is_named_its_own_and_is_what_it_shows(
             self) -> None:
@@ -385,13 +399,14 @@ class OwnPeriodTests(_Estate):
         self.tree.upsert("/shop/gateway/backend", StatusCode.OK)
         self.tree.upsert("/shop/gateway", StatusCode.ERROR, "503 from /health")
         card = self._time_card("/shop/gateway")
-        self.assertRegex(card[0], rf"^Its own status error since {INSTANT}$")
-        self.assertEqual([line for line in card if line.startswith("Status")], [])
+        self.assertRegex(card[0], rf"^Status error since {INSTANT}$")
+        self.assertRegex(card[1], rf"^Its own status error since {INSTANT}$")
+        self.assertEqual(card[0].split(" since ")[1], card[1].split(" since ")[1])
 
     def test_a_node_in_maintenance_keeps_its_status(self) -> None:
         # a pin cancels what is beneath the node: the period is the node's
-        self.client.post("/maintenance", data={
-            "path": _branch(ASPECT), "reason": "cutover", "expires": "1d",
+        self.client.post("/pins/maintenance", data={
+            "path": _branch(ASPECT), "note": "cutover", "expires": "1d",
             "action": "set"})
         shot = self.tree.snapshot(ASPECT)
         assert shot is not None and shot.maintenance
@@ -404,13 +419,14 @@ class OwnPeriodTests(_Estate):
         self.assertRegex(card[0], rf"^Status error since {INSTANT}$")
         self.assertEqual([line for line in card if "own status" in line], [])
 
-    def test_a_node_that_declares_nothing_states_no_period(self) -> None:
-        # it says where what it shows comes from, as a node above others does, and
-        # its observation where a period of its own would stand
+    def test_a_node_that_declares_nothing_states_no_period_of_its_own(self) -> None:
+        # it says the period of what it shows and where that comes from, as a node
+        # above others does (ADR-0132 decision 5), and its observation where a
+        # period of its own would stand
         made = self._period_said(f"{ASPECT}/{FAILS}")
         card = self._time_card("/cloud/aws")
-        self.assertEqual(card[0], f"Status error, from staging/codepipeline/{FAILS} "
-                                  f"beneath it, {made}")
+        self.assertEqual(card[0], f"Status {made}, from staging/codepipeline/{FAILS} "
+                                  f"beneath it")
         self.assertRegex(card[1], rf"^Observed {INSTANT}\.$")
         self.assertEqual([line for line in card[1:] if "tatus" in line], [])
 
@@ -419,7 +435,8 @@ class OwnPeriodTests(_Estate):
         self.check.mended = True
         app_module.engine.run_once()
         card = self._time_card("/cloud/aws")
-        self.assertEqual(card[0], "Status ok, from the nodes beneath it")
+        self.assertRegex(card[0],
+                         rf"^Status ok since {INSTANT}, from the nodes beneath it$")
         self.assertRegex(card[1], rf"^Observed {INSTANT}\.$")
 
     def test_its_changes_are_counted_as_its_own_status_s(self) -> None:
@@ -436,14 +453,20 @@ class OwnPeriodTests(_Estate):
                       self._time_card("/shop/gateway"))
 
     def test_history_says_whose_periods_it_lists(self) -> None:
-        self.assertIn(OWN_PERIODS, self._history_says(ASPECT))
-        self.assertIn(OWN_PERIODS, self._history_says(ACCOUNT))
+        # first those of what it shows, then those of its own status (ADR-0132
+        # decision 6)
+        for path in (ASPECT, ACCOUNT):
+            with self.subTest(path=path):
+                said = self._history_says(path)
+                self.assertEqual(said, [SHOWN_PERIODS, OWN_PERIODS])
 
     def test_history_says_it_of_no_other_node(self) -> None:
-        # a node with nothing beneath it, and one that declares nothing
-        for path in (f"{ASPECT}/{FAILS}", "/cloud/aws"):
-            with self.subTest(path=path):
-                self.assertNotIn(OWN_PERIODS, self._history_says(path))
+        # a node with nothing beneath it has one table, of its own status; one that
+        # declares nothing lists what it shows, and has no status of its own
+        self.assertEqual(self._history_says(f"{ASPECT}/{FAILS}"), [])
+        said = self._history_says("/cloud/aws")
+        self.assertIn(SHOWN_PERIODS, said)
+        self.assertNotIn(OWN_PERIODS, said)
 
     def test_a_node_that_stopped_declaring_has_its_own_sentence(self) -> None:
         # its table ends where it stopped, and says so (ADR-0094 decision 5):
@@ -452,18 +475,26 @@ class OwnPeriodTests(_Estate):
         self.tree.upsert("/estate/account/eu", StatusCode.OK)
         self.tree.upsert("/estate/account", StatusCode.UNDEFINED, "scope: 1 account")
         said = self._history_says("/estate/account")
-        self.assertEqual(len(said), 1, said)
-        self.assertRegex(said[0], r"^Declares nothing of its own since ")
+        self.assertEqual(len(said), 2, said)
+        # beneath what it shows, which it still has (ADR-0132 decision 6)
+        self.assertEqual(said[0], SHOWN_PERIODS)
+        self.assertRegex(said[1], r"^Declares nothing of its own since ")
 
     def test_its_copy_document_names_the_period_its_own(self) -> None:
+        # beneath the period of what it shows, which says what began it (ADR-0132
+        # decision 6)
         document = self._copy(ASPECT)
         shown = document.index(
             "- **Shown as:** error ⛔ — rolled up from its own reading and the 3 "
             "nodes beneath it.")
         self.assertRegex(document[shown + 1],
+                         rf"^- \*\*Status error\*\* since {INSTANT} \S+, begun by a "
+                         rf"reading of {FAILS} beneath it$")
+        self.assertRegex(document[shown + 2],
                          rf"^- \*\*Its own status ok\*\* since before {INSTANT} ")
         self.assertEqual(
-            [line for line in document if line.startswith("- **Status")], [])
+            [line for line in document if line.startswith("- **Status")],
+            [document[shown + 1]])
 
     def test_a_leaf_s_copy_document_keeps_its_status(self) -> None:
         document = self._copy(f"{ASPECT}/{FAILS}")
@@ -494,10 +525,12 @@ class _Clock:
 
 
 class MadeByTests(_Estate):
-    """A branch's Time card names the node beneath it that makes what it shows, with
-    that node's own *since* (decision 3): one that counts the branch's code for
-    itself, never one that only passes it on, and of several the one that has shown
-    it the longest — a stale one from when it went stale."""
+    """A branch's Time card names the node beneath it that makes what it shows
+    (decision 3): one that counts the branch's code for itself, never one that only
+    passes it on, and of several the one that has shown it the longest — a stale one
+    from when it went stale. The line states the period of what the branch shows,
+    and the named node's own *since* only where that began later (ADR-0132 decision
+    5)."""
 
     def setUp(self) -> None:
         super().setUp()
@@ -523,7 +556,7 @@ class MadeByTests(_Estate):
                 with self.subTest(path=path, query=query):
                     self.assertEqual(
                         self._time_card(path, query)[0],
-                        f"Status error, from {name} beneath it, {made}")
+                        f"Status {made}, from {name} beneath it")
 
     def test_its_name_is_a_link_to_its_page(self) -> None:
         line = self._time_card_body(ACCOUNT).all(tag="p")[0]
@@ -539,9 +572,9 @@ class MadeByTests(_Estate):
         self.tree.upsert("/shop/mid/leaf", StatusCode.ERROR, "down")
         made = self._period_said("/shop/mid/leaf")
         self.assertEqual(self._time_card("/shop")[0],
-                         f"Status error, from mid/leaf beneath it, {made}")
+                         f"Status {made}, from mid/leaf beneath it")
         self.assertEqual(self._time_card("/shop/mid")[0],
-                         f"Status error, from leaf beneath it, {made}")
+                         f"Status {made}, from leaf beneath it")
 
     def test_of_several_it_names_the_one_that_has_shown_it_the_longest(
             self) -> None:
@@ -556,7 +589,7 @@ class MadeByTests(_Estate):
         self.tree.upsert("/shop/a-late", StatusCode.ERROR, "down")
         made = self._period_said("/shop/b-early")
         self.assertEqual(self._time_card("/shop")[0],
-                         f"Status error, from b-early beneath it, {made}, and 1 more")
+                         f"Status {made}, from b-early beneath it, and 1 more")
 
     def test_a_branch_that_counts_it_for_itself_is_named_as_any_node(self) -> None:
         # the gateway's own check failed first and its backend after it: both
@@ -569,33 +602,65 @@ class MadeByTests(_Estate):
         made = self._period_said("/shop/gw")
         self.assertTrue(made.startswith("error since "), made)
         self.assertEqual(self._time_card("/shop")[0],
-                         f"Status error, from gw beneath it, {made}, and 1 more")
+                         f"Status {made}, from gw beneath it, and 1 more")
+
+    def test_its_own_since_stands_where_it_began_after_the_branch_s(self) -> None:
+        # the branch turned red from one node, which has recovered, and another has
+        # kept it red since: the branch's instant first, then the named node's own
+        # (ADR-0132 decision 5)
+        self._shop("a", "b")
+        self.clock.go(10)
+        first = self.clock.at
+        self.tree.upsert("/shop/a", StatusCode.ERROR, "down")
+        self.clock.go(10)
+        self.tree.upsert("/shop/b", StatusCode.ERROR, "down")
+        self.clock.go(10)
+        self.tree.upsert("/shop/a", StatusCode.OK, "answers")
+        made = self._period_said("/shop/b")
+        self.assertEqual(self._time_card("/shop")[0],
+                         f"Status error since {_shown(first)}, from b beneath it, "
+                         f"{made}")
 
     def test_a_period_that_began_before_a_bound_says_so(self) -> None:
         # its first reading found it failing, so the tree vouches for no beginning
         # (ADR-0099 decision 9): the line says *before*, as the node's own card does
-        self._shop()
+        # — beside the branch's instant, which another node began earlier
+        self._shop("web")
+        self.clock.go(5)
+        first = self.clock.at
+        self.tree.upsert("/shop/web", StatusCode.ERROR, "down")
+        self.clock.go(5)
         self.tree.upsert("/shop/db", StatusCode.ERROR, "down")
+        self.clock.go(5)
+        self.tree.upsert("/shop/web", StatusCode.OK, "answers")
         made = self._period_said("/shop/db")
         self.assertTrue(made.startswith("error since before "), made)
         self.assertEqual(self._time_card("/shop")[0],
-                         f"Status error, from db beneath it, {made}")
+                         f"Status error since {_shown(first)}, from db beneath it, "
+                         f"{made}")
 
     def test_a_period_that_a_pin_s_end_began_says_so(self) -> None:
         # it failed under a pin and has shown the failure since the pin ended, which
-        # the line says as the node's own card does (ADR-0099 decision 8)
-        self._shop("db")
+        # the line says as the node's own card does (ADR-0099 decision 8) — beside
+        # the branch's instant, which another node began earlier
+        self._shop("db", "web")
         self.tree.set_maintenance("/shop/db", "cutover",
                                   expires_at=self.clock.at + timedelta(days=1),
                                   set_by="pan")
-        self.clock.go(10)
+        self.clock.go(5)
+        first = self.clock.at
+        self.tree.upsert("/shop/web", StatusCode.ERROR, "down")
+        self.clock.go(5)
         self.tree.upsert("/shop/db", StatusCode.ERROR, "down")
         self.clock.go(10)
         self.tree.clear_maintenance("/shop/db")
+        self.clock.go(5)
+        self.tree.upsert("/shop/web", StatusCode.OK, "answers")
         made = self._period_said("/shop/db")
         self.assertTrue(made.endswith(", when its maintenance ended"), made)
         self.assertEqual(self._time_card("/shop")[0],
-                         f"Status error, from db beneath it, {made}")
+                         f"Status error since {_shown(first)}, from db beneath it, "
+                         f"{made}")
 
     def test_a_node_beneath_a_pin_is_never_named(self) -> None:
         # the pin cancels what is beneath it: the older failure does not reach the
@@ -603,14 +668,14 @@ class MadeByTests(_Estate):
         self._shop("svc", "svc/db", "web")
         self.clock.go(10)
         self.tree.upsert("/shop/svc/db", StatusCode.ERROR, "down")
-        self.client.post("/maintenance", data={
-            "path": "shop/svc", "reason": "cutover", "expires": "1d",
+        self.client.post("/pins/maintenance", data={
+            "path": "shop/svc", "note": "cutover", "expires": "1d",
             "action": "set"})
         self.clock.go(10)
         self.tree.upsert("/shop/web", StatusCode.ERROR, "down")
         made = self._period_said("/shop/web")
         self.assertEqual(self._time_card("/shop")[0],
-                         f"Status error, from web beneath it, {made}")
+                         f"Status {made}, from web beneath it")
 
     def test_a_stale_node_that_read_the_code_keeps_its_period(self) -> None:
         # its last reading was the failure, and it counts the code by that reading:
@@ -623,19 +688,22 @@ class MadeByTests(_Estate):
         made = self._period_said("/shop/x")
         self.assertTrue(made.startswith("error since "), made)
         self.assertEqual(self._time_card("/shop")[0],
-                         f"Status error, from x beneath it, {made}")
+                         f"Status {made}, from x beneath it")
 
     def test_a_stale_node_is_named_as_stale_with_its_last_observation(self) -> None:
         # it counts the warning only because its reading went stale, and its period
         # is of *ok*: the line says when it was last observed — and it went stale
-        # before the other node began to warn
+        # before the other node began to warn, which is when the branch's period
+        # began, its last observation and its tolerance after it (ADR-0132
+        # decision 2)
         self._shop("new")
         observed = self.clock.at
         self.tree.upsert("/shop/old", StatusCode.OK, "answers", stale_after=5)
         self.clock.go(10)
         self.tree.upsert("/shop/new", StatusCode.WARN, "slow")
         self.assertEqual(self._time_card("/shop")[0],
-                         f"Status warn, from old beneath it, stale, last observed "
+                         f"Status warn since {_shown(observed + timedelta(seconds=5))}"
+                         f", from old beneath it, stale, last observed "
                          f"{_shown(observed)}, and 1 more")
 
     def test_a_stale_node_is_weighed_from_when_it_went_stale(self) -> None:
@@ -648,7 +716,7 @@ class MadeByTests(_Estate):
         self.clock.go(60)
         made = self._period_said("/shop/new")
         self.assertEqual(self._time_card("/shop")[0],
-                         f"Status warn, from new beneath it, {made}, and 1 more")
+                         f"Status {made}, from new beneath it, and 1 more")
 
 
 class NoRowForAParentTests(_Estate):

@@ -4,7 +4,8 @@
 - **Date:** 2026-06-27
 - **Related:** [ADR-0007](0007-check-result-branches.md) (recursive `CheckResult` —
   refined here), [ADR-0002](0002-rlock-snapshot-synchronization.md) (the tree owns
-  state), [ADR-0008](0008-json-output-api.md) (JSON envelope, unchanged here).
+  state), [ADR-0080](0080-the-envelope-is-the-snapshot-published.md) (JSON envelope,
+  unchanged here).
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -38,13 +39,13 @@ time, maintenance and event-on-change stay the tree's).
    just reads the snapshot.
 3. **Static metadata, not status.** Config is stable between runs: storing it emits
    **no event**, re-setting the same value is a no-op, and it never enters
-   aggregation ([ADR-0004](0004-status-aggregation-semantics.md)) or freshness
+   aggregation ([ADR-0039](0039-status-rollup-semantics.md)) or freshness
    ([ADR-0005](0005-dashboard-freshness-and-self-monitoring.md)).
 4. **Web-only this slice.** It surfaces in the snapshot and renders on leaf detail
    pages **to all viewers** (config is operator-authored; secrets live in `.env`,
    [ADR-0003](0003-config-and-secrets-via-env-file.md)). It is **not** added to the
-   JSON envelope ([ADR-0008](0008-json-output-api.md)) here — that is the
-   API-envelope round's decision.
+   JSON envelope ([ADR-0080](0080-the-envelope-is-the-snapshot-published.md)) here —
+   that is the API-envelope round's decision.
 
 ## Consequences
 - Branch-check leaves show their own config — the case a pull-from-engine design

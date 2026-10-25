@@ -2,24 +2,27 @@
 into one filter that says whether a transition matches and how a link writes the
 filter back.
 
-Five parameters, each empty where it filters nothing. ``under`` is a node path compared
-segment by segment, as an action's is (ADR-0038 decision 6); ``words`` are each found
-in the reason, in any order and ignoring case; ``status`` names the status switches
-that are on, by the word a row shows for the code an event moved to; ``held`` names
-which of *reached* and *held back* is on; ``cause`` names the kinds of cause that are
-on — a reading, a pin, a removal (ADR-0109 decision 5). A switch group with every
+Six parameters, each empty where it filters nothing. ``under`` is a node path compared
+segment by segment, as an action's is (ADR-0038 decision 6); ``tag`` is a tag the node
+must carry (ADR-0139 decision 7), and beside ``under`` both must hold; ``words`` are
+each found in the reason, in any order and ignoring case; ``status`` names the status
+switches that are on, by the word a row shows for the code an event moved to; ``held``
+names which of *reached* and *held back* is on; ``cause`` names the kinds of cause that
+are on — a reading, a pin, a removal (ADR-0109 decision 5). A switch group with every
 switch on, or with none, filters nothing and is written into no link. The window,
 ``from`` and ``to``, is not read here: the route reads it as the Series view does
 (ADR-0098 decision 1).
 """
 from __future__ import annotations
 
+from collections.abc import Callable, Collection
 from dataclasses import dataclass
 
 from markupsafe import Markup
 from werkzeug.datastructures import MultiDict
 
 from little_sister.status import join_path
+from little_sister.tags import spelled
 from little_sister.tree import CAUSE_REACHED, CAUSE_READING, CAUSE_REMOVED, Event
 
 #: The status switches in the order the page offers them.
@@ -75,6 +78,9 @@ class EventFilter:
     statuses: tuple[str, ...] = ()
     held: str = ""
     causes: tuple[str, ...] = ()
+    #: The tag a node must carry for its events to be kept (ADR-0139 decision 7), or
+    #: ``""``.
+    tag: str = ""
 
     @property
     def folded(self) -> tuple[str, ...]:
@@ -84,15 +90,19 @@ class EventFilter:
     @property
     def narrows(self) -> bool:
         """Whether anything is set that can leave an event out."""
-        return bool(self.under or self.folded or self.statuses or self.held
-                    or self.causes)
+        return bool(self.under or self.tag or self.folded or self.statuses
+                    or self.held or self.causes)
 
-    def matches(self, event: Event) -> bool:
-        """Whether ``event`` is one the filter keeps: under the node, moved to a
-        status that is on, reached or held back as the switches say, written by a
-        cause that is on, and saying every word — its reason read whole, its lines
-        together."""
+    def matches(self, event: Event,
+                tags_of: Callable[[str], Collection[str]] | None = None) -> bool:
+        """Whether ``event`` is one the filter keeps: under the node, of a node that
+        carries the tag — as ``tags_of`` says of its path: the node's, or the nearest
+        node above it the tree still holds — moved to a status that is on, reached or
+        held back as the switches say, written by a cause that is on, and saying every
+        word — its reason read whole, its lines together."""
         if self.under and not covers(self.under, event.path):
+            return False
+        if self.tag and (tags_of is None or self.tag not in tags_of(event.path)):
             return False
         if self.statuses and event.new.name.lower() not in self.statuses:
             return False
@@ -108,6 +118,8 @@ class EventFilter:
         written: dict[str, str | list[str]] = {}
         if self.under:
             written["under"] = self.under
+        if self.tag:
+            written["tag"] = self.tag
         if self.folded:
             written["words"] = " ".join(self.words.split())
         if self.statuses:
@@ -132,8 +144,15 @@ def read_filter(args: MultiDict[str, str]) -> EventFilter:
     causes = _switches(args, "cause", CAUSE_WORDS, Markup(
         "The <code>cause</code> filter takes <code>reading</code>, <code>pin</code> "
         "or <code>removed</code>"))
+    raw = args.get("tag", "").strip()
+    tag = spelled(raw)
+    if raw and not tag:
+        raise FilterRefused("tag", Markup(
+            "The <code>tag</code> filter takes one tag: lowercase letters and digits, "
+            "with hyphens between them"))
     return EventFilter(under="" if node == "/" else node, words=args.get("words", ""),
-                       statuses=statuses, held=held[0] if held else "", causes=causes)
+                       statuses=statuses, held=held[0] if held else "", causes=causes,
+                       tag=tag)
 
 
 def _switches(args: MultiDict[str, str], name: str, offered: tuple[str, ...],

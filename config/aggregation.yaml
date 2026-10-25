@@ -1,0 +1,99 @@
+# Configured rules (ADR-0137) — how a part of the tree counts above it, for good: a
+# fact about how the estate is built, reviewed and versioned here. Configuration only:
+# no code.
+#
+# This file is an example and is inert as it stands (every rule is commented out).
+# Every part keeps its true color: a rule changes only what a part counts as one
+# level up — a node in its parent, a line in its node — and every page says so,
+# under § and the rule's name. A person's judgment for a while is a pin, set on the
+# page with an end; a rule here stands until the file changes, and is read at the
+# start.
+#
+# A rule writes five keys:
+#
+#   name        any text, unique across every root's rules, case folded — what the
+#               startup record, a node's page and Handled call the rule
+#   under       the part it picks: the node it names and everything beneath it, `*`
+#               standing for one whole segment (/aws/*/ec2 is every account's ec2)
+#               — or, instead or as well, `tag`: every node that carries the tag
+#               (ADR-0139), a node tagged and everything beneath it; beside `under`
+#               both must hold. A tag no node is given is refused
+#   counts_as   the table: what a part reporting WARN or ERROR counts as above —
+#                 {ERROR: WARN}             the cap: at most a warning
+#                 {WARN: OK}                healing: a warning counts as ok
+#                 {WARN: ERROR}             the floor: a warning counts as an error
+#                 {ERROR: WARN, WARN: OK}   one step down
+#                 {WARN: OK, ERROR: OK}     everything as ok
+#                 {}                        every status as it reads: an exception,
+#                                           written above the rule it excepts
+#                 nothing                   the part left out, whatever it reports
+#               A status the table does not name counts as itself; a table under
+#               which a worse status counts for less than a milder one is refused.
+#   note        why it stands, in Markdown, as a pin's note is
+#   since       the day it began to stand, YYYY-MM-DD; write a new date to confirm
+#               it again
+#
+# and may write three more:
+#
+#   lines             "*" (quoted: YAML reads a bare * as an alias) or a list of line
+#                     addresses — the rule acts on how the lines of every node it
+#                     picks count in that node, each line keeping its color. An
+#                     address is what a line's pin names: its `?reason=` on a node's
+#                     page, or `slug` in the envelope's entries.
+#   while_fewer_than  N, at least 2, beside `lines` or `children`: the table applies
+#                     only while fewer than N of those parts report a status it
+#                     names, and from N on every part counts as it is
+#   children          "*" or a list of child names, beside a count: the children of
+#                     the top of each part it picks — the node `under` names, or
+#                     where its `tag` begins — counted together
+#
+# Without `lines` or `children`, a rule acts on what the top of each part it picks
+# passes to its parent: the node it picks whose parent it does not, which by a tag is
+# where the tag begins. Where two rules pick one place — a node's boundary, one of its
+# lines, its children — the first written decides, whole, every root's rules read with
+# the root named last first. A part whose check stopped running still counts at least a
+# warning, whatever the table says, and the instance's own branch, /little-sister, is
+# out of every rule's reach.
+#
+# A rule that cannot apply — a key it does not know, a table that reorders, a part no
+# check's mount reaches, a tag no node is given, a name another rule has — does not
+# apply, and the instance's own node says why from the start on, so that the alarm it
+# was to quiet stays.
+
+rules: []
+
+# rules:
+#   - name: develop advises
+#     under: /aws/develop
+#     counts_as: {ERROR: WARN}
+#     note: The develop account is no production; it turns the root amber at most.
+#     since: 2026-10-24
+#
+#   - name: ec2 warnings are the weather
+#     under: /aws/*/ec2
+#     lines: "*"
+#     counts_as: {WARN: OK}
+#     note: An instance's CPU credit warning is the day's weather; its errors stay.
+#     since: 2026-10-24
+#
+#   - name: a few medium findings
+#     under: /wiz/medium
+#     lines: "*"
+#     while_fewer_than: 10
+#     counts_as: {ERROR: WARN}
+#     note: Medium findings advise until ten of them fail at once.
+#     since: 2026-10-24
+#
+#   - name: one replica may be down
+#     under: /web
+#     children: "*"
+#     while_fewer_than: 2
+#     counts_as: {WARN: OK, ERROR: OK}
+#     note: Three replicas serve the site; one down is expected, two is an outage.
+#     since: 2026-10-24
+#
+#   - name: the lab is ours
+#     under: /lab
+#     counts_as: nothing
+#     note: The lab is where things break on purpose.
+#     since: 2026-10-24

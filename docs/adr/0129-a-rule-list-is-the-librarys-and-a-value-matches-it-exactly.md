@@ -1,7 +1,7 @@
 # ADR-0129 — A rule list is the library's, and a value matches it exactly
 
 - **Status:** Accepted
-- **Date:** 2026-10-11
+- **Date:** 2026-10-25 (accepted 2026-10-11)
 - **Related:** little-sister-aws **ADR-0003** (the rule list this lifts, its decisions 4
   to 7), [ADR-0126](0126-a-line-is-a-template-over-its-record.md) (decision 2, the
   words a type hands over with a line, the `rule` word among them now),
@@ -126,7 +126,7 @@ release that brings them and nothing else of it has to change.
 - `little-sister-aws` takes its matcher from here. Its names, prefixes and regexes stop
   folding case and its regexes match whole names, so a configuration that leaned on
   either sees its rule match nothing, which the log line says with its hint; its
-  ADR-0003 says so in an update. What its rules grade stays its own.
+  ADR-0003 says so. What its rules grade stays its own.
 - `little-sister-github`'s `actions` aspect has rules of its own: two named axes, the
   repository's name and the workflow's file its node is named by, `ignore:` their one
   action, read before anything is spent on a workflow.

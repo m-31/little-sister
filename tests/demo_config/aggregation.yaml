@@ -1,0 +1,60 @@
+# The demo's configured rules (ADR-0137): one of each kind, on the scripted checks, so
+# that the wall, a node's page, Handled and the Copy document show what each does as
+# the cycles turn (docs/testing-the-gui.md, Mode 2). Every rule is real configuration,
+# read as a deployment's is: a typo here is named on /little-sister at the start.
+
+rules:
+  # A cap on what a part passes up: the nightly matrix stays red on its own box, under
+  # §, and /ci counts it amber.
+  - name: nightly advises
+    under: /ci/nightly
+    counts_as: {ERROR: WARN}
+    note: |
+      The nightly matrix fails for a while every cycle and is mended in the morning;
+      it turns **/ci** amber at most.
+    since: 2026-10-24
+
+  # The floor: the gateway's warning counts as an error above, so /services goes red
+  # while the gateway's own box stays amber.
+  - name: the gateway has no amber
+    under: /services/api
+    counts_as: {WARN: ERROR}
+    note: The public gateway's slowdown is an outage for whoever waits on it.
+    since: 2026-10-24
+
+  # Healing on one named line: deploy-gate's wait counts as ok in /ci/pipelines, and
+  # keeps its amber on the line.
+  - name: a waiting gate is no failure
+    under: /ci/pipelines
+    lines: [deploy-gate]
+    counts_as: {WARN: OK}
+    note: The deploy gate waits for a person's approval; waiting is its job.
+    since: 2026-10-24
+
+  # A count over lines: the review queue counts as ok while fewer than six reviews
+  # wait, and amber from the sixth on — mid-cycle, when one arrives before one merges.
+  - name: a short review queue
+    under: /ci/reviews
+    lines: "*"
+    while_fewer_than: 6
+    counts_as: {WARN: OK}
+    note: Five reviews waiting is a normal day; the sixth means the queue is backing up.
+    since: 2026-10-24
+
+  # A count over children, the quorum: one host of the fleet down counts as a warning,
+  # two as the outage they are.
+  - name: one host may be down
+    under: /hosts/fleet
+    children: "*"
+    while_fewer_than: 2
+    counts_as: {ERROR: WARN}
+    note: The fleet serves with four hosts of five; one down advises, two is an outage.
+    since: 2026-10-24
+
+  # A part left out, which comes and goes: Handled says it picks nothing while the
+  # backfill job is absent.
+  - name: backfill is a one-off
+    under: /ci/jobs/backfill
+    counts_as: nothing
+    note: The backfill job runs now and then, and is nobody's alarm.
+    since: 2026-10-24

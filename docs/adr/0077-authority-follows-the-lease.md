@@ -1,7 +1,7 @@
 # ADR-0077 — Authority follows the lease: a state file is adopted in a running process
 
 - **Status:** Accepted
-- **Date:** 2026-09-05
+- **Date:** 2026-10-24 (accepted 2026-09-05)
 - **Related:** [ADR-0071](0071-what-a-restart-keeps-is-a-directory-of-files.md) (the
   state layer and the keeper seam this record gives a second direction; its §5 points
   here), [ADR-0072](0072-the-instance-reports-on-itself.md) (the lines, and the rule
@@ -10,7 +10,9 @@
   listed on, and the action seam *take the backups* uses),
   [ADR-0014](0014-maintenance-persistence.md) (the pins, whose replacement at runtime
   is a transition like any other), [ADR-0002](0002-rlock-snapshot-synchronization.md)
-  (the lock the swap is made under and held no longer than the swap)
+  (the lock the swap is made under and held no longer than the swap),
+  [ADR-0134](0134-the-state-is-compressed-and-stamped.md) (the newer local copy a start
+  keeps, and the line a retired name gets at a takeover)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -73,22 +75,26 @@ A keeper, for its part, moves bytes and knows nothing about the files.
    a holder that died before anybody wrote again continues with its own state, which
    is the case that must work out of the box.
 
-5. **Adoption is the process first, then the disk — and on the disk, the temporary
-   file first.** The store's copy is parsed and handed to `restore`; then it is written
-   to the temporary file, the live file set aside as `<name>.bak` — an older one
-   overwritten — and the temporary file renamed into place: the one write that can
-   fail fails before anything has moved, the two renames in one directory leave no
-   moment with the live file gone, and should the last of them fail all the same, the
-   live file is put back from `.bak` before the failure is raised. Then the digest the
-   mirror compares against is seeded with the bytes that landed, so what arrived from
-   the store is not sent back until it changes. A copy whose bytes are the local
-   file's already — a token that moved without its bytes moving — is nothing to adopt:
-   the digest is seeded and no `.bak` is made of a file for its own copy. A file with
-   no `restore` is set aside and written but not swapped in memory, and its line says
-   so. The order makes every failure leave a consistent
-   state: a copy the process cannot take — not JSON, a `restore` that raises — changes
-   nothing, and a disk that refuses moves nothing; each is the `load.<file>` line at
-   ERROR, with *adopt* as the verb, standing until an adoption of that file lands.
+5. **Adoption is the process first, then the disk — and on the disk, the temporary file
+   first.** The store's copy is parsed and handed to `restore`; then it is written to
+   the temporary file, the live file set aside as `<name>.bak` — an older one
+   overwritten — and the temporary file renamed into place: the one write that can fail
+   fails before anything has moved, the two renames in one directory leave no moment
+   with the live file gone, and should the last of them fail all the same, the live file
+   is put back from `.bak` before the failure is raised. Then the digest the mirror
+   compares against is seeded with the bytes that landed, so what arrived from the store
+   is not sent back until it changes. A copy whose bytes are the local file's already —
+   a token that moved without its bytes moving — is nothing to adopt: the digest is
+   seeded and no `.bak` is made of a file for its own copy. A file with no `restore` is
+   set aside and written but not swapped in memory, and its line says so: *until a
+   restart*, which takes it in. A retired name a takeover adopts, `events.json` or
+   `series.json`, is written in place the same way, under a line that says it is no
+   longer read, since no restart makes *until a restart* true for it
+   ([ADR-0134](0134-the-state-is-compressed-and-stamped.md) decision 2). The order makes
+   every failure leave a consistent state: a copy the process cannot take — not JSON, a
+   `restore` that raises — changes nothing, and a disk that refuses moves nothing; each
+   is the `load.<file>` line at ERROR, with *adopt* as the verb, standing until an
+   adoption of that file lands.
 
    **A file whose adoption failed is held out of the mirror until one lands.** The
    instance holds the lease now and the interval's saves run — and a save of that file
@@ -108,7 +114,7 @@ A keeper, for its part, moves bytes and knows nothing about the files.
    refuses a walk upwards, at startup and at a takeover alike, since a store that offers
    `maintenance.json.bak` is not offering a state file. What is lost is the gap between
    the holder's last heartbeat and the takeover; merging it into the store's log would
-   be the merge ADR-0004 refused.
+   be the merge little-sister-aws ADR-0004 refused.
 
 7. **What was set aside is shown, and the way back is a button.** The `state` child on
    `/little-sister` lists every `.bak` in the directory in its `report` — a fact, not a
@@ -125,7 +131,11 @@ A keeper, for its part, moves bytes and knows nothing about the files.
 
 8. **`restore_from_keeper` seeds the same digest** for every file it writes, so the
    first flush after a start no longer sends every restored file back once — found on
-   the way and fixed beside it, the same rule as decision 5.
+   the way and fixed beside it, the same rule as decision 5. A start may keep a local
+   copy over the store's instead — one newer by the same writer, written holding
+   ([ADR-0134](0134-the-state-is-compressed-and-stamped.md) decision 5) — and the keeper
+   notes the store's token as it loads all the same, so the flip that follows names
+   nothing for it and the flip's save sends the newer copy up.
 
 ## Consequences
 
@@ -154,14 +164,15 @@ A keeper, for its part, moves bytes and knows nothing about the files.
 - **Keep the rule *its own state is what it writes***. Right for the dead-holder
   successor, wrong for every rollout; rejected the day the first rollout showed it.
 - **Merge the standby's observations into the store's log at takeover.** The merge
-  ADR-0004 refused, for three minutes of observations the dead holder mostly made too.
+  little-sister-aws ADR-0004 refused, for three minutes of observations the dead holder
+  mostly made too.
 - **Restart the standby instead of adopting**: a restart restores the store and needs
   no runtime swap. A standby under an autoscaling group is the instance that is about
   to serve; killing it to make it right is the rollout failing on purpose, and a demoted
   holder that takes the lease back has nobody to restart it.
-- **The `.bak` in the store, versioned.** One copy per file is ADR-0004's decision,
-  to be revisited when the series file joins the store; the shadow is one instance's
-  and belongs on that instance.
+- **The `.bak` in the store, versioned.** One copy per file is little-sister-aws
+  ADR-0004's decision, to be revisited when the series file joins the store; the shadow
+  is one instance's and belongs on that instance.
 - **List the `.bak` files from the disk at report time.** A stat is cheap and this is
   the local disk, and the rule of ADR-0072 is that a report never measures; the stamps
   cost one scan at startup and one assignment per write.

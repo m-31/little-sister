@@ -23,7 +23,8 @@ from little_sister.keeper import (
     register_keeper,
     registered_keeper,
 )
-from little_sister.state import BACKUP_SUFFIX, EVENTS_FILE, MAINTENANCE_FILE, StateLayer
+from little_sister.state import BACKUP_SUFFIX, EVENTS_FILE, PINS_FILE, StateLayer
+from tests.state_files import encoded, on_disk, tables
 
 
 class _Store:
@@ -137,14 +138,13 @@ class RestoreTests(_KeeperTest):
     """The keeper loads **first**, and a failure never refuses to start."""
 
     def test_every_file_it_holds_arrives_in_the_directory(self):
-        store = _Store({"events.json": b'{"events": []}',
-                        "store.sqlite3": b"\x00binary"})
+        log = encoded(EVENTS_FILE, {"events": []})
+        store = _Store({EVENTS_FILE: log, "store.sqlite3": b"\x00binary"})
         register_keeper("s3", store)
         with tempfile.TemporaryDirectory() as directory:
             state = self._layer(directory)
             state.restore_from_keeper()
-            self.assertEqual(state.path("events.json").read_bytes(),
-                             b'{"events": []}')
+            self.assertEqual(state.path(EVENTS_FILE).read_bytes(), log)
             # it never knows what a file means: a package's own file rides along
             self.assertEqual(state.path("store.sqlite3").read_bytes(), b"\x00binary")
             self.assertEqual(state.lines(), ())
@@ -230,13 +230,13 @@ class SaveTests(_KeeperTest):
         register_keeper("s3", store)
         with tempfile.TemporaryDirectory() as directory:
             state = self._layer(directory)
-            state.write("maintenance.json", {"nodes": {}})
-            state.keep("events.json", lambda: {"events": [1]})
+            state.write(PINS_FILE, {"nodes": {}})
+            state.keep(EVENTS_FILE, lambda: {"events": [1]})
             # a file no producer here registered — a package's own store
             state.path("store.sqlite3").write_bytes(b"\x00binary")
             state.flush()
             self.assertEqual(sorted(name for name, _data in store.saved),
-                             ["events.json", "maintenance.json", "store.sqlite3"])
+                             [EVENTS_FILE, PINS_FILE, "store.sqlite3"])
             self.assertEqual(state.lines(), ())
 
     def test_it_takes_what_this_flush_wrote_not_the_flush_before(self):
@@ -245,13 +245,13 @@ class SaveTests(_KeeperTest):
         with tempfile.TemporaryDirectory() as directory:
             state = self._layer(directory)
             payload = {"events": [1]}
-            state.keep("events.json", lambda: payload)
+            state.keep(EVENTS_FILE, lambda: payload)
             state.flush()
             payload["events"].append(2)
             state.flush()
-            sent = [data for name, data in store.saved if name == "events.json"]
+            sent = [data for name, data in store.saved if name == EVENTS_FILE]
             self.assertEqual(len(sent), 2)
-            self.assertIn(b"2", sent[-1])
+            self.assertEqual(tables(EVENTS_FILE, sent[-1]), {"events": [1, 2]})
 
     def test_an_unchanged_file_is_not_sent_again(self):
         store = _Store()
@@ -363,7 +363,8 @@ class OnTheHeartbeatTests(_KeeperTest):
     def test_the_instance_restored_from_a_keeper_says_nothing_at_all(self):
         # A working keeper is silent everywhere but /system: nothing claims
         # anything, so the heartbeat stays OK.
-        register_keeper("s3", _Store({"events.json": b'{"events": []}'}))
+        register_keeper("s3", _Store({EVENTS_FILE: encoded(EVENTS_FILE,
+                                                           {"events": []})}))
         with tempfile.TemporaryDirectory() as directory:
             state = self._layer(directory)
             state.restore_from_keeper()
@@ -373,7 +374,8 @@ class OnTheHeartbeatTests(_KeeperTest):
     def test_the_first_flush_after_a_restore_does_not_send_back_what_arrived(self):
         """What the keeper handed over at startup is what it holds: a file is sent
         again only once it has changed, not once per start."""
-        store = _Store({"events.json": b'{"events": []}', "a.json": b'{"k": 1}'})
+        store = _Store({EVENTS_FILE: encoded(EVENTS_FILE, {"events": []}),
+                        "a.json": b'{"k": 1}'})
         register_keeper("s3", store)
         with tempfile.TemporaryDirectory() as directory:
             state = self._layer(directory)
@@ -413,19 +415,19 @@ class AFreshMachineTests(_KeeperTest):
     def _the_old_machine(self) -> _Store:
         """What the instance that stopped left in the bucket: its event log and
         one pin, written by a state layer of its own."""
-        from little_sister.maintenance import MaintenanceEntry, MaintenanceStore
+        from little_sister.pins import MAINTENANCE, Pin, PinStore
         from little_sister.tree import StatusTree
         store = _Store()
         with tempfile.TemporaryDirectory() as directory:
             old = StateLayer(directory)
-            MaintenanceStore(old).save({"/x": MaintenanceEntry(
+            PinStore(old).save({"/x": Pin(MAINTENANCE,
                 "planned", datetime(2026, 1, 1, tzinfo=UTC),
                 datetime(2999, 1, 1, tzinfo=UTC), "ada")})
             written = StatusTree()
             written.upsert("/x", StatusCode.OK)
             written.upsert("/x", StatusCode.ERROR, "down")
-            old.write("events.json", written.events_payload())
-            for name in ("maintenance.json", "events.json"):
+            old.write(EVENTS_FILE, written.events_payload())
+            for name in (PINS_FILE, EVENTS_FILE):
                 store.held[name] = old.path(name).read_bytes()
         return store
 
@@ -434,7 +436,7 @@ class AFreshMachineTests(_KeeperTest):
         with tempfile.TemporaryDirectory() as directory:
             state = self._layer(directory)     # an empty machine
             self._app._restore_state(_Roots("/x"), state)  # type: ignore[arg-type]
-            self.assertEqual(self.tree.maintenance_entry("/x").reason, "planned")
+            self.assertEqual(self.tree.maintenance_entry("/x").note, "planned")
             self.assertEqual([event.new for event in self.tree.recent_events()
                               if event.path == "/x"],
                              [StatusCode.OK, StatusCode.ERROR,
@@ -656,8 +658,8 @@ class TakeoverTests(_KeeperTest):
             # there is beside it as .bak
             self.assertEqual(taken, [{"who": "them"}])
             self.assertEqual(state.read("a.json"), {"who": "them"})
-            self.assertEqual(json.loads(state.path("a.json" + BACKUP_SUFFIX)
-                                        .read_text()), {"who": "me"})
+            self.assertEqual(on_disk(state.path("a.json" + BACKUP_SUFFIX)),
+                             {"who": "me"})
             # nothing overwrote the store: it holds what it held, and the copy
             # that arrived from it is not sent back until it changes
             self.assertEqual(store.held["a.json"], b'{"who": "them"}')
@@ -700,9 +702,10 @@ class TakeoverTests(_KeeperTest):
             self.assertEqual(state.read("a.json"), {"who": "the interim holder"})
 
     def test_a_kept_file_is_adopted_in_memory_and_its_older_backup_overwritten(self):
-        # The holder wrote the file with the layer's own serializer, as a holder
-        # does: what the producer yields after the adoption is then the text on
-        # disk, and the file is neither rewritten nor sent until the state moves.
+        # What the producer yields after the adoption is then the content on disk,
+        # whatever serializer wrote the holder's copy — the layer compares content,
+        # never text (ADR-0134) — so the file is neither rewritten nor sent until
+        # the state moves.
         store = _TakeoverStore({"log.json": json.dumps({"n": 3}, indent=2,
                                                        sort_keys=True).encode()})
         store.changed = ["log.json"]
@@ -714,8 +717,8 @@ class TakeoverTests(_KeeperTest):
             store.wanted = True
             state.flush()
             self.assertEqual(held, {"n": 3})
-            self.assertEqual(json.loads(state.path("log.json" + BACKUP_SUFFIX)
-                                        .read_text()), {"n": 1})
+            self.assertEqual(on_disk(state.path("log.json" + BACKUP_SUFFIX)),
+                             {"n": 1})
             # the adopted text is what the producer now yields: not rewritten,
             # not sent, until the state changes
             state.flush()
@@ -862,8 +865,8 @@ class TakeoverTests(_KeeperTest):
             state.path("a.json.tmp").rmdir()
             state.flush()
             self.assertEqual(state.read("a.json"), {"who": "them"})
-            self.assertEqual(json.loads(state.path("a.json" + BACKUP_SUFFIX)
-                                        .read_text()), {"who": "me"})
+            self.assertEqual(on_disk(state.path("a.json" + BACKUP_SUFFIX)),
+                             {"who": "me"})
             self.assertEqual(self._coded(state), [])
 
     def test_the_last_rename_failing_puts_the_live_file_back(self):
@@ -905,12 +908,12 @@ class TakeoverTests(_KeeperTest):
         """A token that moved without its bytes moving — a versioned or an
         encrypted PUT of the same bytes — makes no ``.bak`` of a file for its
         own copy, and seeds the digest so it is not sent back either."""
-        local = json.dumps({"who": "me"}, indent=2, sort_keys=True).encode()
-        store = _TakeoverStore({"a.json": local})
+        store = _TakeoverStore()
         store.changed = ["a.json"]
         taken: list[object] = []
         with tempfile.TemporaryDirectory() as directory:
             state = self._standby(directory, store)
+            store.held["a.json"] = state.path("a.json").read_bytes()
             state.restore_with("a.json", taken.append)
             store.wanted = True
             with self.assertLogs(level="INFO") as captured:
@@ -1071,11 +1074,11 @@ class AStandbyTakesOverTests(_KeeperTest):
     def _written_by_the_holder() -> dict[str, bytes]:
         """What the holder wrote to the store while this instance stood by: a pin
         on ``/x`` and two transitions of it."""
-        from little_sister.maintenance import MaintenanceEntry, MaintenanceStore
+        from little_sister.pins import MAINTENANCE, Pin, PinStore
         from little_sister.tree import StatusTree
         with tempfile.TemporaryDirectory() as directory:
             theirs = StateLayer(directory)
-            MaintenanceStore(theirs).save({"/x": MaintenanceEntry(
+            PinStore(theirs).save({"/x": Pin(MAINTENANCE,
                 "theirs", datetime(2026, 1, 1, tzinfo=UTC),
                 datetime(2999, 1, 1, tzinfo=UTC), "ada")})
             written = StatusTree()
@@ -1083,7 +1086,7 @@ class AStandbyTakesOverTests(_KeeperTest):
             written.upsert("/x", StatusCode.ERROR, "down")
             theirs.write(EVENTS_FILE, written.events_payload())
             return {name: theirs.path(name).read_bytes()
-                    for name in (MAINTENANCE_FILE, EVENTS_FILE)}
+                    for name in (PINS_FILE, EVENTS_FILE)}
 
     def test_a_standby_takes_over_with_the_stores_state_and_keeps_its_own_as_bak(self):
         store = _TakeoverStore()
@@ -1098,14 +1101,14 @@ class AStandbyTakesOverTests(_KeeperTest):
             self.assertEqual(store.saved, [])
             # the holder wrote meanwhile; then its lease lapsed
             store.held.update(self._written_by_the_holder())
-            store.changed = [MAINTENANCE_FILE, EVENTS_FILE]
+            store.changed = [PINS_FILE, EVENTS_FILE]
             store.wanted = True
 
             state.flush()
 
             # the process holds the store's pins: /x pinned as the holder left
             # it, this instance's own /y cleared with a real transition
-            self.assertEqual(self.tree.maintenance_entry("/x").reason, "theirs")
+            self.assertEqual(self.tree.maintenance_entry("/x").note, "theirs")
             self.assertIsNone(self.tree.maintenance_entry("/y"))
             # and the store's events, followed by the transitions the adoption
             # itself made — the log was adopted first
@@ -1115,9 +1118,9 @@ class AStandbyTakesOverTests(_KeeperTest):
                               ("/y", StatusCode.UNDEFINED),
                               ("/x", StatusCode.MAINTENANCE)])
             # what it had is beside the live files as .bak
-            mine = json.loads(state.path(MAINTENANCE_FILE + BACKUP_SUFFIX).read_text())
-            self.assertEqual(list(mine["nodes"]), ["/y"])
-            log = json.loads(state.path(EVENTS_FILE + BACKUP_SUFFIX).read_text())
+            mine = on_disk(state.path(PINS_FILE + BACKUP_SUFFIX))
+            self.assertEqual([row["path"] for row in mine["pins"]], ["/y"])
+            log = on_disk(state.path(EVENTS_FILE + BACKUP_SUFFIX))
             self.assertEqual([raw["path"] for raw in log["events"]], ["/y"])
             # nothing was sent back this interval, and one save of each follows
             # once each changes
@@ -1125,10 +1128,10 @@ class AStandbyTakesOverTests(_KeeperTest):
             self.tree.set_maintenance("/y", "again", expires_at=_far(), set_by="bob")
             state.flush()
             self.assertEqual([name for name, _ in store.saved],
-                             [EVENTS_FILE, MAINTENANCE_FILE])
+                             [EVENTS_FILE, PINS_FILE])
             self.assertEqual(state.lines(), ())
             self.assertIn(f"{EVENTS_FILE}{BACKUP_SUFFIX}", state.report())
-            self.assertIn(f"{MAINTENANCE_FILE}{BACKUP_SUFFIX}", state.report())
+            self.assertIn(f"{PINS_FILE}{BACKUP_SUFFIX}", state.report())
 
     def test_the_successor_of_a_dead_holder_continues_with_its_own_state(self):
         store = _TakeoverStore(self._written_by_the_holder())
@@ -1136,14 +1139,14 @@ class AStandbyTakesOverTests(_KeeperTest):
         with tempfile.TemporaryDirectory() as directory:
             state = StateLayer(directory, interval_seconds=3600)
             self._app._restore_state(_Roots("/x", "/y"), state)  # type: ignore[arg-type]
-            self.assertEqual(self.tree.maintenance_entry("/x").reason, "theirs")
+            self.assertEqual(self.tree.maintenance_entry("/x").note, "theirs")
             self.tree.set_maintenance("/y", "mine", expires_at=_far(), set_by="bob")
             state.flush()      # the first interval it takes; nothing changed
             self.assertEqual(store.asked, 1)
-            self.assertEqual(self.tree.maintenance_entry("/y").reason, "mine")
-            self.assertFalse(state.path(MAINTENANCE_FILE + BACKUP_SUFFIX).exists())
+            self.assertEqual(self.tree.maintenance_entry("/y").note, "mine")
+            self.assertFalse(state.path(PINS_FILE + BACKUP_SUFFIX).exists())
             self.assertEqual([name for name, _ in store.saved],
-                             [EVENTS_FILE, MAINTENANCE_FILE])
+                             [EVENTS_FILE, PINS_FILE])
             self.assertEqual(state.lines(), ())
 
 

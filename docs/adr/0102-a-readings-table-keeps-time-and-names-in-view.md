@@ -1,7 +1,7 @@
 # ADR-0102 — A readings table keeps time and names in view; a quiet log says what it means
 
 - **Status:** Accepted
-- **Date:** 2026-10-03
+- **Date:** 2026-10-24 (accepted 2026-10-03)
 - **Related:** [ADR-0092](0092-a-check-declares-its-measures.md) (decision 6, the
   readings table; the measures whose labels and units head it),
   [ADR-0097](0097-a-nodes-series-have-a-view-of-their-own.md) (decision 1, History
@@ -12,7 +12,9 @@
   (decision 2, the current row reads *current*; decisions 1 and 9, a bound),
   [ADR-0110](0110-what-every-node-last-showed-is-kept-beside-the-log.md) (decision 5,
   the kept entry a quiet node's period is read from),
-  [ADR-0027](0027-observation-timestamp-semantics.md) (an observed node carries a stamp)
+  [ADR-0027](0027-observation-timestamp-semantics.md) (an observed node carries a stamp),
+  [ADR-0132](0132-a-branch-keeps-the-period-of-what-it-shows-beside-the-log.md) (decision
+  6, History's two tables of periods for a node above others)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -59,6 +61,15 @@ name.
 
 ### 3. A quiet log says what it means
 
+A node above others has two tables of periods on History
+([ADR-0132](0132-a-branch-keeps-the-period-of-what-it-shows-beside-the-log.md) decision
+6): first those of what it shows, newest first — the one that holds from its entry,
+where it is of what the node shows, and those that ended, derived from the rows at and
+beneath it and of a dependency a shield there is reached through, as far back as the log
+holds them, the oldest stated by a bound — each naming the node that began it and what
+moved it, the newest fifty open and the rest in one fold beneath them; then those of its
+own status. What follows reads the same of each table.
+
 Where the log holds no change of a node's status, History says which quiet it is. A
 node that declares nothing of its own above nodes that report (ADR-0094 decision 5)
 says so in the sentence it uses once it has stopped declaring: *Declares nothing of its
@@ -80,8 +91,9 @@ recorded*.
   holds no change of holds its status *since* the instant the kept table says, or *since
   before* its bound, there too (ADR-0099 decision 1), from the one rule that bounds
   every period a surface states.
-- **Nothing moves on a contract**: these are pages, and the JSON envelope carries no
-  readings and no periods.
+- **Nothing moves on a contract for this**: these are pages, and the JSON envelope
+  carries no readings. The two periods a node carries there are ADR-0132's (decision 7,
+  [ADR-0080](0080-the-envelope-is-the-snapshot-published.md)).
 
 ## Alternatives considered
 

@@ -394,7 +394,7 @@ def _nine_roots_with_trailing_chains() -> StatusSnapshot:
 def _fifteen_leaves_and_a_mixed_root() -> StatusSnapshot:
     """Fifteen leaf roots plus one root with chains of heights (3,3,3,7,5).
 
-    The undodgeable case (Lex, 2026-08-12): inside an unchanged three-track
+    The undodgeable case: inside an unchanged three-track
     band the mixed card's nested auto-fit flips three columns to four, the
     7-chain re-chunks beside the 5-chain instead of above it, and the fixed
     plan rises 16 -> 18 modeled rows — while every alternative track count
@@ -533,7 +533,7 @@ class WidthPricedBreakpointTests(TestCase):
                 previous = page
 
     def test_the_incumbents_own_count_dodges_a_mid_band_column_flip(self):
-        # The compact counterexample (Lex, 2026-08-12): nine roots, the ninth
+        # The compact counterexample: nine roots, the ninth
         # ending in five short children and two deep chains.  At ~2,032px its
         # nested grid flips from five to six columns, the chains land in
         # separate rows, and the held plan rises 12 -> 17 modeled rows —
@@ -559,7 +559,7 @@ class WidthPricedBreakpointTests(TestCase):
         self.assertNotEqual(after[1], before[1])
 
     def test_an_auto_fill_band_breaks_before_a_new_track_rechunks_worse(self):
-        # The second counterexample (Lex, 2026-08-12): twelve linear roots of
+        # The second counterexample: twelve linear roots of
         # mixed heights ride one auto-fill band, and at 2,752px the eighth
         # track re-chunks them 15 -> 16 modeled rows.  The seven-track hold
         # sat below the old `min(roots, auto-fill)` floor, which grew with
@@ -1012,16 +1012,18 @@ class FirstLookPricingTests(TestCase):
         self.assertEqual(dashboard_layout(roots, 8, priced=priced).weights, (7,))
 
     def test_what_a_status_opens_or_closes_is_never_priced(self):
-        # the failure budget's openings, and today's density, which closes a
-        # quiet leaf by its status: the planner reads the configured look alone
+        # the failure budget's openings, which a status decides: the planner reads
+        # the configured look and the tree's shape alone, the chips of a level the
+        # built-in look calls big among them, which no status moves
         def wall(failing: bool):
             tree = StatusTree()
             for leaf in ("a", "b", "c", "d"):
                 tree.upsert(f"/card/svc/{leaf}", StatusCode.OK, "in step")
-            tree.upsert("/plain/x/one", StatusCode.OK)
+            for index in range(31):
+                tree.upsert(f"/plain/x/n{index:02d}", StatusCode.OK)
             if failing:
                 tree.upsert("/card/svc/b", StatusCode.ERROR, "down")
-                tree.upsert("/plain/x/one", StatusCode.ERROR, "down")
+                tree.upsert("/plain/x/n00", StatusCode.ERROR, "down")
             root = _snapshot(tree, "")
             looks = FirstLooks((), {"/card/svc": NodeMeta(look=Stated(chips=True))},
                                Config(), lambda _path: False)
@@ -1030,7 +1032,8 @@ class FirstLookPricingTests(TestCase):
         calm, calm_drawn = wall(failing=False)
         hot, hot_drawn = wall(failing=True)
         self.assertIn("/card/svc/b", hot_drawn.budget)
-        self.assertIn("/plain/x/one", calm_drawn.closed)    # the density's chip
+        self.assertIn("/plain/x/n00", calm_drawn.closed)    # the big level's chip
+        self.assertIn("/plain/x/n00", hot_drawn.budget)     # opened by the budget
         self.assertEqual(calm_drawn.priced, hot_drawn.priced)
         priced = Priced(closed=calm_drawn.priced, chip_w={"/card/svc": 420})
         self.assertEqual(
@@ -1102,3 +1105,265 @@ class FirstLookPricingTests(TestCase):
                         self.assertEqual(
                             self.model._piece_height(pieces, width),
                             self.model._flow_height(node, 7, width, 1, priced))
+
+
+def _towered_roots() -> tuple[StatusSnapshot, ...]:
+    """Five cards of one line and a sixth of six boxes three leaves deep."""
+    tree = StatusTree()
+    for index in range(5):
+        tree.upsert(f"/s{index}", StatusCode.OK)
+    for child in range(6):
+        for leaf in range(3):
+            tree.upsert(f"/tall/c{child}/l{leaf}", StatusCode.OK)
+    return _snapshot(tree, "").children
+
+
+class PackedPricingTests(TestCase):
+    """Under the look `boxes: packed` (ADR-0138) the planner prices every level as it
+    is packed — each box beneath the shortest column, a run of chips in one column as
+    a box is, a level of a card as many columns as fit and its boxes and runs fill —
+    and the plan is the one that packs the page shortest."""
+
+    def setUp(self):
+        from little_sister import dashboard_layout as model
+        self.model = model
+        model._memo.clear()
+
+    def test_a_packed_level_stands_each_box_beneath_the_shortest_column(self):
+        box = (1, 0, (), ())
+        kids = (box,) * 4
+        width = 2 * 3300 + 64
+        # a tall box and three short ones in two columns: rows stand the second pair
+        # beneath the tall one, packed stands the three beside it
+        self.assertEqual(self.model._level_rows(kids, iter([5, 1, 1, 1]), 2, 0, width),
+                         5 + 1)
+        self.assertEqual(
+            self.model._level_packed(kids, iter([5, 1, 1, 1]), 2, 0, width), 5)
+        # a level's first boxes stand one to a column, a tall one first or not
+        self.assertEqual(
+            self.model._level_packed(kids, iter([1, 5, 1, 1]), 2, 0, width), 5)
+        # and of two columns as short the leftmost takes the next box
+        self.assertEqual(
+            self.model._level_packed(kids[:3], iter([2, 2, 3]), 2, 0, width), 5)
+
+    def test_a_packed_run_stands_in_one_column_its_lines_at_the_columns_width(self):
+        box = (1, 0, (), ())
+        chip_w = 10 * self.model._CHIP_CH
+        width = 3 * 3300 + 2 * 64
+        # six chips: thirteen to a line across the level, four in a column of it
+        kids = (box, None, None, None, None, None, None, box)
+        self.assertEqual(
+            self.model._level_rows(kids, iter([1, 1]), 3, chip_w, width), 1 + 1 + 1)
+        self.assertEqual(
+            self.model._level_packed(kids, iter([1, 1]), 3, chip_w, width), 2)
+        # the run in the second column, two lines, the boxes beside it a line each
+        self.assertEqual(
+            self.model._level_packed(kids, iter([3, 1]), 3, chip_w, width), 3)
+
+    def test_a_packed_level_lays_as_many_tracks_as_its_boxes_and_runs_fill(self):
+        # wide enough for four tracks of a card's level: in rows a run stands across
+        # every one of them; packed, two boxes and a run fill three, a third each
+        width = 2 * (2 * 3364 - 64 + 180) + 64
+        self.assertEqual(self.model._level_columns(width, 2, 1, packed=False), 4)
+        self.assertEqual(self.model._level_columns(width, 2, 1, packed=True), 3)
+        self.assertEqual(self.model._level_columns(width, 2, 0, packed=True), 2)
+        self.assertEqual(self.model._level_columns(width, 5, 1, packed=True), 4)
+        # one open box is no grid, whatever its runs
+        self.assertEqual(self.model._level_columns(width, 1, 2, packed=True), 1)
+        tree = StatusTree()
+        for name in ("a", "b"):
+            for leaf in ("x", "y"):
+                tree.upsert(f"/card/{name}/{leaf}", StatusCode.OK)
+        tree.upsert("/card/c", StatusCode.OK)
+        shape = self.model._shape(_card(tree, "card"), 7, 1,
+                                  Priced(closed=frozenset({"/card/c"})))
+        # each box a third wide, its leaves stacked, and the run a line beside them
+        self.assertEqual(self.model._shape_height(shape, width, packed=True), 1 + 3)
+        self.assertEqual(self.model._shape_height(shape, width), 1 + 3 + 1)
+
+    def test_packed_pieces_match_the_reference_evaluation(self):
+        # the bottom-up pieces and the subtree walk agree packed as in rows
+        model = self.model
+        cost = model._reason_cost(6)
+        for node in _deep_branch_root().children:
+            shape = model._shape(node, 7, cost)
+            pieces = model._shape_pieces(shape, packed=True)
+            probes = {bound for bound, _height in pieces}
+            probes |= {bound - 1 for bound in probes if bound > 1}
+            probes |= set(range(1, model._MAX_CONTENT_WIDTH, 9973))
+            for width in sorted(probes):
+                with self.subTest(node=node.name, width=width):
+                    self.assertEqual(model._piece_height(pieces, width),
+                                     model._shape_height(shape, width, packed=True))
+
+    def test_packed_pieces_match_the_reference_with_closed_levels(self):
+        # the seeded walls of the rows' differential, packed: runs and boxes at every
+        # depth, each run in one column of its level
+        import random
+        model = self.model
+        rng = random.Random(20261025)
+        for trial in range(10):
+            tree = StatusTree()
+            for index in range(rng.randint(1, 4)):
+                for child in range(rng.randint(1, 9)):
+                    for grand in range(rng.randint(0, 5)):
+                        chain = "".join(f"/e{level}"
+                                        for level in range(rng.randint(0, 2)))
+                        tree.upsert(f"/t{index}/c{child}/g{grand}{chain}",
+                                    StatusCode.OK)
+                    if not rng.randint(0, 3):
+                        tree.upsert(f"/t{index}/c{child}", StatusCode.OK)
+            root = _snapshot(tree, "")
+            paths: list[str] = []
+
+            def walk(node, paths=paths):
+                for kid in node.children:
+                    paths.append(kid.path)
+                    walk(kid)
+            walk(root)
+            closed = frozenset(path for path in paths
+                               if path.count("/") > 1 and rng.random() < 0.4)
+            priced = Priced(
+                closed=closed,
+                caps={path: rng.choice((0, 6, 12, 30)) for path in paths
+                      if rng.random() < 0.3},
+                chip_w={path: rng.randint(300, 3000) for path in paths},
+                chip_own={path: rng.randint(250, 4500) for path in closed
+                          if rng.random() < 0.9})
+            for node in root.children:
+                shape = model._shape(node, 7, 1, priced)
+                pieces = model._shape_pieces(shape, packed=True)
+                probes = {bound for bound, _height in pieces}
+                probes |= {bound - 1 for bound in probes if bound > 1}
+                probes |= set(range(1, model._MAX_CONTENT_WIDTH, 7919))
+                # and finely where a run in one column of its level wraps its chips
+                probes |= set(range(1, 30000, 113))
+                for width in sorted(probes):
+                    with self.subTest(trial=trial, node=node.name, width=width):
+                        self.assertEqual(
+                            model._piece_height(pieces, width),
+                            model._shape_height(shape, width, packed=True))
+
+    def test_a_tall_card_takes_the_tracks_that_pack_the_page_shortest(self):
+        # at three tracks rows' plan has no track to spare in a row of three cards and
+        # leaves every card one; packed the tall card takes all three beneath the five
+        # short ones, and the packed page is 11 rows where rows' plan packs 26
+        model = self.model
+        roots = _towered_roots()
+        self.assertEqual(_band_at(dashboard_layout(roots, 8), 13600), (0, (1,) * 6))
+        packed = dashboard_layout(roots, 8, packed=True)
+        self.assertEqual(_band_at(packed, 13600), (3, (1, 1, 1, 1, 1, 3)))
+        pieces = tuple(model._height_pieces(node, 7, 1, None, packed=True)
+                       for node in roots)
+        self.assertEqual(model._packed_plan_cost(pieces, 13600, 3, (1,) * 6)[0], 26)
+        self.assertEqual(
+            model._packed_plan_cost(pieces, 13600, 3, (1, 1, 1, 1, 1, 3))[0], 11)
+
+    def test_a_card_keeps_one_track_where_more_would_stand_it_beneath_a_tower(self):
+        # a tower and a card of two boxes beside it at two tracks: two tracks would
+        # shorten the second card, but stand it beneath the tower, so packed it keeps
+        # one
+        model = self.model
+        tower = _profile((1, 30))
+        beside = _profile((1, 4), (2, 2))
+        spans, (page, _filled) = model._pack_spans((tower, beside), 2)
+        self.assertEqual(spans, (1, 1))
+        self.assertEqual(page, 30)
+        # where the tower comes after it, the short card's two tracks would stand the
+        # tower beneath it
+        spans, (page, _filled) = model._pack_spans((beside, tower), 2)
+        self.assertEqual(page, 30)
+        self.assertEqual(spans, (1, 1))
+
+    def test_a_step_that_keeps_the_page_is_taken_where_it_fills_the_columns_less(self):
+        # the tower makes the page; a card beside it two tracks wide is 4 rows tall
+        # where one wide it is 10, and its two columns hold 8 rows where its one held
+        # 10: the step is taken, the page as low and the columns filled less
+        model = self.model
+        tower = _profile((1, 30))
+        spans, cost = model._pack_spans((tower, _profile((1, 10), (2, 4))), 3)
+        self.assertEqual((spans, cost), ((1, 2), (30, 38)))
+        # six rows tall two wide, its columns would hold 12: the step is left
+        spans, cost = model._pack_spans((tower, _profile((1, 10), (2, 6))), 3)
+        self.assertEqual((spans, cost), ((1, 1), (30, 40)))
+
+    def test_the_packed_plan_never_packs_worse_than_the_rows_plan(self):
+        # the greedy steps alone can lose to rows' plan, so at every track count the
+        # packed plan is rows' own where that packs no taller: a packed wall is never
+        # planned worse than rows' plan would pack it, at any width
+        import random
+        model = self.model
+        rng = random.Random(20261026)
+        lost = 0
+        for trial in range(12):
+            tree = StatusTree()
+            for index in range(rng.randint(2, 10)):
+                for child in range(rng.randint(1, 7)):
+                    chain = "".join(f"/e{level}" for level in range(rng.randint(0, 3)))
+                    tree.upsert(f"/t{index:02d}/c{child}{chain}", StatusCode.OK)
+            roots = _snapshot(tree, "").children
+            pieces = tuple(model._height_pieces(node, 7, 1, None, packed=True)
+                           for node in roots)
+            for width in sorted(model._band_events(pieces))[::7]:
+                for tracks in range(1, model._track_count(width) + 1):
+                    profiles = [model._profile_at(card, width, tracks)
+                                for card in pieces]
+                    rowed = model._packed_plan_cost(
+                        pieces, width, tracks, allocate_spans(profiles, tracks))
+                    greedy = model._pack_spans(profiles, tracks)[1]
+                    lost += greedy > rowed
+                    page, filled, _plan = model._packed_allocation_at(pieces, width,
+                                                                      tracks)
+                    with self.subTest(trial=trial, width=width, tracks=tracks):
+                        self.assertLessEqual((page, filled), rowed)
+        # the fallback is no ornament: the greedy steps alone do lose somewhere here
+        self.assertGreater(lost, 0)
+
+    def test_randomized_packed_walls_are_never_worse_than_the_best_legal_choice(self):
+        # the rows sweep's promise, packed: at every width the published band packs
+        # no taller than the best plan a legal track count offers there
+        import random
+        model = self.model
+        rng = random.Random(20261025)
+        for trial in range(8):
+            tree = StatusTree()
+            for index in range(rng.randint(2, 10)):
+                if rng.random() < 0.5:
+                    chain = "".join(f"/d{level}" for level in range(rng.randint(1, 5)))
+                    tree.upsert(f"/t{index:02d}{chain}", StatusCode.OK)
+                else:
+                    for child in range(rng.randint(2, 7)):
+                        chain = "".join(f"/e{level}"
+                                        for level in range(rng.randint(0, 3)))
+                        tree.upsert(f"/t{index:02d}/c{child}{chain}", StatusCode.OK)
+            roots = _snapshot(tree, "").children
+            pieces = tuple(model._height_pieces(node, 7, 1, None, packed=True)
+                           for node in roots)
+            layout = dashboard_layout(roots, 8, packed=True)
+            probes = sorted({width for event in model._band_events(pieces)
+                             for width in (event - 1, event) if width >= 1})
+            for width in probes:
+                band = None
+                for tenths, tracks, plan in layout.breakpoints:
+                    if tenths > width:
+                        break
+                    band = (tracks, plan)
+                if band is None:
+                    continue
+                tracks = band[0] or model._track_count(width)
+                page = model._packed_plan_cost(pieces, width, tracks, band[1])[0]
+                best = min(model._packed_allocation_at(pieces, width, candidate)[0]
+                           for candidate in range(model._track_floor(width),
+                                                  model._track_count(width) + 1))
+                if page > best:
+                    self.fail(f"trial {trial}: published page {page} at "
+                              f"{width / 10}px although a legal count packs {best}")
+
+    def test_the_memo_keeps_the_looks_apart(self):
+        roots = _towered_roots()
+        rows = dashboard_layout(roots, 8)
+        packed = dashboard_layout(roots, 8, packed=True)
+        self.assertIsNot(rows, packed)
+        self.assertIs(rows, dashboard_layout(roots, 8))
+        self.assertIs(packed, dashboard_layout(roots, 8, packed=True))
+        self.assertNotEqual(rows.breakpoints, packed.breakpoints)

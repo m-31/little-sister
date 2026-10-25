@@ -128,7 +128,7 @@ class StaleAssetsBrowserTests(_BrowserCase):
         card.locator('.status-card__head [data-control="pin"]').click()
         self.page.wait_for_function(
             "document.activeElement !== null"
-            " && document.activeElement.name === 'reason'")
+            " && document.activeElement.name === 'note'")
         self.page.keyboard.type("half a sentence")
         self._upgrade()
         before = len(self.asked)

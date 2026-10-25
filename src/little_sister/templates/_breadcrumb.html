@@ -3,14 +3,17 @@
    The first crumb names the tree, `nodes`: what its first level holds is the
    deployment's to choose, so the crumb names the kind of thing rather than any of
    them. Each crumb opens the same view of that ancestor — the Status view, the
-   Series view, the History page, the Copy page — and `nodes` that view's root, which
-   for History is the overview and for Copy the tree's document (ADR-0115 decision
-   7). The current node (last crumb) is plain text. One flex item, on one
-   line with the node's title beside it while the band has the room. Where it has
-   not — a deep path on a phone — the trail takes as many lines as it needs
-   (`.ls-crumbs`), each ending in its slash: the space before a slash does not break,
-   the one after it does. Expects `branch` in context (the node's url-branch path),
-   and `view` on a page that is one. #}
+   Series view, the History page, the Handbook, the Copy page — and `nodes` that
+   view's root, which for History is the overview and for Copy the tree's document
+   (ADR-0115 decision 7). A Handbook crumb opens the ancestor's handbook where it has
+   one and its Status view where it has none: a sign-in written once for every server
+   beneath a node is that node's handbook (ADR-0133 decision 4), and a node without
+   one has no Handbook view to open. The current node (last crumb) is plain text.
+   One flex item, on one line with the node's title beside it while the band has the
+   room. Where it has not — a deep path on a phone — the trail takes as many lines as
+   it needs (`.ls-crumbs`), each ending in its slash: the space before a slash does
+   not break, the one after it does. Expects `branch` in context (the node's
+   url-branch path), and `view` on a page that is one. #}
 {%- set crumb_view = view | default('status') -%}
 {%- macro crumb_href(path) -%}
     {%- if crumb_view == 'series' -%}
@@ -22,6 +25,8 @@
         {{- url_for('history', path=path) if path else url_for('status') -}}
     {%- elif crumb_view == 'copy' -%}
         {{- url_for('copy', branch=path) if path else url_for('copy') -}}
+    {%- elif crumb_view == 'handbook' and has_handbook(path) -%}
+        {{- url_for('handbook', path=path) if path else url_for('handbook') -}}
     {%- else -%}
         {{- url_for('status', branch=path) if path else url_for('status') -}}
     {%- endif -%}

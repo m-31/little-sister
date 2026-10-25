@@ -1,7 +1,7 @@
 """What the pages say of a node its check no longer reports (ADR-0109 decisions 3
-to 6): the Events page lists each removal and can hide them by their cause, the
-Maintenance page lists a pin whose node is gone, and the check's History page holds
-the readings kept of a subject no node stands for any more.
+to 6): the Events page lists each removal and can hide them by their cause,
+*Handled* lists a pin whose node is gone, and the check's History page holds the
+readings kept of a subject no node stands for any more.
 """
 from __future__ import annotations
 
@@ -175,11 +175,10 @@ class CauseTests(TestCase):
 
 
 class MaintenanceTests(_PageCase):
-    """The Maintenance page lists a pin whose node is no longer reported
-    (decision 4)."""
+    """*Handled* lists a pin whose node is no longer reported (decision 4)."""
 
     def _sections(self) -> dict[str, Element]:
-        page = parse(self._get("/maintenance"))
+        page = parse(self._get("/handled"))
         return {section.one("pin-node__path").text(): section
                 for section in page.all("pin-node")}
 
@@ -207,8 +206,9 @@ class MaintenanceTests(_PageCase):
         _pin(self.tree, EXPORT)
         _pin(self.tree, IMPORT)
         self.tree.prune(JOBS, {"import"})
-        page = parse(self._get("/maintenance"))
-        self.assertEqual(page.one("pin-count").text(), "2 pins on 2 nodes.")
+        page = parse(self._get("/handled"))
+        self.assertEqual(page.one("pin-count").text(),
+                         "2 pins on 2 nodes, the longest standing first.")
 
     def test_a_lines_pin_on_a_removed_node_is_listed_beneath_it(self) -> None:
         self.tree.set_entry_maintenance(
@@ -229,24 +229,25 @@ class MaintenanceTests(_PageCase):
         section = self._sections()[EXPORT]
         forms = section.all(tag="form")
         self.assertEqual(len(forms), 2)
-        response = self.client.post("/maintenance", data={
+        response = self.client.post("/pins/maintenance", data={
             "path": EXPORT, "action": "clear", "set_at": pin.token,
-            "next": "/maintenance?node=/ci/jobs/export#pinned-node"})
+            "next": "/handled?node=/ci/jobs/export#pinned-node"})
         self.assertEqual(response.status_code, 302)
         self.assertIsNone(self.tree.maintenance_entry(EXPORT))
         self.assertIsNone(self.tree.snapshot(EXPORT))
-        self.assertIn("No nodes are in maintenance.", self._get("/maintenance"))
+        self.assertIn("Nothing is handled: no node or line is in maintenance, seen "
+                      "or held by a rule.", self._get("/handled"))
 
     def test_an_edit_keeps_it_and_makes_no_node(self) -> None:
         pin = _pin(self.tree, EXPORT)
         self.tree.prune(JOBS, {"import"})
-        response = self.client.post("/maintenance", data={
+        response = self.client.post("/pins/maintenance", data={
             "path": EXPORT, "action": "set", "set_at": pin.token,
-            "reason": "until Monday", "duration": "3d"})
+            "note": "until Monday", "duration": "3d"})
         self.assertEqual(response.status_code, 302)
         stored = self.tree.maintenance_entry(EXPORT)
         assert stored is not None
-        self.assertEqual(stored.reason, "until Monday")
+        self.assertEqual(stored.note, "until Monday")
         self.assertIsNone(self.tree.snapshot(EXPORT))
         self.assertTrue(self._sections()[EXPORT].has("pin-node--suspended"))
 

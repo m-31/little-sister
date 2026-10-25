@@ -1,11 +1,14 @@
 # ADR-0005 — Dashboard freshness & engine self-monitoring
 
 - **Status:** Accepted
-- **Date:** 2026-10-04 (accepted 2026-06-20)
+- **Date:** 2026-10-25 (accepted 2026-06-20)
 - **Related:** [ADR-0001](0001-in-process-threaded-engine.md) (the engine),
-  [ADR-0004](0004-status-aggregation-semantics.md) (roll-up),
+  [ADR-0039](0039-status-rollup-semantics.md) (roll-up),
   [ADR-0104](0104-a-pin-is-one-block-on-what-it-silences.md) (the editor the poll
-  waits for).
+  waits for), [ADR-0041](0041-maintenance-is-a-contribution-rule.md) (decision 5: the
+  freshness backstop holds under a pin),
+  [ADR-0132](0132-a-branch-keeps-the-period-of-what-it-shows-beside-the-log.md)
+  (decision 2: a branch's period, which a node gone stale moves).
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -19,10 +22,13 @@ that died is the dangerous case — green must mean *freshly verified*.
 **1. Stale statuses degrade.** A node that reports on a schedule but hasn't been
 observed within roughly two of its intervals (`frequency + max(frequency, 30s)`)
 is **stale**. Its status is degraded to at least `WARN` by *worse-of* — so a real
-`ERROR` is never softened — and that rolls up the tree. Maintenance nodes and
-never-reported (`UNDEFINED`) nodes are exempt. Staleness is computed at **render
-time** in the snapshot (it depends on the clock, not on a check running); it is
-**not** recorded as an event.
+`ERROR` is never softened — and that rolls up the tree. A node that never reported
+(`UNDEFINED`) is exempt, and so is one whose check reports `MAINTENANCE` itself: neither
+carries a severity to degrade. A pin exempts nothing — a pinned check that stops running
+escalates as any other does
+([ADR-0041](0041-maintenance-is-a-contribution-rule.md) decision 5). Staleness is
+computed at **render time** in the snapshot (it depends on the clock, not on a check
+running); it is **not** recorded as an event.
 
 The interval is the check's **period**, so the rule reaches exactly as far as
 `frequency` does. A paced check has no period of its own
@@ -71,7 +77,7 @@ grid tile, paired with the "updated …" line and polled with the fragment — u
 sustained-outage banner it dims with the frozen content, while a *stale heartbeat
 itself* stays vivid (the self-monitor's alarm). Its path is **reserved**: the loader
 rejects custom checks on the `/little-sister` line, so nothing user-configured can
-hide behind the one-line strip ([ADR-0024](0024-dashboard-layout.md)).
+hide behind the one-line strip ([ADR-0056](0056-stable-useful-dashboard-flow.md) decision 3).
 
 The heartbeat node also carries the engine's **configuration** verdict. A
 deployment whose config tree is absent no longer starts at all
@@ -87,10 +93,13 @@ honest reading.
 ## Consequences
 - Green means "freshly verified"; a dead check or a dead engine surfaces
   automatically (per-check staleness + the heartbeat node).
-- Staleness is a *view* concern: `StatusTree.snapshot` degrades and flags it;
-  `Status.get_status_code` / `effective` stay raw, and the event log / history keep
-  recording only real check transitions.
-- No "went stale" event is recorded (that would need a periodic sweep) — deferred.
+- Staleness is a *view* concern: `StatusTree.snapshot` degrades and flags it, and
+  `Status.get_status_code` / `effective` stay raw.
+- No *went stale* row is written to the event log. A branch's period, kept beside the
+  log, says when a node beneath it went stale, dated by the reading's last observation
+  and its tolerance
+  ([ADR-0132](0132-a-branch-keeps-the-period-of-what-it-shows-beside-the-log.md)
+  decision 2).
 - The heartbeat adds ~1 cheap upsert per second.
 
 ## Alternatives considered

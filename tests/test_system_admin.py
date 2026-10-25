@@ -377,7 +377,7 @@ class TheDoorTests(_Case):
         app_module.status_tree = StatusTree()
         app_module.status_tree.upsert("/db", StatusCode.OK, "in step")
         self._login()
-        self.client.post("/maintenance",
+        self.client.post("/pins/maintenance",
                          data={"path": "db", "action": "set",
                                "reason": "during an incident", "duration": "2h"})
         body = " ".join(
@@ -385,7 +385,7 @@ class TheDoorTests(_Case):
         # The stored name, whole and alone — anchored on both sides, since a
         # substring assertion cannot tell `admin` from `admin@system-admin`.
         self.assertIn("Pinned by <strong>admin</strong>", body)
-        self.assertIn("silenced by <strong>admin</strong>", body)
+        self.assertIn("in maintenance by <strong>admin</strong>", body)
 
 
 class VisibleInUseTests(_Case):

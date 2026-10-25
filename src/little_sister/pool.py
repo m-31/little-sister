@@ -4,8 +4,7 @@
 every thread a ``ThreadPoolExecutor`` started — whatever its daemon flag — draining
 the work already queued: measured on CPython 3.14.6, thirty queued one-second tasks
 on six threads all ran, and the exit waited five seconds. For the engine that meant
-a check in flight held the stop for as long as it ran; for the links probe, a pass
-held it for as long as its hosts took to answer.
+a check in flight held the stop for as long as it ran.
 
 :class:`DaemonPool` is the same interface — a :class:`concurrent.futures.Executor`,
 so :func:`~concurrent.futures.as_completed`, ``cancel`` and ``result`` work on what

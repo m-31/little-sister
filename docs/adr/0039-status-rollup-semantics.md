@@ -1,27 +1,35 @@
 # ADR-0039 — Status roll-up: how a parent derives its status
 
 - **Status:** Accepted
-- **Date:** 2026-10-10 (accepted 2026-08-02)
-- **Supersedes:** [ADR-0004](0004-status-aggregation-semantics.md) (its roll-up half;
-  the *failing check* half is [ADR-0040](0040-what-a-failing-check-becomes.md) and the
-  `MAINTENANCE` half is [ADR-0041](0041-maintenance-is-a-contribution-rule.md))
+- **Date:** 2026-10-25 (accepted 2026-08-02; rules 1 to 4 and the explicit status
+  decided 2026-06-20)
 - **Related:** [ADR-0032](0032-status-contribution-boundary.md) (the boundary this
   derivation sits inside — *own*, *effective*, *contribution*),
   [ADR-0036](0036-addressable-reasons.md) (the same rule one level down, over an
   entry's virtual children), [ADR-0005](0005-dashboard-freshness-and-self-monitoring.md)
-  (staleness, the one transform applied on top),
+  (staleness, layered on top and never suppressed),
   [ADR-0124](0124-a-node-whose-lines-are-all-silenced-still-counts-the-nodes-beneath-it.md)
-  (whose `MAINTENANCE` cancels a subtree, and why a node's silenced lines do not)
+  (whose `MAINTENANCE` cancels a subtree, and why a node's pinned lines do not),
+  [ADR-0137](0137-a-deployment-says-in-a-table-how-a-part-counts-above-it.md) (rule 4
+  restated: a declared rule may transform what a part counts above),
+  [ADR-0135](0135-a-handled-part-keeps-its-true-color-and-every-surface-says-by-what.md)
+  (decision 2: maintenance's own words, *silenced* left to the kind that holds a
+  flapping thing)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
 
-ADR-0004 was written to fix a buggy `get_status_code()` and ended up carrying three
-unrelated decisions: how a parent accumulates, what a failing check becomes, and what
-an administrator's `MAINTENANCE` does. [ADR-0032](0032-status-contribution-boundary.md)
-named the vocabulary those three were talking past each other in, and promised the
-split once maintenance became a real contribution rule. It has, so this is the first
-of the three pieces: the pure derivation, over stored readings, with no policy in it.
+A parent's status is derived from its own state and its children. The rules below were
+first decided on 2026-06-20, to fix a first draft of `get_status_code()` that could
+return the string `"warn"` and could downgrade an `ERROR`, and to settle what
+`UNDEFINED` and `MAINTENANCE` do to the parent above them. Checks normally update
+**leaves**, but some updaters — a satellite check — replace a whole **branch**, which is
+what the explicit status below is for.
+
+This is the pure derivation, over stored readings, with no policy in it:
+[ADR-0032](0032-status-contribution-boundary.md) names the vocabulary it sits inside,
+what a failing check becomes is [ADR-0040](0040-what-a-failing-check-becomes.md)'s, and
+what an administrator's pin does is [ADR-0041](0041-maintenance-is-a-contribution-rule.md)'s.
 
 ## Decision
 
@@ -35,24 +43,31 @@ contributions:
 3. **`MAINTENANCE` contributes nothing** and cancels its subtree — a node's, by a pin
    on it or by its check's word for it. *Why* a node reads `MAINTENANCE` is
    [ADR-0041](0041-maintenance-is-a-contribution-rule.md)'s business; this rule only
-   says what a parent does with one. A node whose lines are all silenced counts nothing
-   for itself and cancels nothing: its lines are skipped as rule 5 skips a silenced
-   child, and the nodes beneath it count as they would without them
+   says what a parent does with one. A node whose lines are all pinned counts nothing
+   for itself and cancels nothing: its lines are skipped as rule 5 skips a child in
+   maintenance, and the nodes beneath it count as they would without them
    ([ADR-0124](0124-a-node-whose-lines-are-all-silenced-still-counts-the-nodes-beneath-it.md)).
-4. **Always a `StatusCode`, never a downgrade.** An `ERROR` node with a `WARN` child
-   stays `ERROR`.
+4. **Always a `StatusCode`, and the derived roll-up never downgrades.** An `ERROR`
+   node with a `WARN` child stays `ERROR`. A rule **declared** at a node's boundary,
+   over its children or on its lines may transform what a part counts above, visibly
+   and attributably
+   ([ADR-0137](0137-a-deployment-says-in-a-table-how-a-part-counts-above-it.md)
+   decision 9): the part keeps its true color under the rule's mark, and what a part
+   shows is never transformed.
 5. **When nothing is counted, the answer depends on why.** If any child was skipped
-   *because it is silenced*, the parent reads `MAINTENANCE`; if the children merely
-   have not reported, it stays `UNDEFINED`.
+   *because it is in maintenance*, the parent reads `MAINTENANCE`; if the children
+   merely have not reported, it stays `UNDEFINED`. A node all of whose parts a
+   declared rule leaves out reads `UNDEFINED` too: it counts nothing, and nothing
+   beneath it is in maintenance.
 
-Rule 5 is what ADR-0004 left open ("*Edge case to confirm … proposed default:
-`UNDEFINED`"), and it is answered against the model rather than by taste: the same
+Rule 5 is what the rules of 2026-06-20 left open (their proposed default was
+`UNDEFINED`), and it is answered against the model rather than by taste: the same
 question already had an answer one level down, where a node whose **virtual** children —
 its reason entries — are all pinned reads `MAINTENANCE` where nothing beneath it counts
 either ([ADR-0036](0036-addressable-reasons.md) decision 7). Real and virtual children
 may not read differently in one model. And the two facts are genuinely different:
-*nothing under here is reporting because we silenced it* is not *nothing here has
-reported yet*, and only the first is something an operator did on purpose.
+*nothing under here is reporting because we put it in maintenance* is not *nothing
+here has reported yet*, and only the first is something an operator did on purpose.
 
 ### An explicit (non-derived) node status
 
@@ -83,6 +98,6 @@ an explicit branch status owns clearing it on recovery.
   rejected: "unknown" or "planned downtime" would mask or fake real problems.
 - **Forbid an explicit inner-node status** (checks only ever touch leaves) — does not
   survive contact with satellite checks, whose branch can fail as a unit.
-- **Keep rule 5 at `UNDEFINED`** — simpler, and it was ADR-0004's own proposal. It
+- **Keep rule 5 at `UNDEFINED`** — simpler, and it was the proposal of 2026-06-20. It
   loses the property that matters more: one model answering one question one way,
   whether the children are real or virtual.

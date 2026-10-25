@@ -27,7 +27,7 @@ os.environ.setdefault("SECRET_KEY", "test-key")
 
 from little_sister import app as app_module
 from little_sister.copy_status import TimeStyle, format_node_markdown
-from little_sister.maintenance import MaintenanceEntry
+from little_sister.pins import Pin
 from little_sister.status import StatusCode
 from little_sister.tree import Event, StatusPeriod, StatusTree
 from tests.page_tree import Element, parse
@@ -51,7 +51,7 @@ def _event(path: str, old: StatusCode, new: StatusCode, minutes: int,
                  reason=reason, timestamp=_at(minutes), suppressed_by="")
 
 
-def _pin(note: str) -> MaintenanceEntry:
+def _pin(note: str) -> Pin:
     """A pin as the store holds one."""
     tree = StatusTree()
     tree.set_maintenance("/any", note, expires_at=_SOON, set_by="lex")
@@ -182,7 +182,7 @@ class NoteTests(TestCase):
         # written by hand can hold none, and its event carries none either
         tree = StatusTree()
         tree.upsert("/quiet", OK, "fine")
-        tree.restore_maintenance({"/quiet": replace(_pin("x"), reason="")})
+        tree.restore_maintenance({"/quiet": replace(_pin("x"), note="")})
         self.assertEqual(tree.recent_events()[-1].reason, ())
         self.assertEqual(tree.history("/quiet")[-1].reason, ())
 
@@ -259,12 +259,14 @@ class _Pages(TestCase):
         return str(app_module.app.jinja_env.filters["localtime"](_at(minutes)))
 
     def _period(self, url: str) -> str:
-        """The Time card's sentence about the status that holds: a node's own,
-        named so on a node above others (ADR-0123 decision 3)."""
-        for paragraph in self._page(url).all(tag="p"):
-            text = paragraph.text()
-            if text.startswith(("Status ", "Its own status ")):
-                return text
+        """The Time card's sentence about the status of its own that holds: named so
+        on a node above others (ADR-0123 decision 3), beneath the period of what it
+        shows (ADR-0132 decision 5), and the card's one period on a leaf."""
+        texts = [paragraph.text() for paragraph in self._page(url).all(tag="p")]
+        for prefix in ("Its own status ", "Status "):
+            for text in texts:
+                if text.startswith(prefix):
+                    return text
         self.fail(f"no period on {url}")
 
 

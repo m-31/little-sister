@@ -40,10 +40,10 @@ _HEAD = ("<div class='status-card__head' data-path='/hosts' style='display:flex;
          "width:300px;position:relative'>"
          "<a class='status-card__name' style='{name}'>hosts</a>"
          "<span class='status-head__middle' style='flex:1'>the hosts</span>"
+         "<span class='status-card__state'>ok</span>"
          "<span class='node-controls' style='display:inline-flex;gap:3px'>"
          "<span class='node-actions'>"
          "<a class='node-action' style='{action}'>file</a></span>"
-         "<span class='status-card__state'>ok</span>"
          "<span class='node-icons'><a class='node-icon'>x</a></span></span></div>")
 
 #: A head whose name broke onto a second line, its state on that line at the row's
@@ -56,9 +56,28 @@ _BROKEN = ("<div class='status-card__head' data-path='/queue' style='display:fle
            "<span class='node-controls' style='display:inline-flex;align-items:center;"
            "align-self:flex-start'>"
            "<span class='node-icons'><a class='node-icon' style='display:inline-block;"
-           "width:24px'>x</a></span>"
+           "width:24px'>x</a></span></span>"
            "<span class='status-card__state' style='position:absolute;right:0;bottom:0;"
-           "width:{state}px'>ok</span></span></div>")
+           "width:{state}px'>ok</span></div>")
+
+#: A card's head as the pointer looks draw it (ADR-0127 decision 3): the
+#: toolbar right after the name and taking no room, so that it lies over what follows
+#: — the title, or where ``title`` is empty the state — shown at ``opacity`` 1, and at
+#: 0 as the look keeps it until the pointer rests on the head, fading the toolbar as a
+#: whole. ``head`` adds a class to the head, ``name`` a style to the name.
+_POINTER = ("<div class='status-card__head{head}' data-path='/hosts' "
+            "style='display:flex;width:300px;position:relative;"
+            "font:16px/24px monospace'>"
+            "<a class='status-card__name' style='{name}'>hosts</a>"
+            "<span class='node-controls' style='display:inline-flex;width:0;"
+            "position:relative;z-index:1;opacity:{opacity}'>"
+            "<span class='node-icons' style='display:inline-flex'>"
+            "<a class='node-icon' style='display:inline-block;width:24px'>x</a></span>"
+            "<span class='node-actions' style='display:inline-flex'>"
+            "<a class='node-action' style='display:inline-block;width:40px'>file</a>"
+            "</span></span>"
+            "<span class='status-head__middle'>{title}</span>"
+            "<span class='status-card__state'>ok since 11:59</span></div>")
 
 #: A plot whose line ends at ``x``.
 _PLOT = ("<svg class='ls-curve__plot' viewBox='0 0 760 180' width='760' height='180'"
@@ -222,6 +241,20 @@ class TheWalksLooksTests(unittest.TestCase):
                     self.assertEqual(drawn[look.key], never_chose[look.key])
 
 
+class AnotherLookTests(unittest.TestCase):
+    def test_look_adds_a_look_of_the_settings_menus_to_the_walks_own(self) -> None:
+        # `--look boxes=packed` walks the demo packed (ADR-0138), the card still on a
+        # pause; a look or a value the menu does not have stops the walk before it
+        # starts, naming the looks
+        self.assertEqual(walk_gui.chosen_looks(["boxes=packed"]),
+                         {**walk_gui.CHOSEN_LOOKS, "boxes": "packed"})
+        self.assertEqual(walk_gui.chosen_looks([]), walk_gui.CHOSEN_LOOKS)
+        for asked in ("boxes=masonry", "packing=packed", "boxes"):
+            with self.subTest(asked=asked), self.assertRaises(SystemExit) as stop:
+                walk_gui.chosen_looks([asked])
+            self.assertIn("boxes", str(stop.exception))
+
+
 class FactsInChromiumTests(unittest.TestCase):
     playwright: Any = None
     browser: Any = None
@@ -255,10 +288,22 @@ class FactsInChromiumTests(unittest.TestCase):
                          self.steps)
         self.page = self.walk.page
 
-    def _found(self, fact: str, body: str) -> list[str]:
-        self.page.set_content(_PAGE.format(body))
-        found: list[str] = self.page.evaluate(FACTS[fact][1])
+    def _found(self, fact: str, body: str, *, look: str | None = None,
+               page: Any = None) -> list[str]:
+        """What ``fact`` finds on a page of ``body``, drawn under the look
+        `head_buttons` ``look`` where one is given, as the server writes it onto the
+        body, and in ``page`` where one is given — another screen's."""
+        page = page or self.page
+        page.set_content(_PAGE.format(body))
+        if look is not None:
+            page.evaluate("look => { document.body.dataset.lsHeadButtons = look; }",
+                          look)
+        found: list[str] = page.evaluate(FACTS[fact][1])
         return found
+
+    def _pointer(self, *, opacity: int = 1, title: str = "the hosts", head: str = "",
+                 name: str = "") -> str:
+        return _POINTER.format(opacity=opacity, title=title, head=head, name=name)
 
     def test_a_page_wider_than_its_screen_is_marked(self) -> None:
         self.assertEqual(self._found("page-width", "<div style='width:900px'>x</div>"),
@@ -299,10 +344,89 @@ class FactsInChromiumTests(unittest.TestCase):
     def test_an_action_lying_over_the_state_is_marked_too(self) -> None:
         # the row's controls are parts of the fact as the name and the title are
         found = self._found("head-overlap",
-                            _HEAD.format(name="", action="margin-right:-20px"))
+                            _HEAD.format(name="", action="margin-left:-8px"))
         self.assertEqual(len(found), 1)
-        self.assertRegex(found[0], r"\A/hosts: \.node-action and "
+        self.assertRegex(found[0], r"\A/hosts: \.status-card__state and "
+                                   r"\.node-action overlap by \d+×\d+px\Z")
+
+    def test_a_toolbar_out_of_sight_lies_over_nothing(self) -> None:
+        # The pointer looks fade a head's whole toolbar until the pointer rests on
+        # it: its parts keep their own opacity, and none of them is seen.
+        for title in ("the hosts", ""):
+            for look in ("pointer", "pointer-name", "name"):
+                self.assertEqual(self._found("head-overlap",
+                                             self._pointer(opacity=0, title=title),
+                                             look=look), [], (title, look))
+
+    def test_a_shown_toolbar_over_the_title_is_the_pointer_looks_own(self) -> None:
+        # Under `pointer` and `pointer-name` the toolbar, shown, lies over the
+        # title on purpose; under any other look, or none, that is an overlap.
+        for look in ("pointer", "pointer-name"):
+            self.assertEqual(self._found("head-overlap", self._pointer(), look=look),
+                             [], look)
+        for look in ("name", "line", None):
+            found = self._found("head-overlap", self._pointer(), look=look)
+            self.assertEqual(len(found), 2, look)
+            self.assertRegex(found[0], r"\A/hosts: \.node-icons and "
+                                       r"\.status-head__middle overlap by \d+×\d+px\Z")
+            self.assertRegex(found[1], r"\A/hosts: \.node-action and "
+                                       r"\.status-head__middle overlap by \d+×\d+px\Z")
+        # a crowded head keeps the toolbar's room, and one being measured reads the
+        # row with it in, so an overlap there is one under every look
+        for head in (" is-crowded", " is-measuring"):
+            self.assertEqual(len(self._found("head-overlap", self._pointer(head=head),
+                                             look="pointer")), 2, head)
+
+    def test_a_shown_toolbar_over_the_state_or_the_name_is_marked(self) -> None:
+        # what the row has no room for folds behind ⋯ before the state, so a
+        # toolbar over it is a fault under the pointer looks as under any other
+        found = self._found("head-overlap", self._pointer(title=""), look="pointer")
+        self.assertEqual(len(found), 2)
+        self.assertRegex(found[0], r"\A/hosts: \.node-icons and "
                                    r"\.status-card__state overlap by \d+×\d+px\Z")
+        self.assertRegex(found[1], r"\A/hosts: \.node-action and "
+                                   r"\.status-card__state overlap by \d+×\d+px\Z")
+        found = self._found("head-overlap",
+                            self._pointer(name="margin-right:-30px"), look="pointer")
+        self.assertTrue(any(f.startswith("/hosts: .status-card__name and .node-icons ")
+                            for f in found), found)
+        # and only the toolbar lies over the title: a name over it is marked there too
+        found = self._found("head-overlap",
+                            self._pointer(opacity=0, name="margin-right:-30px"),
+                            look="pointer")
+        self.assertEqual(len(found), 1)
+        self.assertRegex(found[0], r"\A/hosts: \.status-card__name and "
+                                   r"\.status-head__middle overlap by \d+×\d+px\Z")
+
+    def test_on_a_touch_screen_a_toolbar_over_the_title_is_marked(self) -> None:
+        # with no pointer to rest on a head, the look keeps the toolbar's room
+        context = self.browser.new_context(**PROFILES[-1].context())
+        self.addCleanup(context.close)
+        found = self._found("head-overlap", self._pointer(), look="pointer",
+                            page=context.new_page())
+        self.assertEqual(len(found), 2)
+
+    def test_a_box_over_another_in_a_level_is_marked(self) -> None:
+        # the wall's cards, and a card's open boxes, one of them standing in the grid
+        # through a wrapper drawn without a box of its own (`.tree-solo`)
+        level = ("<div class='status-grid' style='display:grid;"
+                 "grid-template-columns:200px 200px;grid-auto-rows:20px'>"
+                 "<div class='status-card' data-node='/a' style='grid-area:1/1/4/2'>a"
+                 "</div><div class='status-card' data-node='/b' "
+                 "style='grid-area:{b}'>b</div></div>")
+        self.assertEqual(self._found("box-overlap", level.format(b="1/2/3/3")), [])
+        found = self._found("box-overlap", level.format(b="2/1/5/2"))
+        self.assertEqual(len(found), 1)
+        self.assertRegex(found[0], r"\A/a and /b overlap by \d+×\d+px\Z")
+        nested = ("<div class='status-card'><div class='node-children' "
+                  "style='display:grid;grid-template-columns:150px 150px;"
+                  "grid-auto-rows:20px'>"
+                  "<div class='tree-node' data-node='/c/x' style='grid-area:1/1/3/2'>x"
+                  "</div><div class='tree-solo' style='display:contents'>"
+                  "<div class='tree-node' data-node='/c/y' style='grid-area:{y}'>y"
+                  "</div></div></div></div>")
+        self.assertEqual(self._found("box-overlap", nested.format(y="1/2/2/3")), [])
+        self.assertEqual(len(self._found("box-overlap", nested.format(y="2/1/4/2"))), 1)
 
     def test_a_line_that_leaves_its_plot_is_marked(self) -> None:
         self.assertEqual(self._found("curve-in-plot", _PLOT.format(x=744)), [])

@@ -14,7 +14,7 @@
         ('/status',      'Status',      'grid'),
         ('/series',      'Series',      'chart'),
         ('/events',      'Events',      'rows'),
-        ('/maintenance', 'Maintenance', 'pause'),
+        ('/handled',     'Handled',     'diamond'),
         ('/links',       'Links',       'link'),
         ('/copy',        'Copy',        'copy'),
     ] -%}
@@ -36,10 +36,11 @@
     {%- elif name == 'rows' -%}
         <rect x="1" y="2" width="14" height="2" rx="1"/><rect x="1" y="7" width="14" height="2" rx="1"/>
         <rect x="1" y="12" width="10" height="2" rx="1"/>
-    {%- elif name == 'pause' -%}
-        <circle cx="8" cy="8" r="3" fill="none" stroke="currentColor" stroke-width="2"/>
-        <rect x="7" y="0" width="2" height="4"/><rect x="7" y="12" width="2" height="4"/>
-        <rect x="0" y="7" width="4" height="2"/><rect x="12" y="7" width="4" height="2"/>
+    {%- elif name == 'diamond' -%}
+        {#- *Handled*'s ringed diamond (ADR-0135 decision 8), the chip's and the
+            pill's mark for what a rule handles. -#}
+        <path d="M8 1.2 14.8 8 8 14.8 1.2 8Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+        <circle cx="8" cy="8" r="1.9"/>
     {%- elif name == 'link' -%}
         <path d="M6 10 L10 6 M4 8 a3 3 0 0 1 0-4 l2-2 a3 3 0 0 1 4 4 M12 8 a3 3 0 0 1 0 4 l-2 2 a3 3 0 0 1-4-4"
               fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>

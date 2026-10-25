@@ -89,9 +89,10 @@ OPEN_ENDPOINTS = frozenset({
 #:
 #: The routes the JSON API reads: ``/status`` serves the dashboard to a session *and*
 #: the status read to a bearer token, deciding which by content negotiation
-#: (ADR-0008), and ``/series`` and ``/series/<path>`` serve the Series index and a
-#: node's Series view to a session and the series read to a token (ADR-0122
-#: decision 8). A gate in front of one would redirect an API client to a login page.
+#: (ADR-0080 decision 8), and ``/series`` and ``/series/<path>`` serve the Series
+#: index and a node's Series view to a session and the series read to a token
+#: (ADR-0122 decision 8). A gate in front of one would redirect an API client to a
+#: login page.
 #: None is open — each refuses both ways — and they are named
 #: separately from :data:`OPEN_ENDPOINTS` so that nobody reads them as open.
 SELF_AUTHENTICATING_ENDPOINTS = frozenset({"status", "series", "series_index"})
@@ -135,6 +136,13 @@ _ANSWER_KEY = "identity_answer"
 _ENTERING_KEY = "identity_door"
 
 
+#: The acts a person may be let do, one permission each, by the name of the kind of pin
+#: the act sets (ADR-0141 decision 4) — planning maintenance, and marking a failure seen
+#: (ADR-0142): every one an admin's, until roles map onto them (backlog #59) — which
+#: makes that a mapping rather than a rewrite of every route.
+PERMISSIONS: frozenset[str] = frozenset({"maintenance", "seen"})
+
+
 class _Unset:
     """The "nothing cached yet" marker, distinct from a cached ``None``."""
 
@@ -159,6 +167,18 @@ class Identity:
     firstname: str = ""
     lastname: str = ""
     admin: bool = False
+
+    def may(self, permission: str) -> bool:
+        """Whether this person may do the act ``permission`` names (:data:`PERMISSIONS`)
+        — a route asks this, never ``admin`` (ADR-0141 decision 4). Every permission
+        is an admin's until roles map onto them.
+
+        :raises ValueError: ``permission`` names no act, a typo in a route that would
+            otherwise answer *no* to everybody and look like a role.
+        """
+        if permission not in PERMISSIONS:
+            raise ValueError(f"no act is called {permission!r}")
+        return self.admin
 
 
 class IdentityProvider(Protocol):
@@ -255,8 +275,8 @@ class Door:
         header-verifying provider is the whole of that case, and it is not a defect.
         And a door may be registered and temporarily unable to take a credential:
         the system-admin account whose password did not resolve is registered so
-        that ``/system`` can say *configured but unavailable*, and answers ``404``
-        meanwhile (ADR-0069 §5).
+        that ``/system/installed`` can say *configured but unavailable*, and answers
+        ``404`` meanwhile (ADR-0069 §5).
 
         A provider says the second part by implementing ``enterable()``; not
         implementing it means *yes*, which is right for every provider that has a
@@ -312,9 +332,9 @@ class Door:
 
     @property
     def provider_name(self) -> str:
-        """The class answering for this door, as ``/system`` names it. The package
-        beside it says *whose* class, so the bare name is the whole of what is left
-        to say."""
+        """The class answering for this door, as ``/system/installed`` names it. The
+        package beside it says *whose* class, so the bare name is the whole of what
+        is left to say."""
         return type(self.provider).__name__
 
 
@@ -380,9 +400,9 @@ def use(name: str, provider: IdentityProvider, *, default: bool = False,
 def registered_doors() -> tuple[Door, ...]:
     """Every registered door with the package that answers for it, by name.
 
-    For ``/system``: a way into an application must not be knowable only by reading
-    the source, and a registration nobody can see from the running instance is
-    indistinguishable from one that silently did not take (ADR-0064, ADR-0069 §6).
+    For ``/system/installed``: a way into an application must not be knowable only by
+    reading the source, and a registration nobody can see from the running instance
+    is indistinguishable from one that silently did not take (ADR-0064, ADR-0069 §6).
     """
     return tuple(_doors[name] for name in sorted(_doors))
 
@@ -450,8 +470,9 @@ def choose_at_login() -> None:
 
 
 def choosing_at_login() -> bool:
-    """Whether this installation asked for :func:`choose_at_login`. For ``/system``,
-    which says what ``/login`` does rather than leaving it to be discovered."""
+    """Whether this installation asked for :func:`choose_at_login`. For
+    ``/system/installed``, which says what ``/login`` does rather than leaving it to
+    be discovered."""
     return _choose_at_login
 
 
@@ -656,14 +677,14 @@ def announce_doors() -> None:
     who knows the address in at ``/login/<door>``.
 
     So both omissions are a ``WARNING`` naming the missing line, and the instance
-    serves: ``/health`` answers for the load balancer (ADR-0066), ``/system`` shows
-    the door table, and every gated page refuses with a ``401`` until somebody
-    registers one. The warning is not quite the only place that says so any more —
-    an instance with **no door at all** never becomes ready, and ``/ready`` says
-    ``doors`` for as long as that holds (ADR-0073); doors without a default are an
-    instance anybody who knows the address can enter, so readiness is silent about
-    them and this warning stays the only word. It says what to add rather than only
-    what is wrong, for the same reason.
+    serves: ``/health`` answers for the load balancer (ADR-0066),
+    ``/system/installed`` shows the door table, and every gated page refuses with a
+    ``401`` until somebody registers one. The warning is not quite the only place
+    that says so any more — an instance with **no door at all** never becomes ready,
+    and ``/ready`` says ``doors`` for as long as that holds (ADR-0073); doors without
+    a default are an instance anybody who knows the address can enter, so readiness
+    is silent about them and this warning stays the only word. It says what to add
+    rather than only what is wrong, for the same reason.
     """
     doors = registered_doors()
     if not doors:
@@ -851,10 +872,10 @@ def _no_way_in() -> str:
 
     That state was already diagnosed **everywhere except here** —
     :func:`announce_doors` writes the startup line, ``/ready`` reports ``doors``,
-    ``/system`` shows the table, and :func:`challenge` distinguishes the two cases
-    at ``DEBUG``. Every one of those is somewhere a reader has to already know to
-    look. This is the one surface somebody is standing in front of at the moment
-    it matters, and it was the only one that stayed silent.
+    ``/system/installed`` shows the table, and :func:`challenge` distinguishes the
+    two cases at ``DEBUG``. Every one of those is somewhere a reader has to already
+    know to look. This is the one surface somebody is standing in front of at the
+    moment it matters, and it was the only one that stayed silent.
 
     **Three states get three sentences**, because they need three different
     actions — and because two of them are not faults at all:
@@ -869,12 +890,12 @@ def _no_way_in() -> str:
       resolve, and until it does nobody gets in at all.
 
     What it deliberately does **not** do is name the doors or say why each failed.
-    That is ``/system``'s, and ``/system`` is behind an admin session on purpose
+    That is ``/system/installed``'s, which is behind an admin session on purpose
     (ADR-0069 §5) — so this page says *that* there is no way in and where the
     answer is, and leaves *which door and why* to a page that knows who is asking.
 
-    **It does not send anybody to ``/system``.** Measured on 2026-09-24: the
-    third state is exactly the state in which ``/system`` cannot be reached, since
+    **It does not send anybody there.** Measured on 2026-09-24: the third state is
+    exactly the state in which ``/system/installed`` cannot be reached, since
     reaching it needs an admin session and no door can issue one — the system-admin
     door included, which is the door that state is usually about. Naming it there
     offers a page nobody in front of this one can open. The instance has already

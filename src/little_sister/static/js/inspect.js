@@ -2,10 +2,13 @@
  *
  * A hover card for a node: its name and title as the node's own head draws them —
  * every node's box carries its head, open or closed — and the first block of its
- * `about` with how many blocks follow, which the grid's fragment carries in
- * #node-meta (`_status_grid.html`) and which is read again after every swap, so a
- * node a run names after the load has its card and a changed `about` is current.
- * A node with neither a title nor an `about` has no card, and the card keeps the
+ * `about`, or of its `description` where it has none (ADR-0133 decision 2), with how
+ * many blocks follow, the tags it carries (ADR-0139 decision 4) and a link to its
+ * handbook where it has one (ADR-0133 decision 3), which the grid's fragment carries
+ * in #node-meta
+ * (`_status_grid.html`) and which is read again after every swap, so a node a run
+ * names after the load has its card and a changed `about` is current. A node with no
+ * title, no text, no tags and no handbook has no card, and the card keeps the
  * node's state out: the chip or the head under the pointer shows it. Bound once by
  * event delegation on #status-grid, so it survives the ~10s grid swaps, and placed
  * with Floating UI.
@@ -32,7 +35,8 @@
 
     // A node's name, which is what the card answers to: a chip, the toggle in an
     // open node's head, and the status strip's name. A node's page's own head has
-    // no toggle — its `about` is open in the band above it — and no card.
+    // no toggle — its `about` stands in its About card beside its facts — and no
+    // card.
     var NAMES = '.tree-chip, [data-control="toggle"], .ls-strip__name';
     // Where a node's head draws its name and its title.
     var HEAD_NAME = ".status-card__name, .status-node__name, .ls-strip__name";
@@ -48,7 +52,7 @@
     // node's own row, and its card would come up over the one above and stand there
     // while the note is typed. The editor stands in the node's box, after its row
     // (ADR-0127 decision 3), so the node is what is asked.
-    var EDITOR = "details.maintenance-editor-disclosure[open] form.maintenance-editor-form, details.reason-pin[open] form.maintenance-editor-form";
+    var EDITOR = "details.maintenance-editor-disclosure[open] form.maintenance-editor-form, details.reason-pin[open] form.maintenance-editor-form, details.reason-ack[open] form.maintenance-editor-form";
 
     // What each node's `about` opens with, as the fragment the grid holds says it.
     var META = {};
@@ -112,8 +116,9 @@
     }
 
     // The card, from the node's head and its `about`'s first block: its name, the
-    // title beside it as the head draws it, then the block, and where the `about`
-    // has more, a line to the node's page that counts it.
+    // title beside it as the head draws it, then the block, where the `about` has
+    // more, a line to the node's page that counts it, and where the node has a
+    // handbook, a line to it.
     function fill(hit) {
         card.textContent = "";
         var heading = document.createElement("div");
@@ -130,10 +135,12 @@
         }
         card.appendChild(heading);
         if (!hit.meta) { return; }
-        var about = document.createElement("div");
-        about.className = "inspect-card__about md-body";
-        about.innerHTML = hit.meta.about;              // rendered by the server
-        card.appendChild(about);
+        if (hit.meta.about) {
+            var about = document.createElement("div");
+            about.className = "inspect-card__about md-body";
+            about.innerHTML = hit.meta.about;          // rendered by the server
+            card.appendChild(about);
+        }
         var more = Number(hit.meta.more) || 0;
         if (more > 0) {
             var link = document.createElement("a");
@@ -142,6 +149,25 @@
             link.textContent = "\u2026 " + more + " more paragraph"
                 + (more === 1 ? "" : "s") + " on its page";
             card.appendChild(link);
+        }
+        // The tags it carries, in one line (ADR-0139 decision 4).
+        if (hit.meta.tags) {
+            var tags = document.createElement("ul");
+            tags.className = "ls-tags inspect-card__tags";
+            String(hit.meta.tags).split(" ").forEach(function (tag) {
+                var chip = document.createElement("li");
+                chip.className = "ls-tag";
+                chip.textContent = tag;
+                tags.appendChild(chip);
+            });
+            card.appendChild(tags);
+        }
+        if (hit.meta.handbook) {
+            var book = document.createElement("a");
+            book.className = "inspect-card__handbook";
+            book.href = hit.meta.handbook;             // the Handbook view's address
+            book.textContent = "Handbook";
+            card.appendChild(book);
         }
     }
 
@@ -280,8 +306,9 @@
     }, true);
 
     // Mark the names that have a card so the stylesheet can hint them with the help
-    // cursor, again after each polled grid swap: a name whose node has an `about`
-    // in the map or a title in its head, and whose pin is not being written.
+    // cursor, again after each polled grid swap: a name whose node has an entry in the
+    // map — a text, its tags or a handbook — or a title in its head, and whose pin is
+    // not being written.
     function markTriggers() {
         var titled = {};
         var titles = grid.querySelectorAll("[data-path] .node-title");

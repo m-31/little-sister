@@ -43,7 +43,7 @@ from datetime import date, datetime, timedelta
 from functools import partial
 from typing import Any
 
-from little_sister import first_look, instants, process, self_report
+from little_sister import first_look, handbooks, instants, process, self_report
 from little_sister.checks import (
     Check,
     CheckError,
@@ -56,6 +56,7 @@ from little_sister.checks import (
     parse_duration,
     plain,
 )
+from little_sister.checks.metadata import expand_tokens
 from little_sister.checks.output import FAILURE_BYTES, failure_text
 from little_sister.codes import RANKED, worst_of
 from little_sister.config import config
@@ -81,7 +82,13 @@ from little_sister.limits import (
 )
 from little_sister.line_template import Declarations
 from little_sister.logger import logger
-from little_sister.nodes import ABOUT_NOTED_PAST, NodeMeta, note_long_about
+from little_sister.nodes import (
+    ABOUT_NOTED_PAST,
+    DESCRIPTION_NOTED_PAST,
+    NodeMeta,
+    note_long_about,
+    note_long_description,
+)
 from little_sister.pool import DaemonPool
 from little_sister.readiness import Outcomes
 from little_sister.reasons import Entry, Refusal, derive_code, lenient_records, slug
@@ -159,7 +166,7 @@ DEFAULT_PERIOD = 900
 STAGGER_WINDOW_SECONDS = 60.0
 
 # The engine's self-monitoring node: it heartbeats HEARTBEAT_PATH (reserved —
-# see status.py; the dashboard renders it as the status strip, ADR-0024) every
+# see status.py; the dashboard renders it as the status strip, ADR-0056) every
 # scheduler tick, so a dead scheduler shows up stale and degraded (ADR-0005).
 # The beat carries what the instance says about itself — the engine's own lines
 # and every registered contributor's (ADR-0072) — as pinnable entries whose
@@ -333,6 +340,15 @@ def _escalate_after(check: Check) -> int:
     """
     stated = check.escalate_after
     return config.escalate_after if stated is None else stated
+
+
+def _stamped(text: str, check: Check) -> str:
+    """A label a child's result carries — a ``title``, an ``about``, a handbook's
+    text — with the ``{token}``s its type offers expanded, as they are in what the
+    type declares (ADR-0133 decision 2): the run's text is the type's too, and the
+    values are fixed when the check is made, as a label is at its node's first fill.
+    A ``{default}`` stays as written, there being no declared text beneath it."""
+    return expand_tokens(text, check.label_tokens) if text else text
 
 
 def _largest_record(result: CheckResult, measurements: Sequence[Measurement],
@@ -1058,6 +1074,15 @@ class Engine:
         for _limit, said in self._capacity.warnings():
             logger.warning("engine: %s", said)
         self._tree = tree
+        # The nodes beneath a check whose description past about 160 characters has
+        # been named on the startup record (ADR-0133 decision 2): a run hands a
+        # child its description on every run, and the record names it once.
+        self._long_descriptions: set[str] = set()
+        # The nodes a check writes whose texts the startup record has looked at for
+        # a link into the handbook that leads nowhere (ADR-0133 decision 4): once,
+        # when a run first fills each — of the check's own node, the details its
+        # type gives it alone, the rest being configuration the start looked at.
+        self._links_looked_at: set[str] = set()
         # A configured-but-empty deployment: the engine runs, and every beat
         # carries these lines at WARN instead of OK (see _tick / ADR-0031 §7).
         self._heartbeat_warning = tuple(heartbeat_warning or ())
@@ -1067,6 +1092,9 @@ class Engine:
         # The state layer (ADR-0071), when the application keeps one: its kept
         # files are written on the tick and once more at stop().
         self._state = state
+        # What the start asks to run on every tick beside the pins' expiry: the
+        # notes' retention (ADR-0047 decision 12) — each by a name, guarded.
+        self._sweeps: list[tuple[str, Callable[[], object]]] = []
         # Where the checks' readings are kept as series (ADR-0087): memory, the
         # first tier and always the front, unless a caller composed its own — and
         # what each check keeps, by the two things a series names a check by. A
@@ -1090,7 +1118,7 @@ class Engine:
         # (ADR-0027). Registration only — a node still appears when its result does.
         # The heartbeat above is deliberately *not* a mount: it is the engine's own
         # liveness rather than a check, so it neither blocks nor feeds that roll-up
-        # (and the dashboard lifts it out of the grid anyway, ADR-0024).
+        # (and the dashboard lifts it out of the grid anyway, ADR-0056).
         # And, beside it, where a check is reached *through* another one
         # (ADR-0032 rule 3, backlog #38 A). Registration only, exactly like the
         # mount above: whether the shield is in force is derived per snapshot
@@ -1655,9 +1683,6 @@ class Engine:
         # that. Same detection window, and no period for a surface to misreport.
         beat = max(1, round(self._poll_interval))
         tolerance = stale_after_seconds(beat)
-        self._tree.upsert(
-            HEARTBEAT_PATH, StatusCode.OK, (), members=True,
-            description=HEARTBEAT_DESCRIPTION, stale_after=tolerance)
         # Every line on a child carries a code; what the speaker merely *knows* is
         # its report, on the child's page and never on a card (ADR-0044 decision
         # 6, ADR-0076 decision 1). Written through every tick, empty included, so
@@ -1665,24 +1690,61 @@ class Engine:
         own = self._heartbeat_warning + tuple(self._report.lines())
         own_report = "\n\n".join(
             part for part in (self._heartbeat_report, self._report.report()) if part)
-        self._tree.upsert(
-            join_path(HEARTBEAT_PATH, ENGINE_REPORT), derive_code(own), own,
-            members=True, description=CHILD_DESCRIPTION, stale_after=tolerance,
-            title=ENGINE_TITLE, about=ENGINE_ABOUT, report=own_report)
-        for report in self_report.current_reports():
+        reports = self_report.current_reports()
+        # **The beat is stored as a run is** (ADR-0132 decision 2): the instance's
+        # own nodes in one hold of the tree's lock, read before it is taken, so its
+        # branch is never compared between two of them — and the hold's end says
+        # that what answers for them, the tick, has run once in this process, so a
+        # contributor a restart no longer has stops counting at its kept entry
+        # (decision 3).
+        with self._tree.storing(HEARTBEAT_PATH):
             self._tree.upsert(
-                join_path(HEARTBEAT_PATH, report.name), derive_code(report.lines),
-                report.lines, members=True, description=CHILD_DESCRIPTION,
-                stale_after=tolerance, title=report.title or None,
-                about=report.about or None, report=report.report)
+                HEARTBEAT_PATH, StatusCode.OK, (), members=True,
+                description=HEARTBEAT_DESCRIPTION, stale_after=tolerance)
+            self._tree.upsert(
+                join_path(HEARTBEAT_PATH, ENGINE_REPORT), derive_code(own), own,
+                members=True, description=CHILD_DESCRIPTION, stale_after=tolerance,
+                title=ENGINE_TITLE, about=ENGINE_ABOUT, report=own_report)
+            for report in reports:
+                self._tree.upsert(
+                    join_path(HEARTBEAT_PATH, report.name),
+                    derive_code(report.lines), report.lines, members=True,
+                    description=CHILD_DESCRIPTION, stale_after=tolerance,
+                    title=report.title or None, about=report.about or None,
+                    report=report.report)
         # Expire maintenance pins past their window (ADR-0014); a real transition,
         # so the next check refills the node.
         self._tree.sweep_expired()
+        # and what the start registered beside it, the notes' retention among them
+        self._run_sweeps()
+        # **The tick's comparison** (ADR-0132 decision 2): what time alone moved —
+        # a node beneath a branch gone stale, a shield ended with its dependency's
+        # silence — each dated when that reading went stale, and every branch
+        # against its kept period.
+        self._tree.compare_periods()
         # The kept state files, at most once per interval (ADR-0071) — and whether
         # this tick ran that save, which the tick's own line says (ADR-0095).
         if self._state is not None:
             return self._state.tick()
         return False
+
+    def every_tick(self, name: str, sweep: Callable[[], object]) -> None:
+        """Run ``sweep`` on every tick, beside the pins' expiry — the notes'
+        retention (ADR-0047 decision 12), which the start registers. Guarded as the
+        series' sweep is: one that raises is a ``runtime`` line named for it, and
+        the tick goes on."""
+        self._sweeps.append((name, sweep))
+
+    def _run_sweeps(self) -> None:
+        for name, sweep in self._sweeps:
+            try:
+                sweep()
+            except Exception as error:
+                logger.exception("engine: the %s sweep raised", name)
+                self_report.runtime.see(
+                    f"{name}.sweep",
+                    plain(f"the {name} sweep raised ({error!r}); it runs again at "
+                          f"the next tick"), log=False)
 
     def _sweep_series(self) -> Swept | None:
         """One sweep of the series under this configuration's retention and the
@@ -2036,14 +2098,24 @@ class Engine:
         # said it, in the tree it returned — so the engine places none of them and
         # the node's own reading is cleared.
         measurement = measurements[0] if len(measurements) == 1 else None
+        # **A run's store is one write** (ADR-0132 decision 2, ADR-0002): the tree's
+        # lock held from its first write to its last — the run's node, the nodes
+        # beneath it, what it no longer returns, and a unit's failure over its node
+        # last — so no page, no API call and no tick sees half a run, and the tree
+        # compares every branch above what the run moved once, when the store ends,
+        # by the run's one instant. The node the unit answers for is what its end
+        # says has run once in this process (decision 3).
+        answers_for = join_path(check.path, unit.node) if declared else check.path
         try:
-            if whole and declared:
-                self._store_path(check.path, result, check,
-                                 split_path(unit.node), is_root=True, unit=unit,
-                                 measurement=measurement, failure=unit_failure)
-            else:
-                self._store(check.path, result, check, is_root=True,
-                            measurement=measurement)
+            with self._tree.storing(answers_for):
+                if whole and declared:
+                    self._store_path(check.path, result, check,
+                                     split_path(unit.node), is_root=True,
+                                     unit=unit, measurement=measurement,
+                                     failure=unit_failure)
+                else:
+                    self._store(check.path, result, check, is_root=True,
+                                measurement=measurement)
         except Exception as error:
             logger.exception("engine: failed to upsert %s", label)
             self_report.runtime.see(
@@ -2290,19 +2362,19 @@ class Engine:
         therefore always stored with its reading cleared, which is the same
         write-through rule ``report`` follows and for the same reason.
 
-        A branch check's ``about`` / ``title`` for its subnodes ride the same way,
-        but only on **children** (ADR-0025): the root's labels keep their startup
-        sources (``nodes.yaml`` / the inline check), so its result labels are
-        ignored like its ``name``; each child's fill an empty node field only, so a
-        ``nodes.yaml`` override still wins. Their **first** source is not the
-        result at all but ``check.subnode_labels`` — the deployment's ``subnodes:``
-        block resolved over what the type declared, keyed by subnode *name* at any
-        depth, exactly like the flag below (ADR-0025). Per
-        field: a resolved ``title`` and a stamped ``about`` coexist on one node,
-        because that is how every other precedence in this pair works. The result's
-        label is read where that map is silent for the name — the dynamically named
-        child — and, whatever the map holds, for a child that says a run names it
-        (the last paragraph).
+        A branch check's ``about`` / ``title`` for its subnodes ride the same way, and
+        its ``handbook`` with them (ADR-0133 decision 3), but only on **children**
+        (ADR-0025): the root's labels keep their startup sources (``nodes.yaml`` / the
+        inline check), so its result labels are ignored like its ``name``; each child's
+        fill an empty node field only, so a ``nodes.yaml`` override still wins. Their
+        **first** source is not the result at all but ``check.subnode_labels`` — the
+        deployment's ``subnodes:`` block resolved over what the type declared, keyed by
+        subnode *name* at any depth, exactly like the flag below (ADR-0025). Per field:
+        a resolved ``title`` and a stamped ``about`` coexist on one node, because that
+        is how every other precedence in this pair works. The result's label is read
+        where that map is silent for the name — the dynamically named child — and,
+        whatever the map holds, for a child that says a run names it (the last
+        paragraph).
 
         ``order`` (ADR-0055) fills an unset field the same way but is read on the
         **root too**, deliberately unlike the labels: a rank is not identity, and
@@ -2364,8 +2436,22 @@ class Engine:
         labels: Mapping[str, str] = (
             {} if result.dynamic
             else check.subnode_labels.get(leaf_name(path), {}))
-        about = None if is_root else (labels.get("about") or result.about or None)
-        title = None if is_root else (labels.get("title") or result.title or None)
+        about = None if is_root else (labels.get("about")
+                                      or _stamped(result.about, check) or None)
+        title = None if is_root else (labels.get("title")
+                                      or _stamped(result.title, check) or None)
+        handbook = None if is_root else self._handbook(path, labels, result, check)
+        # The details (ADR-0133 decision 6): the type's, its object's, written through
+        # on every node as the description is, the root's too; and what the
+        # deployment's `subnodes:` block gives the child's name — nothing for a child a
+        # run names, which takes nothing declared for its name (ADR-0118) and is
+        # reached by what is given down from above it instead.
+        named_details = None if is_root else (
+            () if result.dynamic else check.subnode_details.get(leaf_name(path), ()))
+        # and the tags that block gives the name (ADR-0139 decision 2), the same way:
+        # given on the child and coming down from it, never by a name a run gave.
+        named_tags = None if is_root else (
+            () if result.dynamic else check.subnode_tags.get(leaf_name(path), ()))
         order = result.order or None
         # Whether this run named the node, kept before anything is asked of it: the
         # claim below, and the first look, read it for this node and its children. A
@@ -2393,8 +2479,10 @@ class Engine:
                           frequency_seconds=(check.frequency_seconds
                                              if period is None else period),
                           config=config, report=result.report,
-                          about=about, title=title, order=order,
-                          show_when_quiet=show_when_quiet,
+                          about=about, title=title, handbook=handbook,
+                          type_details=tuple(result.details.items()),
+                          named_details=named_details, named_tags=named_tags,
+                          order=order, show_when_quiet=show_when_quiet,
                           escalate_after=_escalate_after(check),
                           # The run's measurement travels with its reading: this
                           # run measured this object, and everything on the node is
@@ -2416,6 +2504,48 @@ class Engine:
                                   else dict(measurement.record)))
         if long_about is not None:
             note_long_about(path, long_about)
+        # A description past about 160 characters is named once, the first time a
+        # run hands it to a node beneath its check (ADR-0133 decision 2); a check's
+        # own description is configuration, and the startup pass names it.
+        if (not is_root and description is not None
+                and len(description.strip()) > DESCRIPTION_NOTED_PAST
+                and path not in self._long_descriptions):
+            self._long_descriptions.add(path)
+            note_long_description(path, description)
+        # A link the node's texts write in the short form that leads nowhere is named
+        # once, when a run first fills it (ADR-0133 decision 4): beneath a check's own
+        # node a handbook comes from the check's labels and its run as well as from
+        # nodes.yaml, so the startup pass, which reads the configuration alone, leaves
+        # such a node to its first fill, with every text it has by then — its details
+        # among them. The check's own node it looked at, all but the details its type
+        # gives it, which a run alone says.
+        if path not in self._links_looked_at:
+            self._links_looked_at.add(path)
+            if not is_root:
+                texts = self._tree.texts(path)
+                texts.update(handbooks.detail_texts(
+                    (detail.key, detail.text)
+                    for detail in self._tree.own_details(path)))
+                handbooks.note_links(path, texts, texts.get("handbook", ""))
+            elif result.details:
+                handbooks.note_links(path, handbooks.detail_texts(
+                    result.details.items()), self._tree.handbook(path))
+
+    def _handbook(self, path: str, labels: Mapping[str, str], result: CheckResult,
+                  check: Check) -> str | None:
+        """The handbook a child's reading fills its node with (ADR-0133 decision 3),
+        or ``None``: what the check's file and its type declare for the child's
+        name, read when the check was made, and otherwise what the run hands over —
+        text, or a file the type's package ships, read against that package. A run's
+        is read only where it would fill the node, so a file is read once and not on
+        every run, and a node that has one keeps it."""
+        if declared := labels.get("handbook"):
+            return declared
+        if not result.handbook or self._tree.handbook(path):
+            return None
+        return _stamped(handbooks.resolve(
+            result.handbook, handbooks.package_directory(type(check)),
+            where=f"the run of {check.path} for {path}"), check) or None
 
     def _prune_returned(self, path: str, result: CheckResult,
                         check: Check) -> None:

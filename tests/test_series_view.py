@@ -399,7 +399,8 @@ class SeriesViewTests(TestCase):
 
     def test_a_node_s_views_are_tabs(self) -> None:
         expected = [("Status", f"/status{HOST}"), ("Series", f"/series{HOST}"),
-                    ("History", f"/history{HOST}"), ("Copy", f"/copy{HOST}")]
+                    ("History", f"/history{HOST}"), ("Notes", f"/notes{HOST}"),
+                    ("Copy", f"/copy{HOST}")]
         for view, url in (("Status", f"/status{HOST}"),
                           ("Series", f"/series{HOST}"),
                           ("History", f"/history{HOST}"),
@@ -414,7 +415,8 @@ class SeriesViewTests(TestCase):
         def labels(url: str) -> list[str]:
             return [label for label, _, _ in self._tabs(self._get(url))]
         # nothing keeps a series here
-        self.assertEqual(labels("/status/other/thing"), ["Status", "History", "Copy"])
+        self.assertEqual(labels("/status/other/thing"),
+                         ["Status", "History", "Notes", "Copy"])
         # a check keeps one on this node
         self.assertIn("Series", labels(f"/status{HOST}/web"))
         # a check above keeps one and declares a measure standing here, or beneath
@@ -423,7 +425,8 @@ class SeriesViewTests(TestCase):
         # — a `*` naming any node there
         self.assertIn("Series", labels(f"/status{HOST}/processes/mail"))
         # a check above keeps one, and no measure of its stands here
-        self.assertEqual(labels(f"/status{HOST}/ssh"), ["Status", "History", "Copy"])
+        self.assertEqual(labels(f"/status{HOST}/ssh"),
+                         ["Status", "History", "Notes", "Copy"])
 
     def test_the_root_has_no_history_tab(self) -> None:
         self.assertEqual(self._tabs(self._get("/status")),

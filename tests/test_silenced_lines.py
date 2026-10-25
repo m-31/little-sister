@@ -35,7 +35,7 @@ from tests.test_one_status import (
 
 #: What the aspect's Copy document says it shows, and where that comes from.
 SHOWN_AS = ("- **Shown as:** error ⛔ — rolled up from the 3 nodes beneath it. Every "
-            "line of its own is silenced.")
+            "line of its own is in maintenance.")
 
 
 def _beside(box: Element) -> list[str]:
@@ -160,11 +160,11 @@ class WhatItSaysTests(_Silenced):
                 self.assertEqual("data-budget" in node.attrs, closed)
 
     def test_its_time_card_says_where_its_status_comes_from(self) -> None:
-        # the node beneath it that makes it so, with that node's own *since*
-        # (ADR-0123 decision 3)
+        # the period of what it shows, and the node beneath it that makes it so,
+        # which made the whole period (ADR-0123 decision 3, ADR-0132 decision 5)
         card = self._time_card(ASPECT)
-        self.assertEqual(card[0], f"Status error, from {FAILS} beneath it, "
-                                  f"{self._period_said(f'{ASPECT}/{FAILS}')}")
+        self.assertEqual(card[0], f"Status {self._period_said(f'{ASPECT}/{FAILS}')}"
+                                  f", from {FAILS} beneath it")
         self.assertRegex(card[1],
                          rf"^Its own status maintenance since (before )?{INSTANT}$")
 

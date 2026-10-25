@@ -1,7 +1,7 @@
 # ADR-0107 — An event is a change of what a node shows
 
 - **Status:** Accepted
-- **Date:** 2026-10-03
+- **Date:** 2026-10-25 (accepted 2026-10-03)
 - **Related:** [ADR-0036](0036-addressable-reasons.md) (decision 5, a line's pin;
   decision 7, what a node shows over its lines; decision 11, which this amends),
   [ADR-0041](0041-maintenance-is-a-contribution-rule.md) (decisions 6 to 8, the mark
@@ -21,7 +21,13 @@
   wait, and its cause), [ADR-0109](0109-a-node-says-its-children-are-complete.md) (a
   node's removal, and its cause),
   [ADR-0110](0110-what-every-node-last-showed-is-kept-beside-the-log.md) (the table
-  beside the log, which decision 5's comparisons read)
+  beside the log, which decision 5's comparisons read),
+  [ADR-0135](0135-a-handled-part-keeps-its-true-color-and-every-surface-says-by-what.md) (decision 2, maintenance's own
+  words, which decision 3's take),
+  [ADR-0137](0137-a-deployment-says-in-a-table-how-a-part-counts-above-it.md) (the rows
+  a configured rule marks, and `shown`),
+  [ADR-0142](0142-a-failure-marked-seen-counts-as-ok-above-until-it-changes.md) (the
+  rows of a failure marked seen, and why one ended)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -70,6 +76,12 @@ written for a line by itself. A line's pin that does not change what its node sh
 one of two failing lines pinned, a note or an expiry edited — is no event, so the log
 does not fill with lines, which is what ADR-0036 decision 11 kept out of it.
 
+A failure a person marks seen writes rows of its node
+([ADR-0142](0142-a-failure-marked-seen-counts-as-ok-above-until-it-changes.md)
+decision 7): its set, its edit and its end, the node's own and a line's alike. A node's
+own seen changes nothing its node shows, so its rows go from what the node shows to the
+same; a line's go from what its node showed to what it shows.
+
 ### 2. A change of the reading that the node does not show is a row of its own, held back
 
 As beneath a node's pin (ADR-0041 decision 6), and now also where only some of the
@@ -85,23 +97,41 @@ saying one thing, a status that either reached or was held back, so the page's s
 switches and *reached* off answer what a pin hid, that run included. A change only the
 reading made is one held-back row, and one only the node made is one that reached.
 
+A rule a deployment configures marks rows too
+([ADR-0137](0137-a-deployment-says-in-a-table-how-a-part-counts-above-it.md)
+decision 11). A change of what a node shows that the rule kept from its parent — one it
+makes count for less, a floor holding nothing back — is marked `aggregation` once the
+write is whole, as damping's are; a change of the reading the node does not show,
+because a rule on its lines counts it for less, is a row of its own, marked
+`aggregation` where a pin's is `maintenance`, and one a floor on the lines raised is a
+row of no rule's, which the Events page does not list. A reading's row that a seen kept
+from its node's parent is marked `seen`, as damping's are. Since a mark does not say by
+itself whether the node showed the change, a row carries `shown`, kept in the log only
+where it differs from what its mark implies.
+
 ### 3. An event carries its cause
 
 A field of its own, beside its reason: a reading; the node's pin, set, edited or ended;
-a line's pin, set or ended; the end of a wait by its count (ADR-0119); and *removed*,
-for a node its check has stopped reporting
-([ADR-0109](0109-a-node-says-its-children-are-complete.md)). The reason is what it was —
-the node's lines for a reading, for the end of a pin and for the end of a wait, the
-pin's note for a node's pin — and where a line's pin was set it is that line and the
-pin's note: the line by its text, since a slug means nothing once the line is gone. A
-removal's row is written for each node removed, and at the first run after a restart for
-a path the log last showed a status for (decision 5).
+a line's pin, set or ended; a seen, set, edited or ended, on the node or on a line —
+`seen-set`, `seen-edited` and `seen-ended`, and `line-seen-set`, `line-seen-edited` and
+`line-seen-ended`, the act and the kind; the end of a wait by its count (ADR-0119); and
+*removed*, for a node its check has stopped reporting
+([ADR-0109](0109-a-node-says-its-children-are-complete.md)). A seen's end carries
+`ended` besides, why it ended: a recovery, a worsening, a new occurrence, a part no
+longer reported, its end, or by hand. The reason is what it was — the node's lines for
+a reading, for the end of a pin and for the end of a wait, the pin's note for a node's
+pin — and where a line's pin was set it is that line and the pin's note: the line by
+its text, since a slug means nothing once the line is gone. A removal's row is written
+for each node removed, and at the first run after a restart for a path the log last
+showed a status for (decision 5).
 
 Each surface says the cause in its own words. On the Events page a row that a pin caused
-carries a chip beside its status: *set*, *edited*, *maintenance ended*, *line silenced*,
-*line's maintenance ended*. The row that ends a wait carries *reached*. On the Time card
-and in the Copy document a period says what kind of beginning it had, ADR-0099 decision
-8 one level down: *Status ok since 16:24:04, when a line was silenced* and *Status error
+carries a chip beside its status: *set*, *edited*, *maintenance ended*, *line's pin set*,
+*line's maintenance ended*. A seen's carries *seen*, *seen changed* and *seen ended*
+with why — *seen ended · worse* — and a line's *line seen*, *line's seen changed* and
+*line's seen ended*. The row that ends a wait carries *reached*. On the Time card and in
+the Copy document a period says what kind of beginning it had, ADR-0099 decision 8 one
+level down: *Status ok since 16:24:04, when a line's pin was set* and *Status error
 since 18:00:00, when a line's maintenance ended*. A period of maintenance says nothing
 more, however it began.
 

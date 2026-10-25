@@ -1,7 +1,7 @@
 # ADR-0128 — Where a node's first look comes from: `chips`, `fold_ok` and `reason_cap`
 
 - **Status:** Accepted
-- **Date:** 2026-10-18 (accepted 2026-10-11)
+- **Date:** 2026-10-25 (accepted 2026-10-11)
 - **Related:** [ADR-0127](0127-the-wall-is-a-tree-and-a-click-opens-or-closes-a-node.md)
   (the tree whose first look this decides), [ADR-0012](0012-node-metadata.md) and
   [ADR-0017](0017-node-title.md) (`nodes.yaml`, by path, above everything a check
@@ -77,10 +77,8 @@ For each key of each node, the first statement found:
    constructor keyword, for the type's own node, which no name reaches — a proposal,
    which the deployment takes back in the check's file;
 5. `settings.yaml`, for everything nobody spoke for;
-6. built in: open, its healthy shown, and the line budget's default — drawn once the
-   family's types have declared their big levels (see the consequences); until then a
-   node nobody speaks for keeps the density the wall had before the tree, a quiet leaf
-   a chip and a level's quiet boxes past `branch_cap` behind *+N more*.
+6. built in: open, its healthy shown, and the line budget's default — but a level that,
+   opened, would draw more than thirty boxes starts as chips (decision 8).
 
 Between the viewer's word and the files stand two defaults of a view: a node's page
 opens its node's children as it arrives, and a `depth=` in the address closes a level
@@ -148,12 +146,17 @@ The check whose file and type speak for a node is the one that writes it: the ch
 whose path the node is, or lies beneath, and beneath a mount two checks share, the one
 whose own subtree the node is in — `owned_nodes()`, which the loader keeps apart
 ([ADR-0015](0015-check-discovery-union.md)) — so a host's two metrics checks each speak
-for their own leaves. The mount itself takes nothing from either check's file or type,
-and `nodes.yaml` speaks for it as for any container. Whether a run named a child is
-remembered beside the tree, never on the snapshot, so the snapshot stays provenance-free
-(ADR-0025), and it is forgotten with a node a run removes; after a restart it is known
-again as each run writes, and until then no child is matched by its name. `nodes.yaml`
-is kept for the process's life.
+for their own leaves. The mount's own look takes nothing from either check's file or
+type: `nodes.yaml` speaks for it as for any container. Each of its children starts as
+the check that writes it says of the children of its own node — `nodes.yaml`'s word for
+the mount first, for every child alike, then that check's file and its type, then
+`settings.yaml`. So a Mac's leaves are chips, `host-metrics`' and `macos-memory`'s each
+by its own check's proposal, and a NAS's `smart` and `temperature` stand open beside
+`host-metrics`' chips, `qnap-metrics` proposing nothing for the node. Whether a run
+named a child is remembered beside the tree, never on the snapshot, so the snapshot
+stays provenance-free (ADR-0025), and it is forgotten with a node a run removes; after a
+restart it is known again as each run writes, and until then no child is matched by its
+name. `nodes.yaml` is kept for the process's life.
 
 ### 6. The planner prices the first look
 
@@ -180,16 +183,48 @@ naming its entry, as its `show_when_quiet` does. In each of them a key the loade
 not know warns at startup, naming the key and its file — for a type's declaration, the
 type — where it was ignored in silence.
 
+### 8. A level nobody spoke for starts as chips once it is big
+
+The built-in look of decision 2 is open, its healthy shown — but a level that, opened,
+would draw more than thirty boxes starts as chips, as `chips: true` would start it, its
+failures the budget's to open
+([ADR-0127](0127-the-wall-is-a-tree-and-a-click-opens-or-closes-a-node.md) decision 5)
+and a node that claims `show_when_quiet` open (Lex's words of 2026-10-24). Its boxes are
+counted all the way down, the deeper levels deciding first, so that a child counts what
+it draws once it has decided: sixty pods stand as chips, and so do thirty repositories
+with two workflows each and ten hosts of ten leaves, where seven repositories with their
+build and deploy, twenty-one boxes, stand open. It reads the tree's shape alone, never a
+status, the same on every screen, so the planner prices what it closes as it prices the
+configured look (decision 6); every statement wins over it, `chips: false` in
+`settings.yaml` among them, and the cards are never its.
+
+Thirty is the library's (`first_look.BIG_LEVEL`): on both deployments' walls the
+family's declarations leave it nothing to close at thirty, forty or fifty, where twenty
+would close a team's checks on the tree mounted under its teams, and with nothing
+declared it closes a run of twenty repositories, 83 boxes opened. `branch_cap` and
+*+N more* go with the density whose rule they were, and a `branch_cap:` left in
+`settings.yaml` is named at the start as no longer read.
+
 ## Consequences
 
-- **A type proposes, a deployment overrides.** A family package declares its big
-  levels once; every deployment of it inherits them and takes any back in the check's
-  file, by name or for the check's own node, or per path in `nodes.yaml`.
+- **A type proposes, a deployment overrides.** A family package declares its big levels
+  once; every deployment of it inherits them and takes any back in the check's file, by
+  name or for the check's own node, or per path in `nodes.yaml`. The library's own types
+  that write a host's levels propose theirs: `host-metrics` a host's leaves as chips, by
+  `node_defaults`, and a disk's filesystems where it fans out, by its `disk` entry;
+  `qnap-metrics` its drives and its temperature sensors, its two branches open;
+  `macos-memory` its leaves and its watched processes. Measured on a household's wall of
+  nine hosts with the family's declarations, the wall reads 1,414, 1,195, 1,415 and
+  3,427 pixels at 2,560, 1,920 and 1,280 pixels wide and on a phone, where with nothing
+  declared for the hosts, and no level closed for being big, it reads 2,544, 3,585,
+  4,674 and 7,550.
 - **A deployment that says nothing sees more.** Built in, a node nobody speaks for
-  starts open with its healthy shown, where dense mode closed its quiet leaves, so a
-  deployment's big levels are closed by its types or in its own files. The release that
-  changes the built-in look comes after the library's own types that write a host's
-  levels and the family's have declared theirs, and says so at the top of its notes.
+  starts open with its healthy shown, where dense mode closed its quiet leaves, and only
+  a level of more than thirty boxes starts as chips, so a deployment's big levels are
+  closed by its types or in its own files. The built-in look was drawn before the
+  family's packages released their declarations, on Lex's word of 2026-10-25, so the
+  release that brings it brings theirs on the same day, never after it, and says at the
+  top of its notes that a deployment updates them with it and states its big levels.
 - **The check-authoring surface grows by additions** — `node_defaults` for a type's own
   node, and the new keys and `children:` in `subnode_defaults` — so its epoch does not
   move (ADR-0049 decision 5, ADR-0051 decision 2); a package that uses them raises its
@@ -219,3 +254,6 @@ type — where it was ignored in silence.
   deployment would write one `nodes.yaml` path per repository, the copy-paste ADR-0025
   closed for labels.
 - **A key that overrules every type at once**: later, if a deployment asks.
+- **A host's healthy leaves folded** rather than chips: on the household's wall as tall
+  at 2,560, 418 to 500 pixels taller at a desk below it and 308 on a phone, and naming
+  no healthy leaf.

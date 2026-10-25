@@ -1,16 +1,21 @@
 # ADR-0069 — Identity comes from outside, and never from a chain
 
 - **Status:** Accepted
-- **Date:** 2026-10-04 (accepted 2026-08-29)
+- **Date:** 2026-10-25 (accepted 2026-08-29)
 - **Related:** [ADR-0068](0068-the-login-gate-refuses-by-default.md) (the gate this sits
   on), [ADR-0023](0023-secret-references.md) (the reference the system admin's password
   is), [ADR-0064](0064-the-resolver-is-a-registration.md) (the registration this copies,
   including what a second claim on one name does),
   [ADR-0034](0034-template-slots-for-dependent-packages.md) (the seam whose failure rule
   this deliberately inverts), [ADR-0052](0052-plugin-names.md) (a name claimed once),
-  [ADR-0008](0008-json-output-api.md) (the bearer token that stays out of this),
+  [ADR-0080](0080-the-envelope-is-the-snapshot-published.md) (the bearer token that
+  stays out of this),
   [ADR-0100](0100-system-is-two-views.md) (the *Installed* view of `/system`, which
-  shows the doors and the system-admin line)
+  shows the doors and the system-admin line),
+  [ADR-0141](0141-every-pin-is-one-thing-with-a-kind-and-the-envelope-lists-what-handles-a-part.md)
+  (what a request may do, asked by name),
+  [ADR-0142](0142-a-failure-marked-seen-counts-as-ok-above-until-it-changes.md) (the
+  act of marking a failure seen, and its permission)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -476,6 +481,15 @@ request.
 `name`, `firstname`, `lastname`, `admin`. No raw-claims bag: a deployment that needs more
 already has it, in its own provider code, and a claims dictionary on the library's type
 is a surface owed forever for a convenience nobody asked for.
+
+An `Identity` answers what it may do: `may(<act>)`, one permission per act a person
+does to a node, named for the kind of pin the act sets — `maintenance`, and `seen`
+([ADR-0142](0142-a-failure-marked-seen-counts-as-ok-above-until-it-changes.md)
+decision 1) — which a route asks rather than `admin`
+([ADR-0141](0141-every-pin-is-one-thing-with-a-kind-and-the-envelope-lists-what-handles-a-part.md)
+decision 4). Every act is an admin's until a deployment's roles map onto them, so the
+four fields stay four, and a provider maps a directory group onto `admin` as before; a
+name no act has raises, so that a typo in a route is not a permission nobody holds.
 
 ## Consequences
 

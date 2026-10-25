@@ -44,7 +44,7 @@ import sys
 import tempfile
 import threading
 import time
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -103,13 +103,32 @@ PROFILES = (Profile("desk-1440", 1440, 900), Profile("desk-1000", 1000, 800),
 CHOSEN_LOOKS = {"inspection_card": "pause"}
 
 
-def open_context(browser: Any, profile: Profile, base: str) -> Any:
-    """A browser context of ``profile``'s screen for ``base``'s pages, the walk's
-    :data:`CHOSEN_LOOKS` chosen in the presentation cookie."""
+def open_context(browser: Any, profile: Profile, base: str,
+                 chosen: Mapping[str, str] = CHOSEN_LOOKS) -> Any:
+    """A browser context of ``profile``'s screen for ``base``'s pages, the looks
+    ``chosen`` — the walk's own, :data:`CHOSEN_LOOKS`, unless ``--look`` adds to them —
+    in the presentation cookie."""
     context = browser.new_context(**profile.context())
     context.add_cookies([{"name": "ls_prefs", "url": base,
-                          "value": urlencode(CHOSEN_LOOKS)}])
+                          "value": urlencode(dict(chosen))}])
     return context
+
+
+def chosen_looks(asked: Sequence[str]) -> dict[str, str]:
+    """The walk's looks and those ``--look`` asks for, each ``key=value`` a look and a
+    value of the settings menu's (``little_sister.looks``) — another look under
+    which to walk the demo, such as ``boxes=packed``."""
+    from little_sister.looks import LOOKS_BY_KEY
+    chosen = dict(CHOSEN_LOOKS)
+    for item in asked:
+        key, _, value = item.partition("=")
+        look = LOOKS_BY_KEY.get(key.strip())
+        if look is None or value.strip() not in look.values:
+            known = ", ".join(sorted(LOOKS_BY_KEY))
+            raise SystemExit(f"--look {item!r}: a look and one of its values, "
+                             f"key=value, of {known}")
+        chosen[look.key] = value.strip()
+    return chosen
 
 
 #: The facts a step is measured against: a name, what it holds a page to, and a
@@ -145,15 +164,39 @@ FACTS: dict[str, tuple[str, str]] = {
         }"""),
     "head-overlap": (
         "In a head's row the name, the title, the actions, the state and the icons "
-        "do not lie over one another.",
+        "do not lie over one another as a reader sees them, but for a shown toolbar "
+        "over the title where the look `head_buttons` lays it there.",
         """() => {
             const found = [];
+            // What a reader sees: a part the page hides, or fades by its own opacity
+            // or an ancestor's — the pointer looks fade a head's whole toolbar, its
+            // `.node-controls`, until the pointer rests on the head — is none.
             const shown = (el) => {
                 const style = getComputedStyle(el);
                 const box = el.getBoundingClientRect();
-                return style.visibility !== 'hidden' && style.display !== 'none'
-                    && Number(style.opacity) > 0.05 && box.width > 0 && box.height > 0;
+                if (style.visibility === 'hidden' || style.display === 'none'
+                        || box.width <= 0 || box.height <= 0) { return false; }
+                for (let up = el; up && up !== document.body; up = up.parentElement) {
+                    if (Number(getComputedStyle(up).opacity) <= 0.05) { return false; }
+                }
+                return true;
             };
+            // Under `pointer` and `pointer-name`, where a pointer can rest on a head,
+            // the toolbar takes no room in the row and, shown, lies over the title on
+            // purpose (ADR-0127 decision 3): that one overlap is no mark.
+            // A head being measured or crowded keeps the toolbar's room, as a touch
+            // screen does, so there it marks as everywhere else.
+            const overTitle = document.body.matches(
+                    '[data-ls-head-buttons="pointer"], '
+                    + '[data-ls-head-buttons="pointer-name"]')
+                && window.matchMedia('(hover: hover)').matches;
+            const ofToolbar = (el) => el.matches(
+                '.node-controls > .node-icons, .node-controls > .node-actions > *,'
+                + ' .node-controls > .node-more');
+            const laid = (head, a, b) => overTitle
+                && !head.matches('.is-measuring, .is-crowded')
+                && ((ofToolbar(a) && b.matches('.status-head__middle'))
+                    || (ofToolbar(b) && a.matches('.status-head__middle')));
             // A name is its lines, not its box: where it broke onto a second line,
             // the state may stand on that line beside it (ADR-0127 decision 3).
             const rectsOf = (el) => {
@@ -168,18 +211,20 @@ FACTS: dict[str, tuple[str, str]] = {
             };
             for (const head of document.querySelectorAll(
                     '.status-card__head, .tree-box > .status-node__self')) {
-                // The row's parts, and the controls at its end: the node's actions
-                // and ⋯, the state cluster and the icons (ADR-0127 decision 3).
+                // The row's parts: the name, the title, the state cluster, and the
+                // toolbar's — the icons, ↗ first, then the node's actions and ⋯ —
+                // where the look `head_buttons` keeps them (ADR-0127 decision 3).
                 const parts = Array.from(head.querySelectorAll(
                     ':scope > .status-card__name, :scope > .status-node__name,'
                     + ' :scope > .status-head__middle,'
                     + ' :scope > .node-controls > .node-actions > *,'
                     + ' :scope > .node-controls > .node-more,'
-                    + ' :scope > .node-controls > .status-card__state,'
-                    + ' :scope > .node-controls > .status-node__state,'
+                    + ' :scope > .status-card__state,'
+                    + ' :scope > .status-node__state,'
                     + ' :scope > .node-controls > .node-icons')).filter(shown);
                 for (let i = 0; i < parts.length; i += 1) {
                     for (let j = i + 1; j < parts.length; j += 1) {
+                        if (laid(head, parts[i], parts[j])) { continue; }
                         let over = null;
                         for (const a of rectsOf(parts[i])) {
                             for (const b of rectsOf(parts[j])) {
@@ -198,6 +243,44 @@ FACTS: dict[str, tuple[str, str]] = {
                             found.push(`${head.dataset.path}: .${name(parts[i])} and `
                                 + `.${name(parts[j])} overlap by `
                                 + `${Math.round(over[0])}×${Math.round(over[1])}px`);
+                        }
+                    }
+                }
+            }
+            return found;
+        }"""),
+    "box-overlap": (
+        "In a level of boxes — the wall's cards, a card's open boxes — no box stands "
+        "over another.",
+        """() => {
+            const found = [];
+            const named = (el) => el.dataset.node
+                || '.' + (el.className.toString().split(' ')[0]
+                          || el.tagName.toLowerCase());
+            for (const level of document.querySelectorAll(
+                    '.status-grid, .status-card .node-children')) {
+                if (getComputedStyle(level).display !== 'grid') { continue; }
+                // a wrapper drawn without a box of its own stands its child in the grid
+                const items = [];
+                for (const child of level.children) {
+                    const display = getComputedStyle(child).display;
+                    if (display === 'none') { continue; }
+                    if (display === 'contents') { items.push(...child.children); }
+                    else { items.push(child); }
+                }
+                const boxes = items.map((el) => [el, el.getBoundingClientRect()])
+                    .filter(([, box]) => box.width && box.height);
+                for (let i = 0; i < boxes.length; i += 1) {
+                    const [one, a] = boxes[i];
+                    for (let j = i + 1; j < boxes.length; j += 1) {
+                        const [other, b] = boxes[j];
+                        const wide = Math.min(a.right, b.right)
+                            - Math.max(a.left, b.left);
+                        const tall = Math.min(a.bottom, b.bottom)
+                            - Math.max(a.top, b.top);
+                        if (wide > 2 && tall > 2) {
+                            found.push(`${named(one)} and ${named(other)} overlap `
+                                + `by ${Math.round(wide)}×${Math.round(tall)}px`);
                         }
                     }
                 }
@@ -488,7 +571,7 @@ PAGES = (("branch page", "/status/services"), ("leaf page", "/status/services/we
          ("leaf history", "/history/services/web"),
          ("subject branch", "/status/ci/jobs"),
          ("subject node", "/status/ci/jobs/import"),
-         ("events", "/events"), ("maintenance", "/maintenance"),
+         ("events", "/events"), ("handled", "/handled"),
          ("system", "/system"), ("system installed", "/system/installed"),
          ("links", "/links"), ("copy", "/copy"), ("about", "/about"))
 
@@ -516,7 +599,7 @@ def _pin_what_goes(walk: Walk, base: str, wait: Callable[[float], None]) -> bool
             timeout=3000)
         page.wait_for_function(
             "document.activeElement !== null"
-            " && document.activeElement.name === 'reason'", timeout=3000)
+            " && document.activeElement.name === 'note'", timeout=3000)
         page.keyboard.type("The walk pins what comes and goes.")
         walk.step("pin: the editor open in its card")
         with page.expect_navigation(timeout=5000):
@@ -545,7 +628,7 @@ def _what_it_left(walk: Walk, base: str) -> None:
     """What a removed node leaves (ADR-0109): its event, its suspended pin, its
     kept readings."""
     for name, path in (("removed: events", f"/events?under={ABOVE}"),
-                       ("removed: maintenance", "/maintenance"),
+                       ("removed: handled", "/handled"),
                        ("removed: the branch it left", f"/status{ABOVE}"),
                        ("removed: its own address", f"/status{GOES}"),
                        ("removed: its check's history", f"/history{ABOVE}"),
@@ -556,11 +639,12 @@ def _what_it_left(walk: Walk, base: str) -> None:
 
 def walk_demo(browser: Any, base: str, out: Path, steps: list[Step],
               profiles: Sequence[Profile] = PROFILES,
-              wait: Callable[[float], None] = time.sleep) -> None:
-    """The live demo, on every screen."""
+              wait: Callable[[float], None] = time.sleep,
+              chosen: Mapping[str, str] = CHOSEN_LOOKS) -> None:
+    """The live demo, on every screen, in the looks ``chosen``."""
     walks: list[tuple[Any, Walk]] = []
     for profile in profiles:
-        context = open_context(browser, profile, base)
+        context = open_context(browser, profile, base, chosen)
         walk = Walk(context.new_page(), profile, out, steps)
         walks.append((context, walk))
         _sign_in(walk, base)
@@ -723,7 +807,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--out", type=Path, default=_DEFAULT_OUT)
     parser.add_argument("--no-fixtures", action="store_true",
                         help="walk the live demo alone")
+    parser.add_argument("--look", action="append", default=[], metavar="KEY=VALUE",
+                        help="walk the live demo in another look as well as the "
+                             "walk's own, e.g. boxes=packed; the fixture sheet keeps "
+                             "the library's")
     args = parser.parse_args(argv)
+    chosen = chosen_looks(args.look)
     out: Path = args.out.resolve()
     out.mkdir(parents=True, exist_ok=True)
     from playwright.sync_api import sync_playwright
@@ -738,7 +827,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 # the demo's checks run every few seconds: let each have read once,
                 # and the kept series have something to draw
                 time.sleep(20)
-                walk_demo(browser, base, out, steps)
+                walk_demo(browser, base, out, steps, chosen=chosen)
                 walk_fixtures(browser, pages, out, steps)
                 browser.close()
         finally:

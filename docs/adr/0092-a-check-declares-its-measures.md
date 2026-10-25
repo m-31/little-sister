@@ -1,7 +1,7 @@
 # ADR-0092 — A check declares its measures, and the node that stands for a subject shows its series
 
 - **Status:** Accepted
-- **Date:** 2026-10-04 (accepted 2026-09-27)
+- **Date:** 2026-10-25 (accepted 2026-09-27)
 - **Related:** [ADR-0085](0085-a-measure-is-read-out-of-a-record.md) (a measure is a
   projection over the record, and its unit belongs to it — the declaration this adds),
   [ADR-0087](0087-a-check-keeps-its-subjects-readings.md) (the series, its order and
@@ -10,8 +10,9 @@
   [ADR-0025](0025-check-provided-subnode-metadata.md) (the `subnodes:` merge this
   follows), [ADR-0056](0056-stable-useful-dashboard-flow.md) (the display caps
   `reading_cap` joins), [ADR-0079](0079-freshness-is-a-stated-tolerance.md) (the
-  tolerance a hole is measured against), [ADR-0006](0006-config-file-and-timezones.md)
-  (the configured timezone), [ADR-0082](0082-a-line-carries-what-it-is-about-and-what-it-read.md)
+  tolerance a hole is measured against),
+  [ADR-0120](0120-every-stored-time-is-an-instant.md) (decision 7, the configured
+  timezone), [ADR-0082](0082-a-line-carries-what-it-is-about-and-what-it-read.md)
   (the record list a reading's fields are written through),
   [ADR-0049](0049-the-check-authoring-surface.md) (the surface a type's default
   arrives on), [ADR-0096](0096-a-measure-names-its-node-and-its-things.md) (the binary
@@ -23,7 +24,11 @@
   [ADR-0106](0106-a-subject-with-a-history-has-a-node-of-its-own.md) (the node of a
   subject whose reading rides on a line, and a run's mark),
   [ADR-0111](0111-a-runs-mark-says-how-the-run-stood.md) (the records a mark is drawn
-  for)
+  for), [ADR-0098](0098-a-series-view-is-drawn-over-a-window.md) (decisions 1, 2 and
+  5: the window a Series view is drawn over, and a window drawn column by column),
+  [ADR-0122](0122-a-series-is-read-over-the-api-as-it-stands.md) (a series read over
+  the API), [ADR-0135](0135-a-handled-part-keeps-its-true-color-and-every-surface-says-by-what.md)
+  (decision 8: *Handled*, which lists every pin)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -94,13 +99,16 @@ the same readings in the same order. The axis is proportional to time, so a nigh
 without readings is a night wide.
 
 Its times read in `settings.yaml`'s `timezone` and `time_format`, or their defaults,
-as every other time a page shows ([ADR-0006](0006-config-file-and-timezones.md)): that
+as every other time a page shows ([ADR-0120](0120-every-stored-time-is-an-instant.md)
+decision 7): that
 is what *the viewer's timezone* has meant on every server-rendered page. A zone per
 browser or per user would be a preference of its own, and there is none.
 
 ### 5. A failure is marked, a hole is left plain
 
-A curve spans everything the series keeps, so `series_keep` is its one span. A reading
+A curve spans what its series keeps, or the window its Series view is drawn over where
+the view's URL names one
+([ADR-0098](0098-a-series-view-is-drawn-over-a-window.md) decisions 1 and 2). A reading
 whose record carries an `error`
 ([ADR-0096](0096-a-measure-names-its-node-and-its-things.md) decision 4) — the request
 that failed — breaks the line and is marked at its instant in the error ink, beneath
@@ -116,7 +124,11 @@ asleep — and the line breaks there without a mark. The period is the check's a
 the node's ([ADR-0097](0097-a-nodes-series-have-a-view-of-their-own.md) decision 1),
 since a node two checks share carries the period of whichever wrote it last. One missed
 poll is not a hole, as it does not make the node stale either. The line never crosses a
-hole, because across it there is nothing that was read.
+hole, because across it there is nothing that was read. Drawn column by column, as a
+window with more readings than the plot has columns is
+([ADR-0098](0098-a-series-view-is-drawn-over-a-window.md) decision 5), the line breaks
+at a hole at least a column wide and at a column none of whose readings has a number,
+and a column that holds a failed reading carries one mark.
 
 A series of events — records with an identity or a state, whose source keeps the
 history — has no cadence for a tolerance to measure. It is drawn as a mark for each run
@@ -159,8 +171,11 @@ check's own YAML beside `series_keep`, where it wins for that check. It counts t
 the Series view shows of each series
 ([ADR-0097](0097-a-nodes-series-have-a-view-of-their-own.md) decision 2): `0` shows the
 curves alone and leaves every reading to the History page, as `maintenance_cap: 0`
-sends every pin to `/maintenance`. A bad value in `settings.yaml` is logged and
-replaced, as every setting's is ([ADR-0006](0006-config-file-and-timezones.md)): one
+sends every pin to *Handled*
+([ADR-0135](0135-a-handled-part-keeps-its-true-color-and-every-surface-says-by-what.md)
+decision 8). A bad value in `settings.yaml` is logged and
+replaced, as every setting's is ([ADR-0120](0120-every-stored-time-is-an-instant.md)
+decision 7): one
 that is not a whole number by the default, a negative one by `0`. In a check's YAML it
 is refused at startup, naming the file, as a bad `series_keep` is.
 
@@ -178,7 +193,8 @@ is refused at startup, naming the file, as a bad `series_keep` is.
 - **A subject's recent history is part of its status**, and the core's line stays
   *status, not telemetry*: a series is bounded per subject and read where the subject
   is.
-- **The envelope does not move.** Reading a series over the API is a change of its own.
+- **The envelope does not move.** Reading a series over the API is a change of its own,
+  [ADR-0122](0122-a-series-is-read-over-the-api-as-it-stands.md)'s.
 
 ## Alternatives considered
 

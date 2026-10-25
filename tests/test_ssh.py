@@ -6,12 +6,13 @@ from unittest import TestCase, mock
 
 from little_sister import process
 from little_sister.checks import CheckError, code
+from little_sister.checks.output import OUTPUT_RECORD
 from little_sister.checks.ssh.command import RemoteCommandCheck
 from little_sister.checks.ssh.connect import ConnectCheck
 from little_sister.checks.ssh.connection import SshConnection
 from little_sister.checks.ssh.host_metrics import PROFILES
 from little_sister.checks.ssh.script import ScriptCheck
-from little_sister.limits import RECORD_LIMIT
+from little_sister.limits import RECORD_LIMIT, Limits, capacity
 from little_sister.status import StatusCode
 from tests.running import (
     SSH_RUN,
@@ -33,6 +34,12 @@ PQ_BANNER = ("** WARNING: connection is not using a post-quantum key exchange"
 
 def _patch_run(stdout="", returncode=0, stderr=""):
     return mock.patch(RUN, return_value=finished(stdout, returncode, stderr))
+
+
+def _start(check, record_limit):
+    """What a start at ``record_limit`` says of ``check`` (ADR-0075)."""
+    return capacity([check], max_workers=8,
+                    limits=Limits(record_limit=record_limit), record_floor=0)
 
 
 #: The longest command the oldest server the family reads takes. Dropbear 2012.55
@@ -205,6 +212,35 @@ class RemoteCommandCheckTests(TestCase):
                 {"type": "ssh-command", "path": "/c", "host": "h",
                  "command": "x", "capture": "nonsense"}, HERE)
 
+    def test_the_transport_half_and_the_output_share_one_record(self):
+        """The output's budget is what a record of `OUTPUT_RECORD` bytes leaves after
+        the transport half, where the transport half used to come on top of an output
+        that filled the record alone. At the default `max_chars`, in the worst
+        encodings, with `debug` and without, the record weighs no more than the check
+        declares, and the check declares 2,048 bytes at the most."""
+        for debug in (False, True):
+            for chatter in ("x" * 4000, "ä" * 4000, "\U0001f600" * 4000):
+                with self.subTest(debug=debug, kind=chatter[0]):
+                    check = self._check(capture="both", debug=debug)
+                    with _patch_run(stdout=chatter, returncode=3, stderr=chatter):
+                        record = record_of(check)
+                    weighed = len(json.dumps(record).encode("utf-8"))
+                    self.assertLessEqual(weighed, check.expected_record())
+                    self.assertLessEqual(check.expected_record(), OUTPUT_RECORD)
+
+    def test_the_templates_configuration_starts_at_the_default_and_at_2048(self):
+        """`max_chars: 1000`, the shipped template's, which declared 2,672 bytes and
+        refused the start at the default `record_limit` while the transport half came
+        on top: it declares 2,048 now, so a start at the default says nothing of it,
+        and one at 2,048 takes it."""
+        check = self._check(capture="both", max_chars=1000)
+        self.assertEqual(check.expected_record(), OUTPUT_RECORD)
+        for limit in (RECORD_LIMIT, OUTPUT_RECORD):
+            with self.subTest(limit=limit):
+                self.assertEqual(_start(check, limit).refusals(), ())
+        said = _start(check, RECORD_LIMIT).warnings()
+        self.assertNotIn("record", [limit for limit, _ in said])
+
 
 class CommandLineTests(TestCase):
     """What the command line carries is the wrapper and the command, never the script
@@ -249,6 +285,21 @@ class ScriptCheckTests(TestCase):
                          (StatusCode.OK, [code("output")]))
         self.assertEqual(remote_parts(run), ("bash -s", "echo hi\n"))
         self.assertEqual(remote_args(run), [])
+
+    def test_the_templates_configuration_shares_one_record_with_its_transport(self):
+        """As `ssh-command` does: at the template's `max_chars` the record and its
+        transport half weigh 2,048 bytes at the most, whatever the output is written
+        in, and a start at the default `record_limit` or at 2,048 takes the check."""
+        with tempfile.TemporaryDirectory() as directory:
+            check = self._check(directory, max_chars=1000)
+            with _patch_run(stdout="ä" * 4000, returncode=0):
+                record = record_of(check)
+        self.assertLessEqual(len(json.dumps(record).encode("utf-8")),
+                             check.expected_record())
+        self.assertEqual(check.expected_record(), OUTPUT_RECORD)
+        for limit in (RECORD_LIMIT, OUTPUT_RECORD):
+            with self.subTest(limit=limit):
+                self.assertEqual(_start(check, limit).refusals(), ())
 
     def test_interpreter_override(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -49,7 +49,7 @@ NOTICE_BYTES = 220
 #: ``debug stderr:`` line can be rebuilt from the reading rather than from a
 #: `RemoteResult` the grading is not allowed to see (ADR-0086). It was 800
 #: characters while it lived only in a reason; a record is kept per reading and
-#: shares its 2 KB with whatever else the check read — a host's volumes — so the
+#: shares its bytes with whatever else the check read — a host's volumes — so the
 #: diagnostic line is the thing that gives way, not the measurement.
 DEBUG_STDERR_CHARS = 300
 DEBUG_STDERR_BYTES = 320
@@ -275,7 +275,8 @@ class SshCheckBase(Check):
         record["output"] = (
             None if result.error is not None
             else captured_output(result.stdout, result.stderr, capture=capture,
-                                 max_chars=max_chars, keep=keep))
+                                 max_chars=max_chars, keep=keep,
+                                 transport=self._transport_record_bytes()))
         return Measurement(record=record)
 
     def _output_result(self, record: Mapping[str, Any]) -> CheckResult:
@@ -304,8 +305,11 @@ class SshCheckBase(Check):
     def _output_record_bytes(self, max_chars: int) -> int:
         """The transport half and the captured output together — a ceiling that
         cannot be exceeded, because both halves are clipped in these same bytes
-        (ADR-0075)."""
-        return self._transport_record_bytes() + output_record_bytes(max_chars)
+        (ADR-0075) — and one record of
+        :data:`~little_sister.checks.output.OUTPUT_RECORD` at the most, since the
+        output's budget is what that record leaves after the transport half."""
+        transport = self._transport_record_bytes()
+        return transport + output_record_bytes(max_chars, transport)
 
 
 class SshScriptCheck(SshCheckBase):

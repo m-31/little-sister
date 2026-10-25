@@ -1,4 +1,4 @@
-{#- Status not by color alone (ADR-0024): a small shape cue per state — a check (ok),
+{#- Status not by color alone (architecture.md §6): a small shape cue per state — a check (ok),
     triangle (warn), filled disc (error), pause bars (maintenance), hollow ring (idle /
     undefined) — so a status reads without leaning on the fill color, and a red/green
     color-blind viewer can separate error from ok. Drawn in ``currentColor`` so it
@@ -12,11 +12,12 @@
     needs it too, and importing the grid template would execute the grid's body without
     the grid's context — StrictUndefined rightly refuses that. -#}
 {#- ``use`` draws the cue as a reference to a shape the page holds once
-    (``cue_sprite``, which the wall's page includes outside the grid the refresh
-    swaps): the wall draws a cue on every chip, every box's head and every coded
-    line, several hundred on a deployment's tree (backlog #91 §3.9), and the shape's
-    path in each would be a third of the fragment. The pages that draw a cue here and
-    there keep the whole shape in place. -#}
+    (``cue_sprite``, which every page includes at its end, `_page_end.html`, outside
+    the grid the refresh swaps): the wall draws a cue on every chip, every box's head
+    and every coded line, several hundred on a deployment's tree (backlog #91 §3.9),
+    and the shape's path in each would be a third of the fragment; and a status a text
+    names in braces is drawn as a sign whose cue refers to it, on any page. The pages
+    that draw a cue here and there keep the whole shape in place. -#}
 {% macro cue_shape(code) -%}
 {%- if code.name == 'OK' -%}
 <path d="M3.5 8.5 6.5 11.5 12.5 4.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>

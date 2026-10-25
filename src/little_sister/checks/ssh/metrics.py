@@ -7,12 +7,15 @@ into a dict and ``reading`` / ``readings`` turn those strings into the numbers a
 record holds; ``refuse_thresholds`` names what replaces the ``thresholds:`` block
 the checks graded by before their levels were pairs (ADR-0131);
 ``human_kb`` / ``human_duration`` format sizes and uptimes; ``unavailable`` is the
-"no data" leaf; ``volume_name`` makes a tree-safe filesystem node name; and the
-``*_notices`` / ``oneline`` helpers tidy ssh's stderr. Pure, so it is unit-testable
-without SSH: feed a captured busybox ``df`` blob and assert the parse.
+"no data" leaf; ``volume_name`` makes a tree-safe filesystem node name;
+``code_span`` writes a host, a mount point or a pattern as a node's detail (ADR-0133
+decision 6); and the ``*_notices`` / ``oneline`` helpers tidy ssh's stderr. Pure, so
+it is unit-testable without SSH: feed a captured busybox ``df`` blob and assert the
+parse.
 """
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 
 from little_sister.checks.base import CheckError, CheckResult
@@ -102,16 +105,27 @@ def _level(value: object) -> str:
     return f"{value:g}" if isinstance(value, int | float) else str(value)
 
 
-def unavailable(name: str, description: str, about: str = "", *,
-                dynamic: bool = False) -> CheckResult:
+def unavailable(name: str, description: str, *, dynamic: bool = False,
+                details: Mapping[str, str] | None = None) -> CheckResult:
     """A WARN leaf for an aspect the script was expected to report but didn't.
 
-    ``about`` is the aspect's optional subject label (ADR-0025), carried so a
-    missing aspect's hover card still explains what the leaf *is*. ``dynamic``
-    says that the host names the leaf — a volume — and no declaration does
-    (ADR-0118)."""
+    ``dynamic`` says that the host names the leaf — a volume — and no declaration
+    does (ADR-0118); ``details`` are its object's (ADR-0133 decision 6), which a leaf
+    whose numbers did not arrive still has — a volume's mount point."""
     return CheckResult(StatusCode.WARN, ["unavailable"], name=name,
-                       description=description, about=about, dynamic=dynamic)
+                       description=description, dynamic=dynamic,
+                       details=dict(details or {}))
+
+
+def code_span(text: str) -> str:
+    """``text`` as a Markdown code span, for a detail that names a thing as its
+    source writes it — a mount point, a pattern: fenced by one backtick more than the
+    longest run of them inside, and padded where it begins or ends with one, so that
+    whatever a host calls a thing stays what it called it (CommonMark §6.1)."""
+    longest = max((len(run) for run in re.findall(r"`+", text)), default=0)
+    fence = "`" * (longest + 1)
+    pad = " " if text.startswith("`") or text.endswith("`") else ""
+    return f"{fence}{pad}{text}{pad}{fence}"
 
 
 def volume_name(mount: str, used: set[str]) -> str:

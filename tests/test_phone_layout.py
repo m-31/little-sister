@@ -88,7 +88,7 @@ class ViewportTests(_SignedIn):
     def test_it_reaches_the_page(self):
         routes = ("/status", f"/status{HOST}", "/events", "/system",
                   "/system/installed", "/series", f"/history{HOST}",
-                  "/maintenance", "/links", "/copy", "/about")
+                  "/handled", "/links", "/copy", "/about")
         for url in routes:
             with self.subTest(url=url):
                 self.assertEqual(self._declared(self._get(url)), [VIEWPORT])

@@ -11,8 +11,8 @@ so each of them is settled here, once:
   *alive and moved*. Both are right somewhere, so neither is assumed.
 * **One `User-Agent`.** ``little-sister/<version>``, because the default
   ``Python-urllib`` is exactly the string a corporate filter is most likely to answer
-  with a ``403`` nobody can interpret. A caller may override it — the link prober adds
-  which subsystem is knocking — and a caller-supplied header always wins.
+  with a ``403`` nobody can interpret. A caller may override it, and a
+  caller-supplied header always wins.
 * **Proxies and TLS trust are the environment's.** The opener is a default one
   otherwise, so ``http_proxy`` / ``https_proxy`` are honored, as is the system trust
   store (``SSL_CERT_FILE`` / ``SSL_CERT_DIR`` for an internal CA). There is

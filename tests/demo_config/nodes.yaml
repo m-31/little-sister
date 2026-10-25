@@ -14,7 +14,7 @@
 # `/security/wiz` shows: those bands are ranked by the *check*, and the top-level
 # cards here are ranked by the person who reads the wall — outside-in, rather than
 # the alphabetical `ci hosts network security services storage`. A rank is static, so
-# ADR-0024's positional stability holds: a card moves when somebody edits this file
+# ADR-0056's positional stability holds: a card moves when somebody edits this file
 # and never because a status changed. Delete every `order:` below and the wall goes
 # back to alphabetical on the next restart.
 
@@ -22,10 +22,37 @@
   order: 1
   title: Public services
   about: Everything a visitor from outside touches.
+  # A handbook as text (ADR-0133 decision 3), read on the node's Handbook tab: what
+  # holds for every service beneath it. The API gateway beneath has one of its own,
+  # a file in handbook/ that its check's file names.
+  handbook: |
+    ## Who to call
+
+    The platform team owns every public service: its channel first, then the
+    on-call number on the contact page.
+
+    ## Before you change anything
+
+    Say so in the team's channel, and pin the node while you work, so that the
+    wall says somebody is on it.
+  # Details (ADR-0133 decision 6), named values whose keys the team chose: given
+  # here, they hold for every service beneath, key by key, the nearest winning — the
+  # API gateway's check file names its own owner, which keeps this row's place. A
+  # link written `handbook#…` in one leads into this node's handbook, the page every
+  # service beneath it shares.
+  details:
+    owner: Platform team
+    on call: "[who to call](handbook#who-to-call)"
+    tickets: "[PLAT board](https://tickets.example.org/plat)"
+  # Tags (ADR-0139), words that say what the node is where the tree cannot: they hold
+  # for every service beneath, and add up with any a node beneath is given. The demo's
+  # tags.yaml says what each means.
+  tags: [production, customer-facing]
 
 /ci:
   order: 2
   title: Delivery
+  tags: internal
   about: |
     The build and review pipeline. Carries the demo's two **members** neighbors —
     a prose eruption beside a keyed review queue — so a dashboard shows reason
@@ -43,11 +70,18 @@
   order: 5
   title: Storage
   about: Where the bytes live, and whether they were copied anywhere else.
+  tags: production
 
 /hosts:
   order: 4
   title: Hosts
   about: Machines, and the aspects a host check reports beneath each one.
+  # A place told level by level composes itself card by card (ADR-0133 decision 6):
+  # the site here, the rack in the fleet's check file, and each host's own name from
+  # the run that reads it, first.
+  details:
+    site: Example data centre, hall 2
+  tags: hall-2
 
 /security:
   order: 3
@@ -60,7 +94,7 @@
 
 # The engine's heartbeat (ADR-0005). It owns no check, yet it is a fair metadata
 # target and never an orphan: what lands here feeds the status strip and its hover
-# card (ADR-0024), which is otherwise the one node on the page with no prose at all.
+# card (ADR-0056), which is otherwise the one node on the page with no prose at all.
 /little-sister:
   title: Little Sister
   about: |

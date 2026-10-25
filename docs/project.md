@@ -70,11 +70,21 @@ system. It carries:
 
 A status therefore forms a **tree**: a node may have children, each itself a full
 status with its own children. A node grows no structured `links:` list of its own:
-`about` and `description` are Markdown and carry their own links, and a check ships
-its runbook through its own config ([ADR-0013](adr/0013-check-config-on-node.md),
-[ADR-0025](adr/0025-check-provided-subnode-metadata.md)); curated *general* links
-live on their own page ([ADR-0030](adr/0030-curated-links.md)), separate from the
-tree.
+`about` and `description` are Markdown and carry their own links, the `about` saying in
+short what to do, and what a team writes at length about a node — its runbook, how to
+sign in, its policy — is the node's `handbook`, read on a tab of its own, which a
+deployment writes as text or as a Markdown file and a check type may ship for the
+aspects it emits, and which any text of the node links as `handbook#<section>`
+([ADR-0133](adr/0133-a-node-says-what-it-is-in-a-card-and-at-length-in-a-handbook.md),
+[ADR-0025](adr/0025-check-provided-subnode-metadata.md)). Whom to ask, where its
+tickets go, its documentation, a place and how to log in are its `details`, named
+values whose keys its team chooses, each a line of Markdown, beside the exact name of
+the object it stands for — an account, a region, a function, a host — which its check
+type gives it with every run; what a deployment gives a node holds for every node
+beneath it, key by key, the nearest winning, so a place told level by level, a site, a
+room, a rack, composes itself node by node (ADR-0133 decision 6). Curated *general*
+links live on their own page ([ADR-0030](adr/0030-curated-links.md)), separate from
+the tree.
 
 ### 2.2 StatusCode
 
@@ -98,10 +108,19 @@ rules are recorded in [ADR-0039](adr/0039-status-rollup-semantics.md):
   separate rule ([ADR-0041](adr/0041-maintenance-is-a-contribution-rule.md), §2.6);
   the roll-up only says what a parent does with one.
 - **When nothing is counted, *why* decides**: a parent whose children were all
-  silenced reads `MAINTENANCE`; one whose children have merely never reported
+  in maintenance reads `MAINTENANCE`; one whose children have merely never reported
   stays `UNDEFINED`.
 - A branch owner (e.g. a satellite check, §2.9) may stamp a node `ERROR` and drop
   its children, and must clear that when it can update the branch again.
+- **A deployment may say how a part counts above it**, for good, in
+  `config/aggregation.yaml`
+  ([ADR-0137](adr/0137-a-deployment-says-in-a-table-how-a-part-counts-above-it.md)): a
+  table per status that never reorders — staging passes at most `WARN` up, an account's
+  warnings heal to `OK`, a band counts as `WARN` until ten of its findings fail, one
+  replica of three may be down. The derived roll-up never downgrades; a declared rule
+  may, and says so: the part keeps its true color under the rule's mark, every surface
+  names the rule, a part whose check stopped running still counts at least `WARN`, and
+  the instance's own branch is out of every rule's reach.
 
 There is exactly **one overall status** for the whole application, because the
 status is a single tree: every check updates its own node, and the web UI reads
@@ -148,7 +167,7 @@ Besides the current status, little-sister records **status changes**:
   unit, where a failed reading is a marked gap and a stretch in which nothing was read
   a plain one, and the newest readings as a table; every kept reading is on the node's
   history page.
-- An **admin** can put a node into **maintenance** with a reason. Maintenance is a
+- An **admin** can put a node into **maintenance** with a note. Maintenance is a
   sticky override: it pins the node to `MAINTENANCE` (canceling its subtree) until
   an admin clears it, and it can be edited in place — extending a window keeps the
   explanation and never lets the node alarm in a gap. The explanation is authored
@@ -156,12 +175,17 @@ Besides the current status, little-sister records **status changes**:
   Its expiry can be entered as a relative duration or as a full/shortened future
   timestamp in the configured timezone; the form exposes the accepted formats beside
   the field.
-- An admin can also silence **one reason** of a node instead of the whole node. A
-  check that discovers many findings puts many of them under one node; an operator
-  works on one at a time, and the other findings must keep alarming while they do.
-  A silenced reason stays visible, says who silenced it, and the node says how many
-  of its reasons are quiet. Its pin is editable in place under the same rule as a
-  whole-node pin.
+- An admin can also put **one reason** of a node in maintenance instead of the whole
+  node. A check that discovers many findings puts many of them under one node; an
+  operator works on one at a time, and the other findings must keep alarming while
+  they do. A pinned reason stays visible, says who put it in maintenance, and the
+  node says how many of its reasons are quiet. Its pin is editable in place under
+  the same rule as a whole-node pin.
+- An admin can write a **note** on a node or on one of its reasons: what is known
+  about it — what was found, a ticket, whom to ask — kept beside its status and never
+  part of it. A pin's note is one of a node's notes and stays when the pin ends, so a
+  finding outlives its pin, and the notes outlive the node itself; a deployment says
+  how long they are kept.
 
 Durable storage and retention of this history is a later concern.
 
@@ -191,7 +215,7 @@ Two related capabilities — the first shipped, the second still planned:
   little-sister as a backend — the motivating client is a native **macOS Swift**
   app querying an instance on another machine, and it consumes it today. Access
   uses a **bearer token**, and the surface is **read-only**: it is a published,
-  versioned contract ([ADR-0008](adr/0008-json-output-api.md); the OpenAPI
+  versioned contract ([ADR-0080](adr/0080-the-envelope-is-the-snapshot-published.md); the OpenAPI
   document is [`api/openapi.yaml`](api/openapi.yaml)). Write **actions** over the
   API remain future work.
 - **Satellites (federation) — planned.** An instance can act as a **satellite** that
@@ -217,19 +241,21 @@ login step or a page offering the choice
 
 The app offers:
 
-- **Status dashboard** (`/status`, `/status/<branch>`) — the live status tree as a
-  grid of system cards. Each system and subsystem is a box color-coded by its
-  rolled-up status and nested inside its parent, with reasons. To make the
-  **culprit** obvious, healthy branches and boxes that are merely colored by a
-  child (a *derived* status) are **dimmed**, leaving the node that actually reports
-  the problem bold. Nodes drill down to a branch or a single check; **hide-ok /
-  hide-idle** filters narrow the view and an adjustable **depth** controls how much
-  of the tree expands — from a single overall light down to the full tree
-  (remembered per viewer). The dashboard
-  keeps itself current (it refreshes periodically and flags when it can't), and
-  shows a **stale** status — one not verified within its expected interval — as
-  degraded, so green always means freshly checked. The engine even reports its own
-  liveness as a node, so a dead monitor is visible too.
+- **Status dashboard** (`/status`, `/status/<branch>`) — the live status tree as a grid
+  of system cards, every node in it either a **chip**, closed, or a **box**, open, with
+  its reasons, and a click on it changing which where it stands. How each node starts is
+  configured, the first failures beneath chips open their way, and what a viewer opens
+  is kept for the browser tab. Each node is color-coded by its rolled-up status. To make
+  the **culprit** obvious, healthy branches and boxes that are merely colored by a child
+  (a *derived* status) are **dimmed**, leaving the node that actually reports the
+  problem bold. Nodes drill down to a branch or a single check; **hide-ok / hide-idle**
+  filters narrow the view, and the band's *Close all*, *As configured* and *Open all*
+  close and open every node at once. The dashboard keeps itself current (it refreshes
+  periodically and flags when it can't), and shows a **stale** status — one not verified
+  within its expected interval — as degraded, so green always means freshly checked. The
+  engine even reports its own liveness as a node, so a dead monitor is visible too. How
+  the wall is used — what a viewer sees and what a click does — is told at **Help**,
+  below.
 - **Check detail** (a leaf) — its description, current status and reason, the time
   interval the current status has held, how often it is checked, what it measured,
   the curves and newest readings of the thing it keeps a history of (§2.6), and a link
@@ -243,6 +269,12 @@ The app offers:
   rule held it back and a time window, all in its URL.
 - **About** (`/about`) — who this is, why it is called that, and the version of the
   instance in front of you.
+- **Help** (`/help`) — how the wall is used: what a viewer sees on it and what a click
+  does, the band and a head's buttons, a node's tabs, each group of the settings menu
+  and the kiosk. It is a Markdown file the package ships,
+  [`src/little_sister/help/using-the-wall.md`](../src/little_sister/help/using-the-wall.md),
+  linked from the settings menu's foot
+  ([ADR-0136](adr/0136-how-the-wall-is-used-is-one-file-the-package-ships.md)).
 - **System** (`/system`, admin) — two views. *Running*: which instance this is, engine
   uptime, worker-pool size, check counts, what the process holds, and per check when
   it runs next and what it declared beside what it did — refreshing itself like the

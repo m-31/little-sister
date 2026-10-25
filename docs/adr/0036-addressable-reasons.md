@@ -1,26 +1,39 @@
 # ADR-0036 — Addressable reasons: keyed entries, and maintenance on one of them
 
 - **Status:** Accepted
-- **Date:** 2026-10-10 (accepted 2026-08-01)
+- **Date:** 2026-10-25 (accepted 2026-08-01)
 - **Related:** [ADR-0032](0032-status-contribution-boundary.md) (the contribution
   boundary, amended by this decision to reach one level below a node),
-  [ADR-0004](0004-status-aggregation-semantics.md) (the roll-up these entries reuse,
-  and an open edge case this answers one level down),
+  [ADR-0039](0039-status-rollup-semantics.md) (the roll-up these entries reuse, and
+  rule 5, the edge case this answers one level down),
   [ADR-0007](0007-check-result-branches.md) (`CheckResult`, and the tree-level prune it
   deferred — which this decision makes unnecessary *for entries*),
   [ADR-0014](0014-maintenance-persistence.md) (the pin and its side-table, whose key
   space this widens), [ADR-0018](0018-markdown-rendering.md) (an alternative it
   declined once, on other grounds — see *Alternatives*),
-  [ADR-0024](0024-dashboard-layout.md) (`reason_cap`, the display budget these render
-  inside), [ADR-0008](0008-json-output-api.md) (the envelope, extended additively),
+  [ADR-0056](0056-stable-useful-dashboard-flow.md) (`reason_cap`, the display budget
+  these render inside), [ADR-0080](0080-the-envelope-is-the-snapshot-published.md)
+  (the envelope, extended additively),
   [ADR-0025](0025-check-provided-subnode-metadata.md) (the other route — real
   subnodes — and why it is not this one),
   [ADR-0104](0104-a-pin-is-one-block-on-what-it-silences.md) (the block that states a
-  pin on `/maintenance`, where one is edited and cleared),
+  pin on *Handled*, where one is edited and cleared),
   [ADR-0107](0107-an-event-is-a-change-of-what-a-node-shows.md) (a line's pin as an
   event of its node, and the change beneath one that is held back),
   [ADR-0124](0124-a-node-whose-lines-are-all-silenced-still-counts-the-nodes-beneath-it.md)
-  (what a node whose lines are all pinned cancels: nothing)
+  (what a node whose lines are all pinned cancels: nothing),
+  [ADR-0135](0135-a-handled-part-keeps-its-true-color-and-every-surface-says-by-what.md) (decisions 6 and 8: the page
+  that states every pin, at `/handled`, and the pill and the pip that lead to it),
+  [ADR-0137](0137-a-deployment-says-in-a-table-how-a-part-counts-above-it.md)
+  (decision 8's threshold, returned as a configured rule on a node's lines),
+  [ADR-0141](0141-every-pin-is-one-thing-with-a-kind-and-the-envelope-lists-what-handles-a-part.md)
+  (the file a line's pin is kept in, its route and its place in the envelope),
+  [ADR-0041](0041-maintenance-is-a-contribution-rule.md) (decisions 2 and 5: a node's
+  pin, the first arm of the same transform, and staleness under a pin),
+  [ADR-0109](0109-a-node-says-its-children-are-complete.md) (decision 1: the prune
+  ADR-0007 deferred, as a node's statement that its children are complete),
+  [ADR-0140](0140-a-nodes-notes-stand-on-a-tab-of-their-own.md) (decision 6: a pin's
+  text is `note`, in the model, the form and the file)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -44,7 +57,7 @@ rejected on cost, not on principle:
   erase every real status transition the operator had.
 - **The envelope and the client.** Hundreds of extra leaves per check land in the JSON
   and in the menu-bar app's tree.
-- **The dashboard.** The density rules of [ADR-0024](0024-dashboard-layout.md) — chips,
+- **The dashboard.** The density rules of [ADR-0056](0056-stable-useful-dashboard-flow.md) — chips,
   the branch cap — were tuned for a dozen siblings, not two hundred.
 - **It demands the prune.** [ADR-0007](0007-check-result-branches.md) deferred a
   tree-level delete *"until a check needs it"*; entries-as-nodes would need it
@@ -73,9 +86,9 @@ and `__post_init__` normalizes to the one internal form. A disk check keeps writ
 But **not every reason list is a list of independent things**, and the difference
 decides what may be suppressed. A failing check's node carries two reasons —
 `check error: …` and the stack trace
-([ADR-0004](0004-status-aggregation-semantics.md), *A check that fails*) — and a
+([ADR-0040](0040-what-a-failing-check-becomes.md) decisions 2 and 3) — and a
 captured-output check carries stdout beside stderr. Those are **one condition in
-several paragraphs**: silencing the trace while the message keeps alarming is
+several paragraphs**: pinning the trace while the message keeps alarming is
 meaningless, and so is a per-line ticket button on either half.
 
 So **prose is the default and members are declared**, in either of two ways: the check
@@ -109,11 +122,13 @@ at.
 **5. The pin lives outside the check's output.** The check emits `slug -> text` and
 nothing else; the maintenance side-table's key widens from `path` to `(path, slug)`;
 the snapshot joins the two. Where the widened side-table is persisted is
-[ADR-0014](0014-maintenance-persistence.md); the file's shape is a clean break, not a
-migration. Storing the entry *in* the reason map would destroy it on the check's next
-run, and writing it into the tree is what
-[ADR-0032](0032-status-contribution-boundary.md) rule 3 forbids. This is the first
-maintenance-shaped mechanism built rule-3-correct from the start.
+[ADR-0014](0014-maintenance-persistence.md): with the nodes' pins in one list,
+`var/state/pins.json`, a line's pin beside its node's path and its slug
+([ADR-0141](0141-every-pin-is-one-thing-with-a-kind-and-the-envelope-lists-what-handles-a-part.md)
+decision 1); the file's shape is a clean break, not a migration. Storing the entry *in*
+the reason map would destroy it on the check's next run, and writing it into the tree
+is what [ADR-0032](0032-status-contribution-boundary.md) rule 3 forbids. This is the
+first maintenance-shaped mechanism built rule-3-correct from the start.
 
 **6. Absence suspends a pin; only expiry disposes of it.** A slug missing from this
 run's map means the pin *does not apply right now* — it is **not** deleted. A failed
@@ -129,7 +144,7 @@ decision 1), as decision 11 has it.
 reported status; a suppressed one contributes nothing; the node's **own** status is the
 worst of what is left. That holds literally over entries that declare a code of their
 own ([ADR-0042](0042-entries-carry-their-own-code.md)): same derivation, same
-exclusions, same silenced-versus-unreported tiebreak, with one stated default — an
+exclusions, same maintenance-versus-unreported tiebreak, with one stated default — an
 entry-bearing node whose run reports **no** entries reads `OK`, because "nothing to
 report" is not "nothing reported". A node that reported entries and has none
 unsuppressed left has an own status of `MAINTENANCE`, which counts nothing for itself
@@ -143,38 +158,47 @@ check with a code and nothing to say), and one whose reasons are **prose** (deci
 — prose has no individually suppressible parts, and its unit of suppression stays the
 node pin.
 
-This is [ADR-0004](0004-status-aggregation-semantics.md)'s roll-up applied one level
+This is [ADR-0039](0039-status-rollup-semantics.md)'s roll-up applied one level
 below a node, and it is what the
 [ADR-0032](0032-status-contribution-boundary.md) decision 8 records:
 the contribution boundary reaches under a node, and rules 2–7 hold there unchanged.
 
-**8. A per-entry pin takes the cap, not the threshold.** An entry may declare a **code
-of its own** ([ADR-0042](0042-entries-carry-their-own-code.md)), so an entry has no
-severity of its own only where it declares none — which remains the default, and
-remains permanently right for a severity-banded leaf, whose lines are one severity by
-construction. When the pin policy grows an `escapes` setting, the threshold form
-(`escapes: error`) is meaningless for such an entry, because it carries the node's. The
-**cap** form does work: a capped entry contributes `WARN` where it would have
-contributed `ERROR`. Whether a pin on a *coded* entry may take `escapes` is re-examined
-by the pin policy when it is designed.
+**8. A per-entry pin holds its line whole, and a threshold is a configured rule's.**
+An entry may declare a **code of its own** ([ADR-0042](0042-entries-carry-their-own-code.md)),
+so an entry has no severity of its own only where it declares none — which remains the
+default, and remains permanently right for a severity-banded leaf, whose lines are one
+severity by construction. A pin takes no `escapes`: it holds its part whole. What a
+threshold would do is a rule a deployment configures on a node's lines
+([ADR-0137](0137-a-deployment-says-in-a-table-how-a-part-counts-above-it.md) decisions
+1 and 4) — healing, `{WARN: OK}`, on every line or on the lines it names by their
+addresses, a derived `h-…` refused since it is the line's wording (decision 4). Its
+table maps each line by the code it declares, or by the node's where it declares none;
+a line keeps its color under it while its node shows what its lines count as, the
+virtual children of decision 7; and a pinned line is the pin's.
 
-**9. Liveness is not switched off.** `_is_stale`'s exemption for a pinned node is
-**not** extended to a node whose entries are all pinned. Staleness keeps judging the
-raw reading, which the tree still holds — otherwise a dead check hides behind twenty
-quiet findings ([ADR-0032](0032-status-contribution-boundary.md) rule 6).
+**9. Liveness is not switched off.** A pin exempts no node from staleness
+([ADR-0041](0041-maintenance-is-a-contribution-rule.md) decision 5), and a node whose
+entries are all pinned is no exception. Staleness keeps judging the raw reading, which
+the tree still holds — otherwise a dead check hides behind twenty quiet findings
+([ADR-0032](0032-status-contribution-boundary.md) rule 6).
 
 **10. Quiet is visible.** A suppressed entry renders in the maintenance surface color,
 and the node states how many of its entries are quiet — a card clamps its reasons to
-`reason_cap` ([ADR-0024](0024-dashboard-layout.md)), so the pinned line may sit below
+`reason_cap` ([ADR-0056](0056-stable-useful-dashboard-flow.md) decision 1), so the
+pinned line may sit below
 the fold and the count is the only thing that always shows
 ([ADR-0032](0032-status-contribution-boundary.md) rule 5). An entry pin **reports**
-everywhere a node pin does — the strip pill, the "contains maintenance" pip and
-`/maintenance`, where it is edited and cleared as well as on its node's page
-([ADR-0104](0104-a-pin-is-one-block-on-what-it-silences.md) decision 6). Setting one
-is the node's own page's job, a leaf's or a branch's (decision 12).
+everywhere a node pin does — the band's pill and a card's pip, each a ringed diamond,
+and *Handled*, at `/handled`, the page they lead to, which states every pin and where it
+is edited and cleared as well as on its node's page
+([ADR-0104](0104-a-pin-is-one-block-on-what-it-silences.md) decision 6,
+[ADR-0135](0135-a-handled-part-keeps-its-true-color-and-every-surface-says-by-what.md)
+decisions 6 and 8). `GET /maintenance` answers with *Handled* and its query, so that a
+bookmark and a way back drawn before hold. Setting one is the node's own page's job, a
+leaf's or a branch's (decision 12).
 
 The **capped popover summarizes per node** — one row with a count (*3 of 20 reasons*,
-or *all 20 reasons* where every member is pinned) — while `/maintenance` states each
+or *all 20 reasons* where every member is pinned) — while *Handled* states each
 pin as a block under its node's path. Twenty rows from one node would otherwise evict
 every other node from a capped list. The count is also what keeps the pip honest:
 without it a row would read as a node pin, which it is not.
@@ -198,10 +222,13 @@ the node's own lines as a leaf's page lists its lines — in full rather than cl
 end and a pinned line's block beneath it — from one template the two pages share. Any
 line takes a pin, whatever it says, as a node does: a pin is an admin's intent, set
 ahead of the work as readily as on a failure. Each line grows an admin control, and the
-write posts `path` plus **`slug`**, not `reason`: this form's `reason` is already the
-pin's explanation text, and overloading it would have made the two indistinguishable in
-one request — the *addressing* shape this decision fixes is the query parameter
-(`?reason=<slug>`), a different namespace, and it is unaffected.
+write posts `path` plus **`slug`** to `POST /pins/maintenance`
+([ADR-0141](0141-every-pin-is-one-thing-with-a-kind-and-the-envelope-lists-what-handles-a-part.md)
+decision 4), beside the pin's text in a field of its own, `note`
+([ADR-0140](0140-a-nodes-notes-stand-on-a-tab-of-their-own.md) decision 6), so the
+line and the explanation never share a name in one request — the *addressing* shape
+this decision fixes is the query parameter (`?reason=<slug>`), a different namespace,
+and it is unaffected.
 
 The **query parameter is built** on the node page rather than as a second route:
 `/status/<branch>?reason=<slug>` — the node stays a path, the slug stays a query value.
@@ -223,10 +250,11 @@ slashes by default), and the natural slug for a discovered entry contains one �
 
 The **slug is never rendered as text.** It appears only as that link's value. What
 names an entry in a list is its *line*, and the two texts stand in two places of the
-block that states its pin on `/maintenance`
+block that states its pin on *Handled*
 ([ADR-0104](0104-a-pin-is-one-block-on-what-it-silences.md) decision 6): the line in
-the sentence the block opens with, the pin's own explanation as its note. They are both
-called "reason" in the model and are not the same kind of thing.
+the sentence the block opens with, the pin's own explanation as its note. They are not
+the same kind of thing, and the model names them apart: a line's text, and the pin's
+`note` (ADR-0140 decision 6).
 
 **13. The JSON envelope grows additively.** The existing `reasons` array of strings
 stays, unchanged for every existing client; a new array — `entries`, the working name
@@ -238,35 +266,36 @@ rather than arriving on its own.
 That round is [ADR-0080](0080-the-envelope-is-the-snapshot-published.md), and it took
 the name rather than the addition: `entries` is an object that **replaces** the string
 `reasons`, its `addressable` flag is this record's `members`, and its items carry
-`slug`, `text`, `code`, `running` and `maintenance`. The name this record could not
-spend twice was spent there.
+`slug`, `text`, `code`, `running` and `handled`, the list of what handles the line, its
+pin among them (ADR-0141 decision 3). The name this record could not spend twice was
+spent there.
 
 ## Consequences
 
 - The operator can pin the one finding they are working on. The other nineteen keep
   alarming, which is the entire point.
-- **No prune, no ownership stamp, no completeness signal.** An entry that disappears
-  is simply absent from the next map. [ADR-0007](0007-check-result-branches.md)'s
-  deferred tree-level prune stays deferred — it is still owed for genuinely
-  node-shaped dynamic subjects and for its original case (aspect nodes left behind by
-  an unreachable host), but it is no longer on this feature's path.
+- **No prune, no ownership stamp, no completeness signal** for entries. An entry that
+  disappears is simply absent from the next map. The tree-level prune
+  [ADR-0007](0007-check-result-branches.md) deferred is a node's own statement that its
+  children are complete, for genuinely node-shaped dynamic subjects
+  ([ADR-0109](0109-a-node-says-its-children-are-complete.md) decision 1) — a result
+  that says nothing keeps its children, an unreachable host's aspect nodes among them —
+  and it is not on this feature's path.
 - **`own_code` stops meaning "what the check reported".** For a node with suppressed
-  entries it is a derived value, and the tree's stored code is the raw one. The
-  maintenance keystone refactor makes the same move for node pins, so the two should
-  share one transform in `StatusTree.snapshot` rather than build it twice — which is
-  why this lands **with or after** that refactor, not before it.
-- **[ADR-0004](0004-status-aggregation-semantics.md) has an open edge case that must
-  now be answered the same way.** *"A node whose children are all ignored and that has
-  no explicit code — proposed default: `UNDEFINED`."* Decision 7 answers the identical
-  question for virtual children with `MAINTENANCE`, and real children reading
-  `UNDEFINED` while virtual ones read `MAINTENANCE` would be a contradiction in one
-  model. The ADR-0004 split owes the same answer: a container whose every child is
-  pinned is in maintenance, not idle.
-- **A write client cannot yet address an entry.** Decision 13 publishes no slug, so a
-  token-authed mutation (the JSON API's write actions) has nothing to name. Adding
-  the slug later is additive but costs a second `schema_version` bump; that is the
-  accepted trade for a smaller envelope now, and the bump the contract round spends is
-  the one that carries it.
+  entries it is a derived value, and the tree's stored code is the raw one. A node's
+  pin makes the same move ([ADR-0041](0041-maintenance-is-a-contribution-rule.md)
+  decision 2), and the two share one transform in `StatusTree.snapshot`, the node pin
+  its first arm.
+- **The roll-up's open edge case is answered the same way**
+  ([ADR-0039](0039-status-rollup-semantics.md) rule 5). *"A node whose children are all
+  ignored and that has no explicit code"* had `UNDEFINED` as its proposed default.
+  Decision 7 answers the identical question for virtual children with `MAINTENANCE`,
+  and real children reading `UNDEFINED` while virtual ones read `MAINTENANCE` would be
+  a contradiction in one model: a container whose every child is pinned is in
+  maintenance, not idle.
+- **An entry's slug is published.** The one `schema_version` bump the contract round
+  spent carries it on every item of `entries` (decision 13), so a client names the line
+  a pin stands on as a form does.
 - **Two shapes at one seam.** `CheckResult.reason` accepts four input forms and the
   core sees one. The normalization is the only place that knows the difference, which
   is the same rule the value readers follow

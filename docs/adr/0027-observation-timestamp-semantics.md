@@ -2,10 +2,10 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-20 (accepted 2026-08-01)
-- **Related:** [ADR-0004](0004-status-aggregation-semantics.md) (status roll-up),
+- **Related:** [ADR-0039](0039-status-rollup-semantics.md) (status roll-up),
   [ADR-0005](0005-dashboard-freshness-and-self-monitoring.md) (staleness),
-  [ADR-0008](0008-json-output-api.md) (JSON contract),
-  [ADR-0006](0006-config-file-and-timezones.md) (timestamp storage & rendering).
+  [ADR-0080](0080-the-envelope-is-the-snapshot-published.md) (JSON contract),
+  [ADR-0120](0120-every-stored-time-is-an-instant.md) (timestamp storage & rendering).
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -13,7 +13,7 @@
 every check write, `touch()` on a maintenance-pinned refresh. But `__init__` stamped it
 too, so a node **no check ever writes** — a container above the check mounts, the root
 above all — served the **process start time** as its "observation" for as long as the
-process lived. The effective *code* rolls up (ADR-0004); the timestamp did not, and the
+process lived. The effective *code* rolls up (ADR-0039); the timestamp did not, and the
 asymmetry was easy to miss: `GET /status` returned a root `timestamp` equal to boot
 time, and the menu-bar client's data-age line dutifully displayed a ten-day-old instant
 as if it were current.
@@ -40,7 +40,7 @@ run?"** — and it exists only where that question has **exactly one answer**:
    `/system/node_a/host_metrics` reports that check's run time on `/system/node_a`,
    `/system`, and `/` alike. The engine's own heartbeat node is not a check mount and
    never blocks (or feeds) this roll-up — its line is reserved and rendered as the
-   status strip anyway ([ADR-0024](0024-dashboard-layout.md)).
+   status strip anyway ([ADR-0056](0056-stable-useful-dashboard-flow.md) decision 3).
 4. **Two or more mounts below: no timestamp.** Any single value there would attribute
    one check's run time to another check's data.
 5. **No aggregation statistics — deliberately.** `min(children)` ("nothing below is
@@ -48,7 +48,7 @@ run?"** — and it exists only where that question has **exactly one answer**:
    Raw age across heterogeneous frequencies carries no signal: a healthy 90-day check
    would make a min-rolled root look ancient, and a reader would need each check's
    frequency to interpret the number — which is precisely the normalization `stale`
-   already performs and rolls up. Codes aggregate (worst-of, ADR-0004); observation
+   already performs and rolls up. Codes aggregate (worst-of, ADR-0039); observation
    times do not. Whoever wants detail drills into the branch of interest, where every
    written node answers exactly.
 
@@ -67,8 +67,8 @@ ambiguity, smuggled upward. With the count those ancestors inherit **no** stamp,
 the shared node itself still answers with its own last write (rule 2).
 
 **Web.** A dashboard card shows its node's resolved time when present — rendered via
-`localtime` as a time of day (ADR-0006), inside the polled fragment so it refreshes
-with the grid — and nothing when `None`. The detail page's Time block says "not yet
+`localtime` as a time of day (ADR-0120 decision 7), inside the polled fragment so it
+refreshes with the grid — and nothing when `None`. The detail page's Time block says "not yet
 observed" instead of inventing an instant.
 
 **JSON.** The snapshot semantics flow through unchanged (one snapshot, one truth):
@@ -78,7 +78,7 @@ lose a root-level "data observed at" value at this stage; what an alerting clien
 should get instead — above all the *cause* behind a non-OK status, plus whatever
 freshness view it needs — is deliberately deferred and designed with the client in
 one contract change. Strictly, required-to-nullable is an incompatible change under
-ADR-0008's versioning rule; `schema_version` stays **1** until that round and the
+ADR-0080 decision 1's versioning rule; `schema_version` stays **1** until that round and the
 formal bump is consolidated into it — the field's one consumer is first-party and
 updates in lockstep.
 

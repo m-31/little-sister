@@ -79,6 +79,10 @@ BUILTIN_ASPECTS: dict[str, Aspect] = {
     # The declarative action list (ADR-0038). Layered like the checks rather than
     # merged: a site root *adds* its actions to a base root's.
     "actions": Aspect("actions", as_file=True, as_directory=False),
+    # The configured rules at the contribution boundary (ADR-0137): one file, every
+    # root's rules read as one list, the root named last first, since a later root
+    # wins everywhere else in the chain. `little_sister.aggregation` is the loader.
+    "aggregation": Aspect("aggregation", as_file=True, as_directory=False),
     # The deployment's last word on the Content-Security-Policy (ADR-0048 §5): the
     # sources it adds, and the one place a policy keyword may be taken at all.
     # Layered like the actions rather than merged — a policy is a union, so a site
@@ -89,8 +93,16 @@ BUILTIN_ASPECTS: dict[str, Aspect] = {
     # directory holding `links.yaml` beside them once it does, so the aspect grows
     # without a second migration (ADR-0030). `little_sister.links` is the loader.
     "links": Aspect("links", as_file=True, as_directory=True),
+    # Always a directory: the deployment's handbooks, one Markdown file each, named
+    # where a node's handbook is stated (ADR-0133 decision 3) and never found by a
+    # node's path. `little_sister.handbooks` is the loader.
+    "handbook": Aspect("handbook", as_file=False, as_directory=True),
     "nodes": Aspect("nodes", as_file=True, as_directory=False),
     "settings": Aspect("settings", as_file=True, as_directory=False),
+    # The known tags (ADR-0139 decision 3): one file, each tag with a line of what it
+    # means, every root's read and added up, the later root's line winning for a tag
+    # two of them name. It gives no node a tag. `little_sister.tags` is the loader.
+    "tags": Aspect("tags", as_file=True, as_directory=False),
     # One file until the deployment adds per-user pictures; then `users.yaml`
     # moves inside the directory beside `avatars/` (ADR-0045).
     "users": Aspect("users", as_file=True, as_directory=True),

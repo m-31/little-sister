@@ -19,7 +19,10 @@ its readings stand beside each measurement as what the round worked from.
 **The deployed wall** is read too (backlog #91's note, §2, 2026-10-17): the recorded
 tree as the deployment that runs mounts it, one team's five checks at the root, each a
 card — the wall it is mostly looked at on, and on a desk 2,560 pixels wide, a screen
-there 1,300 pixels tall; and at 1,920, at 1,280 and on a phone beside it.
+there 1,300 pixels tall; and at 1,920, at 1,280 and on a phone beside it. So is **the
+hosts wall** (``tests/hosts_tree.py``; the note's §7.5, 2026-10-21), a second
+deployment's, nine hosts the library's own types write: the wall the host types are
+measured on when they declare how their levels start.
 
 **The swap** is what the refresh costs the browser today: from the fragment's last
 byte to the second frame after ``poll.js`` has put it in the page — the parse, the
@@ -48,7 +51,7 @@ from wsgiref.simple_server import WSGIRequestHandler, WSGIServer, make_server
 
 from little_sister import app as app_module
 from little_sister.tree import StatusTree
-from tests import anonymized_tree
+from tests import anonymized_tree, hosts_tree
 from tests.browser_server import PageServer
 
 try:  # pragma: no cover - environment probe
@@ -68,9 +71,9 @@ _BOOTSTRAP = (Path(__file__).resolve().parent.parent / "var" / "bootstrap"
 #: One screen: the prototype's 900 pixels on a desk and 780 on a phone (§3.9).
 _DESK_SCREEN = 900
 _PHONE_SCREEN = 780
-#: The desk the deployment's own wall is mostly looked at on, Lex's of 2026-10-17
-#: (backlog #91's note, §2): a screen 2,560 pixels wide and 1,440 tall, about 1,300
-#: of them the page's beneath the browser's bars — a screen of its own.
+#: The desk the deployment's own wall is mostly looked at on (backlog #91's note, §2): a
+#: screen 2,560 pixels wide and 1,440 tall, about 1,300 of them the page's beneath the
+#: browser's bars — a screen of its own.
 _WIDE_DESK = 2560
 _WIDE_DESK_SCREEN = 1300
 _PHONE = {
@@ -140,9 +143,9 @@ class Case:
 #: tolerance, and the head's row to 10.4 and 31.6 — the icons end the first row now
 #: and never wrap beneath it, so a name a phone's box cannot hold beside them gives
 #: way last and wraps, where the icons used to take the line beneath instead — and,
-#: on Lex's word of 2026-10-16, a name that breaks anyway carries the state on its
+#: on 2026-10-16, a name that breaks anyway carries the state on its
 #: second line, beneath the icons, instead of a third line of its own: 10.1 and
-#: 30.6; and on his word of the same day the caret left every head, its room the
+#: 30.6; and the same day the caret left every head, its room the
 #: name's: 10.0 and 29.9, and every desk's wall a little shorter, none taller. Those
 #: readings are an admin's (the fixtures' `pan` is one), whose ‖ stands on every open
 #: head without a pin; that one more square is most of what is left over the first
@@ -156,7 +159,7 @@ class Case:
 #: all fail 10,658 to 10,702, 22,695 to 23,336 and 8,591 to 8,632.
 #:
 #: **The chip runs line up in columns** (ADR-0127 decision 12), the look `chip_runs:
-#: aligned`, the library's own, which Lex took knowing it costs room (backlog #91's
+#: aligned`, the library's own, taken knowing it costs room (backlog #91's
 #: note, §2, 2026-10-15): each chip stretched to its level's column, one to a row
 #: where a box had room for one, until such a run came to wrap as it comes (below).
 #: The readings it raised, in pixels before and after:
@@ -191,7 +194,7 @@ class Case:
 #: 2,560 the planner gives github three of the seven tracks, 951 pixels tall, and
 #: aws one, its three accounts beneath each other, 1,447: the wall's height.
 #:
-#: **The library's theme became cyberpunk** (Lex's word of 2026-10-18), which a
+#: **The library's theme became cyberpunk** on 2026-10-18, which a
 #: browser that never chose draws in, so every reading here is cyberpunk's: its
 #: monospace face reads the walls taller than the plain theme's proportional one did.
 #: In pixels, plain and cyberpunk: the recorded wall at a desk 3,810 and 4,036, on a
@@ -202,63 +205,135 @@ class Case:
 #: page 31,150 and 37,576; and the deployed wall at 2,560 pixels 1,640 and 1,703, at
 #: 1,920 1,619 and 1,703, at 1,280 1,832 and 1,849 and on a phone 3,405 and 3,651 —
 #: its aws card 1,447 and 1,511, its github card 951 and 1,056.
+#: **The hosts wall** (2026-10-21), read in the library's theme as it was drawn: one
+#: screen at 2,560 pixels, its hosts' card 646 tall beside the family's 889; at 1,920
+#: pixels 1,081, at 1,280 992 and on a phone 2,476, a viewer's 2,434. The same day the
+#: library's host types came to propose how their levels first look (the note's §7.5,
+#: the third slice), drawn here as they propose it, and the wall reads as it did but
+#: at 1,280 pixels, 1,059: priced as the chips they are drawn as, a host's leaves no
+#: longer make its card the taller in the planner's rows, which gives each card one of
+#: two tracks where it gave the hosts two of three — 67 pixels more, until the flip.
+#: Later the same day each leaf of the Mac's node, which ``host-metrics`` and
+#: ``macos-memory`` share, starts as its own check proposes: the Mac's watched processes
+#: a chip where their branch stood open, every host's leaves priced as the chips they
+#: are drawn as. The wall reads as it did at 2,560 and 1,920 pixels, at 1,280 986 — each
+#: card one of two tracks still, the hosts' 794 tall — and on a phone 2,382, a viewer's
+#: 2,361.
+#: **An open head's buttons stand where the look ``head_buttons`` puts them**
+#: (2026-10-21, ADR-0127 decision 3), read here in the library's, ``pointer``:
+#: right after the name, the state outside them. No wall stands taller, and some
+#: stand shorter, the state no longer between two of the toolbar's gaps — a coarse
+#: pointer's are 8 pixels — but 0.4em after the title. In pixels before and after: the
+#: recorded wall on a phone 8,262 and 8,199, every leaf failing 25,868 and 25,702 and
+#: a viewer's 24,670 and 24,504, the deployed wall on a phone 3,651 and 3,610 and its
+#: github card at 2,560 pixels 1,056 and 1,035, and the hosts wall on a phone, a
+#: viewer's, 2,361 and 2,340. Under ``line`` every wall but the hosts wall at 2,560
+#: pixels stands taller, a line of buttons on every open head — the recorded wall at a
+#: desk 4,830, on a phone 9,323 — and under ``name`` none, ↗ out of the row: 3,947
+#: and 8,014.
+#: **A branch says why it has its color** (ADR-0135 decision 7, 2026-10-24): a card of
+#: its own right after Time wherever a branch fails or holds something handled, each
+#: of its lists five rows open and the rest folded beneath *N more*. The node pages it
+#: stands on read taller by it, in pixels without it and with it: a team's page 2,182
+#: and 2,422, its four failing parts listed; a check's page 2,027 and 2,190; the
+#: workflow runs' page 1,766 and 1,903, with a hundred repositories 7,960 and 8,203,
+#: and in an outage 3,950 and 4,217, where its list unfolded read 5,723. Every wall
+#: reads as it did, and so does every page with no branch at its head.
+#: **The interactive wall's flip** (backlog #91's note, §7.5, 2026-10-25): a level
+#: nobody speaks for starts open, its healthy shown, and one that would draw more than
+#: thirty boxes as chips; *+N more* went with today's density. Since then each tree is
+#: drawn with what the family's packages that come out with the flip propose for their
+#: levels, stated by path (``tests/family_looks.py``), since no deployment of theirs
+#: draws the wall without them. The two read, in pixels before and after: the recorded
+#: wall at a desk 4,036 and 3,358, on a phone 8,199 and 8,280 and at 1,920 pixels
+#: 2,667 and 2,318, a viewer's 3,947 and 3,289, 8,014 and 8,088 and 2,622 and 2,318;
+#: every leaf failing 11,701 and 3,331, 25,702 and 7,975 and 9,403 and 2,390, a
+#: viewer's 11,199 and 3,248, 24,504 and 7,744 and 9,028 and 2,390 — three failures
+#: open in each card, where every failing leaf stood open; the wall with a hundred
+#: repositories 4,036 and 3,975; a team's github box 1,183 and 1,273, in an outage
+#: 6,768 and 1,402; its card in an outage 6,982 and 3,207, and with a hundred
+#: repositories 2,223 and 3,783, every repository a chip where three boxes stood before
+#: *+97 more*; a check's page 2,190 and 2,174, the workflow runs' page in an outage
+#: 4,217 and 3,758; wiz's page 1,548 and 900, informational's own page 2,451 and 900
+#: and with 300 findings 37,576 and 900, its healthy findings folded; the deployed wall
+#: at 2,560 pixels 1,703 and 1,328, a viewer's 1,703 and 1,307, its aws card 1,511
+#: and 1,137 and its github card 1,035 and 1,066, at 1,280 1,849 and 1,741 and on a
+#: phone 3,610 and 3,618; and the hosts wall at 2,560 pixels 1,300 and 1,367, a
+#: viewer's 1,300 and 1,346, at 1,920 1,081 and 1,195, at 1,280 986 and 1,415 and on a
+#: phone 2,382 and 3,379, a viewer's 2,340 and 3,310, its seven local hosts each a box
+#: where four waited behind *+4 more*. Drawn with the same declarations on today's
+#: look, the slice before the flip read the recorded wall at 3,167, 7,803 and 2,227, a
+#: viewer's at 3,098, 7,680 and 2,227, a team's github box 1,211 and its card in an
+#: outage 3,016, the deployed wall on a phone 3,535 and its github card 1,137, and the
+#: hosts wall 1,300, 900, 986 and 2,382: what the flip itself opens is the quiet leaves
+#: nobody speaks for — github's flat aspects, its rate limit and the load test — and
+#: every box *+N more* held back. Every other page reads as it did.
 CASES: tuple[Case, ...] = (
-    Case("the whole wall, desk", "recorded", "/status", 1280, 4.5, 4.0),
+    Case("the whole wall, desk", "recorded", "/status", 1280, 3.7, 4.0),
     Case("the whole wall, every leaf failing, desk", "blackout", "/status", 1280,
-         13.0, 12.0),
+         3.7, 12.0),
     Case("the whole wall, alpha with 100 repositories, desk", "wide", "/status",
-         1280, 4.5),
-    Case("a team's github box, one failure", "recorded", "/status", 1280, 1.3, 1.1,
+         1280, 4.4),
+    Case("a team's github box, one failure", "recorded", "/status", 1280, 1.4, 1.1,
          box="/alpha/github"),
-    Case("a team's card, an outage", "outage", "/status", 1280, 7.8, 8.4,
+    Case("a team's card, an outage", "outage", "/status", 1280, 3.6, 8.4,
          box="/alpha"),
-    Case("a team's github box, an outage", "outage", "/status", 1280, 7.5, 6.6,
+    Case("a team's github box, an outage", "outage", "/status", 1280, 1.6, 6.6,
          box="/alpha/github"),
-    Case("a team's card with 100 repositories", "wide", "/status", 1280, 2.5, 3.6,
+    Case("a team's card with 100 repositories", "wide", "/status", 1280, 4.2, 3.6,
          box="/alpha"),
-    Case("a team's page", "recorded", "/status/alpha", 1024, 2.2, 2.2),
-    Case("a check's page (github)", "recorded", "/status/alpha/github", 1024, 2.2,
+    Case("a team's page", "recorded", "/status/alpha", 1024, 2.7, 2.2),
+    Case("a check's page (github)", "recorded", "/status/alpha/github", 1024, 2.4,
          1.3),
     Case("a wide branch's page (20 repositories)", "recorded",
-         "/status/alpha/github/actions", 1024, 2.0, 1.7),
+         "/status/alpha/github/actions", 1024, 2.1, 1.7),
     Case("the same with 100 repositories", "wide", "/status/alpha/github/actions",
-         1024, 8.8, 7.8),
+         1024, 9.1, 7.8),
     Case("an outage: the workflow runs' page", "outage",
-         "/status/alpha/github/actions", 1024, 4.4, 4.2),
+         "/status/alpha/github/actions", 1024, 4.2, 4.2),
     Case("wiz's page, informational open", "recorded", "/status/alpha/wiz", 1024,
-         1.5, 1.1),
+         1.0, 1.1),
     Case("informational's own page, 17 findings", "recorded",
-         "/status/alpha/wiz/informational", 1024, 2.7, 1.4),
+         "/status/alpha/wiz/informational", 1024, 1.0, 1.4),
     Case("informational's own page, 300 findings", "findings",
-         "/status/alpha/wiz/informational", 1024, 41.8, 20.0),
+         "/status/alpha/wiz/informational", 1024, 1.0, 20.0),
     Case("the whole wall, phone", "recorded", "/status", 390, 10.6, 8.6),
     Case("the whole wall, every leaf failing, phone", "blackout", "/status", 390,
-         33.2, 28.7),
-    Case("the whole wall, 1,920 pixels", "recorded", "/status", 1920, 3.0),
+         10.2, 28.7),
+    Case("the whole wall, 1,920 pixels", "recorded", "/status", 1920, 2.6),
     Case("the whole wall, every leaf failing, 1,920 pixels", "blackout", "/status",
-         1920, 10.4),
-    Case("the whole wall, desk, a viewer", "recorded", "/status", 1280, 4.4,
+         1920, 2.7),
+    Case("the whole wall, desk, a viewer", "recorded", "/status", 1280, 3.7,
          viewer=True),
     Case("the whole wall, every leaf failing, desk, a viewer", "blackout", "/status",
-         1280, 12.4, viewer=True),
-    Case("the whole wall, phone, a viewer", "recorded", "/status", 390, 10.3,
+         1280, 3.6, viewer=True),
+    Case("the whole wall, phone, a viewer", "recorded", "/status", 390, 10.4,
          viewer=True),
     Case("the whole wall, every leaf failing, phone, a viewer", "blackout",
-         "/status", 390, 31.6, viewer=True),
-    Case("the whole wall, 1,920 pixels, a viewer", "recorded", "/status", 1920, 2.9,
+         "/status", 390, 9.9, viewer=True),
+    Case("the whole wall, 1,920 pixels, a viewer", "recorded", "/status", 1920, 2.6,
          viewer=True),
     Case("the whole wall, every leaf failing, 1,920 pixels, a viewer", "blackout",
-         "/status", 1920, 10.0, viewer=True),
-    Case("the deployed wall, 2,560 pixels", "deployed", "/status", _WIDE_DESK, 1.3),
+         "/status", 1920, 2.7, viewer=True),
+    Case("the deployed wall, 2,560 pixels", "deployed", "/status", _WIDE_DESK, 1.0),
     Case("the deployed wall, 2,560 pixels, a viewer", "deployed", "/status",
-         _WIDE_DESK, 1.3, viewer=True),
+         _WIDE_DESK, 1.0, viewer=True),
     Case("the deployed wall's aws card, 2,560 pixels", "deployed", "/status",
-         _WIDE_DESK, 1.2, box="/aws"),
+         _WIDE_DESK, 0.9, box="/aws"),
     Case("the deployed wall's github card, 2,560 pixels", "deployed", "/status",
          _WIDE_DESK, 0.8, box="/github"),
     Case("the deployed wall, 1,920 pixels", "deployed", "/status", 1920, 1.9),
-    Case("the deployed wall, desk", "deployed", "/status", 1280, 2.1),
-    Case("the deployed wall, phone", "deployed", "/status", 390, 4.7),
+    Case("the deployed wall, desk", "deployed", "/status", 1280, 1.9),
+    Case("the deployed wall, phone", "deployed", "/status", 390, 4.6),
+    Case("the hosts wall, 2,560 pixels", hosts_tree.VARIANT, "/status", _WIDE_DESK,
+         1.1),
+    Case("the hosts wall, 2,560 pixels, a viewer", hosts_tree.VARIANT, "/status",
+         _WIDE_DESK, 1.0, viewer=True),
+    Case("the hosts wall, 1,920 pixels", hosts_tree.VARIANT, "/status", 1920, 1.3),
+    Case("the hosts wall, desk", hosts_tree.VARIANT, "/status", 1280, 1.6),
+    Case("the hosts wall, phone", hosts_tree.VARIANT, "/status", 390, 4.3),
+    Case("the hosts wall, phone, a viewer", hosts_tree.VARIANT, "/status", 390, 4.2,
+         viewer=True),
 )
 
 #: The page's height once its layout has settled: the scripts have planned the grid
@@ -349,13 +424,15 @@ class WallCostTests(unittest.TestCase):
             raise unittest.SkipTest(f"no chromium available: {error}") from error
         cls.trees = {variant: anonymized_tree.build(variant)
                      for variant in anonymized_tree.VARIANTS}
+        cls.trees[hosts_tree.VARIANT] = hosts_tree.build()
         cls.saved_tree = app_module.status_tree
         cls.saved_config = app_module.config
         cls.saved_error = app_module.engine_error
+        cls.saved_looks = app_module.first_looks
         app_module.status_tree = cls.trees["recorded"]
         # a deployment's pages carry no banner about an engine never started
         app_module.engine_error = None
-        # the deployment's line budget (§3.9); density, branch_cap and depth default
+        # the deployment's line budget (§3.9); depth at its default
         app_module.config = replace(app_module.config,
                                     reason_cap=anonymized_tree.REASON_CAP)
         cls.server = make_server("127.0.0.1", 0, app_module.app,
@@ -371,6 +448,7 @@ class WallCostTests(unittest.TestCase):
         app_module.status_tree = cls.saved_tree
         app_module.config = cls.saved_config
         app_module.engine_error = cls.saved_error
+        app_module.first_looks = cls.saved_looks
         cls.browser.close()
         cls.playwright.stop()
 
@@ -419,6 +497,18 @@ class WallCostTests(unittest.TestCase):
 
     def _open(self, page: Any, case: Case) -> None:
         app_module.status_tree = self.trees[case.variant]
+        # the line budget of the deployment the tree is from, and the first look its
+        # types propose: the hosts tree's from the library's own host types, and the
+        # family's packages' stated by path on both trees (`tests/family_looks.py`)
+        app_module.config = replace(
+            app_module.config,
+            reason_cap=(hosts_tree.REASON_CAP if case.variant == hosts_tree.VARIANT
+                        else anonymized_tree.REASON_CAP))
+        app_module.first_looks = (
+            hosts_tree.first_looks(self.trees[case.variant], app_module.config)
+            if case.variant == hosts_tree.VARIANT
+            else anonymized_tree.first_looks(self.trees[case.variant],
+                                             app_module.config))
         page.goto(f"{self.base}{case.url}")
         page.wait_for_load_state("networkidle")
 
@@ -460,6 +550,21 @@ class WallCostTests(unittest.TestCase):
                     f"{case.what} at {case.width} pixels: {screens:.2f} screens "
                     f"({pixels}) against a baseline of {case.baseline}; the readings "
                     "so far:\n  " + "\n  ".join(readings))
+
+    def test_the_window_stands_through_a_swap(self):
+        # The recorded wall on a desk, scrolled down, was scrolled 24 pixels back up by
+        # a refresh, and from its foot 1,347: the browser's own scroll anchoring held on
+        # to a node of a layout the swap passes through, the grid not yet planned. The
+        # window stands where it was
+        page = self._signed_in(1280)
+        self._open(page, CASES[0])
+        foot = page.evaluate("document.documentElement.scrollHeight - innerHeight")
+        for scrolled in (1200, foot):
+            page.evaluate(f"window.scrollTo(0, {scrolled})")
+            with self.subTest(scrolled=scrolled):
+                self.assertIsNotNone(page.evaluate(_SWAP), "nothing was swapped")
+                self.assertAlmostEqual(page.evaluate("window.scrollY"), scrolled,
+                                       delta=1)
 
     def test_the_swap_under_a_throttled_cpu(self):
         # the recorded wall on a desk, the CPU four times slower: one refresh,

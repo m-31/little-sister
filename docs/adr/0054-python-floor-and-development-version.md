@@ -2,7 +2,6 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-09 (restating decisions taken 2026-06-27)
-- **Supersedes:** [ADR-0010](0010-python-version.md) — Target Python 3.14 (2026-06-27)
 - **Related:** [ADR-0001](0001-in-process-threaded-engine.md) (single-host threaded
   engine — the reason free-threading is interesting at all),
   [ADR-0002](0002-rlock-snapshot-synchronization.md) (locking is GIL-independent, so
@@ -13,7 +12,7 @@
 
 ## Context
 
-**Restated from ADR-0010 (2026-06-27).** `requires-python` sat at `>=3.14` with no
+**On 2026-06-27** `requires-python` sat at `>=3.14` with no
 recorded rationale, and the question was whether to keep it or loosen it. The code
 forced nothing that new then and forces nothing that new now, so the pin was a
 **choice, not a constraint** — and the runtime context made a high floor cheap: the
@@ -27,9 +26,9 @@ consumer is a stranger whose interpreter we do not choose, and the common server
 distributions sit at 3.11 to 3.13 while nothing ships 3.14 yet. `>=3.14` therefore reads
 to almost every interested reader as *"Requires-Python >=3.14; the candidate selected …
 does not match"* — which looks like a broken package rather than a deliberate floor,
-and which no line of code asks for. ADR-0010 anticipated being revisited if an
-interpreter-version constraint appeared; the constraint turned out to be reach rather
-than a stuck host.
+and which no line of code asks for. The answer of 2026-06-27 anticipated being
+revisited if an interpreter-version constraint appeared; the constraint turned out to
+be reach rather than a stuck host.
 
 **The floor was measured, not estimated** — each interpreter fetched, the package
 installed, the suite run:
@@ -46,7 +45,7 @@ installed, the suite run:
 One finding shaped decision 3. The suite initially failed on 3.11–3.13 in a single file,
 where a class annotated a method with its own name — legal to a type checker, and a
 `NameError` at import on anything that does not evaluate annotations lazily (PEP
-649/749). No type checker can catch that, and `datetime.UTC` had arrived after ADR-0010
+649/749). No type checker can catch that, and `datetime.UTC` had arrived since 2026-06-27
 without anyone noticing. **A floor nobody exercises is a claim, not a promise, and it
 decays silently.**
 
@@ -56,14 +55,14 @@ decays silently.**
    code can keep without a port.
 
 2. **Development, the pinned interpreter and the everyday gate stay on 3.14**
-   (restated from ADR-0010, 2026-06-27). `.python-version` pins the exact patch level,
+   (decided 2026-06-27). `.python-version` pins the exact patch level,
    so every environment that runs the suite runs it on the same interpreter, and uv
    downloads it rather than adapting to whatever is present. The floor is what we
    *support*; 3.14 is what we *use*.
 
 3. **The floor is checked, in the two ways it can break** — this is what makes
-   decision 1 a promise rather than a claim, and it is the part ADR-0010 had no need
-   for:
+   decision 1 a promise rather than a claim, and it is the part a floor of 3.14 had no
+   need for:
    - `mypy --python-version 3.11` on **every commit** (the pre-commit hook). Static,
      about a second, and it names exactly the class that broke 3.10: a stdlib name or
      signature the floor does not have.
@@ -77,16 +76,16 @@ decays silently.**
      rules propose modern idioms, and one the floor cannot run is a proposal to break
      decision 1.
 
-4. **The free-threading door stays open** (restated from ADR-0010, 2026-06-27). A floor
+4. **The free-threading door stays open** (decided 2026-06-27). A floor
    forbids *requiring* 3.14, not running on it, and correctness never depended on it —
    [ADR-0002](0002-rlock-snapshot-synchronization.md) locks explicitly regardless of the
    GIL.
 
 5. **No compatibility shims.** The floor is what the code is written against, not
    something it adapts to at runtime: no `sys.version_info` branches, no
-   `typing_extensions`, no backport imports. ADR-0010 bought that simplicity by having
-   one version; this record buys it by having one *target*, with the checks in decision
-   3 keeping the two honest. If a shim ever looks necessary, that is the moment to raise
+   `typing_extensions`, no backport imports. A floor of 3.14 bought that simplicity by
+   having one version; this record buys it by having one *target*, with the checks in
+   decision 3 keeping the two honest. If a shim ever looks necessary, that is the moment to raise
    the floor instead — in a superseding record.
 
 ## Consequences
@@ -113,14 +112,14 @@ decays silently.**
   nothing else, so a non-document could not be dropped at all. Hence `drop_files`, which
   is general — the next dev-only dotfile runs into the same gap.
 - **What is given up:** PEP 695 generics, the `type` statement, `itertools.batched`, and
-  lazily-evaluated annotations — the modernizations ADR-0010's consequences listed as
-  available later. Decision 3's checks are what turn each of them from a silent trap
+  lazily-evaluated annotations — the modernizations a floor of 3.14 had left available
+  for later. Decision 3's checks are what turn each of them from a silent trap
   into a failed gate.
 - **The plugins carry their own `requires-python`** and have to follow, each with its own
   version, or somebody on 3.12 can install the library and not the plugin.
 - **Everyday cost:** one extra second on each commit, and about half a minute on each
   release.
-- **No external contract is affected** (restated from ADR-0010, 2026-06-27): federation
+- **No external contract is affected** (decided 2026-06-27): federation
   peers and the client apps speak JSON over HTTP, so the runtime version is invisible to
   them.
 - **A consumer-facing change**, so it belongs in the CHANGELOG rather than only here: a
@@ -128,9 +127,10 @@ decays silently.**
 
 ## Alternatives considered
 
-- **Keep `>=3.14`** — ADR-0010's answer, and correct for its context: one version to
-  lint, type-check and test against, on a host whose interpreter we provision. It stops
-  being correct at the moment the audience is people whose interpreter we do not choose.
+- **Keep `>=3.14`** — the answer of 2026-06-27, and correct for its context: one
+  version to lint, type-check and test against, on a host whose interpreter we
+  provision. It stops being correct at the moment the audience is people whose
+  interpreter we do not choose.
 - **Relax later, in some version after the first upload.** Sound on the mechanics —
   `requires-python` is per artifact, so the decision is revisitable at every version —
   and it loses on the thing that is not mechanical: the compatibility is free *today*
@@ -140,5 +140,5 @@ decays silently.**
   sitting at 3.11 — the widest part of the installed base — for nothing the code wants.
 - **`>=3.10` or lower.** Measured impossible without a port: see the context.
 - **Declare `>=3.11` and keep testing only on 3.14.** This is the option that looks
-  free and is not. It is the state ADR-0010 left behind, where `datetime.UTC` walked in
-  unnoticed; the difference now is that the promise would be public.
+  free and is not. It is the state the 3.14 floor left behind, where `datetime.UTC`
+  walked in unnoticed; the difference now is that the promise would be public.

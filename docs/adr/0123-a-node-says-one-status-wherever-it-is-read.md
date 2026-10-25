@@ -1,7 +1,7 @@
 # ADR-0123 — A node says one status wherever it is read
 
 - **Status:** Accepted
-- **Date:** 2026-10-10
+- **Date:** 2026-10-25 (accepted 2026-10-10)
 - **Related:** [ADR-0032](0032-status-contribution-boundary.md) (decision 1, the
   statuses a node has — reported, own, effective — and rule 6, staleness judges the
   raw reading), [ADR-0039](0039-status-rollup-semantics.md) (the roll-up, and rule 3,
@@ -15,7 +15,7 @@
   [ADR-0115](0115-a-copy-document-says-where-it-is-from-and-since-when.md) (decision
   5, a branch's document, which this amends),
   [ADR-0094](0094-a-restart-is-no-transition.md) (decision 5, a node that declares
-  nothing names no period),
+  nothing has no own status to name a period of),
   [ADR-0102](0102-a-readings-table-keeps-time-and-names-in-view.md) (decision 3,
   History's rows), [ADR-0110](0110-what-every-node-last-showed-is-kept-beside-the-log.md)
   (the table that keeps when a period began),
@@ -26,7 +26,12 @@
   node, beneath a node that says its scope),
   [ADR-0044](0044-run-facts-on-the-node.md) (decision 8, the one block of a node's
   own facts), [ADR-0079](0079-freshness-is-a-stated-tolerance.md) (the tolerance a
-  reading is stale past)
+  reading is stale past),
+  [ADR-0132](0132-a-branch-keeps-the-period-of-what-it-shows-beside-the-log.md) (the
+  period of what a node above others shows, kept beside the log),
+  [ADR-0135](0135-a-handled-part-keeps-its-true-color-and-every-surface-says-by-what.md)
+  (decision 2, maintenance's own words, the Time card's *when a line's pin was set*
+  among them)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -87,50 +92,58 @@ below, and vivid where the status is the node's own: a failure of its own, or it
 reading gone stale. A card and a box are pale where they are well, as they were, and
 where their status is derived and the nodes beneath them are drawn.
 
-### 3. A period is the own status's, and a node above others names it so
+### 3. A node above others has two periods, and names its own status's so
 
-A node's periods stay those of its own status (decision 4). What a node above others
-shows counts the nodes beneath it, so its own status is one part of that, and a
-surface that states a period of such a node says whose it is:
+A node above others keeps two periods: since when it has shown what it shows, in its
+entry beside the log, written at every change of what it rolls up to — staleness
+included — and never as a row
+([ADR-0132](0132-a-branch-keeps-the-period-of-what-it-shows-beside-the-log.md),
+decision 4); and the period of its own status. What it shows counts the nodes beneath
+it, so its own status is one part of that, and a surface that states the period of its
+own status says whose it is:
 
 - the Time card, *Its own status ok since …*, and what kind of beginning it had after
   it, as before (ADR-0099 decision 8, ADR-0107 decision 3);
 - the node's Copy document, ***Its own status ok** since …*, beneath its *Shown as*;
-- History, under its table: *The periods of its own status: its page heads with what
-  it rolls up to, the nodes beneath it included.*
+- History, under the table of its own status's periods, beneath the table of what it
+  shows: *The periods of its own status: its page heads with what it rolls up to, the
+  nodes beneath it included.*
 
 It is named so while the node is well too, since the period is not the node's then
 either. The count of a node's changes in the last hour (ADR-0083 decision 7) is of
 its own check's, and reads *1 change of its own status in the last hour* there.
 
-**Where the node shows something its own status does not account for, the Time card
-says that first, and names the node beneath it that makes it so, with that node's own
-*since*:** *Status error, from staging/codepipeline/load-fixtures beneath it, error
-since 10:42, and 2 more*. The node named counts the branch's code for itself, and
-every node between them counts it on: a branch on the way down that only passes the
-code on is never the one, and a node that warns beneath a red branch is not named. Of
-several, it is the one that has shown the code the longest, and the line says how many
-others there are. Its *since* is the period its own Time card states, in the same
-words where that period began *before* a bound or when a pin ended, and its name is a
-link to its page. One that counts the code because its own reading went stale is named
-as stale, with when it was last observed — *stale, last observed 10:40* — since its
-period is of something else; it has counted the code since its reading went stale, its
-last observation and its tolerance after it (ADR-0079), and is weighed from then. A
-status that no one node makes, *ok* or *maintenance*, is *from the nodes beneath it*.
-Where the named node's code has counted all along, the branch has shown it at least
-since then — as much as the card can say without a row of the branch's own
-(decision 4); the Events page under the branch lists every change beneath it.
+**The Time card's first line says the period of what the node shows, and names the
+node beneath it that makes it so, with that node's own *since* only where it began
+later:** *Status error since 10:00, from staging/codepipeline/load-fixtures beneath it,
+error since 10:42, and 2 more*; where one node made the whole period the instant is said
+once, *Status error since 10:00, from load-fixtures beneath it*; and a well branch says
+*Status ok since …*. The node named counts the branch's code for itself, and every node
+between them counts it on: a branch on the way down that only passes the code on is
+never the one, and a node that warns beneath a red branch is not named. Of several, it
+is the one that has shown the code the longest, and the line says how many others there
+are. Its *since* is the period its own Time card states, in the same words where that
+period began *before* a bound or when a pin ended, and its name is a link to its page.
+One that counts the code because its own reading went stale is named as stale, with
+when it was last observed — *stale, last observed 10:40* — since its period is of
+something else; it has counted the code since its reading went stale, its last
+observation and its tolerance after it (ADR-0079), and is weighed from then. A status
+that no one node makes, *ok* or *maintenance*, is *from the nodes beneath it*. Where the
+period the tree keeps is not yet of what the node shows — after a restart until the
+units beneath it have run, and while a reading has gone stale before the tick dates it
+— the line says the status without a *since*, and the node beneath with its own
+(ADR-0132 decision 3). The Events page under the branch lists every change beneath it.
 
-Three kinds of node do not name their period their own. A node with nothing beneath
-it shows its own status: *Status error since …*. A node in maintenance, by a pin or by
-its check's own word, cancels what is beneath it (ADR-0039 rule 3), so its period is
-the node's: *Status maintenance since …*; one whose lines are all silenced cancels
-nothing, nor does a pinned one whose own reading went stale, and each names its period
-its own
+Three kinds of node have one period on their Time card, and do not name it their own. A
+node with nothing beneath it shows its own status: *Status error since …*. A node in
+maintenance, by a pin or by its check's own word, cancels what is beneath it (ADR-0039
+rule 3), so its period is the node's: *Status maintenance since …*; one whose lines are
+all pinned cancels nothing, nor does a pinned one whose own reading went stale, and
+each names its own status's period its own
 ([ADR-0124](0124-a-node-whose-lines-are-all-silenced-still-counts-the-nodes-beneath-it.md)).
 And a node that declares nothing has no own status for a period to name, and states its
-observation (ADR-0094 decision 5), beneath the line that says where what it shows comes
-from, since all of it does.
+observation (ADR-0094 decision 5) beneath the line that says what it shows, since when
+and from where, since all of it comes from beneath it.
 
 Which status a period names, whether it is named the node's own and which node beneath
 makes what the node shows are decided where the period's bound is decided, once, from
@@ -143,9 +156,8 @@ off its node.
 An event stays a change of a node's own status (ADR-0107 decision 1), and History,
 *since* and the kept table (ADR-0110) stay what they are. A change beneath a node is a
 row of the node that changed, and the Events page lists it under every node above.
-Since when a branch has shown what it shows is said by the node beneath it that makes
-it so: on that node's own page, and in the line the branch's Time card gives it
-(decision 3), never by a row of the branch's.
+Since when a branch has shown what it shows is kept in its entry beside the log
+(decision 3), never as a row of the branch's.
 
 ## Consequences
 
@@ -153,14 +165,16 @@ it so: on that node's own page, and in the line the branch's Time card gives it
   card on the page above, its one card at depth 0 and the API say one status, and the
   node that fails is the vivid one beneath it.
 - **The Time card of every node above others reads differently**, also where nothing
-  is wrong: *Its own status ok since …* where it read *Status ok since …*, and its
-  changes as its own status's. So does such a node's Copy document.
+  is wrong: the period of what it shows first, *Status ok since …*, and *Its own status
+  ok since …* beneath it, its changes counted as its own status's. So does such a node's
+  Copy document.
 - **A branch whose status comes from beneath it names the node that makes it so**, on
-  its Time card, with that node's own *since* and a link to its page: since when the
-  branch has shown it, as far as one node's period can say. A container that declares
-  nothing says the line above its observation, where it said *Observed …* alone. The
-  Copy document names no such node: its outline lists the nodes beneath with their
-  periods.
+  its Time card, with a link to its page and that node's own *since* where it began
+  after the branch's. A container that declares nothing says that line above its
+  observation, where it said *Observed …* alone. The Copy document states what began
+  the period, in History's words
+  ([ADR-0115](0115-a-copy-document-says-where-it-is-from-and-since-when.md)), and its
+  outline lists the nodes beneath with their periods.
 - **A stale reading of a node's own is drawn as the node's**: vivid on its head, on
   its card and on its box. The card and the box drew it pale where the nodes beneath
   them were drawn.
@@ -168,10 +182,11 @@ it so: on that node's own page, and in the line the branch's Time card gives it
   [ADR-0115](0115-a-copy-document-says-where-it-is-from-and-since-when.md) decision 5
   are amended**: on a node above others the period is named its own status's, and
   what a pin's end or a line's pin says of its beginning follows those words.
-- **The envelope does not move.** `reported`, `own` and `code` say what they said
-  (ADR-0080 decision 2). Whose `code` is, is not in it: a client that compares `own`
-  with `code` reads a stale reading of the node's own as one from beneath it, as the
-  cards did.
+- **The envelope carries both periods**, beside the codes they are of: `period` beside
+  `code`, `own_period` beside `own` (ADR-0132 decision 7). `reported`, `own` and `code`
+  say what they said (ADR-0080 decision 2). Whose `code` is, is not in it: a client that
+  compares `own` with `code` reads a stale reading of the node's own as one from beneath
+  it, as the cards did.
 - **A Copy document's *Shown as* stands where it stood**: where a node shows
   something other than it reported, which its own reading gone stale is as well.
 - **A branch's page a reader cannot pin still opens without a head** where its node
@@ -205,7 +220,7 @@ it so: on that node's own page, and in the line the branch's Time card gives it
   a day on which the node's card stood red.
 - ***Its own reading***, the Copy document's phrase for what a roll-up starts from.
   With a line pinned the own status is not the reading, and the words would be wrong
-  where the card adds *when a line was silenced*.
+  where the card adds *when a line's pin was set*.
 - ***From the nodes beneath it* and no more.** True, and it leaves since when the
   branch has shown what it shows to the pages beneath it; where a node beneath makes
   it so, the card can say that without either answer the round on a branch's own

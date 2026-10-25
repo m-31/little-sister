@@ -262,7 +262,7 @@ What the base class gives you and expects:
   that should alarm is a reason.
   It is also **not your working state**: the raw answer — a 150-finding page, an
   unshortened log — stays inside your check, and what crosses into the record is what
-  is worth keeping, because 2 KB is the default bound on one of them.
+  is worth keeping, because 3 KB is the default bound on one of them.
   A run that **failed** to read its object should still record the attempt — the reason
   beside the values it could not get, as nulls — because a history of failures answers
   *how often did this answer at all*, and a history with holes in it cannot: a hole
@@ -387,7 +387,9 @@ What the base class gives you and expects:
   size you declare ([ADR-0086](adr/0086-a-check-measures-and-grades.md) decision 5). It
   **refuses** a configuration whose declared part alone cannot fit, naming the checks;
   at 80 % of a limit it is a warning in the log and a fact in the `report` of
-  `/little-sister/engine`.
+  `/little-sister/engine`. So size your heaviest record under that share of the
+  default: the library's command types come to 2,048 bytes at most, two thirds of the
+  3,072 default, and a start at the default says nothing of them.
 
   Declare an **estimate of a normal run**, never a bound: `timeout_seconds` is the
   bound, and a type that declares it refuses deployments that work. Declare nothing —
@@ -548,7 +550,7 @@ constructor, but it is wrong: say why.
   reason** (a permanent informational `WARN` holds the root amber — a legitimate
   choice, but a choice); and **split the node when the *group* is what an operator
   acts on, code the line when the *finding* is** — a severity band is a real node
-  with a pin that silences the whole band, while a coded line keeps its pin when
+  with a pin that holds the whole band, while a coded line keeps its pin when
   its state moves. Emitting healthy lines is a per-aspect choice, off by default;
   a run in flight should always produce a line.
 - **A slug is an identifier, never a position** ([ADR-0050](adr/0050-slugs-from-provider-identifiers.md)).
@@ -590,7 +592,7 @@ constructor, but it is wrong: say why.
   attribute declares members, so prose carrying a record stays prose.
 
   The seam refuses a record that is not a JSON mapping, carries a non-time under a
-  timed name, or weighs more than `record_limit` bytes of JSON (2 KB by default), and
+  timed name, or weighs more than `record_limit` bytes of JSON (3 KB by default), and
   what a refusal costs depends on where the record is built
   ([ADR-0093](adr/0093-a-record-the-seam-refuses-costs-its-line.md)). **In your
   tests, and anywhere else a result or a measurement is built, it raises** a
@@ -677,6 +679,20 @@ constructor, but it is wrong: say why.
   `{line.default}` in a default all raise `CheckError` — and `Check.line` refuses a form
   or a word you do not declare, so your own tests meet a typo before a deployment does.
   Test the finished line: what `Check.line` hands back is what every surface shows.
+
+  **A line carries what tells its failure from the next, its occurrence**
+  ([ADR-0142](adr/0142-a-failure-marked-seen-counts-as-ok-above-until-it-changes.md)).
+  A person may mark a failing line *seen*, accepting it as it stands, and that ends when
+  the line fails anew — so `Check.line` carries onto the line the reading's `identity`,
+  the run you read, and where a failure's identity is not its reading's, the record
+  field your type names as `occurrence=` on `Check.__init__`, one of the fields it
+  declares in `line_fields`: `little-sister-aws`'s function lines name
+  `occurrence="error.at"`, since their readings take a new identity at every run while
+  the line holds one error. A name you do not declare raises `CheckError` when your
+  check is built. A value that is no text is written as its JSON, and one too long for a
+  line as its digest; where the record holds no value and the reading names no identity,
+  the line's failure is the failing stretch it stands in. A line you build yourself says
+  it as `Entry(…, occurrence=…)`.
 - **What your grading judges by is declared, and the library grades it:
   `Check.verdict`** ([ADR-0131](adr/0131-a-type-declares-what-it-grades-and-the-library-grades-it.md)).
   Declare every value your grading judges — a name, which is the key a deployment
@@ -737,10 +753,13 @@ constructor, but it is wrong: say why.
   engine judges it after your grading and writes its line from the library's forms
   `since_ok.last` and `since_ok.none` — nothing of yours asks for it, and neither a
   grading nor a form of yours may take one of those names.
-- **Reasons are Markdown** — fold untrusted text in safely: `plain(text)` escapes an
-  inline value (a path, an error, an API message); `code(text)` fences multi-line /
-  log output as a verbatim block ([ADR-0018](adr/0018-markdown-rendering.md)). Never
-  interpolate raw external bytes straight into a reason.
+- **Reasons are Markdown**, as every text the page shows is: GitHub's tables and
+  strikethrough among it, and a status in braces, `{error}`, drawn as its sign
+  ([ADR-0018](adr/0018-markdown-rendering.md) decision 14). Fold untrusted text in
+  safely: `plain(text)` escapes an inline value (a path, an error, an API message) — its
+  emphasis, code, links, a run of tildes and a status's brace — and `code(text)` fences
+  multi-line / log output as a verbatim block. Never interpolate raw external bytes
+  straight into a reason.
 - **A time in a sentence reads the way the page reads it.** Write an instant with
   `little_sister.spans.local_time`, which uses the deployment's configured `timezone`
   and `time_format` ([ADR-0120](adr/0120-every-stored-time-is-an-instant.md)) — never a
@@ -1039,6 +1058,20 @@ else's logger, so hold it in a test against a line that library itself writes
   order, because `0` is the rank the unranked carry, so a zeroed node sorts ahead of
   every positively-ranked sibling. Putting a whole ranked set back to the alphabet
   takes an `order: 0` on each of them ([ADR-0055](adr/0055-sibling-order.md)).
+- **What each text says.** A node's three texts divide by what they say
+  ([ADR-0133](adr/0133-a-node-says-what-it-is-in-a-card-and-at-length-in-a-handbook.md)
+  decision 2). Its `description` says what your check reads, in a sentence — given on
+  every result, and named on the startup record past about 160 characters. Its `about`
+  says what to do: the first steps that hold wherever your type runs, by the status they
+  are done on, `{warn}:` and `{error}:`, in a few sentences — named past about 400 — and
+  a link into the section of the node's handbook that says them at length. How to read
+  a value is the description's and the handbook's, never the about's, and what one
+  reading holds is its line's. The library's host types are the worked example:
+  `host-metrics`' `disk` reads *the share of a filesystem's space in use, as the host's
+  own `df` reports it*; its about says `{warn}: find what grows and clean it up, or plan
+  more space. {error}: free space now, before writes start to fail.` and links
+  `handbook#when-it-fills`; and it ships `handbook/host-metrics/disk.md` beside its
+  module.
 - **Subnode labels: declare, don't mediate.** The per-aspect `title` / `about` a branch
   check ships are **declared**, in the two common constructor keywords
   `subnode_defaults` (`name → {title, about}`) and `label_tokens` (`token → value`),
@@ -1057,7 +1090,17 @@ else's logger, so hold it in a test against a line that library itself writes
   and a type that runs several times in one deployment (one check per team) carries its
   prose once instead of once per config file. Tokens are resolved at **construction**,
   so a token value must be a construction-time fact — a label freezes at the node's
-  first fill, and text that changes with an observation belongs in `reason`. A key in an
+  first fill, and text that changes with an observation belongs in `reason`. They
+  expand in the labels your run hands a child as well — a `title`, an `about`, a
+  `handbook`, text or a file your package ships — so a child no declaration can name,
+  a severity your source invents tomorrow, says what its declared siblings say. Name no
+  token `default`, which is where a deployment's text puts yours and is replaced before
+  any token, and none `ok`, `warn`, `error`, `maintenance` or `undefined`, in any case:
+  `{error}` is how a text names a status, which the page draws as its sign. A
+  type that offers a token by one of those names refuses to load
+  ([ADR-0133](adr/0133-a-node-says-what-it-is-in-a-card-and-at-length-in-a-handbook.md)
+  decision 5) — your text may of course say `{error}:` where it tells what to do when
+  the node fails. A key in an
   entry that the library does not read — a misspelt `titel`, say — is named in one line
   when the check is built, beside its path and your type's name, where it used to do
   nothing in silence.
@@ -1076,9 +1119,50 @@ else's logger, so hold it in a test against a line that library itself writes
   the name in until the instance restarts. A child that does not say so is read
   by its name — its own `about` / `title` then count only where the resolved map says
   nothing for that name, which lasts until a source calls a thing by a name you declare.
-  A check that wants such a child to inherit an aspect's text reads the resolved map,
-  `self.subnode_labels[name][field]`, rather than its own constant: that is what carries
-  a deployment's override down to it (`host-metrics`' per-volume leaves under `disk`).
+  Copy no aspect's text onto such a child: it carries the details of its own object — a
+  volume its mount point — and what holds for every node of the level, whom to ask or
+  how to sign in, a deployment gives as the details under the aspect's name in
+  `subnodes:`, which reach every node beneath it (`host-metrics`' volumes under `disk`,
+  [ADR-0133](adr/0133-a-node-says-what-it-is-in-a-card-and-at-length-in-a-handbook.md)
+  decision 6).
+- **A handbook for an aspect.** What a team reads at length about a node — your
+  reference to an aspect, how to read its values, what to do in each condition — is the
+  node's `handbook`, read on a tab of its own, *Handbook*, where the `about` keeps to the
+  short account
+  ([ADR-0133](adr/0133-a-node-says-what-it-is-in-a-card-and-at-length-in-a-handbook.md)
+  decision 3). Declare it where the labels go, `handbook` in a subnode's
+  `subnode_defaults` entry beside its `title` and `about`: text, or a single line ending
+  in `.md` that names a Markdown file your package ships, relative to the directory of
+  the module your type is defined in — ship it as package data. A deployment's
+  `handbook` replaces yours, or places it where it writes `{default}`, and your tokens
+  expand in it as in a label. A child only the run can name takes its handbook from its
+  own result, `CheckResult(handbook=…)`, read against your package when it first fills
+  the node and not again; a root ignores it, its handbook being its check file's. A file
+  that is missing gives no handbook and a line on the startup record. Your texts link
+  the node's handbook by a short form
+  ([ADR-0133](adr/0133-a-node-says-what-it-is-in-a-card-and-at-length-in-a-handbook.md)
+  decision 4) — `[what to do](handbook#when-it-fails)` in a description, an about or a
+  line, `handbook` alone for its top — which every node of the name resolves to its own
+  handbook, a section being a heading anchored as GitHub anchors it. One your
+  description or your labels write that leads nowhere — to a section the node's
+  handbook does not have, or on a node that has none — is named on the startup record
+  when a run first fills the node; a line's is not looked at.
+- **The details of your object.** What names the thing a node stands for — an account,
+  a region, a function, a host, a bay — is its **details**, named values each a line of
+  Markdown, which the node's *About* card shows first, as a table beneath its `about`
+  ([ADR-0133](adr/0133-a-node-says-what-it-is-in-a-card-and-at-length-in-a-handbook.md)
+  decision 6). Hand them over on the result of every node you write, the root's too,
+  with every run: `CheckResult(details={"function": "`batch-import`", "region":
+  "eu-west-1"})`, the keys yours to choose and shown in the order you give them. Like
+  `description` they are written through, so what your last run said is what the node
+  holds. They are the node's own and come down to no node beneath it — a function's card
+  shows its account's id where you write it on the function too — where what a
+  deployment gives in its files holds for every node beneath; on a node two checks share
+  they are withheld, as `report` is. A value is text and an empty one says nothing; one
+  that is not text fails the run as your error. Declare none in `subnode_defaults`,
+  where a `details` key is one the library does not read and the log says so. A link
+  one writes in the short form leads into the node's own handbook, and one that leads
+  nowhere is named when a run first fills the node.
 - **Declaring that a node's quiet lines are the reading.** Most reason text is
   diagnostic — while the node is quiet there is nothing to read — but some checks' lines
   are an **inventory**: one line per instance, per volume, per account, read *because*
@@ -1125,17 +1209,25 @@ else's logger, so hold it in a test against a line that library itself writes
   `children:` in the entry says the same for each child of the node, whatever its name,
   and `node_defaults` carries all of it for your check's own node, which no name
   reaches — `node_defaults={"chips": True, "children": {"chips": True}}` for
-  repositories that start as chips with their workflow runs chips too. It is a
+  repositories that start as chips with their workflow runs chips too. The library's
+  own host types are the plainest case: `host-metrics` proposes a host's leaves as
+  chips with `node_defaults={"chips": True}` and a disk's filesystems in its `disk`
+  entry, `qnap-metrics` its drives and its sensors, `macos-memory` its leaves and its
+  watched processes — and where two of them share a host node, each speaks for the
+  leaves it writes there, the node's own look being `nodes.yaml`'s. It is a
   **proposal**: the deployment's file takes it back, `nodes.yaml` overrides both per
   path, and it ranks above `settings.yaml`, so it reaches every deployment that says
   nothing. A boolean is a real boolean and `reason_cap` a whole number, or the check's
   construction is refused, naming the entry; a key the library does not read is named
   at startup. Nothing you close hides a failure for long: in each card the first three
   failures a chip would hide open their way, and a node that claims `show_when_quiet`
-  starts open whatever its parent's `chips` says. Declare a level closed where it is
-  big for every deployment, not where one deployment would like it smaller — that is
-  the deployment's file. A package that declares them raises its floor to the release
-  of the library that reads them.
+  starts open whatever its parent's `chips` says. A level nobody speaks for starts open,
+  its healthy shown, unless opened it would draw more than thirty boxes, counted all
+  the way down, when it starts as chips — a net for the level that grows unexpectedly,
+  which leaves a level you know is big yours to declare. Declare a level closed where
+  it is big for every deployment, not where one deployment would like it smaller —
+  that is the deployment's file. A package that declares them raises its floor to the
+  release of the library that reads them.
 - **What a line says is the deployment's to re-word: `display:`**
   ([ADR-0126](adr/0126-a-line-is-a-template-over-its-record.md)). Beside `subnodes:` and
   `measures:`, read by the library for every type: a form's full name to a template that

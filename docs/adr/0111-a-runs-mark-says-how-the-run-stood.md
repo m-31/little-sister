@@ -18,8 +18,8 @@
   identity or a state* came from),
   [ADR-0109](0109-a-node-says-its-children-are-complete.md) (decision 6: a series no
   node stands for), [ADR-0093](0093-a-record-the-seam-refuses-costs-its-line.md) (a
-  record the seam refuses), [ADR-0024](0024-dashboard-layout.md) (a status is never said
-  by color alone), [ADR-0028](0028-design-tokens-and-themes.md) (the inks are tokens
+  record the seam refuses), [`../architecture.md`](../architecture.md) §6 (a status is
+  never said by color alone), [ADR-0028](0028-design-tokens-and-themes.md) (the inks are tokens
   every theme has), [ADR-0036](0036-addressable-reasons.md) (a pin holds a slug),
   [ADR-0051](0051-what-startup-refuses.md) (decision 2, the epoch)
 - **Register:** [`../decisions.md`](../decisions.md)
@@ -96,7 +96,7 @@ contrast; both are tokens every theme has
 ([ADR-0028](0028-design-tokens-and-themes.md)).
 
 The marks are then four, each told by its shape and its place as well as by its ink
-([ADR-0024](0024-dashboard-layout.md)):
+([`../architecture.md`](../architecture.md) §6):
 
 - **A run that passed** — without a measure a short tick in the body ink; with one a
   stem to its value with a filled head.

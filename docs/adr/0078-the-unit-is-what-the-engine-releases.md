@@ -1,7 +1,7 @@
 # ADR-0078 — The unit is what the engine releases, and a check declares its own
 
 - **Status:** Accepted
-- **Date:** 2026-10-18 (accepted 2026-09-06)
+- **Date:** 2026-10-25 (accepted 2026-09-06)
 - **Related:** [ADR-0049](0049-the-check-authoring-surface.md) (the surface this
   joins, and its add-is-compatible rule),
   [ADR-0051](0051-what-startup-refuses.md) (the epoch, its snapshot, and the shape
@@ -12,11 +12,12 @@
   (stamped where written), [ADR-0040](0040-what-a-failing-check-becomes.md) (a
   failing check is all-or-nothing — the scope this narrows),
   [ADR-0043](0043-coverage-backstop.md) (the backstop, which attaches to whatever was
-  short), [ADR-0008](0008-json-output-api.md) (the envelope this reaches),
+  short), [ADR-0080](0080-the-envelope-is-the-snapshot-published.md) (the envelope this
+  reaches),
   [ADR-0086](0086-a-check-measures-and-grades.md) (a run measures and grades — a unit
   is a unit of measuring), [ADR-0130](0130-a-unit-has-a-period-of-its-own.md) (a
   unit's own period and the node it answers for, the periodic half decision 6 leaves
-  open)
+  open; decision 5, why the envelope names no unit)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -92,10 +93,13 @@ reading the envelope can be told about.
    is the decision's real cost and its real payoff: all-or-nothing was a *simplifying*
    rule, and it is now all-or-nothing per unit.
 
-5. **The envelope names the unit that answered, and nothing else about it.** The
+5. **The envelope says where a unit answered, and nothing else about it.** The
    published snapshot carries `run` wherever a unit answered for the node — decision
-   3's rule, said in the contract's words — and an optional `unit` key beside it
-   naming which. That is the whole of what this decision owes the contract round, and
+   3's rule, said in the contract's words — and no key names the unit: a unit's `run`
+   stands on the node it answers for, and `frequency_seconds` and
+   `stale_after_seconds` are per node already
+   ([ADR-0130](0130-a-unit-has-a-period-of-its-own.md) decision 5). That is the whole of
+   what this decision owes the contract round, and
    it is why it is taken before that round freezes the envelope rather than after: a
    `run` block that may appear below a check's mount is a different contract from one
    that may not, and no additive field can fix that later.

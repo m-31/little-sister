@@ -1,16 +1,20 @@
 """The golden envelope — one artifact every repository in the family tests against.
 
-`docs/api/openapi.yaml` is normative and says what the envelope *may* contain; this
-is one envelope that actually contains it, produced by this application's own API
-and held to it by `tests/test_contract_fixture.py`. A client that decodes this file
-decodes every optional shape `schema_version` 2 has: a node with and without a
-`run`, a run on a schedule carrying `frequency_seconds` and `stale_after_seconds` and
-one carrying neither, entries addressable and prose, an entry carrying `subject` and
-`data`, one carrying neither and one whose record was `refused`, a record with the typed
-``at`` / ``started`` / ``ended`` keys at two depths, a `maintenance` pin and a null, the
-envelope's own `instance` block, and **both** shapes of `contribution` — the pin's,
-which withholds and reports a null code, and a damped node's, which transforms: the node
-reads ERROR, the parent counted OK, and `contribution.code` is that OK.
+`docs/api/openapi.yaml` is normative and says what the envelope *may* contain; this is
+one envelope that actually contains it, produced by this application's own API and held
+to it by `tests/test_contract_fixture.py`. A client that decodes this file decodes every
+optional shape `schema_version` 3 has: a node with and without a `run`, a node with and
+without a `handbook`, `details` a node's check type gave and its deployment gave — a key
+both name and one given empty — a run on a schedule carrying `frequency_seconds` and
+`stale_after_seconds` and one carrying neither, entries addressable and prose, an entry
+carrying `subject` and `data`, one carrying neither and one whose record was `refused`,
+a record with the typed ``at`` / ``started`` / ``ended`` keys at two depths, what
+handles a node and a line — a person's pin, a configured rule on what a node passes up
+and on its lines, and nothing — the envelope's own `instance` block, and **both** shapes
+of `contribution` — the pin's, which withholds and reports a null code, and a damped
+node's, which transforms: the node reads ERROR, the parent counted OK, and
+`contribution.code` is that OK — each naming the rule that decided, where one pin or one
+configured rule did.
 
 **A field added to the envelope makes this artifact stale in the same change.** ADR-0080
 decision 1 says a field added to the snapshot is added to the contract in that change;
@@ -31,7 +35,7 @@ occur the artifact holds a fixed placeholder and a comparison normalizes them. A
 ``expires_at`` is **not** among them: the scene fixes it, so it is a real value a
 client's date decoding is tested against.
 
-**The series read has an artifact of its own**, ``series-2.json`` (ADR-0122 decision
+**The series read has an artifact of its own**, ``series-3.json`` (ADR-0122 decision
 9): one request and its answer, holding every shape that read has — a series on its
 check's node and one on its subject's, a measure a ``*`` expanded and one with no
 ``axis_to``, a series without measures, a reading that failed, a run with its own
@@ -52,10 +56,10 @@ __all__ = ["ARTIFACT", "SERIES_ARTIFACT", "golden_artifact", "golden_envelope",
            "golden_series", "golden_series_artifact", "normalize"]
 
 #: The artifact's file name inside this package.
-ARTIFACT = "envelope-2.json"
+ARTIFACT = "envelope-3.json"
 
 #: The series read's artifact, beside it (ADR-0122 decision 9).
-SERIES_ARTIFACT = "series-2.json"
+SERIES_ARTIFACT = "series-3.json"
 
 
 def _artifact(name: str) -> dict[str, Any]:

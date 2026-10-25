@@ -432,12 +432,7 @@ class _Rendering:
         ``None`` where the record holds no such field."""
         if name.startswith(_WORD):
             return self.words.get(name[len(_WORD):])
-        found: object = self.record
-        for key in name.split("."):
-            if not isinstance(found, Mapping) or key not in found:
-                return None
-            found = found[key]
-        return found
+        return field_of(self.record, name)
 
     def nodes(self, nodes: tuple[_Node, ...]) -> str:
         return "".join(self.node(node) for node in nodes)
@@ -461,6 +456,18 @@ class _Rendering:
         words = self.nodes(node.words)
         target = _target(self.value(node.target))
         return words if target is None else f"[{words}]({target})"
+
+
+def field_of(record: Mapping[str, Any], name: str) -> object:
+    """The field of ``record`` that the dotted ``name`` names, as a template reads it
+    — ``None`` where the record holds no such field. The one reading of a dotted name,
+    which a type's ``occurrence=`` is read by too (ADR-0142)."""
+    found: object = record
+    for key in name.split("."):
+        if not isinstance(found, Mapping) or key not in found:
+            return None
+        found = found[key]
+    return found
 
 
 def _written(name: str, value: object) -> str:

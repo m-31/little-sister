@@ -250,7 +250,7 @@ class WhatIsKnownTests(_Estate):
         self._remove()
         page = self._said(f"/status/{GONE}")
         self.assertIn(f'name="next" value="/status/{GONE}"', page)
-        cleared = self.client.post("/maintenance", data={
+        cleared = self.client.post("/pins/maintenance", data={
             "path": "/batch/export", "action": "clear", "set_at": entry.token,
             "next": f"/status/{GONE}"})
         self.assertEqual(cleared.status_code, 302)

@@ -16,22 +16,25 @@ import json
 import os
 import tempfile
 from collections.abc import Sequence
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from unittest import TestCase, mock
 
 os.environ.setdefault("SECRET_KEY", "test-key")
 
+from little_sister import api, contract
 from little_sister import app as app_module
-from little_sister import contract
+from little_sister.aggregation import AggregationRule, RuleSet, Table
 from little_sister.checks.base import Check, CheckResult, Measurement
 from little_sister.checks.file import FileFreshnessCheck
 from little_sister.checks.ssh import HostMetricsCheck
 from little_sister.engine import Engine
+from little_sister.pins import SEEN
 from little_sister.reasons import Entry
 from little_sister.series import MemoryStore, SeriesKey, SeriesRecord
 from little_sister.status import StatusCode
+from little_sister.tags import Vocabulary
 from little_sister.tree import StatusTree
 
 TOKEN = "secret-token"
@@ -40,16 +43,28 @@ JSON_HEADERS = {"Accept": "application/json", "Authorization": f"Bearer {TOKEN}"
 #: The field names that differ between two correct runs. Kept here **and** in the
 #: artifact, because the artifact is read by a client that cannot import this.
 VOLATILE = ["generated_at", "observed_at", "next_at", "version",
-            "set_at", "created_at"]
+            "set_at", "created_at", "since"]
+
+
+#: The ids the scene's four pins are given, in the order they are set — two in
+#: maintenance and two seen: a pin's id is made when it is first set (ADR-0141
+#: decision 2), and the artifact holds these.
+PIN_IDS = ["5c1d0a7e3f4b2c18", "9e2f4a6b8c0d1e3f", "3a7b9c1d5e2f4a6b",
+           "c4d6e8f0a2b4c6d8"]
 
 
 def build_scene(tree: StatusTree) -> None:
-    """One tree carrying every optional shape `schema_version` 2 has.
+    """One tree carrying every optional shape `schema_version` 3 has.
 
     Every line below is here because the envelope has a field that is otherwise
     never populated: a reader who deletes one deletes a shape the client is no
     longer tested against.
     """
+    with mock.patch("little_sister.pins.new_id", side_effect=list(PIN_IDS)):
+        _build_scene(tree)
+
+
+def _build_scene(tree: StatusTree) -> None:
     # A plain leaf: `run` present, entries empty, nothing optional set — and no
     # `frequency_seconds`, which is the *paced* shape a client must also decode.
     tree.upsert("/services/web", StatusCode.OK)
@@ -57,7 +72,33 @@ def build_scene(tree: StatusTree) -> None:
     # applied. The client has a test per field of this, so an artifact without it
     # would leave that suite on its own fixtures whatever else happened.
     tree.upsert("/services/api", StatusCode.OK,
-                frequency_seconds=300, stale_after=900.0)
+                frequency_seconds=300, stale_after=900.0,
+                type_details=(("host", "`api01.example.test`"),
+                              ("region", "eu-central-1")))
+    # A node that has a handbook says where it is (ADR-0133 decision 3): the absolute
+    # address of its Handbook view, as the request reached the server — the test
+    # client's `http://localhost` — and never its text; every other node carries no
+    # key. Its about links into it by the short form, raw (decision 4).
+    tree.set_handbook("/services/api", "## Sign in\n\nThrough the bastion.\n")
+    tree.set_about("/services/api", "[Sign in](handbook#sign-in) first.")
+    # A node's details (ADR-0133 decision 6), its own as given: what its check type
+    # gives it with its run, the details of its object, above — first, `by: type` —
+    # then what its
+    # deployment gives it — `by: deployment` — which holds for every node beneath. A
+    # key both name stands once for each, the deployment's value winning in the
+    # type's place; and one given empty takes the key back, here and beneath. Every
+    # other node carries no key.
+    tree.set_details("/services", (
+        ("owner", "Platform team"),
+        ("tickets", "[PLAT](https://tickets.example.test/plat)")))
+    tree.set_details("/services/api", (("region", "Frankfurt"), ("tickets", "")))
+    # A node's tags (ADR-0139), every tag it carries in the order the known tags
+    # give: those its deployment writes for it and for every node above it, added up.
+    # `/services` is production and so is every service beneath it; the API carries
+    # a tag of its own besides. Every other node carries no key.
+    tree.use_tags(
+        Vocabulary({"production": "Serves customers.", "rack-4": "In rack 4."}),
+        {"/services": ("production",), "/services/api": ("rack-4",)})
     # Prose entries, and a node whose parent rolls up from it.
     tree.upsert("/services/db", StatusCode.ERROR, "connection refused")
     # Display metadata that is not a status claim (ADR-0044): report, title,
@@ -136,13 +177,14 @@ def build_scene(tree: StatusTree) -> None:
     tree.upsert("/services/cache", StatusCode.ERROR, "connect: no route to host")
     tree.set_dependency("/services/cache", "/network/vpn")
     # A pin: the one shape whose absence would have made this artifact's own
-    # description false, and which nothing above produces on its own.
+    # description false, and which nothing above produces on its own — listed among
+    # what handles its node, `handled`, which `contribution.rule` names.
     tree.set_maintenance("/services/db", "waiting on the vendor",
                          expires_at=datetime(2027, 1, 1, tzinfo=UTC),
                          set_by="lex")
     # **A line pinned on its own** (ADR-0036): the nightly workflow somebody switched
     # off, silenced while its siblings keep alarming, so the node still reads ERROR
-    # from the failed line. An entry carries its pin exactly as a node does, with an
+    # from the failed line. An entry lists its pin exactly as a node does, with an
     # expiry of its own, and nothing above produces one.
     tree.set_entry_maintenance("/platform/actions", "1001-workflow-77",
                                "off until the migration lands",
@@ -164,6 +206,48 @@ def build_scene(tree: StatusTree) -> None:
     tree.set_title("/services/backup", "Backup")
     tree.set_check_mount("/services/backup")
     tree.set_run_facts("/services/backup", wall_seconds=None, next_run_at=None)
+    # **The deployment's configured rules** (2.11.0, ADR-0137): healing on what
+    # `/staging` passes up, so that its parent counts the OK its own `code` is not,
+    # `contribution.by` naming `aggregation`; and healing on a node's lines, so that
+    # the slow runner's entry says what its node counted of it, `contribution` on an
+    # entry. The pinned nightly above says `maintenance` there, and every other entry
+    # carries it as null. Healing and not a cap: the client names the cause of a red
+    # root by descending through what each node carries up, and a capped branch
+    # would carry a warning into it — a cause its tests do not expect of this scene.
+    tree.use_aggregation(RuleSet((
+        AggregationRule(
+            name="staging advises", under="/staging", segments=("staging",),
+            table=Table(((StatusCode.WARN, StatusCode.OK),)),
+            note="Staging is no production.", since=date(2026, 9, 5),
+            file=Path("config/aggregation.yaml"), root=Path("config")),
+        AggregationRule(
+            name="runners heal", under="/staging/runners",
+            segments=("staging", "runners"),
+            table=Table(((StatusCode.WARN, StatusCode.OK),)), lines=("*",),
+            note="A slow runner is the day's weather.", since=date(2026, 9, 5),
+            file=Path("config/aggregation.yaml"), root=Path("config"), order=1))))
+    tree.upsert("/staging/api", StatusCode.WARN, "slow responses")
+    tree.upsert("/staging/runners", StatusCode.WARN, [
+        Entry("runner-1", "runner 1 is slow", code=StatusCode.WARN),
+        Entry("runner-2", "runner 2 is idle", code=StatusCode.OK)])
+    # **What a person accepted** (ADR-0142): a disk marked seen keeps its true color
+    # and its parent counts it OK, `contribution.by` naming `seen` — its `handled`
+    # the acknowledgment, with the status it was set at, no end, and no occurrence,
+    # a node's own failure being bound to its failing stretch; and a job's line
+    # marked seen until a day, bound to the occurrence its line carries — the run
+    # and the attempt it failed in — so that its entry counts OK in its node. Under
+    # `/staging`, whose healing passes up what the client's cause line descends
+    # through, as it did before.
+    tree.upsert("/staging/disk", StatusCode.ERROR, "disk 97 % full")
+    tree.set_acknowledgment("/staging/disk", "", SEEN, "The disk is on order.",
+                            expires_at=None, set_by="ada")
+    tree.upsert("/staging/jobs", StatusCode.ERROR, [
+        Entry("job-7", "job 7 failed", code=StatusCode.ERROR, occurrence="7/1"),
+        Entry("job-8", "job 8 passed", code=StatusCode.OK, occurrence="8/1")],
+        members=True)
+    tree.set_acknowledgment("/staging/jobs", "job-7", SEEN, "A flaky runner.",
+                            expires_at=datetime(2027, 1, 1, tzinfo=UTC),
+                            set_by="ada")
 
 
 def envelope_from(tree: StatusTree) -> dict:
@@ -203,8 +287,8 @@ class GoldenEnvelopeTests(TestCase):
         """A consumer in another language reads the list out of the file rather
         than keeping a copy of it — which is the copy that would drift."""
         self.assertEqual(contract.golden_artifact()["volatile"], VOLATILE)
-        self.assertEqual(contract.golden_artifact()["schema_version"], 2)
-        self.assertEqual(contract.golden_envelope()["schema_version"], 2)
+        self.assertEqual(contract.golden_artifact()["schema_version"], 3)
+        self.assertEqual(contract.golden_envelope()["schema_version"], 3)
 
     def test_it_carries_every_optional_shape_a_client_must_decode(self):
         """The scene is only worth shipping if it is not the easy case. Each of
@@ -233,14 +317,52 @@ class GoldenEnvelopeTests(TestCase):
         self.assertTrue(any(not item["subject"] and not item["data"]
                             for item in items))
         self.assertTrue(any(item["code"] for item in items))
-        # A line's own work in flight, and a line's own pin beside lines without one.
+        # A line's own work in flight, and a line's own pin beside lines without one
+        # — and a line a configured rule handles, listed as the rule's (3.0.0).
         self.assertTrue(any(item["running"] for item in items))
-        self.assertTrue(any(item["maintenance"] for item in items))
-        self.assertTrue(any(item["maintenance"] is None for item in items))
-        # The two shapes the client tests field by field, and which nothing in the
-        # scene produces unless it is asked for.
-        self.assertTrue(any(node.get("maintenance") for node in nodes))
-        self.assertTrue(any(node["maintenance"] is None for node in nodes))
+        handled = {said["source"] for item in items for said in item["handled"]}
+        self.assertEqual(handled, {"person", "configuration"})
+        self.assertTrue(any(item["handled"] == [] for item in items))
+        self.assertTrue(all("maintenance" not in item for item in items))
+        # 2.11.0's `contribution` on an entry, in each of its shapes: a pinned line
+        # counts nothing by `maintenance`, a line a configured rule heals counts OK
+        # by `aggregation`, and a line no rule touches carries it as null.
+        lines = {(item["contribution"] or {}).get("by"): item for item in items}
+        self.assertEqual(set(lines), {"maintenance", "aggregation", "seen", None})
+        self.assertIsNone(lines["maintenance"]["contribution"]["code"])
+        self.assertEqual(lines["aggregation"]["contribution"]["code"], "OK")
+        self.assertEqual(lines["aggregation"]["code"], "WARN")
+        # a line a person marked seen counts OK in its node and keeps its color, its
+        # acknowledgment bound to the status it was set at and its occurrence
+        self.assertEqual((lines["seen"]["code"], lines["seen"]["contribution"]["code"]),
+                         ("ERROR", "OK"))
+        accepted, = lines["seen"]["handled"]
+        self.assertEqual((accepted["kind"], accepted["status"], accepted["occurrence"],
+                          accepted["counts_as"]),
+                         ("seen", "ERROR", "7/1", {"WARN": "OK", "ERROR": "OK"}))
+        self.assertIsNotNone(accepted["expires_at"])
+        # 3.0.0's `rule`: the pin or the configured rule that decided, which the
+        # entry's own `handled` lists by the same id
+        for by in ("maintenance", "aggregation", "seen"):
+            decided = lines[by]["contribution"]["rule"]
+            self.assertIn(decided, [said["id"] for said in lines[by]["handled"]])
+        # 2.12.0's `tags`: a node's own beside those from above, those from above
+        # alone, and none — the key absent.
+        self.assertTrue(any(node.get("tags") == ["production", "rack-4"]
+                            for node in nodes))
+        self.assertTrue(any(node.get("tags") == ["production"] for node in nodes))
+        self.assertTrue(any("tags" not in node for node in nodes))
+        # What handles a node (3.0.0, in place of `maintenance`): a person's pin, a
+        # configured rule while it acts — on what the node passes up, and on its
+        # lines — and nothing, on most nodes.
+        kinds = {(said["kind"], said["source"], said.get("level"))
+                 for node in nodes for said in node["handled"]}
+        self.assertEqual(kinds, {("maintenance", "person", None),
+                                 ("seen", "person", None),
+                                 ("aggregation", "configuration", "node"),
+                                 ("aggregation", "configuration", "lines")})
+        self.assertTrue(any(node["handled"] == [] for node in nodes))
+        self.assertTrue(all("maintenance" not in node for node in nodes))
         runs = [node["run"] for node in nodes if node.get("run")]
         self.assertTrue(any(run.get("frequency_seconds") for run in runs))
         self.assertTrue(any(run.get("stale_after_seconds") for run in runs))
@@ -255,19 +377,38 @@ class GoldenEnvelopeTests(TestCase):
         self.assertEqual(never["code"], "UNDEFINED")
         # Every rule that names a contribution, each on a node of its own. Three
         # *withhold* the node, with a null `code` — a pin, a shield, a node that has
-        # never reported — and one *transforms* it, with a real code: 2.2.0's two
-        # shapes of one field.
+        # never reported — and two *transform* it, with a real code — damping, and
+        # a configured rule (2.11.0): 2.2.0's two shapes of one field.
         rules = {node["contribution"]["by"]: node["contribution"]
                  for node in nodes if node["contribution"]}
-        self.assertEqual(set(rules),
-                         {"maintenance", "dependency", "undefined", "damping"})
+        self.assertEqual(set(rules), {"maintenance", "dependency", "undefined",
+                                      "damping", "aggregation", "seen"})
         self.assertIsNone(rules["maintenance"]["code"])
         self.assertIsNone(rules["dependency"]["code"])
         self.assertIsNone(rules["undefined"]["code"])
         self.assertIsNotNone(rules["damping"]["code"])
+        # the rule that decided, where one pin or one configured rule did, and null
+        # for a mechanism
+        self.assertEqual(rules["maintenance"]["rule"], PIN_IDS[0])
+        self.assertEqual(rules["aggregation"]["rule"], "staging advises")
+        self.assertEqual(rules["seen"], {"code": "OK", "by": "seen",
+                                         "rule": PIN_IDS[2]})
+        # a node a person marked seen keeps its color; its acknowledgment has no
+        # end and no occurrence, a node's own failure being its failing stretch
+        seen, = [node for node in nodes
+                 if (node["contribution"] or {}).get("by") == "seen"]
+        accepted, = seen["handled"]
+        self.assertEqual((seen["code"], accepted["status"], accepted["occurrence"],
+                          accepted["expires_at"]), ("ERROR", "ERROR", None, None))
+        self.assertEqual({rules[by]["rule"] for by in
+                          ("dependency", "undefined", "damping")}, {None})
         damped, = [node for node in nodes
                    if (node["contribution"] or {}).get("by") == "damping"]
         self.assertNotEqual(damped["code"], damped["contribution"]["code"])
+        healed, = [node for node in nodes
+                   if (node["contribution"] or {}).get("by") == "aggregation"]
+        self.assertEqual((healed["code"], healed["contribution"]["code"]),
+                         ("WARN", "OK"))
         # The measurement at the run: the object named, and the record beside it.
         measured, = [node for node in nodes if node["record"]]
         self.assertTrue(measured["subject"])
@@ -283,6 +424,22 @@ class GoldenEnvelopeTests(TestCase):
         self.assertIsNone(shielded["contribution"]["code"])
         self.assertEqual(shielded["code"], "ERROR")
         self.assertTrue(any(node["shielded_by"] is None for node in nodes))
+        # 2.9.0's two periods, each beside its code: a branch's that is a bound and
+        # one a change began, naming the node it was; a node's own of both kinds; and
+        # each absent where there is none — `period` on a leaf, `own_period` on a
+        # container that declares nothing.
+        periods = [node["period"] for node in nodes if "period" in node]
+        self.assertTrue(any(period.get("before") for period in periods))
+        self.assertTrue(any(period.get("by") and period.get("was")
+                            and period.get("cause") for period in periods))
+        own = [node["own_period"] for node in nodes if "own_period" in node]
+        self.assertTrue(any(period.get("before") for period in own))
+        self.assertTrue(any(period.get("was") and period.get("cause")
+                            for period in own))
+        self.assertTrue(any(not node["children"] and "period" not in node
+                            for node in nodes))
+        self.assertTrue(any(node["children"] and "own_period" not in node
+                            for node in nodes))
         # 2.6.0's `refused`: a line whose record the seam refused carries a null
         # record and the reason beside it, and every other line carries null.
         refused, = [item for item in items if item["refused"]]
@@ -490,8 +647,8 @@ class GoldenSeriesTests(TestCase):
                          {"schema_version", "volatile", "request", "answer"})
         self.assertEqual(artifact["request"], SERIES_REQUEST)
         self.assertEqual(artifact["volatile"], SERIES_VOLATILE)
-        self.assertEqual(artifact["schema_version"], 2)
-        self.assertEqual(contract.golden_series()["schema_version"], 2)
+        self.assertEqual(artifact["schema_version"], 3)
+        self.assertEqual(contract.golden_series()["schema_version"], 3)
 
     def test_every_time_a_reading_carries_is_a_value_a_reader_decodes(self):
         """The scene fixes every instant, so nothing a reading carries is blanked:
@@ -581,7 +738,7 @@ def rewrite() -> None:
     tree = StatusTree()
     build_scene(tree)
     artifact = {
-        "schema_version": 2,
+        "schema_version": api.SCHEMA_VERSION,
         "volatile": VOLATILE,
         "envelope": contract.normalize(envelope_from(tree), VOLATILE),
     }
@@ -593,7 +750,7 @@ def rewrite() -> None:
         engine = build_series_scene(tree, Path(directory))
         answer = series_from(tree, engine)
     series = {
-        "schema_version": 2,
+        "schema_version": api.SCHEMA_VERSION,
         "volatile": SERIES_VOLATILE,
         "request": SERIES_REQUEST,
         "answer": contract.normalize(answer, SERIES_VOLATILE),

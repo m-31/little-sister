@@ -7,9 +7,9 @@
 # host's node: an `ssh` transport leaf (OK; WARN on an ssh advisory such as the
 # post-quantum key-exchange notice; ERROR on a failed connection) plus one leaf
 # per metric — disk / memory / cpu / load — as siblings, each graded by its
-# own pair (`max_disk`, …). Each leaf ships a built-in `about` describing what it measures and
-# how it grades (shown in the dashboard hover card; override per node in
-# `nodes.yaml`, ADR-0025). Auth must be non-interactive (BatchMode): set up key auth
+# own pair (`max_disk`, …). Each leaf ships an `about` that says what to do when it
+# warns or fails, and a handbook, read on its own tab, that says how to read it and what
+# to do at length (ADR-0133). Auth must be non-interactive (BatchMode): set up key auth
 # and a known host key first; the metrics need no root. See checks/README.md and
 # docs/adr/0009-per-profile-metrics-scripts.md.
 
@@ -76,14 +76,27 @@ profile: linux               # host OS / userland — selects the metrics script
 # max_load_warn: 0.8         # 1-min load average per CPU core
 # max_load_error: 1.0
 
+# --- how it first looks on the wall (optional) ----------------------------
+# The type proposes a host's leaves as chips, and a disk's filesystems where
+# `disk_path` fans it out (ADR-0128): each chip shows its state, and a failing one
+# opens by its card's budget. `chips: false` here opens a host's leaves; for a disk's,
+# write `chips: false` in its entry of the `subnodes:` block below, beside its labels.
+# On a host node another check shares, this speaks for its own leaves alone; for
+# every leaf of the node at once, say in `nodes.yaml`.
+# chips: false
+
 # --- display text (optional) -----------------------------------------------
-# Each leaf ships a built-in `about` explaining what it measures. Override it — or
-# add a `title` — per aspect here (ADR-0025); an omitted field keeps the built-in
-# default, and a nodes.yaml entry still overrides above this, per path.
+# Each leaf ships an `about` and a handbook. Override either — or add a `title` — per
+# aspect here (ADR-0025, ADR-0133); an omitted field keeps the shipped one, `{default}`
+# places it in yours, and a nodes.yaml entry still overrides above this, per path. What
+# holds for every volume of a `disk` that fans out you give as the disk's `details`,
+# which reach each volume beneath it; a volume carries its mount point.
 # subnodes:
 #   disk:
 #     title: Data volume
 #     about: |
-#       Space used on **/System/Volumes/Data** (the home directories live here).
+#       {default} Ask the storage team before deleting anything under /srv.
+#     details:
+#       owner: Storage team
 #   load:
-#     about: 1-minute load average per core; this NAS idles high, so warn at 2.0.
+#     handbook: handbook/nas-load.md   # your own, in the configuration's handbook/

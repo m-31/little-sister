@@ -19,13 +19,39 @@
     leftover from before the renderer landed. The record is data, not Markdown, and
     is shown in the one list a line's record is shown in (`_record_list.html`).
 
+    Beside them, where the node says something of itself, its **About** card
+    (`_about_card.html`, ADR-0133 decision 1): the facts stand in a column of their
+    own at their measure, and the card in a second one to the right of *Time*,
+    reaching down beside them, where the block is wide enough for both — a leaf's
+    page widens for it (`check.html`). Where the block is narrower the two columns
+    are one: the facts' own column gives its cards to the block (`display:
+    contents`), and the card stands among them before *Configuration*, which is
+    there to look things up, where the card answers what the reader came with
+    (`overview.css`). The card follows the facts in the document, so a narrow
+    block orders it in. A node with nothing to say of itself has neither the second
+    column nor the card, and its block is as it was; one that has nothing else, a
+    container with an `about` that no check has written or the root, whose overview
+    has no facts (``facts_shown`` false, from `_status_grid.html`), has the card
+    alone, at the facts' measure.
+
     Context: ``node`` (a StatusSnapshot), ``branch`` (its path), ``since`` (the
-    start of the current own-status period, or None), ``made_by`` (the node beneath
-    it that makes what it shows, or None) and ``node_curves`` (the curves that stand
+    start of the current own-status period, or None), ``shows`` (the period of what
+    a node above others shows, or None), ``made_by`` (the node beneath it that makes
+    what it shows, or None) and ``node_curves`` (the curves that stand
     on the node, or None — and allowed to be absent, for a caller that has no engine
     to ask). Never included by the kiosk, which keeps none of this. -#}
 {%- from '_record_list.html' import record_list %}
 {%- from '_series.html' import curve %}
+{%- from '_status_cue.html' import status_cue %}
+{%- from '_rule_block.html' import rule_mark, handled_mark with context %}
+{%- set facts_shown = facts_shown if facts_shown is defined else true %}
+{%- set with_about = about_card(node) %}
+{%- set columns = with_about and facts_shown %}
+{%- if columns %}
+<div class="node-facts__cols">
+<div class="node-facts__main">
+{%- endif %}
+{%- if facts_shown %}
 <div class="card mb-3">
     <div class="card-body">
         <h3 class="h6 text-muted text-uppercase">Time</h3>
@@ -46,8 +72,8 @@
             to show its status then, which is not when its check began to read it;
             an edit of a pin begins no period, so a pinned node holds *since* its
             pin was set (decisions 6 and 8). So does one that a line's pin began:
-            *when a line was silenced*, *when a line's maintenance ended*
-            (ADR-0107 decision 3). The words are `_began`'s, in `app.py`, and
+            *when a line's pin was set*, *when a line's maintenance ended*
+            (ADR-0107 decision 3, its words ADR-0135 decision 2). The words are `_began`'s, in `app.py`, and
             the Copy document writes the same. It read *from … until …*, and the
             second instant was the latest reading, never an end: an active failure
             read as one that had stopped, and a node read once in its period as
@@ -90,16 +116,38 @@
             **A period is stated wherever there is one** (ADR-0115 decision 6): a
             pinned node that no check has written has shown *maintenance* since its
             pin, and *Not yet observed* alone would say nothing of that. The
-            sentence is for a node with neither an observation nor a period. -#}
-        {%- if node.derived %}
-            <p class="mb-1">Status <strong>{{ node.code.name.lower() }}</strong>, from
-            {%- if made_by %} <a class="made-by" href="{{ url_for('status', branch=made_by.path | url_branch) }}">{{ made_by.name }}</a> beneath it
+            sentence is for a node with neither an observation nor a period.
+
+            **A node above others states first the period of what it shows**
+            (ADR-0132 decision 5): *Status error since 10:00*, the period the tree
+            keeps beside its log, so a branch that turned red from one node and
+            stays red from another says the first one's instant, not the second's.
+            The node beneath that makes it so keeps its own *since* only where that
+            began after the branch's — *Status error since 10:00, from load-fixtures
+            beneath it, error since 10:42, and 2 more* — and where one node made the
+            whole period the instant is said once: *Status error since 10:00, from
+            load-fixtures beneath it*. A well branch says *Status ok since …*, true
+            now of everything beneath it, and a bound is *since before …*. *Its own
+            status … since …* stays beneath it, and a container that declares
+            nothing says its observation there, as before. Where the period the tree
+            keeps is not of what the node shows — after a restart until the units
+            beneath it have run, and for the moment a reading has gone stale before
+            the tick dates it (decision 3) — the line says the status without a
+            *since*, and the node beneath with its own, as ADR-0123 decision 3 had
+            it. What began the period is History's and the Copy document's to say.
+            A pinned node's own status cancels what is beneath it, so its own period
+            is what it shows, and it keeps the one line it had: ``shows`` is None
+            there, as on a leaf (`_shows`, in `app.py`). -#}
+        {%- if shows %}
+            <p class="mb-1">Status <strong>{{ shows.status.name.lower() }}</strong>
+            {%- if shows.at %} since {% if shows.before %}before {% endif %}{{ shows.at | localtime }}{% endif %}
+            {%- if made_by %}, from <a class="made-by" href="{{ url_for('status', branch=made_by.path | url_branch) }}">{{ made_by.name }}</a> beneath it
                 {%- if made_by.observed %}, stale, last observed {{ made_by.observed | localtime }}
                 {%- elif made_by.since %}, {{ made_by.since.status.name.lower() }} since {% if made_by.since.before %}before {% endif %}{{ made_by.since.at | localtime }}
                     {%- if made_by.since.began %}, {{ made_by.since.began }}{% endif %}
                 {%- endif %}
-                {%- if made_by.more %}, and {{ made_by.more }} more{% endif %}
-            {%- else %} the nodes beneath it
+                {%- if made_by.more %}, and {% if why is defined and why %}<a href="#why">{{ made_by.more }} more</a>{% else %}{{ made_by.more }} more{% endif %}{% endif %}
+            {%- elif node.derived %}, from the nodes beneath it
             {%- endif %}</p>
         {%- endif %}
         {% if since %}
@@ -111,8 +159,9 @@
             {% if node.timestamp is not none %}
             <p class="mb-1">Last observed {{ node.timestamp | localtime }}</p>
             {% endif %}
-        {% elif node.timestamp is none %}
+        {% elif node.timestamp is none and not (shows and shows.at) %}
             <p class="mb-1 text-muted">Not yet observed.</p>
+        {% elif node.timestamp is none %}
         {% else %}
             <p class="mb-1">Observed {{ node.timestamp | localtime }}.</p>
         {% endif %}
@@ -192,6 +241,65 @@
             that ask the same question, and no second way there. -#}
     </div>
 </div>
+{%- if why is defined and why %}
+{#- **Why a branch has its color** (ADR-0135 decision 7): a card of its own right
+    after Time, titled by its question, wherever the branch fails or holds something
+    handled. First what counts — each part whose failure reaches the branch, with
+    the status it counts as and since when, errors first and the longest first —
+    then what is handled beneath it, the ringed diamond and the total, grouped by
+    job under its mark, each rule with the part it stands on, what that reads
+    where it fails, who set it and until when, linked to where it stands, each list
+    showing its first rows and folding the rest. Time's *and 2 more* links here. A
+    node with rules of its own keeps them as the blocks at the head of its frame
+    (ADR-0104 decision 8). -#}
+{%- macro why_part(part) -%}
+<li>{{ status_cue(part.status) }} {% if part.own %}Its own reading{% else %}<a href="{{ url_for('status', branch=part.path | url_branch) }}">{{ part.name }}</a>{% endif %}, {{ part.status.name.lower() }}
+{%- if part.observed %}, stale, last observed {{ part.observed | localtime }}
+{%- elif part.since %} since {% if part.since.before %}before {% endif %}{{ part.since.at | localtime }}{% endif %}</li>
+{%- endmacro %}
+{%- macro why_rule(row) -%}
+<li>{% if row.slug %}<a href="{{ url_for('status', branch=row.path | url_branch, reason=row.slug) }}#pinned-reason">a line</a> of <a href="{{ url_for('status', branch=row.path | url_branch) }}">{{ row.name }}</a> — {{ row.line | markdown_inline(node=row.path) }}{% else %}<a href="{{ url_for('status', branch=row.path | url_branch) }}">{{ row.name }}</a>{% endif %}
+{%- if row.reads %}, reads {{ row.reads.name.lower() }}{% endif %}
+{%- if row.rule %}, counts {{ row.rule.counts.name.lower() if row.rule.counts else 'nothing' }} · by the rule <strong>{{ row.rule.rule.name }}</strong> since {{ row.rule.rule.since.isoformat() }}
+{%- else %} · by <strong>{{ row.entry.set_by or 'an admin' }}</strong> until {{ row.entry.expires_at | localtime }} · {{ row.entry.expires_at | time_left }}{% endif %}</li>
+{%- endmacro %}
+{#- A list of the card's, its first `why.open` rows open and the rest folded beneath
+    *N more*, the browser's own disclosure, as History folds its earlier periods. -#}
+{%- macro why_list(rows, row_macro) -%}
+<ul class="why-list">
+{%- for row in rows[:why.open] %}
+    {{ row_macro(row) }}
+{%- endfor %}
+</ul>
+{%- if rows | length > why.open %}
+<details class="why-more">
+    <summary class="small text-muted">{{ rows | length - why.open }} more</summary>
+    <ul class="why-list">
+    {%- for row in rows[why.open:] %}
+        {{ row_macro(row) }}
+    {%- endfor %}
+    </ul>
+</details>
+{%- endif %}
+{%- endmacro %}
+<div class="card mb-3 why-card" id="why">
+    <div class="card-body">
+        <h3 class="h6 text-muted text-uppercase">{{ why.title }}</h3>
+        {%- if why.counting %}
+        <p class="mb-1">What counts{% if why.counting | length > 1 %}, {{ why.counting | length }} parts{% endif %}:</p>
+        {{ why_list(why.counting, why_part) }}
+        {%- endif %}
+        {%- if why.handled %}
+        <p class="mb-1 why-card__handled">{{ handled_mark() }}{{ why.handled | length }} handled beneath it</p>
+        {%- for job, rows in why.by_job %}
+        <p class="mb-1 why-card__job">{{ rule_mark(job) }}{{ 'In maintenance' if job == 'maintenance' else 'By a rule' }}</p>
+        {{ why_list(rows, why_rule) }}
+        {%- endfor %}
+        {%- endif %}
+    </div>
+</div>
+{%- endif %}
+{%- endif %}
 
 {% if node.record %}
 {#- **What this run measured** (ADR-0085): the reading the node's code, lines and
@@ -244,16 +352,23 @@
 <div class="card mb-3">
     <div class="card-body">
         <h3 class="h6 text-muted text-uppercase">Report</h3>
-        <div class="md-body">{{ node.report | markdown }}</div>
+        <div class="md-body">{{ node.report | markdown(node=node.path) }}</div>
     </div>
 </div>
 {% endif %}
 
 {% if node.config %}
-<div class="card mb-3">
+<div class="card mb-3 node-facts__config">
     <div class="card-body">
         <h3 class="h6 text-muted text-uppercase">Configuration</h3>
-        <div class="md-body text-muted">{{ node.config | markdown }}</div>
+        <div class="md-body text-muted">{{ node.config | markdown(node=node.path) }}</div>
     </div>
 </div>
 {% endif %}
+{%- if columns %}
+</div>
+{% include '_about_card.html' %}
+</div>
+{%- elif with_about %}
+{% include '_about_card.html' %}
+{%- endif %}

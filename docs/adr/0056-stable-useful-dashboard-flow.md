@@ -1,8 +1,7 @@
 # ADR-0056 — Dashboard layout follows stable, useful flow
 
 - **Status:** Accepted
-- **Date:** 2026-10-18 (accepted 2026-08-15)
-- **Supersedes:** [ADR-0024](0024-dashboard-layout.md)
+- **Date:** 2026-10-25 (accepted 2026-08-15)
 - **Related:** [ADR-0005](0005-dashboard-freshness-and-self-monitoring.md)
   (the `little-sister` heartbeat),
   [ADR-0014](0014-maintenance-persistence.md) (maintenance pins),
@@ -11,7 +10,12 @@
   [ADR-0076](0076-the-instance-node-is-a-branch.md) (the branch the strip rolls up),
   [ADR-0127](0127-the-wall-is-a-tree-and-a-click-opens-or-closes-a-node.md) (the tree
   that replaces dense mode's switch, and the folds that replace `branch_cap`),
-  [ADR-0128](0128-where-a-nodes-first-look-comes-from.md) (the first look this prices).
+  [ADR-0128](0128-where-a-nodes-first-look-comes-from.md) (the first look this prices,
+  the built-in one of decision 2 among them),
+  [ADR-0135](0135-a-handled-part-keeps-its-true-color-and-every-surface-says-by-what.md) (decisions 6 and 8, the pill,
+  the pip and the page they lead to),
+  [ADR-0138](0138-a-viewer-may-pack-a-levels-boxes.md) (a viewer's `boxes: packed`,
+  whose plan this record's bands price as the page will be packed).
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -22,10 +26,10 @@ closes every hole also makes a card's position depend on other cards' live heigh
 so an incident can rearrange the wall while somebody is reading it. The layout must
 therefore remain a function of stable tree facts, not rendered pixels.
 
-ADR-0024 bounded height with reason caps, chips and branch folds, and later let a
-large root spend spare outer tracks. Its first column allocator used visible node
-count, a 16-node entry price and one maximum branch factor. Live fixtures exposed
-five places where that approximation and useful rendered width diverged:
+Height has been bounded since 2026-07-19 with reason caps, chips and branch folds, and
+a large root was later let spend spare outer tracks. The first column allocator used
+visible node count, a 16-node entry price and one maximum branch factor. Live fixtures
+exposed five places where that approximation and useful rendered width diverged:
 
 - configured `reason_cap: 30` makes potential reason hosts much taller without
   changing the number of nodes;
@@ -37,9 +41,8 @@ five places where that approximation and useful rendered width diverged:
 - the fragment shipped 32 complete plans, including 2,560 integers for 80 roots,
   while an arbitrary 16/17-node boundary decided who could compete for every spare.
 
-The durable part of ADR-0024 is the stable-position constraint and its density
-tools. The allocation approximation is replaced here; the rest is restated so this
-record is complete on its own.
+The stable-position constraint and its density tools stand, each below with the date
+it was decided; the allocation approximation is replaced here.
 
 ## Decision
 
@@ -53,20 +56,26 @@ or a box drawn by a status or by a click do not participate: a click makes a car
 taller or shorter where it stands. A node-set, explicit filter/depth or viewport change
 may reflow; a status-only poll may not.
 
+The rows, and the stable position they keep, are the library's look, `boxes: rows`: a
+viewer may choose `boxes: packed` ([ADR-0138](0138-a-viewer-may-pack-a-levels-boxes.md)),
+where each box stands beneath the shortest column by the heights the page was drawn with
+and keeps its column through a refresh and a click — the packing set aside below,
+offered as a choice and held between draws.
+
 Bound the remaining height variance:
 
 1. Dashboard reason blocks use the configured line budget and a sparse card keeps
    the established minimum-height floor.
 2. A node is a chip or a box, closed or open by a click
    ([ADR-0127](0127-the-wall-is-a-tree-and-a-click-opens-or-closes-a-node.md)), and
-   how each starts is its configuration's. Where nobody speaks for a level, a quiet
-   descendant leaf is a compact name-and-state chip and a warn/error leaf a full box
-   with its reason — the density the page drew before the tree — until the built-in
-   look is ADR-0128's. A failure's box is never folded: it opens its way
-   within its card's budget of three, and past it is a red chip with its count; and
-   within item 1's line budget a box shows its failing lines first, errors, then
-   warnings, then the rest, each in its check's order (ADR-0127 decision 6). A chip's
-   detail is one click away and its metadata remains inspectable.
+   how each starts is its configuration's. Where nobody speaks for a level, the
+   built-in look is ADR-0128's (decision 2): the level starts open, its quiet leaves
+   boxes with their lines, and a level that, opened, would draw more than thirty boxes
+   starts as chips, priced as the configured look is. A failure's box is never folded:
+   it opens its way within its card's budget of three, and past it is a red chip with
+   its count; and within item 1's line budget a box shows its failing lines first,
+   errors, then warnings, then the rest, each in its check's order (ADR-0127 decision
+   6). A chip's detail is one click away and its metadata remains inspectable.
 3. The reserved `/little-sister` heartbeat leaves the card grid for a fit-content
    status-strip pill, and it is lifted **with its children**: the path is a branch,
    one child per contributor ([ADR-0076](0076-the-instance-node-is-a-branch.md)), and
@@ -84,22 +93,25 @@ The heartbeat sits in a right-aligned band at the top of `#status-grid`, beneath
 the view controls and inside the polled fragment. Its watching-eye mark distinguishes
 self-monitoring from ordinary nodes, and a stale heartbeat stays vivid.
 
-At a branch level nobody speaks for, `branch_cap` limits only quiet full child boxes:
-surplus boxes remain in the DOM behind an in-place `+N more`, a warn/error box is
-never folded, and the tab's map keeps an open fold across a poll swap. `branch_cap` and
-its `+N more` leave when the built-in look becomes ADR-0128's, and chips and the healthy
-fold are then the folds (ADR-0127 decision 6). The depth control and the
-chips switch have left the band with their cookies (ADR-0127 decision 7).
+At a branch level nobody speaks for, as at every other, the folds are chips and the
+healthy fold (ADR-0127 decision 6): there is no `branch_cap` and no `+N more`, a
+warn/error box is never folded, and the tab's map keeps a fold a viewer opened across a
+poll swap. The depth control and the chips switch have left the band with their cookies
+(ADR-0127 decision 7).
 
 ### Maintenance visibility — decided 2026-07-25
 
 Maintenance is computed from the unfiltered snapshot so shallow depth and hide
 filters cannot erase it. A card whose subtree contains a pin carries an accessible
-maintenance pip opening the scoped list. The global list is folded into a live count
-pill beside the heartbeat; its capped popover links onward to the complete read-only
-`/maintenance` page and the pill itself is the no-JavaScript link. Maintenance is
-not idle and is not hidden by *hide idle*. These surfaces do not change the snapshot,
-maintenance side-table or JSON envelope.
+maintenance pip, the ringed diamond, opening the card's own list. The global list is
+folded into a live count pill beside the heartbeat, the short form of what is handled
+([ADR-0135](0135-a-handled-part-keeps-its-true-color-and-every-surface-says-by-what.md)
+decision 6): a ringed diamond and the number of rules that stand — *2 handled*, its
+words by job in its name, *2 handled: 1 node in maintenance, 1 line in maintenance*.
+Its capped popover links onward to the complete read-only page of what is handled,
+*Handled* at `/handled` (ADR-0135 decision 8), and the pill itself is the no-JavaScript
+link. Maintenance is not idle and is not hidden by *hide idle*. These surfaces do not
+change the snapshot, maintenance side-table or JSON envelope.
 
 ### Reason separators — decided 2026-07-25
 
@@ -191,8 +203,11 @@ sixty entries, under a kilobyte, for the two-root live shape; still one band for
 eighty flat roots). A deployment that wants none of this sets `settings.yaml`
 `dashboard_columns: plain`, which withholds the plan and leaves the auto-fill grid —
 byte-for-byte the no-JavaScript page; `flow` is the default, anything else warns and
-falls back. That key is deliberately an enum, not a switch: a per-viewer value and a
-possible `packed` mode are later steps of the same control.
+falls back. That key is deliberately an enum, not a switch. Packing is no value of it
+but a look a viewer chooses, `boxes: packed` (ADR-0138): the plan is this record's under
+`rows`, and under `packed` the server prices it as the page will be packed, by this
+record's bands, track floor and held count, where a span is not a row's spare tracks
+(ADR-0138 decision 5), and each box's column is the browser's.
 
 ### Explicit track counts — decided 2026-08-15
 
@@ -311,24 +326,24 @@ worth that cost only if per-card reflow proves to annoy in practice.
   at-a-glance quiet reason text for density; both keep their original fallbacks.
 - The first look pays: measured on one deployment's tree at 1,280 pixels, the wall
   priced by its first look is 3.4 screens where pricing every node open makes it 4.1.
-- Known and deliberate: a level nobody speaks for is priced as full box-and-reason
-  hosts, though the density draws its quiet leaves as chips, so the model overestimates
-  its height and can spend width the paint gains little from. That is the stability
-  trade decided above — a chip drawn by a status must not move cards — and it is
-  recorded rather than tuned.
+- A level nobody speaks for is priced as the configured look is: the built-in look
+  draws its quiet leaves as boxes and starts a level that would draw more than thirty
+  boxes as chips, by the tree's shape alone and never by a status, so the model prices
+  what the page first draws.
 
 ## Alternatives considered
 
 - **Equal-height uniform tiles** — maximal stability and balance, but wastes space
   in the interactive overview. It remains a possible fixed-geometry kiosk design.
 - **CSS columns, masonry or dense packing** — closes holes but makes position depend
-  on live height, violating the stable-position rule.
+  on live height, violating the stable-position rule. Packing is offered instead as a
+  viewer's look, `boxes: packed` (ADR-0138), each box keeping its column between draws.
 - **Live reason counts or browser-measured heights** — match one paint precisely and
   make a status poll move cards. Rejected at the input boundary.
 - **Visible node count plus a 16-node entry price and maximum branch factor** —
   deterministic but discontinuous at 16/17, blind to reason-cap configuration, and
-  unable to say which nesting widths are useful. This is the superseded ADR-0024
-  allocation.
+  unable to say which nesting widths are useful. It is the allocation this record
+  replaces.
 - **A `wide` or `weight` hint in `nodes.yaml`** — stable but couples deployment
   metadata to presentation and ages as a check's topology changes. The first look's
   keys cross that line on purpose: they are the web page's settings, not metadata on

@@ -36,7 +36,7 @@
                         {%- if group.node %}{{ status_cue(group.node.code, labeled=true) }}{% endif %}
                         <a class="ls-series-group__node" href="{{ url_for('status', branch=group.path) }}">{{ group.name }}</a>
                         {%- if group.node and group.node.reason %}
-                        <span class="ls-series-group__said md-body">{{ group.node.reason[0] | markdown_inline }}</span>
+                        <span class="ls-series-group__said md-body">{{ group.node.reason[0] | markdown_inline(node=group.node.path) }}</span>
                         {%- endif %}
                     </h2>
                     {#- Every curve's time axis holds the same links: the first curve's

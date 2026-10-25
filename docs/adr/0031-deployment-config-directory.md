@@ -1,16 +1,27 @@
 # ADR-0031 — One deployment config directory, split by aspect
 
 - **Status:** Accepted
-- **Date:** 2026-08-29 (accepted 2026-08-01)
+- **Date:** 2026-10-25 (accepted 2026-08-01)
 - **Related:** [ADR-0015](0015-check-discovery-union.md) (the path-list this generalizes),
   [ADR-0012](0012-node-metadata.md) (`nodes.yaml`, the first non-check tenant),
   [ADR-0030](0030-curated-links.md) (`links.yaml`, the third),
-  [ADR-0006](0006-config-file-and-timezones.md) (`config.yaml`),
-  [ADR-0020](0020-user-list-location.md) (`users.yaml` — its *decision* stands, only its
-  default path moves), [ADR-0003](0003-config-and-secrets-via-env-file.md) (`.env`, which
+  [ADR-0120](0120-every-stored-time-is-an-instant.md) (decision 7, the settings file),
+  [ADR-0046](0046-user-list-from-the-configuration-roots.md) (the user list, whose
+  only input is the `users` aspect), [ADR-0003](0003-config-and-secrets-via-env-file.md) (`.env`, which
   stays out), [ADR-0014](0014-maintenance-persistence.md) (`var/`, which also stays out),
   [ADR-0021](0021-script-resolution.md) (packaged defaults with an override — the same
-  shape, one level down).
+  shape, one level down),
+  [ADR-0137](0137-a-deployment-says-in-a-table-how-a-part-counts-above-it.md) (the
+  `aggregation` aspect, a file in each root, every root's read),
+  [ADR-0133](0133-a-node-says-what-it-is-in-a-card-and-at-length-in-a-handbook.md)
+  (decision 3: the `handbook` aspect, a directory of the files a node's handbook names),
+  [ADR-0139](0139-a-node-carries-every-tag-written-for-it-or-above-it.md) (the `tags`
+  aspect, decision 3, and the tags of `nodes.yaml`, which add up across the roots,
+  decision 2), [ADR-0038](0038-declarative-action-list.md) (the `actions` aspect) and
+  [ADR-0048](0048-an-assembled-content-security-policy.md) (decision 5: the `csp`
+  aspect), each a root's to add to,
+  [ADR-0035](0035-registering-a-config-aspect.md) (the seam through which a dependent
+  package registers an aspect of its own).
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -19,8 +30,8 @@ of thing — check configs, `nodes.yaml` (node metadata, which `load_checks` car
 skip-list to step over, [ADR-0012](0012-node-metadata.md)), and `links.yaml` if
 [ADR-0030](0030-curated-links.md) is accepted. The deployment's other authored inputs sit
 *beside* the directory in the working directory: `config.yaml`
-([ADR-0006](0006-config-file-and-timezones.md)), `users.yaml`
-([ADR-0020](0020-user-list-location.md)), `.env`
+([ADR-0120](0120-every-stored-time-is-an-instant.md) decision 7), `users.yaml`
+([ADR-0046](0046-user-list-from-the-configuration-roots.md)), `.env`
 ([ADR-0003](0003-config-and-secrets-via-env-file.md)). The web-customization phase adds
 another — a brand, which is a little data plus some asset files.
 
@@ -58,21 +69,39 @@ two of them."
    to put in `config/checks.yaml`, and inventing one would mean either a file whose plural
    name holds one check or a second, list-shaped way to declare checks. This is the rule
    applied, not an exception to it. `links` takes the directory form for the other reason:
-   only once it ships icon files of its own.
+   only once it ships icon files of its own. **`handbook` is always a directory** for the
+   first reason: Markdown files, each a node's handbook that a statement names —
+   `handbook: handbook/ec2.md` in a check's file or in `nodes.yaml` — relative to the
+   root the statement is in, and never found by a node's path
+   ([ADR-0133](0133-a-node-says-what-it-is-in-a-card-and-at-length-in-a-handbook.md)
+   decision 3). `aggregation`, the deployment's configured rules, which say how a part
+   of the tree counts above it
+   ([ADR-0137](0137-a-deployment-says-in-a-table-how-a-part-counts-above-it.md)
+   decision 2), and `tags`, the known tags, each with a line of what it means, which
+   gives no node a tag
+   ([ADR-0139](0139-a-node-carries-every-tag-written-for-it-or-above-it.md) decision 3),
+   are always a file.
 
    ```
    config/
      checks/            many *.yaml — one per check
+     actions.yaml       the configured actions
+     aggregation.yaml   the configured rules
+     csp.yaml           what the deployment adds to the content policy
+     handbook/          the handbooks, one Markdown file each
+     links.yaml         curated links
      nodes.yaml         node metadata
-     links.yaml         curated links   — joins the table with ADR-0030, see below
-     settings.yaml      what config.yaml is today
+     settings.yaml      the settings, once config.yaml
+     tags.yaml          the known tags
      users.yaml         the user list
    ```
 
 3. **An aspect joins the table when its loader lands, not before.** A name the library
    recognizes but nobody reads would be a worse lie than the honest "not a known aspect"
-   warning, so `links` is absent until [ADR-0030](0030-curated-links.md) brings the loader
-   that reads it — until then a `links.yaml` warns, which is true.
+   warning, so an aspect joins with the record that brings the loader reading it —
+   `links` with [ADR-0030](0030-curated-links.md), and each that came after it with the
+   record decision 4 names beside it — and until it does, a file of its name warns, which
+   is true.
 
    **Aspect names are known to the library, not discovered.** A **candidate aspect** is a
    `*.yaml` / `*.yml` file or a directory; an unrecognized candidate **warns and is
@@ -88,8 +117,10 @@ two of them."
    — is not a candidate and passes in **silence**, which matters because the library
    itself ships `config/checks/README.md` into that tree and a permanent warning about a
    deployment's own documentation would train everyone to ignore the log. Nothing here
-   stops the monitor either way. (A registry seam in the shape of `CHECK_TYPES` is the
-   later move if plugin packages ever need to add an aspect; nothing needs it today.)
+   stops the monitor either way. A dependent package adds an aspect of its own through a
+   registry seam in the shape of `CHECK_TYPES`
+   ([ADR-0035](0035-registering-a-config-aspect.md)); the library's own aspects are the
+   floor it cannot move.
 
 4. **Combining rules stay per aspect.** The shared directory list deliberately does not
    impose one, because the aspects disagree for good reasons:
@@ -97,9 +128,14 @@ two of them."
    | aspect | across roots |
    |---|---|
    | `checks/` | union; overlapping node ownership is a hard error ([ADR-0015](0015-check-discovery-union.md)) — unchanged |
-   | `nodes.yaml` | per **field**, later root wins; an override is logged with both files named |
+   | `actions.yaml` | union: a site root adds its actions to a base root's ([ADR-0038](0038-declarative-action-list.md)) |
+   | `nodes.yaml` | per **field**, later root wins; an override is logged with both files named — an entry's `tags` excepted, which add up (below) |
    | `links` | groups merge by title, file order preserved ([ADR-0030](0030-curated-links.md)) |
+   | `handbook/` | nothing of its own: a root's statement names a file of its own root, and which statement wins is `nodes.yaml`'s rule per field and the check's ([ADR-0133](0133-a-node-says-what-it-is-in-a-card-and-at-length-in-a-handbook.md) decision 3) |
    | `settings.yaml` | shallow merge, later root wins **per key** — the file is a flat mapping of scalars, so this is well defined |
+   | `aggregation.yaml` | every root's file read, the root named last first, so that a site's root decides where it and a shared base pick one place — a later root winning, as everywhere else in the chain; a rule's name is unique across them ([ADR-0137](0137-a-deployment-says-in-a-table-how-a-part-counts-above-it.md) decision 2) |
+   | `tags.yaml` | every root's file read and added up, the later root's line winning for a tag two of them name, each tag keeping the place it was first named in ([ADR-0139](0139-a-node-carries-every-tag-written-for-it-or-above-it.md) decision 3) |
+   | `csp.yaml` | union: a site root adds its sources, and there is nothing to overwrite ([ADR-0048](0048-an-assembled-content-security-policy.md) decision 5) |
    | `users.yaml` | the **first** root that declares it wins entirely; a second is a warning |
 
    Users are the odd one deliberately: merging identities across layers is a security
@@ -117,7 +153,10 @@ two of them."
    override is logged at INFO with winner and loser named, because a silent winner decided
    by root order is indistinguishable from a bug. A later root can **override** a field but
    not **clear** it — an empty value means "not declared here", not "blank it" — which is
-   deliberate and the same reading every other layer of this precedence chain uses.
+   deliberate and the same reading every other layer of this precedence chain uses. One
+   field combines otherwise: an entry's `tags` add up across the roots, as tags add up
+   wherever they are written
+   ([ADR-0139](0139-a-node-carries-every-tag-written-for-it-or-above-it.md) decision 2).
 
 5. **`config.yaml` becomes `config/settings.yaml`, and `users.yaml` becomes
    `config/users.yaml`.** Moving them in the same change is the point — a deployment
@@ -187,6 +226,19 @@ two of them."
    the engine does not start and the header carries `engine_error` — because that is a typo
    in one file, already visible, and not an unconfigured deployment.
 
+   **Named on the startup record, the start going on — what describes a node, and a rule
+   that cannot apply.** A handbook is a node's metadata, which must not stop monitoring,
+   so a `handbook.yaml` is named on the startup record rather than refusing the start, as
+   is a file in `handbook/` that no statement names
+   ([ADR-0133](0133-a-node-says-what-it-is-in-a-card-and-at-length-in-a-handbook.md)
+   decision 3); so is what cannot be read in `tags.yaml`, a tag being a node's metadata
+   too ([ADR-0139](0139-a-node-carries-every-tag-written-for-it-or-above-it.md)
+   decision 3), and a rule in `aggregation.yaml` that cannot apply, the alarm it was to
+   quiet staying
+   ([ADR-0137](0137-a-deployment-says-in-a-table-how-a-part-counts-above-it.md)
+   decision 2). The program never writes `aggregation.yaml`, as it writes nothing in
+   `config/` (decision 6).
+
 8. **The override ladder is the house pattern.** Three features now share one shape —
    scripts ([ADR-0021](0021-script-resolution.md)), icons
    ([ADR-0030](0030-curated-links.md)), and the brand the customization phase will want:
@@ -241,8 +293,8 @@ two of them."
   installation and hostile for a real one: a file per check is what makes checks
   reviewable in a diff, and a single document cannot be layered per aspect.
 - **Discoverable aspects through a registry now**, so a dependent package could add one.
-  Over-built: nothing outside the library needs an aspect yet, and the shape is easy to
-  add once something does.
+  Over-built: nothing outside the library needed an aspect yet, and the shape was easy to
+  add once something did — [ADR-0035](0035-registering-a-config-aspect.md) adds it.
 - **Merging `users.yaml` across roots** like the other aspects. Rejected as the default —
   identity is where a surprising merge does the most damage.
 - **A one-release compatibility window** that loads the legacy layout with a deprecation

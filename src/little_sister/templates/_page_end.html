@@ -8,3 +8,8 @@
     as direct children of <body>. -#}
     </main>
 </div>
+{#- The shapes of the status cues, drawn once on every page: every cue that refers to
+    one — the wall's, and the sign a status written in braces is drawn as in any text
+    the page shows (ADR-0133 decision 5) — finds it here, outside whatever a refresh
+    swaps. -#}
+{% from '_status_cue.html' import cue_sprite %}{{ cue_sprite() }}

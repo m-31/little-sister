@@ -1,9 +1,9 @@
 # ADR-0063 — A node may decline the density trade (`show_when_quiet`)
 
 - **Status:** Accepted
-- **Date:** 2026-10-18 (accepted 2026-08-22)
-- **Related:** [ADR-0056](0056-stable-useful-dashboard-flow.md) (the chip, the
-  quiet-box fold, and the stability rule this must not disturb),
+- **Date:** 2026-10-25 (accepted 2026-08-22)
+- **Related:** [ADR-0056](0056-stable-useful-dashboard-flow.md) (the density's
+  chip and quiet-box fold, and the stability rule this must not disturb),
   [ADR-0012](0012-node-metadata.md) / [ADR-0017](0017-node-title.md) /
   [ADR-0055](0055-sibling-order.md) (the metadata lattice, and its non-prose
   precedent), [ADR-0025](0025-check-provided-subnode-metadata.md) (check-provided
@@ -13,28 +13,29 @@
   costs), [ADR-0029](0029-per-user-presentation-preferences.md) and
   [ADR-0062](0062-navigation-chrome-is-layout-behavior.md) (what stays the viewer's,
   and what was never a preference), [ADR-0019](0019-inspection-popover.md) (what a
-  chip still offers), [ADR-0008](0008-json-output-api.md) (JSON envelope, unchanged
-  here), [ADR-0061](0061-decoration-is-not-a-label.md) (a client draws its own chips),
+  chip still offers), [ADR-0080](0080-the-envelope-is-the-snapshot-published.md) (JSON
+  envelope, unchanged here), [ADR-0061](0061-decoration-is-not-a-label.md) (a client draws its own chips),
   [ADR-0118](0118-a-child-a-run-names-takes-nothing-declared-for-its-name.md) (a
   child that says a run names it takes nothing declared for its name),
   [ADR-0127](0127-the-wall-is-a-tree-and-a-click-opens-or-closes-a-node.md) (the wall as
   a tree: a click, ▤ and the folds a declared node starts outside of),
   [ADR-0128](0128-where-a-nodes-first-look-comes-from.md) (the first look's addresses,
-  `children:` among them, which the flag rides).
+  `children:` among them, which the flag rides, and decision 8's big level, which starts
+  as chips).
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
 
 The wall buys height by drawing quiet nodes small. The dense view did it with two
 compactions (ADR-0056): a quiet leaf is painted as a name-and-state **chip** rather than
-a box — "a chip trades at-a-glance quiet reason text for density" — and quiet full
-boxes past `branch_cap` fold behind an in-place *+N more*. The tree that replaces it
-([ADR-0127](0127-the-wall-is-a-tree-and-a-click-opens-or-closes-a-node.md)) does it by
-a node's first look ([ADR-0128](0128-where-a-nodes-first-look-comes-from.md)): its
-children start as chips where `chips` says so, and its healthy ones folded where
-`fold_ok` does. Neither hides a failure: the density exempts a warn/error node from both
-compactions, and in the tree a failing node is a red chip where it does not open its
-way.
+a box — "a chip trades at-a-glance quiet reason text for density" — and quiet full boxes
+past `branch_cap` fold behind an in-place *+N more*. The tree that replaces it
+([ADR-0127](0127-the-wall-is-a-tree-and-a-click-opens-or-closes-a-node.md)) does it by a
+node's first look ([ADR-0128](0128-where-a-nodes-first-look-comes-from.md)): its
+children start as chips where `chips` says so, or where nobody spoke for a level and it
+is big, and its healthy ones folded where `fold_ok` does. Neither hides a failure: the
+density exempts a warn/error node from both compactions, and in the tree a failing node
+is a red chip where it does not open its way.
 
 That prices every quiet node the same, and quiet nodes differ in what their lines
 *are*. Most reason text is diagnostic: it explains a problem, so while the node is
@@ -169,9 +170,9 @@ block is one map, shaped like the block itself.
 A declared node **starts open** whatever its parent's `chips` says, and **no healthy
 fold the configuration sets** — its parent's or its own — hides it or its quiet lines
 ([ADR-0127](0127-the-wall-is-a-tree-and-a-click-opens-or-closes-a-node.md) decision 5).
-Where the density still draws a level nobody spoke for, it is exempt from both of its
-compactions the way a failing node is: **never painted as a chip**, and **never counted
-a surplus quiet box**, so the `branch_cap` fold cannot put it behind *+N more*.
+The exemption holds against every level that starts as chips, a big one nobody spoke for
+among them ([ADR-0128](0128-where-a-nodes-first-look-comes-from.md) decision 8): a
+declared node starts open and counts as the box it draws.
 
 The exemption is from every fold or from none: a node kept out of the chip and then
 folded shows *less* than the chip did — exemption from one compaction and not the other
@@ -197,7 +198,7 @@ declared node is priced open, the box it starts as.
   tab and no longer, in the tab's own map (ADR-0127 decision 9), and no per-node
   override joins the settings menu (the ADR-0029 / ADR-0062 line).
 - **Not in the JSON envelope here.** The snapshot carries it and the web renders it;
-  the envelope (ADR-0008) is unchanged, and a client drawing its own chips is
+  the envelope (ADR-0080) is unchanged, and a client drawing its own chips is
   entitled to its own decision (ADR-0061) until the field joins the contract as its
   own deliberate change. That change is
   [ADR-0080](0080-the-envelope-is-the-snapshot-published.md), where `show_when_quiet`
@@ -216,9 +217,10 @@ declared node is priced open, the box it starts as.
 - A behavior a deployment wants is a library upgrade plus its own YAML, never a
   plugin release. The check-authoring surface gains no reader for the key — one name
   (`values.strict_flag`) joins it instead, useful beyond this field.
-- Chips remain the default. The field is for nodes whose quiet text is the reading;
-  a wall of declared nodes is a configuration smell, not a mechanism failure, and
-  dense mode's height benefit shrinks by exactly as much as somebody declares.
+- Chips remain the compact look a type, a deployment or a big level asks for. The
+  field is for nodes whose quiet text is the reading; a wall of declared nodes is a
+  configuration smell, not a mechanism failure, and the chips' height benefit shrinks by
+  exactly as much as somebody declares.
 - The planner gains nothing new to mispredict: a declared node is priced as the open
   box it always starts as.
 - The tests that hold the whole are the open start under a parent's `chips`, the fold

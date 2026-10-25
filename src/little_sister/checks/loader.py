@@ -10,7 +10,7 @@ import yaml
 from little_sister.checks.base import CHECK_TYPES, Check, CheckError
 from little_sister.checks.metadata import (
     CHILDREN_KEYS,
-    SUBNODE_KEYS,
+    STATED_SUBNODE_KEYS,
     unknown_check_keys,
 )
 from little_sister.config_dir import (
@@ -109,7 +109,7 @@ def _load_one(config_path: Path) -> Check:
     if unknown:
         logger.warning("checks: %s: unknown key(s) %s, not read (a subnodes: entry "
                        "knows %s; a children: block %s)", config_path,
-                       ", ".join(unknown), ", ".join(SUBNODE_KEYS),
+                       ", ".join(unknown), ", ".join(STATED_SUBNODE_KEYS),
                        ", ".join(CHILDREN_KEYS))
     return check
 
@@ -119,9 +119,9 @@ def _reject_reserved_paths(loaded: list[tuple[Check, Path]]) -> None:
 
     ``HEARTBEAT_PATH`` is reserved: the engine heartbeats that node itself, and
     the dashboard lifts it out of the card grid into the one-line status strip
-    (ADR-0024), which must never have a subtree hiding behind it. Keeping deployment
-    checks off the whole line also leaves it free for future engine-owned
-    children (connected satellite engines, say).
+    (ADR-0056 decision 3), which must never have a subtree hiding behind it.
+    Keeping deployment checks off the whole line also leaves it free for future
+    engine-owned children (connected satellite engines, say).
     """
     for check, source in loaded:
         for node in sorted(check.owned_nodes()):

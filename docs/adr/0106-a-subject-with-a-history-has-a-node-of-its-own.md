@@ -1,7 +1,7 @@
 # ADR-0106 — A subject with a history has a node of its own, and a run is a mark at its own time
 
 - **Status:** Accepted
-- **Date:** 2026-10-10 (accepted 2026-10-03)
+- **Date:** 2026-10-25 (accepted 2026-10-03)
 - **Related:** [ADR-0092](0092-a-check-declares-its-measures.md) (decisions 5 and 6,
   which left both halves of this open and which this amends),
   [ADR-0096](0096-a-measure-names-its-node-and-its-things.md) (decision 1, where a
@@ -20,12 +20,15 @@
   rename cannot move), [ADR-0025](0025-check-provided-subnode-metadata.md) (a child's
   labels), [ADR-0007](0007-check-result-branches.md) (a child an earlier run wrote stays
   in the tree), [ADR-0039](0039-status-rollup-semantics.md) (the roll-up),
-  [ADR-0024](0024-dashboard-layout.md) (a status is never said by color alone),
+  [`../architecture.md`](../architecture.md) §6 (a status is never said by color alone),
   [ADR-0111](0111-a-runs-mark-says-how-the-run-stood.md) (the marks of a run that warned
   and of one without a verdict, a crowd of runs, the summary, and the records a mark is
   drawn for; decision 2, a line written for the record alone),
   [ADR-0122](0122-a-series-is-read-over-the-api-as-it-stands.md) (the read of decision
-  6, built, and what the build settled)
+  6, built, and what the build settled),
+  [ADR-0109](0109-a-node-says-its-children-are-complete.md) (the pruning a subject that
+  comes and goes needs: a node whose children are complete removes the one it no longer
+  returns)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -179,7 +182,7 @@ seen. A mark is drawn for a record with an identity, and a record with a state h
 - **No line joins two runs**, and no hole is drawn: between two runs nothing was read
   because nothing ran.
 - **A failed run is told by its shape and its place as well as by its ink**
-  ([ADR-0024](0024-dashboard-layout.md)).
+  ([`../architecture.md`](../architecture.md) §6).
 
 What a run *failed* means is the code its reading stood with
 ([ADR-0087](0087-a-check-keeps-its-subjects-readings.md) decision 8). A run that warned
@@ -216,11 +219,13 @@ reads a running instance.
 - **Each type moves at its own release**, and that release moves paths and pins: a
   grading hands back a node where it handed back a line. Until then nothing changes for
   it.
-- **Pruning becomes a prerequisite.** A line a grading no longer writes is gone with the
-  next run; a node it no longer writes stays
+- **Pruning is a prerequisite**, and
+  [ADR-0109](0109-a-node-says-its-children-are-complete.md) is it. A line a grading no
+  longer writes is gone with the next run; a node it no longer writes stays
   ([ADR-0007](0007-check-result-branches.md)), goes stale and degrades every ancestor
-  until the process restarts. A type whose subjects come and go hands back nodes only
-  once a run can remove what it no longer reports.
+  until the process restarts — unless the node above it says that its children are
+  complete, which removes it with the first run that no longer returns it. A type whose
+  subjects come and go hands back nodes in the release where its runs say that.
 - **A subject that is well has a status**, so the wall holds a node for every subject:
   158 more in one deployment, nearly all of them quiet. What keeps that readable is the
   wall's own work: a viewer folding a branch, and a branch saying how it starts.
@@ -234,8 +239,8 @@ reads a running instance.
   [ADR-0097](0097-a-nodes-series-have-a-view-of-their-own.md) decision 1,
   [ADR-0043](0043-coverage-backstop.md) decision 7 and
   [ADR-0086](0086-a-check-measures-and-grades.md) decision 2 are amended.**
-- **`implementing-checks.md` says the rule** when the first commission is built: a
-  subject with a history is handed back as a node, its line on it.
+- **`implementing-checks.md` says the rule**: a subject with a history is handed back
+  as a node, its line on it.
 - **The envelope moves only by what it carries already**: more nodes, each with its
   line's `subject`.
 

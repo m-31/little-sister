@@ -1,0 +1,66 @@
+{#- A node's short account, in a card of its own beside its facts (ADR-0133
+    decision 1): headed *About* as the facts' cards are, the node's `description`
+    first — what its check reads or checks, in a sentence, muted, the check's own
+    words — and its `about` beneath, where the thing stands, how to reach it and what
+    to do (decision 2). The two divide by what they say, so neither repeats the
+    other. Both are rendered as every text is: a table is drawn, and a status either
+    names — `{error}:` — as its sign (decision 5), its cue referring to the shape the
+    page holds once (`_page_end.html`).
+
+    Then its tags (ADR-0139 decision 4), one line of chips: every tag the node
+    carries, its own and those written above it, in its order (`card_tags`, `app.py`),
+    each chip's tooltip what the tag means and, for one that comes down from above,
+    the node it is written on, and each a link to the wall filtered by it (decision 5).
+
+    Then its details after a thin rule (decision 6), as a table: named values whose
+    keys its team chose, the key muted — the type's first, the object, then what the
+    deployment gives, the outermost first, given down to it from above among them,
+    which `card_details` (`app.py`) resolves. A key given down names the node it is
+    given on as its tooltip, and its value is rendered for that node, so that a link
+    written `handbook#sign-in` leads into the handbook every node beneath it shares.
+
+    It stands on the node's Status tab alone: the band no longer carries the `about`
+    and the head no longer carries the `description`, so the node's other views say
+    neither, one click from Status. `_node_facts.html` places it — beside *Time*
+    where its block is wide enough, before *Configuration* wherever it is not — and
+    `about_card` (`app.py`) says whether there is one, a node with neither text nor
+    a detail having none.
+
+    Context: ``node`` (a StatusSnapshot). -#}
+<div class="card ls-node-about">
+    <div class="card-body">
+        <h3 class="h6 text-muted text-uppercase">About</h3>
+        {%- if node.description %}
+        <div class="ls-node-about__description text-muted md-body">{{ node.description | markdown(node=node.path) }}</div>
+        {%- endif %}
+        {%- if node.about %}
+        <div class="ls-node-about__about md-body">{{ node.about | markdown(node=node.path) }}</div>
+        {%- endif %}
+        {%- set chips = card_tags(node) %}
+        {%- if chips %}
+        <ul class="ls-tags ls-node-about__tags" aria-label="Tags">
+            {%- for chip in chips %}
+            {%- set given = chip.at if chip.at != node.path else '' %}
+            <li class="ls-tag"{% if chip.line or given %} title="{{ chip.line }}{% if chip.line and given %} · {% endif %}{% if given %}written on {{ given }}{% endif %}"{% endif %}><a href="{{ url_for('status', tag=chip.tag) }}">{{ chip.tag }}</a></li>
+            {%- endfor %}
+        </ul>
+        {%- endif %}
+        {%- set rows = card_details(node) %}
+        {%- if rows %}
+        {#- In a box that scrolls it, as every table of the page is, should a key
+            be longer than the card is wide; a value breaks within its cell. -#}
+        <div class="ls-node-about__details table-responsive position-relative">
+            <table>
+                <tbody>
+                    {%- for row in rows %}
+                    <tr>
+                        <th scope="row" class="text-muted"{% if row.at != node.path %} title="{{ row.at }}"{% endif %}>{{ row.key }}</th>
+                        <td>{{ row.text | markdown_inline(node=row.at) }}</td>
+                    </tr>
+                    {%- endfor %}
+                </tbody>
+            </table>
+        </div>
+        {%- endif %}
+    </div>
+</div>

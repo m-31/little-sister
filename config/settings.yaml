@@ -42,21 +42,17 @@ reason_cap: 6
 # speaks for (ADR-0128): `chips: true` starts every level beneath the cards as chips,
 # `false` every node open; `fold_ok: true` folds every node's healthy children and
 # lines behind "✓ +N ok". For both, `true` is the more compact look. A value that is no
-# boolean is said in the log and left unset. Unset, the wall starts as it always has:
-# a quiet leaf as a chip, everything else open.
+# boolean is said in the log and left unset. Unset, the wall starts open, every healthy
+# node shown — but a level that, opened, would draw more than thirty boxes, counted all
+# the way down, starts as chips, so a run that suddenly names a great many children
+# does not stretch the wall; `chips: false` here opens that level too.
 #
 # chips: false
 # fold_ok: false
 
-# Quiet (non-warn/error) open boxes a level shows before a "+N more" control reveals
-# the rest (ADR-0056), on a level whose node says nothing of `chips` (above). Warn/error
-# boxes are never capped, so nothing urgent is hidden; a level that says how it starts
-# shows what it says. A non-negative integer; default 3.
-branch_cap: 3
-
 # Maintenance pins the strip pill's popover shows before a "+N more" links to the full
-# /maintenance page (ADR-0056). A non-negative integer; default 5 (0 sends
-# every pin straight to the /maintenance page).
+# list, *Handled* at /handled (ADR-0056). A non-negative integer; default 5 (0 sends
+# every pin straight to /handled).
 maintenance_cap: 5
 
 # The newest readings of each history a check keeps (`series_keep`, ADR-0092) that a
@@ -101,6 +97,12 @@ theme: cyberpunk
 # comes; or `wrapped`, as they come, each chip at its own width, which is the compact
 # view.
 chip_runs: aligned
+# How a level's open boxes fill its columns (ADR-0138): `rows`, the library's, each
+# row as tall as its tallest box and every box in its place whatever its lines
+# (ADR-0056); or `packed`, each box beneath the shortest column, so that a tall box
+# leaves no gap beside it — a box taking its column when the page is drawn and when
+# its width changes, and keeping it through a refresh and a click.
+boxes: rows
 # Whether a pause on a node's name — a chip, the name in an open node's head — opens
 # its inspection card (ADR-0019): `off`, the library's, which keeps the card closed
 # for the pointer and the keyboard alike, or `pause`.
@@ -109,6 +111,20 @@ inspection_card: "off"
 # pointer: `wash`, the library's, a wash of their ink, or `outline`, an outline of it
 # in the wash's place. Under forced colors the outline stands either way.
 toggle_hover: wash
+# Where an open node's head keeps its buttons — its page ↗, its folds, its pin and
+# the node's actions, in that order: `pointer`, the library's, right after the name,
+# shown while the pointer is on the head or the keyboard is in it, and always on a
+# touch screen; `pointer-name`, there too, where a click on the name opens the node's
+# page and ↗ is the keyboard's alone; `line`, on a line of their own beneath the row;
+# or `name`, at the row's end, the name opening the page as under `pointer-name`.
+head_buttons: pointer
+# What the failure budget does with a failure the first look hides — beneath a chip,
+# or in a box a node's look keeps closed: `open`, the library's, opens its way, the
+# first three in each card with every node on their paths, so that a first glance
+# finds it; or `chips`, where it stays the chip it was, red, and the wall keeps its
+# size — what a run names and a box's own lines still come as they come. Keep `open`,
+# a kiosk's too: the one failure a glance should show is what the budget is for.
+failures: open
 
 # Default maintenance window when an admin sets maintenance without an explicit
 # duration (e.g. 12h, 7d). Maintenance always expires — there is no indefinite pin.
@@ -144,6 +160,16 @@ retry_attempts: 2
 # it. A positive integer; default 60.
 state_interval: 60
 
+# How often the event log and the series go to a keeper while no other instance
+# stands by (ADR-0134): at most once per this many seconds, met at the first write
+# of the kept files after it falls due — so never more often than state_interval,
+# which is how often they go while another instance does. A takeover and a
+# graceful shutdown send them at once; the maintenance pins go at the next
+# scheduler tick after they change, and the files on this disk are written every
+# state_interval whatever this says. Without a keeper it does nothing. A positive
+# integer; default 900.
+keeper_interval: 900
+
 # Worker threads the engine's pool is built with (ADR-0075). A ceiling, not a
 # size: the pool is never larger than the number of checks configured. It is also
 # what startup measures the checks' declared cost against — a type may say what a
@@ -177,8 +203,8 @@ memory_share: 0.5
 # is how a deployment answers a refusal it disagrees with, and the other answer is a
 # check that hands over less. A check type that *declares* what one
 # of its records needs (`expected_record()`) is measured against this at startup and
-# named there instead, before it has run at all. A positive integer; default 2048.
-record_limit: 2048
+# named there instead, before it has run at all. A positive integer; default 3072.
+record_limit: 3072
 
 # What every series together may weigh (ADR-0087), counted in the bytes of the JSON
 # the series file keeps each reading in — the way `record_limit` counts one record.
@@ -206,3 +232,17 @@ series_limit: 8388608
 # default 1, which publishes at once and is what every deployment had before there was
 # a counter. A check may state its own `escalate_after:` for the nodes it writes.
 escalate_after: 1
+
+# How long a node's notes are kept (ADR-0047 decision 9): a note is retired once
+# it is not among the last `notes_keep` on its node and it is older than
+# `notes_max_age`, or its node holds more than `notes_cap` notes and it is older
+# than `notes_min_age` — then the oldest first, and only as many as bring the node
+# down to the cap. The counts are positive integers; an age is a number and `mo`,
+# `w`, `d`, `h` or `s`, its months the calendar's in `timezone`, and a bare `m`,
+# minutes everywhere else, is refused. Thirteen months is more than a year, so the
+# note of a yearly problem is there when it comes back, and twenty-five more than
+# two. A value it cannot use is named at the start and gives way to its default.
+notes_keep: 10
+notes_cap: 50
+notes_min_age: 13mo
+notes_max_age: 25mo

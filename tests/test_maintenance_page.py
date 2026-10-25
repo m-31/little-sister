@@ -1,4 +1,4 @@
-"""The Maintenance page is the same blocks (ADR-0104 decision 6).
+"""*Handled* is the same blocks (ADR-0104 decision 6).
 
 Every pin stands under its node's path — the node's own first, then its lines' in
 the check's order — as the block a node's own page states it in, read by everyone
@@ -18,7 +18,7 @@ from urllib.parse import parse_qs, urlsplit
 os.environ.setdefault("SECRET_KEY", "test-key")
 
 from little_sister import app as app_module
-from little_sister.maintenance import MaintenanceEntry
+from little_sister.pins import Pin
 from little_sister.status import StatusCode
 from little_sister.tree import StatusTree
 from tests.page_tree import Element, css_rule, css_rules_naming, parse
@@ -55,7 +55,7 @@ class _PageCase(TestCase):
     def _pin_node(self, path: str = PATH, note: str | None = NOTE,
                   by: str = "lex",
                   left: timedelta = timedelta(days=1, hours=23, minutes=30),
-                  ) -> MaintenanceEntry:
+                  ) -> Pin:
         write = self.tree.set_maintenance(
             path, note, expires_at=datetime.now(UTC) + left, set_by=by)
         assert write.current is not None
@@ -64,14 +64,14 @@ class _PageCase(TestCase):
     def _pin_line(self, slug: str = "mobile-build", note: str = LINE_NOTE,
                   by: str = "anna",
                   left: timedelta = timedelta(hours=5, minutes=30),
-                  path: str = PATH) -> MaintenanceEntry:
+                  path: str = PATH) -> Pin:
         write = self.tree.set_entry_maintenance(
             path, slug, note, expires_at=datetime.now(UTC) + left, set_by=by)
         assert write.current is not None
         return write.current
 
     def _body(self) -> str:
-        response = self.client.get("/maintenance")
+        response = self.client.get("/handled")
         self.assertEqual(response.status_code, 200)
         return response.get_data(as_text=True)
 
@@ -91,7 +91,7 @@ class _PageCase(TestCase):
         return found[0]
 
     def assert_leads_back(self, url: str, path: str = PATH) -> None:
-        """``url`` is the Maintenance page with ``path``'s section marked, which
+        """``url`` is *Handled* with ``path``'s section marked, which
         the page scrolls to.
 
         The node is named in the **query** and the fragment is one fixed id — the
@@ -100,7 +100,7 @@ class _PageCase(TestCase):
         a link from there to `/maintenance#…` is a jump within that answer, which
         loads nothing."""
         parts = urlsplit(url)
-        self.assertEqual(parts.path, "/maintenance")
+        self.assertEqual(parts.path, "/handled")
         self.assertEqual(parse_qs(parts.query), {"node": [path]})
         self.assertEqual(parts.fragment, "pinned-node")
 
@@ -115,20 +115,24 @@ class GroupingTests(_PageCase):
     """Grouped under each node's path, the whole node first and then its lines
     in the check's order."""
 
-    def test_pins_stand_under_their_nodes_path(self):
+    def test_pins_stand_under_their_nodes_path_the_longest_standing_first(self):
+        # *Handled* (ADR-0135 decision 8): one section per job, the nodes whose
+        # pins stand longest first — the index's order is its whole nudge
         self.tree.upsert("/db", StatusCode.ERROR, "boom")
         self._pin_node("/db", note="cutover", by="ada")
         self._pin_node()
         self._pin_line()
         page = self._page()
-        nodes = page.all("pin-node")
-        self.assertEqual([self._path(node) for node in nodes], [PATH, "/db"])
-        for node, path in zip(nodes, (PATH, "/db"), strict=True):
+        job = page.one("handled-job")
+        self.assertEqual(job.one("handled-job__title").text(), "In maintenance")
+        nodes = job.all("pin-node")
+        self.assertEqual([self._path(node) for node in nodes], ["/db", PATH])
+        for node, path in zip(nodes, ("/db", PATH), strict=True):
             heading = node.first()
-            self.assertEqual(heading.tag, "h2")
+            self.assertEqual(heading.tag, "h3")
             self.assertEqual(heading.one(tag="a").attrs.get("href"),
                              "/status" + path)
-        self.assertEqual([len(node.all("rule-block")) for node in nodes], [2, 1])
+        self.assertEqual([len(node.all("rule-block")) for node in nodes], [1, 2])
         # and nothing of the table it was
         self.assertEqual(page.all("maintenance-page"), [])
         self.assertEqual(page.all("row-maintenance"), [])
@@ -144,7 +148,7 @@ class GroupingTests(_PageCase):
             [("node" if block.has("rule-block--node") else "line")
              for block in blocks], ["node", "line", "line"])
         said = [block.one("rule-block__what").text() for block in blocks]
-        self.assertTrue(said[0].startswith("The whole node is silenced by lex"))
+        self.assertTrue(said[0].startswith("The whole node is in maintenance by lex"))
         self.assertTrue(said[1].startswith("web build failed on main — this line"))
         self.assertTrue(said[2].startswith("docs deploy is queued — this line"))
 
@@ -164,12 +168,12 @@ class GroupingTests(_PageCase):
     def test_the_page_says_how_many_pins_stand_on_how_many_nodes(self):
         self._pin_line()
         self.assertEqual(self._page().one("pin-count").text(),
-                         "1 pin on 1 node.")
+                         "1 pin on 1 node, the longest standing first.")
         self.tree.upsert("/db", StatusCode.ERROR, "boom")
         self._pin_node("/db", by="ada")
         self._pin_node()
         self.assertEqual(self._page().one("pin-count").text(),
-                         "3 pins on 2 nodes.")
+                         "3 pins on 2 nodes, the longest standing first.")
 
     def test_the_node_a_change_came_from_is_marked(self):
         # a saved edit comes back with its node named, and the page marks that
@@ -190,14 +194,24 @@ class GroupingTests(_PageCase):
                              named)
             return [self._path(node) for node in named]
 
-        self.assertEqual(marked("/maintenance"), [])
-        self.assertEqual(marked("/maintenance?node=/db"), ["/db"])
-        self.assertEqual(marked("/maintenance?node=/ci/actions"), [PATH])
-        self.assertEqual(marked("/maintenance?node=/nowhere"), [])
+        self.assertEqual(marked("/handled"), [])
+        self.assertEqual(marked("/handled?node=/db"), ["/db"])
+        self.assertEqual(marked("/handled?node=/ci/actions"), [PATH])
+        self.assertEqual(marked("/handled?node=/nowhere"), [])
+
+    def test_the_old_address_answers_with_the_new_one(self):
+        # a bookmark, and a form drawn before the move, still land (ADR-0135
+        # decision 8)
+        response = self.client.get("/maintenance?node=/db")
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.headers["Location"], "/handled?node=/db")
+        response = self.client.get("/maintenance")
+        self.assertEqual(response.headers["Location"], "/handled")
 
     def test_nothing_pinned_says_so(self):
         raw = self._body()
-        self.assertIn("No nodes are in maintenance.", raw)
+        self.assertIn("Nothing is handled: no node or line is in maintenance, seen or "
+                      "held by a rule.", raw)
         page = parse(raw)
         self.assertEqual(page.all("pin-node") + page.all("pin-count"), [])
 
@@ -212,7 +226,7 @@ class BlockTests(_PageCase):
         until = app_module._localtime(entry.expires_at)
         self.assertEqual(
             block.one("rule-block__what").text(),
-            f"The whole node is silenced by lex until {until} · 1d 23h left")
+            f"The whole node is in maintenance by lex until {until} · 1d 23h left")
         note = block.one("rule-block__note")
         self.assertEqual(len(note.all(tag="p")), 2)
         self.assertEqual(note.one(tag="strong").text(), "weekend")
@@ -225,7 +239,7 @@ class BlockTests(_PageCase):
         said = block.one("rule-block__what")
         self.assertEqual(
             said.text(),
-            f"mobile build is disabled — this line is silenced by anna until "
+            f"mobile build is disabled — this line is in maintenance by anna until "
             f"{until} · 5h 29m left")
         # the line as its node writes it, its own link kept
         self.assertEqual(
@@ -234,11 +248,11 @@ class BlockTests(_PageCase):
             ["https://ci.example.org/mobile"])
         self.assertEqual(block.one("rule-block__note").text(), LINE_NOTE)
 
-    def test_under_its_nodes_pin_a_line_says_it_is_also_silenced_on_its_own(self):
+    def test_under_its_nodes_pin_a_line_says_it_is_also_in_maintenance_on_its_own(self):
         self._pin_node()
         self._pin_line()
         blocks = self._node(self._page()).all("rule-block")
-        self.assertIn("this line is also silenced on its own by anna until",
+        self.assertIn("this line is also in maintenance on its own by anna until",
                       blocks[1].one("rule-block__what").text())
         self.assertNotIn("also", blocks[0].one("rule-block__what").text())
 
@@ -273,8 +287,8 @@ class BlockTests(_PageCase):
             return records[0].text()
 
         self.assertEqual(record(), f"Pinned by ada {pinned}.")
-        self.client.post("/maintenance", data={
-            "path": PATH, "action": "set", "reason": "longer", "duration": "3d",
+        self.client.post("/pins/maintenance", data={
+            "path": PATH, "action": "set", "note": "longer", "duration": "3d",
             "set_at": entry.token})
         after = self.tree.maintenance_entry(PATH)
         assert after is not None
@@ -376,14 +390,14 @@ class ChangedThereTests(_PageCase):
         entry = self._pin_node(by="ada")
         edit, _ = self._forms(self._node(self._page()).one("rule-block"))
         posted = self._hidden(edit)
-        posted["reason"] = "reworded"
+        posted["note"] = "reworded"
         posted["duration"] = posted["expiry_was"]
-        response = self.client.post("/maintenance", data=posted)
+        response = self.client.post("/pins/maintenance", data=posted)
         self.assertEqual(response.status_code, 302)
         self.assert_leads_back(response.headers["Location"])
         after = self.tree.maintenance_entry(PATH)
         assert after is not None
-        self.assertEqual((after.reason, after.expires_at, after.set_by),
+        self.assertEqual((after.note, after.expires_at, after.set_by),
                          ("reworded", entry.expires_at, "pan"))
         # and the page it comes back to shows it, on the node it was changed on
         landed = parse(self.client.get(
@@ -398,7 +412,7 @@ class ChangedThereTests(_PageCase):
         self._pin_line()
         blocks = self._node(self._page()).all("rule-block")
         _, clear = self._forms(blocks[1])
-        response = self.client.post("/maintenance", data=self._hidden(clear))
+        response = self.client.post("/pins/maintenance", data=self._hidden(clear))
         self.assertEqual(response.status_code, 302)
         self.assert_leads_back(response.headers["Location"])
         self.assertIsNone(self.tree.entry_maintenance(PATH, "mobile-build"))
@@ -410,9 +424,9 @@ class ChangedThereTests(_PageCase):
         edit, _ = self._forms(self._node(self._page()).one("rule-block"))
         posted = self._hidden(edit)
         self._pin_node(note="ben wrote this", by="ben", left=timedelta(days=5))
-        posted["reason"] = "pan wrote this"
+        posted["note"] = "pan wrote this"
         posted["duration"] = posted["expiry_was"]
-        response = self.client.post("/maintenance", data=posted)
+        response = self.client.post("/pins/maintenance", data=posted)
         self.assertEqual(response.status_code, 200)
         raw = response.get_data(as_text=True)
         self.assertIn("Nothing was saved", raw)

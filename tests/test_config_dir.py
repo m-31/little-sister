@@ -219,6 +219,20 @@ class CandidateTests(TestCase):
             with self.assertNoLogs(level="WARNING"):
                 announce_aspects(str(root))
 
+    def test_a_handbook_directory_is_an_aspect(self):
+        # ADR-0133 decision 3: a deployment's handbooks, one Markdown file each,
+        # joined the table with their loader
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "handbook").mkdir()
+            (root / "handbook" / "ec2.md").write_text("## Sign in\n")
+            with self.assertNoLogs(level="WARNING"):
+                announce_aspects(str(root))
+            self.assertEqual(aspect_in(root, "handbook"), root / "handbook")
+            (root / "handbook.yaml").write_text("/a: x\n")
+            with self.assertRaises(ConfigError):
+                aspect_in(root, "handbook")
+
     def test_resolving_a_root_says_nothing_at_all(self):
         # The scan does not ride the resolution any more, and this is the whole of
         # why: the first resolution in a real process is somebody's registration
@@ -273,7 +287,7 @@ class CandidateTests(TestCase):
                 announce_aspects(str(root))
             line = "\n".join(logs.output)
             self.assertIn("identity (tests)", line)
-            self.assertIn("known: actions, checks", line)   # a built-in stays bare
+            self.assertIn("known: actions, aggregation, checks", line)  # built-ins bare
 
 
 class LayerTests(TestCase):

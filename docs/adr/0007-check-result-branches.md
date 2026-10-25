@@ -3,7 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-10-04 (accepted 2026-06-27)
 - **Related:** [ADR-0002](0002-rlock-snapshot-synchronization.md) (the tree owns
-  state), [ADR-0004](0004-status-aggregation-semantics.md) (roll-up),
+  state), [ADR-0039](0039-status-rollup-semantics.md) (roll-up),
   [ADR-0005](0005-dashboard-freshness-and-self-monitoring.md) (freshness),
   [ADR-0109](0109-a-node-says-its-children-are-complete.md) (pruning).
 - **Register:** [`../decisions.md`](../decisions.md)
@@ -37,7 +37,7 @@ small **tree**.
    writing each child at `parent.full_path.<name>` with the child's own
    `description`. Every node inherits the check's `frequency`, so freshness
    (ADR-0005) applies uniformly. The host node is OK once reachable; the worst
-   aspect rolls up to it (ADR-0004).
+   aspect rolls up to it (ADR-0039).
 3. **The boundary holds.** Identity, observation time, maintenance and
    event-on-change stay the **tree's** concern, set under the lock — exactly as
    for a leaf. The result remains a pure, immutable description of "what I

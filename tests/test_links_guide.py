@@ -10,7 +10,7 @@ So the guide is two folds, the browser's own disclosures and closed: *Add links*
 the file's shape and where it goes, and *Icon names*, the roster and how to add a
 mark. An empty page opens with one sentence and both; a page that has links keeps
 *Icon names* at its foot. A viewer reads what an admin reads: the page knows no
-roles, as *check now* is open to every logged-in user.
+roles.
 
 The page is read as a tree (`tests/page_tree.py`), since every claim here is about
 where something stands. What a browser has to show — that an opened fold fits a
@@ -25,7 +25,7 @@ from unittest import TestCase, mock
 os.environ.setdefault("SECRET_KEY", "test-key")
 
 from little_sister import app as app_module
-from little_sister import icons, link_probe, links
+from little_sister import icons, links
 from tests.page_tree import Element, css_rule, parse
 
 #: The sentence an empty page opens with.
@@ -61,10 +61,7 @@ class _LinksCase(TestCase):
 
     def _page(self, config: links.LinksConfig) -> Element:
         """The page's own part of the document: what stands under its heading."""
-        with (mock.patch.object(app_module, "current_links", return_value=config),
-              mock.patch.object(app_module.link_probe, "refresh_if_due"),
-              mock.patch.object(app_module.link_probe, "page_view",
-                                return_value=link_probe.ProbeView())):
+        with mock.patch.object(app_module, "current_links", return_value=config):
             response = self.client.get("/links")
         self.assertEqual(response.status_code, 200)
         return parse(response.get_data(as_text=True)).with_id("ls-links-page")

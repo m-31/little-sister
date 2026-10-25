@@ -2,9 +2,9 @@
 
 - **Status:** Accepted
 - **Date:** 2026-10-10 (accepted 2026-08-29)
-- **Related:** [ADR-0020](0020-user-list-location.md) /
-  [ADR-0046](0046-user-list-from-the-configuration-roots.md) (where the login list comes
-  from), [ADR-0008](0008-json-output-api.md) (the bearer token `/status` also accepts),
+- **Related:** [ADR-0046](0046-user-list-from-the-configuration-roots.md) (where the
+  login list comes from), [ADR-0080](0080-the-envelope-is-the-snapshot-published.md)
+  (the bearer token `/status` also accepts),
   [ADR-0066](0066-health-answers-liveness-and-says-almost-nothing.md) (the route that
   made this necessary rather than tidy),
   [ADR-0122](0122-a-series-is-read-over-the-api-as-it-stands.md) (the series read, whose
@@ -63,7 +63,8 @@ first time somebody tries it.
   packaged icon, which is `static` and therefore already open.
 - **`SELF_AUTHENTICATING_ENDPOINTS`** contains three routes, each serving a page to a
   session *and* a read of the JSON API to a bearer token, choosing by content
-  negotiation ([ADR-0008](0008-json-output-api.md)): `/status` serves the dashboard and
+  negotiation ([ADR-0080](0080-the-envelope-is-the-snapshot-published.md) decision 8):
+  `/status` serves the dashboard and
   the status read, and `/series` and `/series/<path>` serve the Series index and a
   node's Series view, and the series read
   ([ADR-0122](0122-a-series-is-read-over-the-api-as-it-stands.md) decision 8). A gate in

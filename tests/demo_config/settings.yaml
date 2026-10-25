@@ -12,7 +12,6 @@ time_format: "%Y-%m-%d %H:%M:%S"
 # cap boundaries deliberately, and the live demo should show what a fresh install
 # shows. Raise `reason_cap` here to watch the eruption card stop folding.
 reason_cap: 6
-branch_cap: 3
 maintenance_cap: 5
 
 # Short, because a demo pin should expire while you are still watching: set

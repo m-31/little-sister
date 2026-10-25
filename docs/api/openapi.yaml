@@ -9,9 +9,11 @@ openapi: 3.1.0
 # Field provenance (maintainers — little-sister's ADRs, in its docs/adr/, also where a
 # client keeps a copy of this file): the envelope is the snapshot published ADR-0080;
 # node addressing ADR-0016; the three statuses and the contribution ADR-0032; entries
-# ADR-0036 / ADR-0042, an entry's form ADR-0126; about + leaf description ADR-0012;
-# title ADR-0017; config + report ADR-0013 / ADR-0044; Markdown text fields ADR-0018;
-# maintenance ADR-0014;
+# ADR-0036 / ADR-0042, an entry's form ADR-0126; about + leaf description ADR-0012 and
+# ADR-0133, a status named in them ADR-0133, a node's handbook and its details
+# ADR-0133; title ADR-0017; config + report ADR-0013 /
+# ADR-0044; Markdown text fields ADR-0018; what handles a part ADR-0141, a pin
+# ADR-0014, a configured rule ADR-0137;
 # roll-up & staleness ADR-0039 / ADR-0005 / ADR-0079; the run facts ADR-0044 and the
 # unit that answers for a node ADR-0078; sibling rank ADR-0055; show_when_quiet
 # ADR-0063; instance facts ADR-0066; bearer token ADR-0003. The series read is
@@ -29,10 +31,24 @@ info:
     **What this publishes is what the dashboard renders.** A node carries the three
     statuses it has — what its check `reported`, its `own` status once its own
     suppressions apply, and the rolled-up effective `code` — plus what its parent
-    counted (`contribution`), its entries, its maintenance pin, its last run, and the
-    text and display metadata the client renders as Markdown. Children are returned in
+    counted (`contribution`), its entries, what handles it (`handled`), its last run,
+    and the text and display metadata the client renders as Markdown. Children are returned in
     a deterministic order: a declared rank first (`order`), then natural,
     case-insensitive name order.
+
+    Every text the client renders as Markdown — a node's `about`, `description`,
+    `title`, `config` and `report`, a detail's `text`, an entry's `text`, a
+    `note` of what handles a part, a reading's `texts` — is CommonMark with GitHub's tables and
+    strikethrough, the dialect the dashboard renders. In every one a status written in
+    braces — `{ok}`, `{warn}`, `{error}`, `{maintenance}` or `{undefined}`, in either
+    case — names that status, as `code` spells it, and is rendered as the client shows
+    that status: the dashboard draws its sign there, the status's cue and its word on
+    its tint, so `{error}: restart it` says what to do when it fails. One in code — a
+    code span or a code block — or escaped (`\{error}`) is text. And in every one a
+    link written `handbook` leads to the handbook of the node the text belongs to — a
+    detail's, the node it is given on — the address that node's `handbook` carries,
+    and `handbook#<section>` to a section of it, a heading anchored as GitHub anchors
+    one: `## Sign in` is `#sign-in`.
 
     The same resources back the HTML dashboard; the representation is chosen by
     `Accept` (content negotiation). `Accept: application/json` returns the JSON
@@ -74,9 +90,56 @@ info:
     grading that decided its line's code, where one did, and null on every other line.
     Nothing else moves.
 
+    2.9.0 adds a node's two periods, each beside the code it is of: `own_period` beside
+    `own`, when the node's own status began, and `period` beside `code`, since when the
+    node has shown that code, how that began and the node whose change began it. Each
+    is absent where the node has no such period — `own_period` on a node that declares
+    nothing, `period` on a leaf — and `period` also where it is not of the `code` beside
+    it. Nothing else moves.
+
+    2.10.0 says how every Markdown text is written — CommonMark with GitHub's tables and
+    strikethrough, the dialect the dashboard renders — and what two things mean in it:
+    a status written in braces, `{error}` and the other four, in either case, which the
+    dashboard draws as its sign; and a link written `handbook` or `handbook#<section>`,
+    which leads into the node's handbook. A node that has a handbook says where it is,
+    `handbook`, its absolute address; its text rides in no envelope. A node that has
+    details carries its own, `details`: named values whose keys its team chose, each a
+    line of Markdown and saying who gave it — its check type, the details of the object
+    the node stands for, which are the node's alone; or its deployment, which hold for
+    every node beneath it, key by key, the nearest winning. The descriptions of a node's
+    `about` and `description` say what each is for, as the dashboard divides them. No
+    field moves, and the text stays raw.
+
+    2.11.0 adds the deployment's configured rules: a node's `contribution.by` may say
+    `aggregation`, a rule the deployment configured changing what its parent counts of
+    it, and every entry carries `contribution`, the same object, saying what its node
+    counted of it — `maintenance` where it is pinned, `aggregation` where a configured
+    rule on the node's lines changes how it counts, null where it counts as it reads.
+    A branch's `period` may say `rule` as its `cause`, a configured rule beginning to
+    count beneath it, and name the rule in `rule`. A node's and an entry's own `code`
+    stay what they read. Nothing else moves.
+
+    2.12.0 adds a node's tags: `tags`, every tag the node carries — those its
+    deployment writes for it and for every node above it, added up — each a word, in
+    the order the dashboard lists them; absent where the node carries none. Nothing
+    else moves.
+
+    3.0.0 says every rule on a part in one list. A node and an entry carry `handled`,
+    what handles them now — a pin a person set, while it stands, and a rule the
+    deployment configured, while it changes what counts — each with its `id`, its
+    `kind`, its `source` and its `note`, and `counts_as` in the notation a configured
+    rule is written in; `maintenance`, the one object a pin had, goes. A
+    `contribution` names the rule that decided, `rule`: the `id` its part's `handled`
+    lists it under, and null for damping, a shield, a node not yet reported and a node
+    whose entries are every one pinned. A failure a person accepted as it stands is a
+    pin of the kind `seen`: its part keeps its `code` and is counted `OK` above it,
+    `contribution.by` saying `seen`, and its item says the `status` it was set at and
+    the `occurrence` it is bound to, its `expires_at` null where it was given no end.
+    `schema_version` is 3.
+
     See `docs/api/README.md` (linked below) for auth, `curl` examples and how tokens
     are provisioned.
-  version: 2.8.0
+  version: 3.0.0
   contact:
     name: little-sister
     url: https://github.com/m-31/little-sister
@@ -342,8 +405,12 @@ components:
           $ref: "#/components/schemas/StatusCode"
         own:
           $ref: "#/components/schemas/StatusCode"
+        own_period:
+          $ref: "#/components/schemas/OwnPeriod"
         code:
           $ref: "#/components/schemas/StatusCode"
+        period:
+          $ref: "#/components/schemas/Period"
         contribution:
           description: >-
             What this node's parent counted, and the rule that made it something
@@ -355,14 +422,60 @@ components:
         description:
           type: string
           description: >-
-            What the node's check does — its purpose — kept separate from `about`
-            (what the node *is*). For a branch check each leaf gets its own. Raw
-            Markdown the client renders; empty when unset.
+            What the node's check reads or checks, in a sentence, kept separate from
+            `about`. For a branch check each leaf gets its own. Raw Markdown the client
+            renders; empty when unset.
         about:
           type: string
           description: >-
-            What the node *is* — host, location, kind, context. Raw Markdown the
-            client renders; empty when unset.
+            Where the thing the node stands for is, how to reach it and what to do —
+            an instruction, in short, which a status written in braces lets say what
+            to do in which case: `{error}: restart it`, and a link into the node's
+            handbook the long version: `[what to do](handbook#when-it-fails)`. Raw
+            Markdown the client renders; empty when unset.
+        handbook:
+          type: string
+          format: uri
+          description: >-
+            The absolute address of the node's Handbook view — what its team writes at
+            length about it, its runbook, how to sign in, its policy — as the request
+            reached the server; absent where the node has none. A link the node's
+            texts write `handbook` leads here, and `handbook#<section>` to this
+            address with `#<section>`. The handbook's text is no field of the
+            envelope: a client opens the address in a browser.
+          examples: ["https://monitor.example.org/handbook/services/api"]
+        details:
+          type: array
+          description: >-
+            The node's own details — named values whose keys its team chose, whom to
+            ask, where tickets go, a place, how to log in, the name of the object it
+            stands for — in their order: its check type's first, then its deployment's,
+            each as given, a key both name once for each; absent where the node has
+            none. A `type` detail is the node's alone. A `deployment` detail holds for
+            every node beneath this one, key by key, the nearest winning. So the
+            details the dashboard shows for a node are its own `type` ones, in their
+            order, then the `deployment` ones of the nodes above it, the outermost
+            first, then its own `deployment` ones: a key stands once, where it is
+            named first, with its nearest value — the node's own `deployment` one over
+            its own `type` one, either over one from above — and a nearest value that
+            is empty stands nowhere. A link a detail writes `handbook#<section>` leads
+            into the handbook of the node it is given on.
+          items:
+            $ref: "#/components/schemas/Detail"
+        tags:
+          type: array
+          description: >-
+            Every tag the node carries: the words its deployment writes for it and for
+            every node above it, added up — a fact about what the node is, never about
+            its status, such as `production` or `rack-4`. Each is lowercase letters and
+            digits with hyphens between them, and each stands once, in the order the
+            dashboard lists them: the deployment's known tags in their order, the rest
+            by name. A node carries all of them, so a subtree fetched by its path says
+            them of its root too. Absent where the node carries none.
+          items:
+            type: string
+            pattern: "^[a-z0-9]+(-[a-z0-9]+)*$"
+          examples: [["production", "rack-4"]]
         title:
           type: string
           description: A short display label for the node. Raw Markdown; empty when unset.
@@ -390,14 +503,18 @@ components:
             Whether this node's quiet lines are still worth showing. Null where nobody
             said — a stated `false` is a declaration and not a silence, so the three
             states are deliberately not two.
-        maintenance:
+        handled:
           description: >-
-            The maintenance pin on this node — why, by whom, when, until when — or
-            null when nothing is pinned. *Pinned* is this being non-null; there is no
-            separate flag.
-          oneOf:
-            - $ref: "#/components/schemas/Maintenance"
-            - type: "null"
+            What handles this node now, in no order a client should read anything
+            into: a pin a person set on it, while it stands — `maintenance` paints it
+            and counts nothing of it — and a rule the deployment configured, while it
+            changes what counts: what the node passes up, how its parent counts it
+            among its children, how its children count in it, or how its entries
+            count in it. Empty on most nodes. *Pinned* is a `maintenance` pin here;
+            there is no separate flag.
+          type: array
+          items:
+            $ref: "#/components/schemas/Handled"
         stale:
           type: boolean
           description: >-
@@ -474,7 +591,7 @@ components:
         - report
         - order
         - show_when_quiet
-        - maintenance
+        - handled
         - stale
         - changes
         - entries
@@ -504,12 +621,61 @@ components:
             `shielded_by` names, so its parent counts nothing of it, an `OK` no more
             than an `ERROR`. `damping` — the node has read a worse code but not yet as
             many times in a row as this deployment asked for, so the parent still counts
-            what it published before. Further rules add further names, which is a
-            compatible change; treat an unknown name as "something changed what this
-            node contributed" and show it.
+            what it published before. `seen` — a person accepted the node's failure
+            as it stands, so the parent counts it `OK` until it changes, the node's
+            own `code` staying what it reads. `aggregation` — a rule the deployment
+            configured changes what the parent counts of it: a cap, healing, a floor,
+            the node left out, or any of them while fewer than a number of its
+            siblings fail; the code is what is counted, null where it counts nothing,
+            and the node's own `code` stays what it reads. On an entry the same object
+            says what the entry's node counted of it — `seen` an entry whose failure a
+            person accepted, counted `OK` in its node. Further rules add further names,
+            which is a compatible change; treat an unknown name as "something changed
+            what this node contributed" and show it.
           examples: ["maintenance"]
+        rule:
+          type: ["string", "null"]
+          description: >-
+            The one rule of that kind that decided, where one pin or one configured
+            rule did: the `id` this node's — or this entry's — `handled` lists it
+            under, a pin's or a configured rule's name. Null where `by` names a
+            mechanism rather than anything somebody set or wrote — `damping`,
+            `dependency`, `undefined` — and where a node is `maintenance` because every
+            one of its addressable entries is pinned, or because its check said so.
+          examples: ["5c1d0a7e3f4b2c18", "staging advises", null]
       required:
         - code
+        - by
+        - rule
+
+    Detail:
+      type: object
+      description: >-
+        One of a node's details: a named value, and who gave it.
+      properties:
+        key:
+          type: string
+          description: The name its team chose for the value.
+          examples: ["contact"]
+        text:
+          type: string
+          description: >-
+            The value, one line of raw Markdown the client renders inline. Empty only
+            where a deployment gives the key no value — there, and beneath where
+            nothing nearer names it, the key stands nowhere.
+          examples: ["[Platform on call](https://ops.example.org/oncall)"]
+        by:
+          type: string
+          enum: [type, deployment]
+          description: >-
+            Who gave it. `type` — the node's check type, which gives each node it
+            writes the details of its object with every run: they are the node's
+            alone, and stand first. `deployment` — the deployment's configuration,
+            whose details hold for every node beneath this one, key by key, the
+            nearest winning.
+      required:
+        - key
+        - text
         - by
 
     Entries:
@@ -609,10 +775,26 @@ components:
             this only names what decided it.
           type: ["string", "null"]
           examples: ["max_disk", "actions.disabled_severity_map"]
-        maintenance:
-          description: The pin on this entry, or null when it is not pinned.
+        handled:
+          description: >-
+            What handles this entry now, as a node's `handled` says it of a node: its
+            pin, and a rule the deployment configured on its node's entries while it
+            changes how this one counts. Empty on most entries.
+          type: array
+          items:
+            $ref: "#/components/schemas/Handled"
+        contribution:
+          description: >-
+            What the entry's node counted of it, where that is not the entry as it
+            reads, and the rule that made it so — the object a node carries for its
+            parent, so that an entry reads as a child does. `maintenance` with a null
+            code where the entry is pinned; `aggregation` where a rule the deployment
+            configured on the node's lines changes how it counts, its code what it
+            counts as or null where it counts nothing. Null where the node counts the
+            entry as it reads, which is most entries. The entry's own `code` stays
+            what it reads.
           oneOf:
-            - $ref: "#/components/schemas/Maintenance"
+            - $ref: "#/components/schemas/Contribution"
             - type: "null"
       required:
         - slug
@@ -624,7 +806,105 @@ components:
         - refused
         - form
         - grading
-        - maintenance
+        - handled
+        - contribution
+
+    OwnPeriod:
+      type: object
+      description: |-
+        When the node's own status — `own` — began: the period it is in, in the words
+        the server keeps it in beside its log, so it holds past the log's reach.
+
+        **Absent — not null — on a node that declares nothing**: a container no check
+        writes, which has no status of its own to have begun. A beginning nobody knows
+        is a bound: `since` with `before`, and nothing of how it began.
+      properties:
+        since:
+          type: string
+          format: date-time
+          description: >-
+            When the period began (RFC 3339, UTC) — or, beside `before`, an instant it
+            began no later than.
+          examples: ["2026-09-06T10:11:40Z"]
+        before:
+          type: boolean
+          enum: [true]
+          description: >-
+            Present, and true, where `since` is a bound: the period began at or before
+            it, and how is not known. Absent wherever the beginning is known.
+        was:
+          $ref: "#/components/schemas/StatusCode"
+        cause:
+          type: string
+          description: >-
+            What moved it: `reading`, `pin-set`, `pin-edited` or `pin-ended`,
+            `line-pin-set` or `line-pin-ended`, `seen-set`, `seen-edited` or
+            `seen-ended`, `line-seen-set`, `line-seen-edited` or `line-seen-ended` — a
+            failure marked seen, that mark changed, or its end — `removed`, or, on
+            `period` alone, `stale` — a reading gone stale beneath the node, or a
+            shield ended by its dependency's silence — and `rule` — a rule the
+            deployment configures beginning to count beneath it, which `Period.rule`
+            names. Absent where nothing says what: on a bound, and where the row that
+            began the period named no cause. A vocabulary that may grow, so a client
+            shows a word it does not know rather than refusing it.
+          examples: ["reading"]
+      required:
+        - since
+
+    Period:
+      type: object
+      description: |-
+        Since when the node has shown `code` — the code beside it — how that began, and
+        the node whose change began it. The server keeps it beside its log for every
+        node above others, the root included, so it holds past the log's reach and
+        across a restart.
+
+        **Absent — not null — on a leaf**, whose one period is `own_period`, and
+        **wherever it is not of the `code` beside it**: until the units beneath a node
+        have run after a restart, and for the moment between a reading going stale
+        and the server dating it, the period it keeps can be of another code, and is
+        not served as the node's. So a client never compares the two.
+      properties:
+        since:
+          type: string
+          format: date-time
+          description: >-
+            When the period began (RFC 3339, UTC) — or, beside `before`, an instant it
+            began no later than.
+          examples: ["2026-09-06T10:11:40Z"]
+        before:
+          type: boolean
+          enum: [true]
+          description: >-
+            Present, and true, where `since` is a bound: the node already showed `code`
+            when the server first saw it. Absent wherever the beginning is known.
+        was:
+          $ref: "#/components/schemas/StatusCode"
+        cause:
+          type: string
+          description: >-
+            What moved it, in `OwnPeriod.cause`'s words. Absent on a bound, and where
+            the server cannot say what made the node show another code: a takeover's
+            first tick, which compares the file it adopted with its own tree.
+          examples: ["reading"]
+        by:
+          type: string
+          description: >-
+            The path of the node whose change began the period: the node itself where
+            its own change did, one beneath it, or the dependency a shield is reached
+            through, which need not stand beneath it at all — and, where a rule's
+            beginning began it, the node whose count the rule changed. Absent where
+            nothing names one, as on a bound.
+          examples: ["/services/db"]
+        rule:
+          type: string
+          description: >-
+            The name of the rule the deployment configures whose beginning began the
+            period, beside `cause` `rule` — at the start that brought it, or where a
+            replay of the past found it beginning. Absent everywhere else.
+          examples: ["develop advises"]
+      required:
+        - since
 
     Run:
       type: object
@@ -679,52 +959,154 @@ components:
         - wall_seconds
         - next_at
 
-    Maintenance:
+    Handled:
       type: object
       description: >-
-        Why something was pinned to MAINTENANCE, by whom, and when it auto-expires.
-        Bounded — every pin has an expiry. The same shape on a node and on one of its
-        entries.
+        One thing that handles a node or an entry now: a pin a person set, or a rule
+        the deployment configured. Every one has an `id`, a `kind`, a `source`, a
+        `note` and what it makes its part count as; a pin says who set it and when
+        and until when, a `seen` the failure it accepted as well, and a configured
+        rule where it is written, since when, and where it acts.
       properties:
+        id:
+          type: string
+          description: >-
+            What names it here and in a `contribution`'s `rule`: a pin's id, sixteen
+            hex digits made when it was first set and kept through every edit, or a
+            configured rule's name. Never parse it.
+          examples: ["5c1d0a7e3f4b2c18", "staging advises"]
+        kind:
+          type: string
+          description: >-
+            What it is, the word `contribution.by` says it in: `maintenance` for a
+            pin that puts its part in maintenance, `seen` for one that accepts its
+            part's failure as it stands, `aggregation` for a configured rule. Further
+            kinds add further words, which is a compatible change; show an unknown
+            one as it is.
+          examples: ["maintenance", "seen", "aggregation"]
+        source:
+          type: string
+          enum: ["person", "configuration"]
+          description: >-
+            `person` where somebody set it on the dashboard, `configuration` where the
+            deployment's configuration declares it.
         note:
           type: string
           description: >-
-            Why it was pinned, as raw Markdown for the client to render through its
-            own safe renderer.
+            Why it stands — what is being done, a ticket, what was found — as raw
+            Markdown for the client to render through its own safe renderer.
           examples: ["**Disk swap** — see [runbook](https://ops.example/runbook)"]
+        counts_as:
+          description: >-
+            What it makes its part count as where it acts, in the notation a configured
+            rule is written in: `nothing`, or each status it names with what that
+            counts as — `{"ERROR": "WARN"}` a cap, `{"WARN": "OK"}` healing. A
+            maintenance pin's part counts `nothing`, and a seen one's failure `OK`,
+            `{"WARN": "OK", "ERROR": "OK"}`.
+          oneOf:
+            - type: string
+              enum: ["nothing"]
+            - type: object
+              additionalProperties:
+                $ref: "#/components/schemas/StatusCode"
+          examples: ["nothing", {"ERROR": "WARN"}]
         set_by:
           type: string
-          description: The admin who last wrote the pin.
+          description: A pin's — the person who last wrote it.
           examples: ["ada"]
         set_at:
           type: string
           format: date-time
-          description: When it was last written (RFC 3339, UTC).
+          description: A pin's — when it was last written (RFC 3339, UTC).
           examples: ["2026-09-06T18:00:00Z"]
-        expires_at:
-          type: string
-          format: date-time
-          description: When it auto-expires (RFC 3339, UTC).
-          examples: ["2026-09-13T18:00:00Z"]
         created_by:
           type: string
           description: >-
-            The admin who first set it. Equal to `set_by` for a pin nobody has edited.
+            A pin's — the person who first set it. Equal to `set_by` for a pin nobody
+            has edited.
           examples: ["ada"]
         created_at:
           type: string
           format: date-time
           description: >-
-            When it was first set (RFC 3339, UTC). Equal to `set_at` for a pin nobody
-            has edited; clearing and re-pinning honestly starts a new creation.
+            A pin's — when it was first set (RFC 3339, UTC). Equal to `set_at` for a pin
+            nobody has edited; clearing and setting it again honestly starts a new
+            creation, and a new `id`.
           examples: ["2026-09-06T18:00:00Z"]
+        expires_at:
+          type: [string, "null"]
+          format: date-time
+          description: >-
+            A pin's — when it ends by itself (RFC 3339, UTC). Every maintenance pin has
+            one; a `seen` has one only where it was given one, and is null otherwise,
+            ending as what it accepted changes.
+          examples: ["2026-09-13T18:00:00Z", null]
+        status:
+          type: string
+          enum: [WARN, ERROR]
+          description: >-
+            A `seen`'s — the status its part read when it was marked seen. A worse one
+            ends it, a better one does not.
+          examples: ["ERROR"]
+        occurrence:
+          type: [string, "null"]
+          description: >-
+            A `seen`'s — what tells the failure it accepted from the next: its line's
+            occurrence, the field its check type names or the identity of the reading
+            the line was written from. Another one ends it. Null where it is bound to
+            the failing stretch it was set in, a node's own failure among them. Never
+            parse it.
+          examples: ["7/1", null]
+        file:
+          type: string
+          description: A configured rule's — the file it is written in.
+          examples: ["config/aggregation.yaml"]
+        since:
+          type: string
+          format: date
+          description: A configured rule's — the day it says it stands from.
+          examples: ["2026-09-05"]
+        level:
+          type: string
+          enum: ["node", "lines", "children"]
+          description: >-
+            A configured rule's — where it acts: on what a node passes up, on how a
+            node's entries count in it, or on how a node's children count in it.
+        lines:
+          type: array
+          items:
+            type: string
+          description: >-
+            A configured rule's on entries — the entries it names, by their `slug`, or
+            `["*"]` for every one.
+          examples: [["*"], ["runner-1"]]
+        children:
+          type: array
+          items:
+            type: string
+          description: >-
+            A configured rule's on children — the children it names, by their `name`,
+            or `["*"]` for every one.
+          examples: [["*"]]
+        while_fewer_than:
+          type: integer
+          description: >-
+            A configured rule's that counts — it applies while fewer than this many of
+            the parts it counts report a status its table names, and from there on
+            changes nothing.
+          examples: [2]
+        failing:
+          type: integer
+          description: >-
+            A configured rule's that counts — how many of the parts it counts report a
+            status its table names now.
+          examples: [1]
       required:
+        - id
+        - kind
+        - source
         - note
-        - set_by
-        - set_at
-        - expires_at
-        - created_by
-        - created_at
+        - counts_as
 
     Instance:
       type: object

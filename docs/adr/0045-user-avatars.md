@@ -2,8 +2,8 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-23 (accepted 2026-08-08)
-- **Related:** [ADR-0020](0020-user-list-location.md) (the deployment owns the user
-  list), [ADR-0031](0031-deployment-config-directory.md) (aspect forms, layering and
+- **Related:** [ADR-0046](0046-user-list-from-the-configuration-roots.md) (the
+  deployment owns the user list), [ADR-0031](0031-deployment-config-directory.md) (aspect forms, layering and
   the explicit user-file override), [ADR-0035](0035-registering-a-config-aspect.md)
   (an aspect declares its legal forms rather than having them inferred).
 - **Register:** [`../decisions.md`](../decisions.md)

@@ -28,7 +28,7 @@ os.environ.setdefault("SECRET_KEY", "test-key")
 from little_sister import instants
 from little_sister.checks.base import Check, CheckError, CheckResult, Measurement
 from little_sister.engine import Engine
-from little_sister.maintenance import MaintenanceEntry
+from little_sister.pins import Pin
 from little_sister.reasons import Entry
 from little_sister.series import SeriesKey
 from little_sister.status import HEARTBEAT_PATH, StatusCode
@@ -57,17 +57,19 @@ class _Pins:
     """The pins file, as a store that remembers the last table saved."""
 
     def __init__(self) -> None:
-        self.nodes: dict[str, MaintenanceEntry] = {}
-        self.lines: dict[tuple[str, str], MaintenanceEntry] = {}
+        self.nodes: dict[str, Pin] = {}
+        self.lines: dict[tuple[str, str], Pin] = {}
 
-    def load(self) -> dict[str, MaintenanceEntry]:
+    def load(self) -> dict[str, Pin]:
         return {}
 
-    def load_entries(self) -> dict[tuple[str, str], MaintenanceEntry]:
+    def load_entries(self) -> dict[tuple[str, str], Pin]:
         return {}
 
-    def save(self, entries: dict[str, MaintenanceEntry],
-             entry_pins: dict[tuple[str, str], MaintenanceEntry] | None = None
+    def save(self, entries: dict[str, Pin],
+             entry_pins: dict[tuple[str, str], Pin] | None = None,
+             acknowledged: dict[str, Pin] | None = None,
+             lines_acknowledged: dict[tuple[str, str], Pin] | None = None
              ) -> None:
         self.nodes = dict(entries)
         self.lines = dict(entry_pins or {})
@@ -76,7 +78,7 @@ class _Pins:
 def _grown(tree: StatusTree | None = None) -> StatusTree:
     """A check's branch as its runs left it: a container that declares nothing, a
     job that passes, and one that fails above two regions of its own."""
-    tree = tree if tree is not None else StatusTree(maintenance_store=_Pins())
+    tree = tree if tree is not None else StatusTree(pin_store=_Pins())
     tree.upsert(JOBS, UNDEFINED, "watches two jobs")
     tree.upsert(IMPORT, OK, "run 7 succeeded")
     tree.upsert(EXPORT, ERROR, {"newest": "run 3 failed", "queued": "run 4 waits"})
@@ -103,13 +105,13 @@ def _kept(tree: StatusTree) -> dict[str, Any]:
 def _restarted(old: StatusTree, **options: Any) -> StatusTree:
     """A new process's tree, with the log the old one kept."""
     payload = _kept(old)
-    tree = StatusTree(maintenance_store=_Pins(), **options)
+    tree = StatusTree(pin_store=_Pins(), **options)
     tree.restore_events(events_from_payload(payload), nodes_from_payload(payload))
     return tree
 
 
 def _suspended(tree: StatusTree) -> tuple[
-        dict[str, MaintenanceEntry], dict[tuple[str, str], MaintenanceEntry]]:
+        dict[str, Pin], dict[tuple[str, str], Pin]]:
     """The pins held against a path the tree holds no node at: the nodes' own, and
     their lines'."""
     nodes, lines = tree.pins()
@@ -120,7 +122,7 @@ def _suspended(tree: StatusTree) -> tuple[
 
 
 def _pin(tree: StatusTree, path: str, note: str = "being moved",
-         lasts: timedelta = _SOON) -> MaintenanceEntry:
+         lasts: timedelta = _SOON) -> Pin:
     write = tree.set_maintenance(path, note, expires_at=datetime.now(UTC) + lasts,
                                  set_by="lex")
     assert write.current is not None
@@ -276,7 +278,7 @@ class EventTests(TestCase):
     def test_nor_does_one_whose_removal_the_log_no_longer_holds(self) -> None:
         # nothing is kept of it then, its count least of all: it is seen for the
         # first time, and a first reading is published at once (ADR-0083)
-        tree = StatusTree(event_log_size=4, maintenance_store=_Pins())
+        tree = StatusTree(event_log_size=4, pin_store=_Pins())
         tree.upsert(JOBS, UNDEFINED, "watches two jobs")
         tree.upsert(IMPORT, OK, "fine")
         tree.upsert(EXPORT, OK, "run 2 succeeded", escalate_after=3)
@@ -387,7 +389,7 @@ class PinTests(TestCase):
 
     def test_the_pins_file_keeps_a_suspended_pin(self) -> None:
         pins = _Pins()
-        tree = _grown(StatusTree(maintenance_store=pins))
+        tree = _grown(StatusTree(pin_store=pins))
         pin = _pin(tree, EXPORT)
         tree.prune(JOBS, {"import"})
         tree.sweep_expired()
@@ -403,15 +405,18 @@ class LabelTests(TestCase):
         tree.set_title(EXPORT, "Export")
         tree.set_order(EXPORT, 3)
         tree.set_show_when_quiet(EXPORT, False)
+        tree.set_handbook(EXPORT, "## When it fails\n\nRun it again.")
         _grown(tree)
         tree.prune(JOBS, {"import"})
+        self.assertEqual(tree.handbook(EXPORT), "")
         # the check's own labels fill an empty field only, as on a first reading
         tree.upsert(EXPORT, OK, "run 5 succeeded", about="a job", title="export job",
-                    order=9, show_when_quiet=True)
+                    handbook="a run's", order=9, show_when_quiet=True)
         node = tree.snapshot(EXPORT)
         assert node is not None
         self.assertEqual((node.about, node.title, node.order, node.show_when_quiet),
                          ("the nightly export", "Export", 3, False))
+        self.assertEqual(tree.handbook(EXPORT), "## When it fails\n\nRun it again.")
 
 
 class KeptTests(TestCase):
@@ -425,10 +430,15 @@ class KeptTests(TestCase):
                          {"shows": "UNDEFINED", "reported": "UNDEFINED",
                           "since": instants.stamp(removed.timestamp),
                           "was": "ERROR",
-                          "cause": CAUSE_REMOVED})
+                          "cause": CAUSE_REMOVED,
+                          # a branch: so does the period of what it shows (ADR-0132)
+                          "period": {"code": "UNDEFINED",
+                                     "since": instants.stamp(removed.timestamp),
+                                     "was": "ERROR", "cause": CAUSE_REMOVED,
+                                     "by": EXPORT}})
 
     def test_the_entry_goes_when_its_row_has_left_the_log(self) -> None:
-        tree = StatusTree(event_log_size=4, maintenance_store=_Pins())
+        tree = StatusTree(event_log_size=4, pin_store=_Pins())
         tree.upsert(JOBS, UNDEFINED, "watches two jobs")
         tree.upsert(IMPORT, OK, "fine")
         tree.upsert(EXPORT, ERROR, "run 3 failed")
@@ -445,7 +455,7 @@ class KeptTests(TestCase):
     def test_each_entry_goes_with_its_own_row(self) -> None:
         # the log still holds the removal of one node and no longer that of another
         cleanup = "/ci/jobs/cleanup"
-        tree = StatusTree(event_log_size=3, maintenance_store=_Pins())
+        tree = StatusTree(event_log_size=3, pin_store=_Pins())
         tree.upsert(JOBS, UNDEFINED, "watches three jobs")
         tree.upsert(IMPORT, OK, "fine")
         tree.upsert(EXPORT, ERROR, "run 3 failed")
@@ -460,7 +470,7 @@ class KeptTests(TestCase):
         self.assertEqual(kept[cleanup]["cause"], CAUSE_REMOVED)
 
     def test_the_entry_stays_while_a_pin_is_held_against_the_node(self) -> None:
-        tree = StatusTree(event_log_size=4, maintenance_store=_Pins())
+        tree = StatusTree(event_log_size=4, pin_store=_Pins())
         tree.upsert(JOBS, UNDEFINED, "watches two jobs")
         tree.upsert(IMPORT, OK, "fine")
         tree.upsert(EXPORT, ERROR, "run 3 failed")
@@ -494,11 +504,14 @@ class RestartTests(TestCase):
             [(EU, OK, UNDEFINED, GONE), (US, WARN, UNDEFINED, GONE),
              (EXPORT, ERROR, UNDEFINED, GONE)])
         # and what is kept of it says so, as of a node removed while it was watched
+        removed = instants.stamp(_removals(tree)[-1].timestamp)
         self.assertEqual(_kept(tree)["nodes"][EXPORT], {
             "shows": "UNDEFINED", "reported": "UNDEFINED",
-            "since": instants.stamp(_removals(tree)[-1].timestamp),
+            "since": removed,
             "was": "ERROR",
-            "cause": CAUSE_REMOVED})
+            "cause": CAUSE_REMOVED,
+            "period": {"code": "UNDEFINED", "since": removed, "was": "ERROR",
+                       "cause": CAUSE_REMOVED, "by": EXPORT}})
 
     def test_nothing_is_written_for_a_node_that_showed_nothing(self) -> None:
         old = _grown()

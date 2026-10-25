@@ -2,8 +2,8 @@
 
 - **Status:** Accepted
 - **Date:** 2026-07-18
-- **Related:** [ADR-0020 — Deployment-supplied user list](0020-user-list-location.md)
-  (the library/deployment split this publishing model completes).
+- **Related:** [ADR-0046](0046-user-list-from-the-configuration-roots.md) (a deployment
+  owns its user list: the library/deployment split this publishing model completes).
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context

@@ -1,7 +1,7 @@
 """The self-report seam: what this instance says about itself (ADR-0071).
 
 ``/little-sister`` is the engine's own node — the heartbeat the dashboard draws as
-its status strip (ADR-0024) — and until this seam it could say exactly one thing,
+its status strip (ADR-0056) — and until this seam it could say exactly one thing,
 fixed at construction: that no checks are configured. Everything else the process
 knows about its own state stayed in the log. Now anything with something to say
 registers a **contributor** here, every scheduler tick asks each one for its
@@ -275,9 +275,11 @@ def _coded(name: str, entry: Entry) -> Entry:
 
 #: What an action does when an admin asks: runs, and answers with the sentence
 #: the page shows afterwards — ``""`` for nothing worth saying. Whatever it raises
-#: is caught by the route and shown as the sentence instead. A handler that
-#: returned is followed by a flush of the state layer (ADR-0076 decision 6), so
-#: what it changed reaches the store now and its sentence may say so.
+#: is caught by the route and shown as the sentence instead. A handler runs between
+#: two flushes of the state layer (ADR-0076 decision 6, ADR-0134 decision 6): the one
+#: before it sends what the process holds while a keeper's lease is still its own, so
+#: a handler may give the lease up; the one after a handler that returned sends what
+#: it changed, now, so its sentence may say so.
 ActionHandler = Callable[[], str | None]
 
 
@@ -420,8 +422,8 @@ class Held:
     seen, so a line stands while the condition does and clears when it stops.
 
     The shape the engine's own *late tick* line already had, made shareable: a
-    renderer that raises on every request, a reachability pass that times out, a
-    login that fails — each is one :meth:`see` per occurrence, logged and recorded
+    renderer that raises on every request, a login that fails — each is one
+    :meth:`see` per occurrence, logged and recorded
     in the same call, and one line while any occurrence is inside the window,
     carrying a count rather than a repetition. What the line says is the
     contributor's: :meth:`lines` writes a plain one — the latest text, and *n

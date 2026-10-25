@@ -58,34 +58,67 @@ curl -si -H "Accept: application/json" -H "Authorization: Bearer $TOKEN" \
   -H "X-Flow-Id: abc-123" "$BASE/status" | grep -i '^x-flow-id'
 ```
 
-**What a node carries is what the dashboard shows.** Three statuses — `reported`
-(what the check said), `own` (what the node shows once its own pins apply) and `code`
-(rolled up, degraded when stale) — plus `contribution`, which is non-null only when
-something kept this node out of its parent's count and names the rule that did.
-`changes` is how many times this node's own status changed in the last hour, counting
-only moves between `OK`, `WARN` and `ERROR` — the one number that says *this thing is
-flapping*, since a subject that recovers between failures never trips the escalation
-counter. `contribution` names the rule and carries what was counted: null for a rule that
+**What a node carries is what the dashboard shows.** Three statuses — `reported` (what
+the check said), `own` (what the node shows once its own pins apply) and `code` (rolled
+up, degraded when stale) — plus `contribution`, which is non-null only when something
+kept this node out of its parent's count and names the rule that did. `changes` is how
+many times this node's own status changed in the last hour, counting only moves between
+`OK`, `WARN` and `ERROR` — the one number that says *this thing is flapping*, since a
+subject that recovers between failures never trips the escalation counter.
+`contribution` names the rule and carries what was counted: null for a rule that
 withholds the node, a real code for one that transforms what it publishes — `damping`,
-where a node has read a worse code but not yet often enough in a row for this
-deployment to believe it. `entries` holds the node's reasons: `addressable` says whether they are members with
-stable slugs that can be pinned one by one, and each item carries its `text`, its own
-`code` where the check declared one, its own `maintenance`, the `subject` it is about
-and the `data` the check read — free-form JSON in the check's own vocabulary, of which
-only `at`, `started` and `ended` are typed, as RFC 3339 UTC date-times at any depth —
-and the `form` its text was written from, where the check's grading named one: the key
-a deployment re-words that line under, to show beside it and never to parse. `run` holds the timing
-— `observed_at`, `wall_seconds`, `next_at`, `frequency_seconds` where a check reads
-this node's subject on an interval, and `stale_after_seconds`, the tolerance the
-server measured freshness by, wherever it applied one — and is **absent entirely**
-where nothing answers for the node, which is not the same as present with a null
-`observed_at`. The last two come apart: a node the server re-asserts on its own tick
-names a tolerance and no interval, and so will a paced unit. `maintenance` is one object or null, and the text on it is `note`. The
-Markdown metadata is `about`, `title`, `description`, `config` (what the check ran
-with) and `report` (what its last run found) — **raw Markdown**, render it
-client-side. `order` is the declared rank, `show_when_quiet` a tri-state, and
-`children` are in rank-then-name order. Full field docs are in
-[`openapi.yaml`](openapi.yaml).
+where a node has read a worse code but not yet often enough in a row for this deployment
+to believe it. `entries` holds the node's reasons: `addressable` says whether they are
+members with stable slugs that can be pinned one by one, and each item carries its
+`text`, its own `code` where the check declared one, what handles it, `handled`, the
+`subject` it is about and the `data` the check read — free-form JSON in the check's own
+vocabulary, of which only `at`, `started` and `ended` are typed, as RFC 3339 UTC
+date-times at any depth — and the `form` its text was written from, where the check's
+grading named one: the key a deployment re-words that line under, to show beside it and
+never to parse. `run` holds the timing — `observed_at`, `wall_seconds`, `next_at`,
+`frequency_seconds` where a check reads this node's subject on an interval, and
+`stale_after_seconds`, the tolerance the server measured freshness by, wherever it
+applied one — and is **absent entirely** where nothing answers for the node, which is
+not the same as present with a null `observed_at`. The last two come apart: a node the
+server re-asserts on its own tick names a tolerance and no interval, and so will a paced
+unit. `handled` lists what handles a node now — a pin a person set, while it stands,
+and a rule the deployment configured, while it changes what counts — each with its
+`id`, its `kind`, its `source` and its `note`; an entry carries its own. The Markdown
+metadata is `about`, `title`, `description`, `config` (what the check ran with) and
+`report` (what its last run found) — **raw Markdown**, render it client-side, as an
+entry's `text`, the `note` of what handles a part and a reading's `texts` are. Every
+one is CommonMark with GitHub's tables and strikethrough, the dialect the dashboard
+renders, and in every one a status written in braces — `{ok}`, `{warn}`, `{error}`,
+`{maintenance}` or `{undefined}`, in either case — names that status, as `code` spells
+it: the dashboard draws the status's sign there, its cue and its word on its tint, so
+`{error}: restart it` reads as an instruction for the failing case. Render it as the
+client shows that status; one in code — a code span or a code block — or escaped
+(`\{error}`) is text. And in every one a link written `handbook` leads to the handbook
+of the node the text belongs to and `handbook#<section>` to a section of it, a heading
+anchored as GitHub anchors one, `## Sign in` at `#sign-in`: a node that has a handbook
+says where it is, `handbook`, the absolute address of its Handbook view as your request
+reached the server, which a link it writes so leads to with the section after it. The
+handbook's text rides in no envelope; open the address in a browser. A node's
+`description` says what its check reads, and its `about` where the thing stands, how to
+reach it and what to do. A node's `details` are named values whose keys its team chose —
+whom to ask, where tickets go, a place, how to log in, the name of the object it stands
+for — each `{"key", "text", "by"}`, its text one line of Markdown, and absent where it
+has none. The envelope carries a node's **own**, as given: its check type's first
+(`by: type`), the details of its object, which are the node's alone; then its
+deployment's (`by: deployment`), which **hold for every node beneath**, key by key, the
+nearest winning — a key both name stands once for each. The dashboard shows a node its
+own `type` details first, then the `deployment` ones of the nodes above it, the
+outermost first, then its own `deployment` ones; a key stands once, where it is named
+first, with its nearest value — its own `deployment` one over its own `type` one, either
+over one from above — and a nearest value that is empty stands nowhere, which is how a
+deployment takes a key back for a subtree. A link a detail writes in the short form
+leads into the handbook of the node it is given on. A node's `tags` are every tag it
+carries, the words its deployment writes for it and for every node above it, added up —
+`production`, `rack-4` — in the order the dashboard lists them: its whole set, unlike
+its details, so that a subtree fetched by its path says them of its root too, and
+absent where it carries none. `order` is the declared rank,
+`show_when_quiet` a tri-state, and `children` are in rank-then-name order. Full field
+docs are in [`openapi.yaml`](openapi.yaml).
 
 ## Reading a series
 
@@ -240,29 +273,113 @@ so a client that reads neither is unaffected; one that shows them beside the lin
 a reader what a deployment writes to make that line say more, and to grade it
 differently.
 
+**2.9.0 adds a node's two periods, each beside the code it is of** (little-sister
+ADR-0132): `own_period` beside `own`, when the node's own status began, and `period`
+beside `code`, since when the node has shown that code, how that began — `was`, `cause`
+— and `by`, the node whose change began it, which need not stand beneath it. Each says
+`since`, with `before` where that is a bound. Additive, and absent where there is none:
+`own_period` on a node that declares nothing, `period` on a leaf, whose one period is
+`own_period`, and `period` also wherever it is not of the `code` beside it — after a
+restart until the units beneath the node have run, and for the moment a reading has gone
+stale before the server dates it — so a client shows what it reads and compares nothing.
+
+**2.10.0 says how every Markdown text is written and what two things mean in it**
+(little-sister ADR-0018 and ADR-0133): CommonMark with GitHub's tables and
+strikethrough, the dialect the dashboard renders; `{error}` and the other four, in
+either case, naming that status, which the dashboard draws as its sign; and a link
+written `handbook` or `handbook#<section>`, which leads into the handbook of the node
+the text belongs to. A node that has a handbook gains `handbook`, the absolute address
+of its Handbook view, absent on one that has none. A node that has details gains
+`details`, its own, each saying who gave it — its check type, whose are the node's
+alone, or its deployment, whose hold for every node beneath it, key by key, the nearest
+winning — so a client resolves what the dashboard shows from the nodes above, as above.
+The descriptions of a node's `about` and `description` say what each is for as the
+dashboard divides them — `description` what the node's check reads, `about` where the
+thing stands, how to reach it and what to do. No field moves, and the text stays raw: a
+client that renders none shows the braces, a table's pipes and a link's `handbook#…`,
+which still read; one that does renders each status as it shows the status of that name,
+a table as a table, and the short form as a link to the node's `handbook` with the
+section after it.
+
+**2.11.0 adds a deployment's configured rules** (little-sister ADR-0137): a node's
+`contribution.by` may say `aggregation`, a rule in the deployment's configuration
+changing what its parent counts of it — a cap, healing, a floor, the node left out —
+with the code counted, or null where it counts nothing; and every entry gains
+`contribution`, the same object, saying what its node counted of it: `maintenance`
+with a null code where the entry is pinned, `aggregation` where a configured rule on
+the node's lines changes how it counts, and null on most entries, which count as they
+read. Additive: a node's and an entry's own `code` stay what they read, so a client
+that reads neither field is unaffected; one that does can say why a red line leaves
+its node green, as it says why a red node leaves its parent amber. A branch's `period`
+may say `rule` as its `cause` — a configured rule beginning to count beneath it, at the
+start that brought it — and name the rule in `rule`, beside the `by` of the node whose
+count it changed: a word a client that does not know it shows as it reads.
+
+**2.12.0 adds a node's tags** (little-sister ADR-0139): `tags`, every tag the node
+carries — the words its deployment writes for it and for every node above it, added up,
+each a fact about what the node is, such as `production` or `rack-4` — in the order the
+dashboard lists them, absent where it carries none. Unlike `details` it is the node's
+whole set rather than its own, so that whether a node carries a tag is answered by the
+node in hand, the root of a subtree fetched by its path among them. Additive: nothing
+else moves.
+
+**3.0.0 says every rule on a part in one list** (little-sister ADR-0141), and
+`schema_version` is 3. A node and an entry carry `handled`, what handles them now: a
+pin a person set, while it stands, and a rule the deployment configured, while it
+changes what counts — what a node passes up, how its parent counts it among its
+children, how its children or its entries count in it. Each has its `id`, its `kind`
+(`maintenance`, `seen`, `aggregation`), its `source` (`person`, `configuration`), its
+`note` and `counts_as`, in the notation a configured rule is written in: `nothing`, or
+each status it names with what that counts as. A pin adds who set it and when, who
+first did and when it ends; a configured rule its `file`, the day it stands `since`,
+its `level`, and what it names and counts where it does. `maintenance`, the one object
+a pin had, goes: a client that read it reads the `maintenance` item of `handled`. A
+`contribution` names the rule that decided, `rule` — the `id` its part's `handled`
+lists it under — and null for `damping`, `dependency` and `undefined`, and for a node
+that is `maintenance` because every one of its entries is pinned or its check said
+so. A failure a person accepted as it stands is a pin of the kind `seen`
+(little-sister ADR-0142): its part keeps its `code` and is counted `OK` above it —
+`contribution.by` says `seen`, on a node and on an entry — and its item adds the
+`status` the part read when it was marked, which a worse one ends, and the
+`occurrence` it is bound to, which another one ends: its line's, null where it is the
+failing stretch it was set in. Its `expires_at` is null where it was given no end. A
+kind or a source a client does not know is shown as it reads: further kinds come
+without another major.
+
 Decode defensively all the same: tolerate unknown fields and any child order, and
 treat an absent `run` as *nothing answers for this node* rather than as an error.
 
 ## The golden envelope
 
-[`openapi.yaml`](openapi.yaml) says what the envelope *may* contain; `envelope-2.json`
+[`openapi.yaml`](openapi.yaml) says what the envelope *may* contain; `envelope-3.json`
 beside it is one envelope that contains all of it — a node with a `run` and one without,
 a run that has never written (present, with a null `observed_at`), a run on a schedule
 carrying `frequency_seconds` and `stale_after_seconds`, the `wall_seconds` it took and
 the `next_at` it is due, and one carrying none of them, entries addressable and prose,
 an entry carrying `subject` and `data`, one carrying neither and one whose record was
 `refused`, an entry written from a `form` beside entries that carry none, an entry whose
-work is `running` and one with a `maintenance` pin of its own,
-a record carrying the typed `at` / `started` / `ended` keys at two depths, a
-`maintenance` pin on a node and a null, `show_when_quiet` in all three of its states,
+work is `running` and one a pin of its own handles, a `period` that is a
+bound and one a change began, naming `by`, an `own_period` of each kind, a leaf without
+`period` and a container without `own_period`, a node with a `handbook` and one without,
+`details` its check type gave and its deployment gave, a key both name and one given
+empty, `tags` a node carries from above and of its own beside nodes that carry none, a
+record carrying the typed `at` / `started` / `ended` keys at two depths, what handles a
+node — a person's pin, a configured rule on what a node passes up and one on its
+lines, a failure a person marked seen, a node's own with no end and a line's bound to
+its occurrence until a day — and nothing, `show_when_quiet` in all three of its states,
 and the `instance` block. It carries **both** shapes of `contribution`: the withheld
 one, which reports `code: null` and names its rule (a pin's `maintenance`, a shielded
 node's `dependency`, and `undefined` for a node that has never reported), and a damped
 node's, which *transforms* one — the node reads ERROR, the parent counted OK, and
-`contribution.code` is that OK. Those two are deliberately both here: before damping
-every rule withheld, so a fixture with only the null would quietly teach a client that
-`contribution` means *not counted*. It is **generated from the server's own API** and a
-test holds the server to it, so it cannot quietly stop being true.
+`contribution.code` is that OK — beside a node a configured rule heals, which transforms
+one too and names `aggregation`, and one a person marked seen, which names `seen`. Those
+two shapes are deliberately both here: before damping every rule withheld, so a fixture
+with only the null would quietly teach a client that `contribution` means *not counted*.
+An entry carries `contribution` in each of its shapes as well: a pinned line's
+`maintenance`, a line a rule heals, `aggregation` with the OK its node counted, a line
+marked seen, `seen` with the same OK, and the null on every other — each naming its
+`rule`, which the part's own `handled` lists. It is **generated from the server's own
+API** and a test holds the server to it, so it cannot quietly stop being true.
 
 Which means it has an obligation attached. A field added to the served snapshot is added
 to this contract in the same change — and it makes this artifact stale in that same
@@ -283,7 +400,7 @@ artifact = contract.golden_artifact()          # plus schema_version and volatil
 A client that cannot import the wheel carries the identical bytes as a shared file of
 the family.
 
-**The series read has a golden answer of its own**, `series-2.json`, beside the
+**The series read has a golden answer of its own**, `series-3.json`, beside the
 envelope in that package: one request and what it is answered — a series on its
 check's node and one on its subject's, a measure told apart by key and one with no
 `axis_to`, a series without measures, a reading that failed, a run with its own time,

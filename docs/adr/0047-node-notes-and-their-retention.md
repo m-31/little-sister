@@ -1,7 +1,7 @@
 # ADR-0047 — A node keeps notes, and they outlive it
 
 - **Status:** Accepted
-- **Date:** 2026-09-20 (accepted 2026-08-08, in the design round on what a
+- **Date:** 2026-10-25 (accepted 2026-08-08, in the design round on what a
   maintenance pin leaves behind)
 - **Related:** [ADR-0014](0014-maintenance-persistence.md) (the pin, its side-table,
   the two dates and the compare-and-set token this reuses; its `reason` field is
@@ -18,7 +18,19 @@
   `var/` is state the program owns — which side this lands on),
   [ADR-0012](0012-node-metadata.md) (`about` — what a node *is*; a note is what
   someone wants to say about it),
-  [ADR-0008](0008-json-output-api.md) (the envelope, deliberately untouched here)
+  [ADR-0080](0080-the-envelope-is-the-snapshot-published.md) (the envelope, deliberately
+  untouched here),
+  [ADR-0140](0140-a-nodes-notes-stand-on-a-tab-of-their-own.md) (the notes as built: a
+  note of its own, the *Notes* tab, the Copy document's newest, the rename and the
+  file), [ADR-0141](0141-every-pin-is-one-thing-with-a-kind-and-the-envelope-lists-what-handles-a-part.md)
+  (`pins.json`, which keeps a pin's text under `note` and retires the file that had the
+  old key), [ADR-0071](0071-what-a-restart-keeps-is-a-directory-of-files.md) (the state
+  layer the notes' file is one of),
+  [ADR-0077](0077-authority-follows-the-lease.md) (the takeover, which adopts it),
+  [ADR-0116](0116-a-path-with-no-node-says-what-is-known-of-it.md) (the page of a path
+  no node stands at, which lists its notes),
+  [ADR-0142](0142-a-failure-marked-seen-counts-as-ok-above-until-it-changes.md) (*seen*,
+  an acknowledgment, which this does not replace)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -57,17 +69,20 @@ issue tracker buys nothing, and it would not have answered the second half at al
 
 ## Decision
 
-1. **`reason` becomes `note`.** `MaintenanceEntry.reason` is renamed on the model
-   and on the persisted key. This finishes a rename the presentation layer already
-   made — `app.py` has been building its view models as `note=entry.reason` and
-   documenting `note` as "*why*, the admin's justification" for some time — and it
-   frees `reason` to mean the one thing it means everywhere else in this system: a
-   line a **check** reported. The persisted key is a **clean break**, not a
-   migration, on [ADR-0036](0036-addressable-reasons.md)'s precedent: an entry
-   carrying only the old key loses its text with a warning and the next save
-   rewrites the file. This is runtime state the program owns, every pin in it is
-   bounded by a finite expiry, and one compatibility branch in the read path would
-   outlive the problem it solves.
+1. **`reason` becomes `note`.** A pin's text is renamed in the model, the form and the
+   file at once: it is `Pin.note`, the field a pin's form posts is `note`, and a pin in
+   `pins.json` keeps its text under `note`
+   ([ADR-0140](0140-a-nodes-notes-stand-on-a-tab-of-their-own.md) decision 6). This
+   finishes a rename the presentation layer had made first — `app.py` built its view
+   models as `note=entry.reason` and documented `note` as "*why*, the admin's
+   justification" — and it frees `reason` to mean the one thing it means everywhere
+   else in this system: a line a **check** reported. The persisted key is a **clean
+   break**, not a migration, on [ADR-0036](0036-addressable-reasons.md)'s precedent: no
+   file carries the old key, since `pins.json` is new with the rename and
+   `maintenance.json`, which carried it, is not read
+   ([ADR-0141](0141-every-pin-is-one-thing-with-a-kind-and-the-envelope-lists-what-handles-a-part.md)
+   decision 1). This is runtime state the program owns, and one compatibility branch in
+   the read path would outlive the problem it solves.
 
 2. **A note is not a contribution rule.** Every mechanism in the maintenance and
    aggregation work is a transformation at the node boundary —
@@ -80,7 +95,11 @@ issue tracker buys nothing, and it would not have answered the second half at al
 
 3. **A node keeps a note history** — append-only, time-ordered, addressed like a pin
    (a node path, or a `(path, slug)` entry key, so the entry case that motivated all
-   of this is covered). A pin's note is an entry in that history.
+   of this is covered). A pin's note is an entry in that history, and so is a note an
+   admin writes of its own, bound to nothing, on a node or on one of its lines
+   ([ADR-0140](0140-a-nodes-notes-stand-on-a-tab-of-their-own.md) decision 1). The
+   history is read on a tab of the node's own, *Notes*, and a node's Copy document
+   carries the newest (ADR-0140 decisions 2 and 4).
 
 4. **The note is appended when the pin is set, not when it ends.** It exists from
    the moment it is written; expiry then does nothing to it at all — the pin stops
@@ -112,7 +131,9 @@ issue tracker buys nothing, and it would not have answered the second half at al
    the notes index is browsable and **searchable independently of the tree** (a note
    on a path that does not currently exist must still be findable, or it is worse
    than deleted), and a path rename orphans its notes silently — named, accepted,
-   and not solved here.
+   and not solved here. Until that index stands, the page of a path no node stands at
+   lists the notes written for the path and beneath it
+   ([ADR-0116](0116-a-path-with-no-node-says-what-is-known-of-it.md)).
 
 8. **A note on an entry slug the current run does not report is shown on the node,
    marked as belonging to an unreported entry.** This extends
@@ -142,8 +163,9 @@ issue tracker buys nothing, and it would not have answered the second half at al
     to tidy them to 12 and 24 breaks the only case they exist for. One parser
     consequence: the existing duration vocabulary reads `m` as **minutes**
     (`retry_interval: 2m`), so months are spelled `mo`, and a bare `m` in these two
-    keys is **refused at load** rather than silently accepted — a retention floor of
-    thirteen minutes is not a value anyone meant to write.
+    keys is **refused at load** — warned of, the default taking its place (ADR-0140
+    decision 9) — rather than silently accepted: a retention floor of thirteen minutes
+    is not a value anyone meant to write.
 
 11. **The four keys live in `settings.yaml`**, with the values above as library
     defaults, so an existing deployment upgrades into this behavior without
@@ -153,13 +175,14 @@ issue tracker buys nothing, and it would not have answered the second half at al
     A node that never receives another note must still trim, and the tick is where
     this project already puts periodic disposal.
 
-13. **Notes are persisted in their own `var/notes.json`**, on
+13. **Notes are persisted in their own file, `var/state/notes.json`**, a file of the
+    state layer ([ADR-0071](0071-what-a-restart-keeps-is-a-directory-of-files.md)), on
     [ADR-0014](0014-maintenance-persistence.md)'s discipline exactly: atomic temp
     file plus `os.replace`, a write failure logged rather than raised, the in-memory
-    table authoritative for the session, no flush on shutdown. A third table inside
-    `var/maintenance.json` was the alternative; the filename would then be a lie, and
-    the two now have different lifecycles — one bounded by an expiry, one bounded by
-    a retention policy.
+    table authoritative for the session, no flush on shutdown; a takeover adopts it
+    ([ADR-0077](0077-authority-follows-the-lease.md)). A third table inside the pins'
+    file was the alternative; the filename would then be a lie, and the two have
+    different lifecycles — one bounded by a pin's end, one by a retention policy.
 
 14. **The trust class is unchanged.** A note is admin-authored, like the pin's text
     today, so it renders as full Markdown
@@ -170,12 +193,12 @@ issue tracker buys nothing, and it would not have answered the second half at al
 
 15. **The JSON envelope changes nothing here.** Notes reach clients in the client
     contract round's one `schema_version` decision, additively, and nothing ships
-    piecemeal before it ([ADR-0008](0008-json-output-api.md)). Half of that is spent
+    piecemeal before it. Half of that is spent
     early: [ADR-0080](0080-the-envelope-is-the-snapshot-published.md) publishes the
     pin as one object and calls its text **`note`**, this record's word, because
     renaming a published field later would be a second breaking change for one word
-    and that round was the release in which it was free. The model still calls it
-    `reason` until the history above is built; nothing else of this record ships yet.
+    and that round was the release in which it was free. The model calls it `note` as
+    well (decision 1), and the envelope carries nothing else of this record.
 
 Whether history is kept forever, for a number of days, or as the last N changes was
 an open question. Decision 9 is the answer — **the conjunction of all three, with a
@@ -198,14 +221,15 @@ floor** — and the durable event log inherits this design rather than re-decidi
 - **A note is not an event.** Events are derived and bounded; notes are authored and
   retained. They answer different questions and are not merged, even where both
   appear on the same page.
-- **Acknowledgment does not supersede this.** When it lands, an ack says *someone is
-  on it* and is bound to a condition; a note says *here is
-  what we know* and is bound to nothing. A ticket link may sit on either, and the
-  note is what remains once the pin and the ack are both gone.
+- **Acknowledgment does not supersede this.** An acknowledgment — *seen*,
+  [ADR-0142](0142-a-failure-marked-seen-counts-as-ok-above-until-it-changes.md) — says
+  *someone is on it* and is bound to a condition; a note says *here is what we know*
+  and is bound to nothing. A ticket link may sit on either, and the note is what
+  remains once the pin and the ack are both gone.
 - Every maintenance surface gains a second thing to show and must keep them distinct:
   the live pin's note (editable, silencing something) and the node's history
-  (frozen, silencing nothing). The `/maintenance` page, the card, the popover and the
-  new index all have to say which they are showing.
+  (frozen, silencing nothing). *Handled*, the card, the popover and the new index all
+  have to say which they are showing.
 - `set_maintenance(reason=…)`, the form field, and the templates rename together;
   this is one break rather than two, and it lands in the same slice as the primitive.
 - Notes on paths no check covers accumulate invisibly unless the index is built as

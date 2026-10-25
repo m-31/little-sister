@@ -16,8 +16,9 @@ the model silently.
 The shape priced is the page's **first look** (ADR-0128 decision 6), as the
 configuration draws it and never as a status or a click does: an open node is
 the box it always was, a closed one a chip in its level's run, each run as many
-heading rows as it has lines of chips at the level's width, and a closed
-top-level card one row (:class:`Priced`).  Nothing beneath a chip is priced.
+heading rows as it has lines of chips at the level's width — under the look
+`boxes: packed` at the width of the one column it stands in (ADR-0138) — and a
+closed top-level card one row (:class:`Priced`).  Nothing beneath a chip is priced.
 A run in a level narrower than two of its columns and their gap wraps as it
 comes (backlog #91's note, §2, 2026-10-17), each chip at its own width — the
 model's column the server's estimate, where the stylesheet's is the column the
@@ -276,6 +277,28 @@ def _nested_columns(width: int, child_count: int, runs: bool = False) -> int:
     return max(1, fitting) if runs else min(child_count, max(1, fitting))
 
 
+def _run_count(kids: Sequence[_Shape | None]) -> int:
+    """The runs of chips a level's children stand in: each stretch of closed ones."""
+    runs = 0
+    chip = False
+    for kid in kids:
+        if kid is None and not chip:
+            runs += 1
+        chip = kid is None
+    return runs
+
+
+def _level_columns(width: int, boxes: int, runs: int, packed: bool) -> int:
+    """The tracks a level stands its children in at ``width``: in rows its open
+    boxes' (:func:`_nested_columns`); packed, where a run of chips stands in one
+    column as a box does, as many as fit and its boxes and runs fill — the tracks
+    `dashboard-layout.js` lays a packed level of a card (ADR-0138)."""
+    columns = _nested_columns(width, boxes, runs > 0)
+    if packed and boxes >= 2:
+        return min(columns, boxes + runs)
+    return columns
+
+
 def _run_lines(chips: Sequence[int], chip_w: int, width: int) -> int:
     """The lines a run takes at a level ``width`` wide, ``chips`` its chips' own
     widths: as many to a line as columns of ``chip_w`` fit, from two on; below
@@ -331,22 +354,71 @@ def _level_rows(kids: Sequence[_Shape | None], heights: Iterator[int],
     return rows
 
 
-def _shape_height(shape: _Shape | None, width: int) -> int:
-    """Stable vertical flow rows for one shape at ``width``: the straight-line
-    reference evaluation, re-walking the subtree at every width."""
+def _first_shortest(fill: Sequence[int], span: int) -> int:
+    """Where a box ``span`` columns wide stands in a packed level: the leftmost of the
+    runs of columns whose tallest column ends lowest — ``shortest`` in
+    dashboard-layout.js. That script calls a column within 32 pixels of the lowest as
+    low, a line of a box's lines, and so takes a run nothing stands in yet before any;
+    a row of this model is a box's heading and its lines, so here only an equal height
+    ties, and a run nothing stands in, at nought, is the lowest already."""
+    if span == 1:
+        return fill.index(min(fill))
+    best = 0
+    low = max(fill[:span])
+    for start in range(1, len(fill) - span + 1):
+        top = max(fill[start:start + span])
+        if top < low:
+            best, low = start, top
+    return best
+
+
+def _level_packed(kids: Sequence[_Shape | None], heights: Iterator[int],
+                  columns: int, chip_w: int, width: int,
+                  own: Sequence[int] = ()) -> int:
+    """The rows a level costs packed, as the look `boxes: packed` draws it
+    (ADR-0138): its open boxes, ``heights`` in their order, and its runs of chips,
+    each beneath the shortest of ``columns`` — a run as many rows as its lines of
+    chips at a column's width, ``own`` its chips' own widths in order — the level as
+    tall as its tallest column."""
+    column = max(1, (width - _NESTED_GAP * (columns - 1)) // columns)
+    fill = [0] * columns
+    chips: list[int] = []
+    widths = iter(own)
+
+    def stand(rows: int) -> None:
+        fill[_first_shortest(fill, 1)] += rows
+
+    for kid in kids:
+        if kid is None:
+            chips.append(next(widths, chip_w))
+            continue
+        if chips:
+            stand(_run_lines(chips, chip_w, column))
+            chips = []
+        stand(next(heights))
+    if chips:
+        stand(_run_lines(chips, chip_w, column))
+    return max(fill)
+
+
+def _shape_height(shape: _Shape | None, width: int, packed: bool = False) -> int:
+    """Stable vertical flow rows for one shape at ``width``, its levels in rows or,
+    where ``packed``, packed: the straight-line reference evaluation, re-walking the
+    subtree at every width."""
     if shape is None:
         return 1
     cost, chip_w, kids, own = shape
     if not kids:
         return cost
     boxes = [kid for kid in kids if kid is not None]
-    columns = _nested_columns(width, len(boxes), len(boxes) < len(kids))
+    columns = _level_columns(width, len(boxes), _run_count(kids), packed)
     child_width = max(
         1,
         (width - _NESTED_GAP * (columns - 1)) // columns - _NODE_INSET,
     )
-    heights = iter([_shape_height(box, child_width) for box in boxes])
-    return cost + _level_rows(kids, heights, columns, chip_w, width, own)
+    heights = iter([_shape_height(box, child_width, packed) for box in boxes])
+    level = _level_packed if packed else _level_rows
+    return cost + level(kids, heights, columns, chip_w, width, own)
 
 
 def _flow_height(node: StatusSnapshot, remaining_depth: int, width: int,
@@ -362,8 +434,11 @@ def _flow_height(node: StatusSnapshot, remaining_depth: int, width: int,
     return _shape_height(_shape(node, remaining_depth, reason_cost, priced), width)
 
 
-def _shape_pieces(shape: _Shape | None) -> tuple[tuple[int, int], ...]:
-    """A shape's modeled height as ``(from_width, height)`` pieces.
+def _shape_pieces(shape: _Shape | None,
+                  packed: bool = False) -> tuple[tuple[int, int], ...]:
+    """A shape's modeled height as ``(from_width, height)`` pieces, its levels in
+    rows or, where ``packed``, packed (:func:`_level_packed`) — which changes what a
+    level costs at a width and never where its cost can change.
 
     Built bottom-up: each node combines its **children's pieces** instead of
     re-walking its whole subtree at every threshold, so a node's work is
@@ -374,11 +449,13 @@ def _shape_pieces(shape: _Shape | None) -> tuple[tuple[int, int], ...]:
 
     A node's height can change where its own nested column count flips —
     ``k`` ordinary tracks first fit, every count that can while a run holds the
-    level's tracks — where a run's chips per line change, below two columns where
-    a stretch of a run's chips first fits on one line, and where a child's
-    height changes, mapped back through the exact integer arithmetic the width
-    division uses.  The union is a superset of the true change points, which is
-    all correctness needs: a spurious threshold merges away as an equal piece.
+    level's tracks, packed every count its boxes and runs can fill — where a run's
+    chips per line change, below two columns where a stretch of a run's chips
+    first fits on one line, and where a child's height changes, mapped back
+    through the exact integer arithmetic the width division uses — a run's own
+    widths too where it stands in one column packed.  The union is a superset of
+    the true change points, which is all correctness needs: a spurious threshold
+    merges away as an equal piece.
     ``_shape_height`` remains the straight-line reference implementation; a
     differential test holds the two together.
     """
@@ -389,8 +466,8 @@ def _shape_pieces(shape: _Shape | None) -> tuple[tuple[int, int], ...]:
         return ((1, cost),)
 
     boxes = [kid for kid in kids if kid is not None]
-    runs = len(boxes) < len(kids)
-    child_pieces = [_shape_pieces(box) for box in boxes]
+    runs = _run_count(kids)
+    child_pieces = [_shape_pieces(box, packed) for box in boxes]
     child_bounds = sorted({
         bound
         for pieces in child_pieces
@@ -399,6 +476,7 @@ def _shape_pieces(shape: _Shape | None) -> tuple[tuple[int, int], ...]:
 
     thresholds: set[int] = {1}
     most = (0 if len(boxes) < 2
+            else min(len(boxes) + runs, MAX_LAYOUT_TRACKS) if packed
             else MAX_LAYOUT_TRACKS if runs
             else min(len(boxes), MAX_LAYOUT_TRACKS))
     for columns in range(1, max(1, most) + 1):
@@ -423,13 +501,13 @@ def _shape_pieces(shape: _Shape | None) -> tuple[tuple[int, int], ...]:
             chips = []
     if chips:
         chip_runs.append(chips)
+    # the widths a run's lines change at, the run's own: where its chips per line
+    # change, and below two columns, where a run wraps as it comes, where a stretch
+    # of its chips, each with the gap after it, first fits on one
+    reaches: set[int] = set()
     longest = max((len(run) for run in chip_runs), default=0)
     for per_line in range(2, longest + 1):
-        reach = per_line * (chip_w + _CHIP_GAP) - _CHIP_GAP
-        if 1 < reach <= _MAX_CONTENT_WIDTH:
-            thresholds.add(reach)
-    # below two columns a run wraps as it comes: its lines change where a stretch
-    # of its chips, each with the gap after it, first fits on one
+        reaches.add(per_line * (chip_w + _CHIP_GAP) - _CHIP_GAP)
     bound = 2 * chip_w + _CHIP_GAP
     for run in chip_runs:
         for start, first in enumerate(run):
@@ -438,19 +516,27 @@ def _shape_pieces(shape: _Shape | None) -> tuple[tuple[int, int], ...]:
                 reach += own_width + _CHIP_GAP
                 if reach >= bound:
                     break
-                if 1 < reach <= _MAX_CONTENT_WIDTH:
-                    thresholds.add(reach)
+                reaches.add(reach)
+    # in rows a run stands across the level; packed it stands in one of its columns,
+    # so a run's width is mapped back through every count the level can have
+    for columns in range(1, (max(1, most) if packed else 1) + 1):
+        gap_total = _NESTED_GAP * (columns - 1)
+        for reach in reaches:
+            mapped = columns * reach + gap_total
+            if 1 < mapped <= _MAX_CONTENT_WIDTH:
+                thresholds.add(mapped)
 
+    level = _level_packed if packed else _level_rows
     pieces: list[tuple[int, int]] = []
     for width in sorted(thresholds):
-        columns = _nested_columns(width, len(boxes), runs)
+        columns = _level_columns(width, len(boxes), runs, packed)
         child_width = max(
             1,
             (width - _NESTED_GAP * (columns - 1)) // columns - _NODE_INSET,
         )
         heights = iter([_piece_height(child, child_width)
                         for child in child_pieces])
-        height = cost + _level_rows(kids, heights, columns, chip_w, width, own)
+        height = cost + level(kids, heights, columns, chip_w, width, own)
         if not pieces or pieces[-1][1] != height:
             pieces.append((width, height))
     return tuple(pieces)
@@ -458,11 +544,12 @@ def _shape_pieces(shape: _Shape | None) -> tuple[tuple[int, int], ...]:
 
 def _height_pieces(node: StatusSnapshot, remaining_depth: int,
                    reason_cost: int,
-                   priced: Priced | None = None) -> tuple[tuple[int, int], ...]:
+                   priced: Priced | None = None,
+                   packed: bool = False) -> tuple[tuple[int, int], ...]:
     """The subtree's modeled height as ``(from_width, height)`` pieces
     (:func:`_shape_pieces`), the node itself never closed: a closed top-level
     card is priced by :func:`dashboard_layout`."""
-    return _shape_pieces(_shape(node, remaining_depth, reason_cost, priced))
+    return _shape_pieces(_shape(node, remaining_depth, reason_cost, priced), packed)
 
 
 def _piece_height(pieces: Sequence[tuple[int, int]], width: int) -> int:
@@ -664,6 +751,98 @@ def _plan_cost(pieces_per_root: Sequence[Sequence[tuple[int, int]]],
     return page, sum(heights)
 
 
+def _pack_cost(heights: Sequence[int], spans: Sequence[int],
+               tracks: int) -> tuple[int, int]:
+    """The cards packed as the look `boxes: packed` packs them (ADR-0138): each in
+    page order beneath the shortest run of its span (:func:`_first_shortest`), as
+    ``(page, filled)`` — the tallest column, the number a viewer's scrollbar answers
+    to, and the columns' heights summed, which tells two plans of one page apart
+    where one leaves a hole a card's span made beside the column it stands below."""
+    columns = max(1, tracks)
+    fill = [0] * columns
+    for height, span in zip(heights, spans, strict=True):
+        span = min(span, columns)
+        start = _first_shortest(fill, span)
+        bottom = max(fill[start:start + span]) + height
+        fill[start:start + span] = [bottom] * span
+    return max(fill), sum(fill)
+
+
+def _pack_spans(profiles: Sequence[FlowProfile],
+                tracks: int) -> tuple[tuple[int, ...], tuple[int, int]]:
+    """Useful span steps for cards that are packed rather than rowed, with what the
+    packed level then costs (:func:`_pack_cost`).
+
+    A packed level has no rows, so a span is not a row's spare tracks spent: a card
+    widened stands in more columns, shorter, and the cards after it pack around it.
+    Every card starts at one track; then, while one card's next useful step lowers
+    the packed page — or keeps it and fills its columns less — the card whose step
+    lowers it most takes it, exact ties staying with the earlier card. That is what
+    gives a tower the tracks beside it, and what keeps a short card at one where
+    two would stand it beneath the tower.
+    """
+    if tracks < 1:
+        raise ValueError("track_count must be at least 1")
+    for profile in profiles:
+        _validate_profile(profile)
+    positions = [0] * len(profiles)
+    spans = [1] * len(profiles)
+    heights = [profile[0].height for profile in profiles]
+    cost = _pack_cost(heights, spans, tracks)
+    while True:
+        winner = -1
+        best = cost
+        for index, profile in enumerate(profiles):
+            if positions[index] + 1 >= len(profile):
+                continue
+            step = profile[positions[index] + 1]
+            if step.span > tracks:
+                continue
+            held = spans[index], heights[index]
+            spans[index], heights[index] = step.span, step.height
+            trial = _pack_cost(heights, spans, tracks)
+            spans[index], heights[index] = held
+            if trial < best:
+                winner, best = index, trial
+        if winner < 0:
+            return tuple(spans), cost
+        positions[winner] += 1
+        step = profiles[winner][positions[winner]]
+        spans[winner], heights[winner] = step.span, step.height
+        cost = best
+
+
+def _packed_allocation_at(pieces_per_root: Sequence[Sequence[tuple[int, int]]],
+                          grid_width: int,
+                          tracks: int) -> tuple[int, int, tuple[int, ...]]:
+    """The packed plan for ``tracks`` equal tracks at ``grid_width``, with its cost:
+    :func:`_pack_spans`, or the rows' own plan where that packs no taller, so that
+    a packed wall is never planned worse than the rows' plan would pack it."""
+    profiles = [
+        _profile_at(pieces, grid_width, tracks)
+        for pieces in pieces_per_root
+    ]
+    spans, (page, filled) = _pack_spans(profiles, tracks)
+    rowed = allocate_spans(profiles, tracks)
+    rowed_page, rowed_filled = _packed_plan_cost(pieces_per_root, grid_width,
+                                                 tracks, rowed)
+    if (rowed_page, rowed_filled) < (page, filled):
+        return rowed_page, rowed_filled, rowed
+    return page, filled, spans
+
+
+def _packed_plan_cost(pieces_per_root: Sequence[Sequence[tuple[int, int]]],
+                      grid_width: int, tracks: int,
+                      spans: Sequence[int]) -> tuple[int, int]:
+    """Reprice a **fixed** plan packed at ``grid_width``, as :func:`_plan_cost`
+    reprices one in rows: (page, filled)."""
+    heights = [
+        _piece_height(pieces, _span_width(grid_width, tracks, span))
+        for pieces, span in zip(pieces_per_root, spans, strict=True)
+    ]
+    return _pack_cost(heights, spans, tracks)
+
+
 def _band_events(
         pieces_per_root: Sequence[Sequence[tuple[int, int]]],
 ) -> dict[int, set[int]]:
@@ -697,8 +876,11 @@ def _band_events(
 
 def _plan_breakpoints(
         pieces_per_root: Sequence[Sequence[tuple[int, int]]],
+        packed: bool = False,
 ) -> tuple[tuple[int, int, tuple[int, ...]], ...]:
-    """``(tenths, tracks, plan)`` bands over the grid width, changes only.
+    """``(tenths, tracks, plan)`` bands over the grid width, changes only — each
+    candidate priced in rows, or where ``packed`` as the look `boxes: packed` packs
+    it (:func:`_packed_allocation_at`), by the same rules.
 
     At every event width the affected track counts are repriced and the band
     is the candidate with the smallest modeled page height — ties fall to the
@@ -735,14 +917,15 @@ def _plan_breakpoints(
     fractional widths, so at 1037.5px a wall could carry a 105-row plan while
     a legal candidate offered 75 until the next whole pixel.
     """
+    allocation = _packed_allocation_at if packed else _allocation_at
+    repriced = _packed_plan_cost if packed else _plan_cost
     events = _band_events(pieces_per_root)
     priced: dict[int, tuple[int, int, tuple[int, ...]]] = {}
     breakpoints: list[tuple[int, int, tuple[int, ...]]] = []
     incumbent: tuple[int, tuple[int, ...]] | None = None
     for grid_width in sorted(events):
         for tracks in events[grid_width]:
-            priced[tracks] = _allocation_at(pieces_per_root, grid_width,
-                                            tracks)
+            priced[tracks] = allocation(pieces_per_root, grid_width, tracks)
         autofill = _track_count(grid_width)
         floor = _track_floor(grid_width)
         held_tracks = (incumbent[0] or autofill) if incumbent else 0
@@ -768,8 +951,8 @@ def _plan_breakpoints(
             # incumbent as repriced at *this* width — that inequality is what
             # keeps the published band at the best legal outer choice, and it
             # is why a snap cannot cost the wall a plan it already had.
-            held = _plan_cost(pieces_per_root, grid_width, held_tracks,
-                              incumbent[1])
+            held = repriced(pieces_per_root, grid_width, held_tracks,
+                            incumbent[1])
             if (page, total, negated) >= (*held, -held_tracks):
                 continue
         tracks = challenger[0]
@@ -794,27 +977,31 @@ def _plan_breakpoints(
 # node sets.  Entries are immutable, so the worst a concurrent render can do is
 # compute one twice.
 _MEMO_CAP = 16
-_memo: dict[tuple[_Shape | None, ...], DashboardLayout] = {}
+_memo: dict[tuple[bool, tuple[_Shape | None, ...]], DashboardLayout] = {}
 
 
 def dashboard_layout(nodes: Sequence[StatusSnapshot], max_depth: int,
                      reason_cap: int = DEFAULT_REASON_CAP,
-                     priced: Priced | None = None) -> DashboardLayout:
+                     priced: Priced | None = None,
+                     packed: bool = False) -> DashboardLayout:
     """Build stable flow pieces, diagnostic plans and width breakpoints for the
     page's top-level cards, ``nodes``, as its first look draws them (``priced``,
-    every node open where it is ``None``)."""
+    every node open where it is ``None``) — in rows, or where ``packed`` for the
+    look `boxes: packed`, which a viewer chose (ADR-0138): every level then priced
+    as it is packed, and the plan the one that packs the page shortest."""
     remaining_depth = max(0, max_depth - 1)
     cost = _reason_cost(reason_cap)
     closed = priced.closed if priced is not None else frozenset()
-    key = tuple(
+    shapes = tuple(
         None if node.path in closed
         else _shape(node, remaining_depth, cost, priced)
         for node in nodes
     )
+    key = (packed, shapes)
     cached = _memo.get(key)
     if cached is not None:
         return cached
-    pieces_per_root = tuple(_shape_pieces(shape) for shape in key)
+    pieces_per_root = tuple(_shape_pieces(shape, packed) for shape in shapes)
     weights = tuple(
         _piece_height(pieces, _span_width(_TRACK_WIDTH, 1, 1))
         for pieces in pieces_per_root
@@ -825,7 +1012,9 @@ def dashboard_layout(nodes: Sequence[StatusSnapshot], max_depth: int,
         for pieces in pieces_per_root
     )
     plans = tuple(
-        allocate_spans(
+        _packed_allocation_at(pieces_per_root, _grid_start(track_count),
+                              track_count)[2] if packed
+        else allocate_spans(
             tuple(_profile_at(pieces, _grid_start(track_count), track_count)
                   for pieces in pieces_per_root),
             track_count,
@@ -836,7 +1025,7 @@ def dashboard_layout(nodes: Sequence[StatusSnapshot], max_depth: int,
         weights=weights,
         profiles=profiles,
         plans=plans,
-        breakpoints=_plan_breakpoints(pieces_per_root),
+        breakpoints=_plan_breakpoints(pieces_per_root, packed),
     )
     if len(_memo) >= _MEMO_CAP:
         _memo.pop(next(iter(_memo)))

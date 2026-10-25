@@ -1,7 +1,7 @@
 {#- The page band: what used to be a title row, a loose
     about paragraph and a freshness caption stacked down the page, gathered into
     one aligned block — breadcrumb/title on the left, the updated-line and the
-    filters on the right, the node's about beneath.
+    filters on the right, the node's views beneath.
 
     The freshness line is not chrome. It is the ADR-0005 promise that the page
     dates its own data, so it reads as a measurement: tabular figures so the
@@ -31,7 +31,7 @@
                 "… / critical  Critical". -#}
             {%- set shown = (node | node_title) if node else '' %}
             {%- if shown %}
-            <span class="node-title node-title--header">{{ shown | markdown_inline }}</span>
+            <span class="node-title node-title--header">{{ shown | markdown_inline(node=node.path) }}</span>
             {%- endif %}
         </h1>
         {%- if band_stamp or band_filters %}
@@ -65,6 +65,26 @@
                            {% if hide_idle %}checked{% endif %} data-ls-submit>
                     <label class="form-check-label" for="hide_idle">hide idle</label>
                 </div>
+                {#- The tag the wall shows only what carries (ADR-0139 decision 5): one at
+                    a time, the known ones in their order, each option's tooltip what it
+                    means, then any other the configuration writes. Part of the address,
+                    never of a cookie — unlike hide ok it hides failures — so the form
+                    carries it and nothing remembers it. Offered where a tag is written
+                    or one is asked for. -#}
+                {%- set tag = tag | default('') %}
+                {%- set tag_options = tag_options | default([]) %}
+                {%- if tag_options or tag %}
+                <select class="form-select form-select-sm status-filters__tag" name="tag"
+                        aria-label="Only what carries a tag" data-ls-submit>
+                    <option value=""{% if not tag %} selected{% endif %}>every node</option>
+                    {%- for offered, line in tag_options %}
+                    <option value="{{ offered }}"{% if offered == tag %} selected{% endif %}{% if line %} title="{{ line }}"{% endif %}>{{ offered }}</option>
+                    {%- endfor %}
+                    {%- if tag and tag not in tag_options | map('first') | list %}
+                    <option value="{{ tag }}" selected>{{ tag }}</option>
+                    {%- endif %}
+                </select>
+                {%- endif %}
                 <noscript>
                     <button class="btn btn-sm btn-primary" type="submit">Apply</button>
                 </noscript>
@@ -87,48 +107,49 @@
         </div>
         {%- endif %}
     </div>
-    {#- What the node is, said once and open, on every view of it (backlog #91
-        §3.5): its text at a reading measure beneath the trail and the title, and
-        nothing before it. It was said here in full and again as *About:* in a leaf's
-        status card, so the instance's own nodes, whose `about` is a paragraph, pushed
-        their report down by twice its length; then, from 0.3.19, folded behind a line
-        that named it and showed how it began, a click for what the node is. It is the
-        short account of the node, a sentence or a few, and a note at startup names one
-        past about 400 characters (`nodes.py`); what a team writes at length about a
-        node is to be its handbook, a tab of its own (#113). -#}
-    {%- if node and node.about %}
-    <div class="ls-band__about">
-        <div class="ls-band__about-body md-body">{{ node.about | markdown }}</div>
-    </div>
-    {%- endif %}
-    {#- A node's views (ADR-0097 decision 3): its status, its series, its history
-        and its Copy document, each a route of its own addressed by the node's path.
-        Series stands where a curve can stand at or beneath the node, as the
-        configuration says (`series_tab`), so it does not come and go with the
-        readings, and carries the number of curves its view draws, none where it
-        draws none (ADR-0114 decision 3) — a number that moves with what is declared
-        and what the tree holds, not with a reading; History on every node but the
-        root, which declares nothing of its own and has no periods; Copy on every
-        node and on the root, whose Copy is the tree's document (ADR-0115 decision
-        7) — last, since it hands over what the others show. They close the band,
-        beneath what the node is about, so the band's rule is their track: the views
-        are of what lies below it. -#}
+    {#- What the node is stands in its *About* card on its Status tab, beside its
+        facts (ADR-0133 decision 1), and no longer here: said open in the band on
+        every view of the node, its `about` took most of a phone's first screen
+        before the node's status, and the views beside Status do without it, one
+        click away. -#}
+    {#- A node's views (ADR-0097 decision 3): its status, its series, its history,
+        its notes, its handbook and its Copy document, each a route of its own
+        addressed by the node's path. Series stands where a curve can stand at or
+        beneath the node, as the configuration says (`series_tab`), so it does not
+        come and go with the readings, and carries the number of curves its view
+        draws, none where it draws none (ADR-0114 decision 3) — a number that moves
+        with what is declared and what the tree holds, not with a reading; History on
+        every node but the root, which declares nothing of its own and has no
+        periods; Notes beside it, on every node but the root, with the number of
+        notes its view lists as Series carries its curves (ADR-0140); Handbook on a
+        node that has one (ADR-0133 decision 3), which the configuration gives it, or
+        a run's first fill, so it does not come and go either; Copy on every node and
+        on the root, whose Copy is the tree's document (ADR-0115 decision 7) — last,
+        since it hands over what the others show. They close the band, so the band's
+        rule is their track: the views are of what lies below it. A count says what
+        it counts to a reader who hears the tab rather than sees it. -#}
     {%- if view is defined %}
     {%- set tabs = [('Status', url_for('status', branch=branch) if branch
-                     else url_for('status'), 'status', 0)] %}
+                     else url_for('status'), 'status', 0, '')] %}
     {%- if series_tab | default(false) %}
     {%- set tabs = tabs + [('Series', url_for('series', path=branch) if branch
                             else url_for('series_index'), 'series',
-                            series_count | default(0))] %}
+                            series_count | default(0), 'curve')] %}
     {%- endif %}
     {%- if branch %}
-    {%- set tabs = tabs + [('History', url_for('history', path=branch), 'history', 0)] %}
+    {%- set tabs = tabs + [('History', url_for('history', path=branch), 'history', 0, ''),
+                           ('Notes', url_for('notes', path=branch), 'notes',
+                            notes_count(branch), 'note')] %}
+    {%- endif %}
+    {%- if has_handbook(branch) %}
+    {%- set tabs = tabs + [('Handbook', url_for('handbook', path=branch) if branch
+                            else url_for('handbook'), 'handbook', 0, '')] %}
     {%- endif %}
     {%- set tabs = tabs + [('Copy', url_for('copy', branch=branch) if branch
-                            else url_for('copy'), 'copy', 0)] %}
+                            else url_for('copy'), 'copy', 0, '')] %}
     <nav class="ls-views" aria-label="Views of this node">
-        {%- for label, href, name, count in tabs %}
-        <a class="ls-views__tab{% if name == view %} is-current{% endif %}" href="{{ href }}"{% if name == view %} aria-current="page"{% endif %}>{{ label }}{% if count %} <span class="ls-views__count">{{ count }}</span><span class="visually-hidden"> {{ "curve" if count == 1 else "curves" }}</span>{% endif %}</a>
+        {%- for label, href, name, count, unit in tabs %}
+        <a class="ls-views__tab{% if name == view %} is-current{% endif %}" href="{{ href }}"{% if name == view %} aria-current="page"{% endif %}>{{ label }}{% if count %} <span class="ls-views__count">{{ count }}</span><span class="visually-hidden"> {{ unit if count == 1 else unit ~ "s" }}</span>{% endif %}</a>
         {%- endfor %}
     </nav>
     {%- endif %}

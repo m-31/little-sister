@@ -1,12 +1,11 @@
-"""The tab's map: what a viewer opened stands through the refresh — in a browser.
+"""The tab's map: what a viewer set stands through the refresh — in a browser.
 
-ADR-0127 decisions 9 and 10, their first stage: today's two folds — a level's *+N
-more* and a box's *⌄ all N* beneath its lines, the chevron as it stood — survive every
-refresh and a reload of the tab,
-in one map one script owns, `tree.js`, in the tab's `sessionStorage`; a new tab starts
-as configured, and no cookie is written. Around the swap the keyboard's focus stays
-on its control and an open inspection card on its node. On the kiosk the map lives
-in memory alone, and five minutes without input bring the first look back. The
+ADR-0127 decisions 9 and 10: a box a click on its name closed and a box's *⌄ all N*
+beneath its lines, the chevron as it stood, survive every refresh and a reload of the
+tab, in one map one script owns, `tree.js`, in the tab's `sessionStorage`; a new tab
+starts as configured, and no cookie is written. Around the swap the keyboard's focus
+stays on its control and an open inspection card on its node. On the kiosk the map
+lives in memory alone, and five minutes without input bring the first look back. The
 system page, which has no map, refreshes as it did.
 
 Served by a real server to headless Chromium, on the page's own clock where a
@@ -67,11 +66,12 @@ _FRAGMENT = re.compile(r"[?&]fragment=1")
 #: The page's clock where a test holds it: the refresh is a timer's.
 _NOON = datetime(2026, 10, 16, 12, 0, 0, tzinfo=UTC)
 
-#: A card whose level folds quiet boxes behind *+N more* (five quiet aspects past a
-#: cap of three), one of them erupting with more lines than the budget shows, so a
-#: nested box carries *⌄ all N*; and a card erupting on its own, with a title, so
-#: its name is one the inspection card answers to.
+#: A card of five quiet aspects and one erupting with more lines than the budget
+#: shows, so a nested box carries *⌄ all N*; and a card erupting on its own, with a
+#: title, so its name is one the inspection card answers to. Nobody speaks for their
+#: levels, so every box starts open, the first aspect's the one a click closes.
 _LEVEL = "/nas"
+_ASPECT = "/nas/alpha"
 _NESTED = "/nas/zeta/probe"
 _CARD = "/db"
 _LINES = [f"line {number}: a reading the budget does not show" for number in range(12)]
@@ -173,13 +173,14 @@ class _BrowserCase(unittest.TestCase):
         page.clock.pause_at(_NOON + timedelta(seconds=5))
         return page
 
-    def _more(self, page: Any | None = None) -> Any:
+    def _name(self, path: str, page: Any | None = None) -> Any:
+        """The name in the open head of the node at ``path``, which a click toggles."""
         page = page or self.page
-        return page.locator(f'.node-children[data-branch="{_LEVEL}"] > .branch-more')
+        return page.locator(f'[data-path="{path}"] [data-control="toggle"]').first
 
-    def _level(self, page: Any | None = None) -> Any:
+    def _chip(self, path: str, page: Any | None = None) -> Any:
         page = page or self.page
-        return page.locator(f'.node-children[data-branch="{_LEVEL}"]')
+        return page.locator(f'.tree-node[data-node="{path}"] > .tree-chip')
 
     def _chevron(self, path: str, page: Any | None = None) -> Any:
         """The *⌄ all N* of the node at ``path``, shown: after the block of its own
@@ -208,20 +209,19 @@ class _BrowserCase(unittest.TestCase):
             timeout=5000)
         self.assertGreater(len(self.fragments), before)
 
-    def _open_both(self, page: Any | None = None) -> None:
-        """Open the level's *+N more* and the card's *⌄ all N* by a click each."""
+    def _set_both(self, page: Any | None = None) -> None:
+        """Close the first aspect's box by a click on its name, and open the card's
+        *⌄ all N* by a click on it."""
         page = page or self.page
-        self._more(page).click()
+        self._name(_ASPECT, page).click()
         self._chevron(_CARD, page).click()
-        self.assertTrue(self._level(page).evaluate(
-            "level => level.classList.contains('is-expanded')"))
-        self.assertTrue(self._block(_CARD, page).evaluate(
-            "block => block.classList.contains('is-open')"))
+        self.assertEqual(self._both_set(page), (True, True))
 
-    def _both_open(self, page: Any | None = None) -> tuple[bool, bool]:
+    def _both_set(self, page: Any | None = None) -> tuple[bool, bool]:
+        """Whether the aspect stands closed, and whether the card's lines stand open."""
         page = page or self.page
-        return (self._level(page).evaluate(
-                    "level => level.classList.contains('is-expanded')"),
+        return (page.locator(f'.tree-node[data-node="{_ASPECT}"]')
+                    .get_attribute("data-state-now") == "closed",
                 self._block(_CARD, page).evaluate(
                     "block => block.classList.contains('is-open')"))
 
@@ -231,37 +231,41 @@ class TreeStateTests(_BrowserCase):
 
     def test_a_fold_stands_through_the_refresh_and_a_reload(self):
         self._wall()
-        self.assertEqual(self._both_open(), (False, False))
+        self.assertEqual(self._both_set(), (False, False))
         self.assertIsNone(self._map())
-        self._open_both()
-        # the map holds the two entries, keyed by the level and by the block
+        self._set_both()
+        # the map holds the two entries, keyed by the box's node and by the block's,
+        # the close beside the server's time its node was seen out of failure, which
+        # its hold counts from (ADR-0127 decision 9)
         held = self._map()
         assert held is not None
         self.assertEqual(held["v"], 1)
         self.assertIsNone(held["mode"])
-        self.assertEqual(held["nodes"], {_LEVEL: {"more": True},
-                                         _CARD: {"lines": True}})
+        self.assertEqual(sorted(held["nodes"]), sorted([_ASPECT, _CARD]))
+        self.assertEqual(sorted(held["nodes"][_ASPECT]), ["ok_since", "open"])
+        self.assertIs(held["nodes"][_ASPECT]["open"], False)
+        self.assertEqual(held["nodes"][_CARD], {"lines": True})
         # ten seconds on: the refresh swapped the grid, and both stand
         self._swap()
-        self.assertEqual(self._both_open(), (True, True))
+        self.assertEqual(self._both_set(), (True, True))
         # a reload of the tab: both stand, and the grid was held back until they
         # did — the pending class stood on <html> before the page's own scripts
         # ran, and is gone once the map is applied — and is shown
         self.page.add_init_script(_WATCH_PENDING)
         self.page.reload()
         self.page.wait_for_selector("#status-grid .status-card")
-        self.assertEqual(self._both_open(), (True, True))
+        self.assertEqual(self._both_set(), (True, True))
         self.assertTrue(self.page.evaluate("window.__pendingSeen"))
         self.assertFalse(self.page.evaluate(
             "document.documentElement.classList.contains('ls-tree-pending')"))
         self.assertEqual(self.page.evaluate(
             "getComputedStyle(document.getElementById('status-grid')).visibility"),
             "visible")
-        # and a second click folds each again, which empties the map; a load with
-        # an empty map hides nothing
-        self._more().click()
+        # and a second click undoes each, the aspect's on its chip, which empties the
+        # map; a load with an empty map hides nothing
+        self._chip(_ASPECT).click()
         self._chevron(_CARD).click()
-        self.assertEqual(self._both_open(), (False, False))
+        self.assertEqual(self._both_set(), (False, False))
         self.assertIsNone(self._map())
         self.page.reload()
         self.page.wait_for_selector("#status-grid .status-card")
@@ -277,8 +281,7 @@ class TreeStateTests(_BrowserCase):
         return context.cookies()
 
     def test_a_nested_boxs_chevron_stands_too(self):
-        # the nested box stands behind +N more? no: it fails, so it is shown; its
-        # *⌄ all N* stands after its lines, in the box
+        # the nested box's *⌄ all N* stands after its lines, in the box
         self._wall()
         self._chevron(_NESTED).click()
         self.assertTrue(self._block(_NESTED).evaluate(
@@ -292,13 +295,13 @@ class TreeStateTests(_BrowserCase):
 
     def test_a_new_tab_starts_as_configured(self):
         self._wall()
-        self._open_both()
+        self._set_both()
         other = self._signed_in(self.context)
         self._wall(other)
-        self.assertEqual(self._both_open(other), (False, False))
+        self.assertEqual(self._both_set(other), (False, False))
         self.assertIsNone(self._map(other))
         # and the first tab's folds are its own still
-        self.assertEqual(self._both_open(), (True, True))
+        self.assertEqual(self._both_set(), (True, True))
 
     def test_the_focus_stays_on_its_control_through_a_swap(self):
         # a short window, the controls below its fold: the focus comes back to the
@@ -306,7 +309,7 @@ class TreeStateTests(_BrowserCase):
         self.page.set_viewport_size({"width": 1000, "height": 300})
         self._wall()
         for name, control, node in (
-                ("+N more", self._more(), lambda: self._more()),
+                ("a box's name", self._name(_ASPECT), lambda: self._name(_ASPECT)),
                 ("the chevron", self._chevron(_CARD), lambda: self._chevron(_CARD))):
             with self.subTest(control=name):
                 control.evaluate("control => control.focus({preventScroll: true})")
@@ -368,10 +371,11 @@ class TreeStateTests(_BrowserCase):
         self._wall()
         self.page.evaluate(
             f"window.sessionStorage.setItem({_KEY!r}, JSON.stringify("
-            f"{{v: 2, mode: null, nodes: {{{_LEVEL!r}: {{more: true}}}}}}))")
+            f"{{v: 2, mode: null, nodes: {{{_ASPECT!r}: {{open: false}},"
+            f" {_CARD!r}: {{lines: true}}}}}}))")
         self.page.reload()
         self.page.wait_for_selector("#status-grid .status-card")
-        self.assertEqual(self._both_open(), (False, False))
+        self.assertEqual(self._both_set(), (False, False))
         self.assertIsNone(self._map())
 
     def test_without_storage_the_map_lives_for_the_page(self):
@@ -383,12 +387,12 @@ class TreeStateTests(_BrowserCase):
         errors: list[str] = []
         self.page.on("pageerror", lambda error: errors.append(str(error)))
         self._wall()
-        self._open_both()
+        self._set_both()
         self._swap()
-        self.assertEqual(self._both_open(), (True, True))
+        self.assertEqual(self._both_set(), (True, True))
         self.page.reload()
         self.page.wait_for_selector("#status-grid .status-card")
-        self.assertEqual(self._both_open(), (False, False))
+        self.assertEqual(self._both_set(), (False, False))
         self.assertEqual(errors, [])
 
 
@@ -404,22 +408,22 @@ class KioskTests(_BrowserCase):
     def test_the_kiosk_keeps_nothing_past_five_minutes_without_input(self):
         self._wall(url="/status?depth=8")
         self.assertEqual(self.page.evaluate("document.body.dataset.lsLayout"), "kiosk")
-        self._open_both()
+        self._set_both()
         # a reload starts as configured, and nothing was written to the storage
         self.assertIsNone(self._map())
         self.page.reload()
         self.page.wait_for_selector("#status-grid .status-card")
-        self.assertEqual(self._both_open(), (False, False))
+        self.assertEqual(self._both_set(), (False, False))
         self.page.clock.pause_at(_NOON + timedelta(seconds=5))
-        self._open_both()
+        self._set_both()
         # a pointer that only moves holds them off: four minutes, a move, four more
         self.page.clock.run_for(4 * 60_000)
         self.page.mouse.move(40, 40)
         self.page.clock.run_for(4 * 60_000)
-        self.assertEqual(self._both_open(), (True, True))
+        self.assertEqual(self._both_set(), (True, True))
         # five minutes without any input: the first look is back, the depth with it
         self.page.clock.run_for(5 * 60_000 + 1000)
-        self.assertEqual(self._both_open(), (False, False))
+        self.assertEqual(self._both_set(), (False, False))
         self.assertIn("depth=8", self.page.url)
         self.assertIsNone(self._map())
 

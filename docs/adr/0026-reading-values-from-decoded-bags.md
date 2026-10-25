@@ -7,7 +7,7 @@
   [ADR-0023](0023-secret-references.md) (`secrets:` block — a config seam parsed the
   same way), [ADR-0015](0015-check-discovery-union.md) (checks load from YAML — where a
   `CheckError` from a read surfaces at load time),
-  [ADR-0004](0004-status-aggregation-semantics.md) (any exception from `run()`
+  [ADR-0040](0040-what-a-failing-check-becomes.md) (any exception from `run()`
   becomes a visible ERROR — how a strict read surfaces at run time).
 - **Register:** [`../decisions.md`](../decisions.md)
 

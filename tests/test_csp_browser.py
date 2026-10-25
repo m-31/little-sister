@@ -125,11 +125,9 @@ class OwnPagesReportNothingTests(unittest.TestCase):
             raise unittest.SkipTest(f"no chromium available: {error}") from error
         cls.saved = app_module.status_tree
         app_module.status_tree = _estate()
-        # The page reads its file and starts a probe pass when it opens; both are
-        # held out here, the pass being the instance's and not the browser's.
+        # The page reads its file when it opens, and the file here is this test's.
         cls.patches = [
             mock.patch.object(app_module, "current_links", return_value=_links()),
-            mock.patch.object(app_module.link_probe, "refresh_if_due"),
         ]
         for patch in cls.patches:
             patch.start()

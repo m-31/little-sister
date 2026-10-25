@@ -429,7 +429,7 @@ def test_the_three_faults_are_distinct_members() -> None:
 def test_transport_imports_nothing_from_little_sister() -> None:
     """Its docstring says so, and the reason is a real one: importing `checks`
     registers every built-in check type as a side effect, and this module is used by
-    a built-in check, by the link prober and by installed packages."""
+    a built-in check and by installed packages."""
     import little_sister.transport as module
 
     source = Path(module.__file__ or "").read_text(encoding="utf-8")

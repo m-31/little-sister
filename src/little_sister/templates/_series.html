@@ -221,6 +221,10 @@ newest {{ c.newest }} · lowest {{ c.lowest }} · highest {{ c.highest }}
                 {%- set field = row.fields.get(column.field) %}
                 <td>{% if field %}{% if field.kind == 'instant' %}<time datetime="{{ field.stored }}">{{ field.text }}</time>{% else %}{{ field.text }}{% endif %}{% endif %}</td>
                 {%- endfor %}
+                {#- The sentences are the lines of the node the reading was placed on,
+                    which a row does not say, so a link they write in the short form
+                    leads into no handbook here: its words stand, unlinked (ADR-0133
+                    decision 4). -#}
                 <td class="md-body">{{ row.texts | join('; ') | markdown_inline }}</td>
             </tr>
             {%- endfor %}

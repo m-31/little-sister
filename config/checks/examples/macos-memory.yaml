@@ -10,7 +10,9 @@
 # kernel-panic signature on a small-RAM Mac) and optional `processes` leaves
 # (RSS per watched command-line pattern; a slow leak shows as monotonic
 # growth). A watched process that isn't running is OK — this check watches
-# memory, not liveness. It shares the SSH transport with the `host-metrics`
+# memory, not liveness. Each aspect ships an `about` that says what to do and a
+# handbook that says it at length (ADR-0133); a watched process carries its pattern
+# among its details. It shares the SSH transport with the `host-metrics`
 # check and usually targets the SAME host node — give it NO description so it
 # doesn't overwrite the host's. The script guards on Darwin and reports a
 # clear config error elsewhere. See checks/README.md.
@@ -65,7 +67,18 @@ host: mymac-ssh-alias        # SSH target — ~/.ssh/config alias or hostname/FQ
 # max_compressor_warn: 35%   # of physical RAM
 # max_compressor_error: 50%
 
+# --- how it first looks on the wall (optional) ----------------------------
+# The type proposes its leaves as chips — pressure, swap, the compressor and the
+# processes branch — and the watched processes beneath it too (ADR-0128): each chip
+# shows its state, and a failing one opens by its card's budget. On the host node it
+# shares with host-metrics it speaks for its own leaves alone. `chips: false` here
+# opens its leaves; for the processes, write `chips: false` in their entry of the
+# `subnodes:` block below.
+# chips: false
+
 # --- presentation ------------------------------------------------------------
 # descriptions:              # per-leaf description (Markdown), keyed by leaf name
-#   compressor: Compressed-memory occupancy (panic precursor)
-#   processes: RSS of the app processes this Mac exists to run
+#   compressor: The compressor's share of the memory, this Mac's panic precursor.
+#   processes: The resident memory of the apps this Mac exists to run.
+# subnodes:
+#   processes: {chips: false}  # opens the watched processes

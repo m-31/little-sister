@@ -53,14 +53,16 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from little_sister.config import Config
+from little_sister.first_look import FirstLooks
 from little_sister.status import HEARTBEAT_PATH, StatusCode
 from little_sister.tree import StatusTree
+from tests import family_looks
 
 #: The shapes: ``[path, code, [length, …]]`` per node a check wrote, containers implied.
 SHAPES = Path(__file__).resolve().parent / "fixtures" / "anonymized_tree.json"
 
-#: The deployment's ``reason_cap`` (§3.9); density, ``branch_cap`` and depth at their
-#: defaults.
+#: The deployment's ``reason_cap`` (§3.9); depth at its default.
 REASON_CAP = 30
 
 VARIANTS = ("recorded", "outage", "blackout", "wide", "findings", "deployed")
@@ -388,6 +390,14 @@ def build(variant: str = "recorded", *,
         if _RANKED_PARENTS.search(parent) and name in _RANKS:
             tree.set_order(path, _RANKS[name])
     return tree
+
+
+def first_looks(tree: StatusTree, config: Config) -> FirstLooks:
+    """The first look a variant's wall is drawn with: what the family's packages
+    propose for the levels its checks write, stated by path since they are not
+    installed here (``family_looks``), every aws account a node of its own, under
+    ``config``; the deployment's ``nodes.yaml`` says nothing of it."""
+    return FirstLooks((), family_looks.declared(tree), config, tree.named_by_run)
 
 
 def _every_path(rows: list[tuple[str, StatusCode, list[int]]]) -> set[str]:

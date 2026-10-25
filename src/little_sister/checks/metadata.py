@@ -3,7 +3,10 @@
 A branch check's aspect leaves are **type-inherent** (ADR-0025), so their labels can
 live **with the check** rather than be copy-pasted into ``nodes.yaml``. A deployment
 retunes one in the check's own config: a ``subnodes:`` block, ``name -> {title,
-about, show_when_quiet}``, in the same file the root's ``about`` / ``title`` live in.
+about, handbook, show_when_quiet}``, in the same file the root's ``about`` / ``title``
+live in. The same entry carries the aspect's ``details`` (ADR-0133 decision 6), which
+are no label: :func:`parse_subnode_details` reads them as written, and they hold for
+every node beneath the aspect.
 
 **Every reader here is the library's own.** ``Check._parse_common`` runs
 :func:`parse_subnodes` and :func:`parse_show_when_quiet` for every check whatever its
@@ -39,7 +42,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field, fields
 from typing import Any
 
-from little_sister import values
+from little_sister import details, tags, values
 from little_sister.errors import CheckError
 
 #: The first look's three keys (ADR-0128): whether a node's children start as chips,
@@ -49,9 +52,16 @@ LOOK_KEYS = ("chips", "fold_ok", "reason_cap")
 #: What a ``children:`` block says for each child of the node it stands under,
 #: whatever the child's name: the first look's keys and the claim (ADR-0063).
 CHILDREN_KEYS = (*LOOK_KEYS, "show_when_quiet")
-#: What a ``subnodes:`` entry, and a type's ``subnode_defaults`` entry, may say: the
-#: labels (ADR-0025), the claim, the first look's keys and ``children:``.
-SUBNODE_KEYS = ("title", "about", "show_when_quiet", *LOOK_KEYS, "children")
+#: What a type's ``subnode_defaults`` entry may say: the labels (ADR-0025) — the
+#: ``handbook`` among them (ADR-0133) — the claim, the first look's keys and
+#: ``children:``.
+SUBNODE_KEYS = ("title", "about", "handbook", "show_when_quiet", *LOOK_KEYS,
+                "children")
+#: What a deployment's ``subnodes:`` entry may say: what a type's may, and the
+#: aspect's ``details`` (ADR-0133 decision 6) and ``tags`` (ADR-0139 decision 2), which
+#: a deployment gives and a type does not declare — a type gives its details through
+#: its run, node by node, and gives no tag.
+STATED_SUBNODE_KEYS = (*SUBNODE_KEYS[:3], "details", "tags", *SUBNODE_KEYS[3:])
 #: What a type's ``node_defaults`` may say of its own node: the first look's keys and
 #: ``children:``, since its labels and its claim are the check's file's.
 NODE_DEFAULTS_KEYS = (*LOOK_KEYS, "children")
@@ -179,9 +189,12 @@ def unknown_keys(bag: Mapping[str, Any], known: tuple[str, ...],
 
 
 def parse_subnodes(config: dict[str, Any]) -> dict[str, dict[str, str]]:
-    """Parse a check config's optional ``subnodes:`` map — ``name -> {title, about}``
-    — into ``{name: {"title": …, "about": …}}``. A missing block is ``{}``; a
-    malformed one raises :class:`CheckError`, so a typo fails the load loudly.
+    """Parse a check config's optional ``subnodes:`` map — ``name -> {title, about,
+    handbook}`` — into ``{name: {"title": …, "about": …, "handbook": …}}``, each as
+    written: a ``handbook`` that names a file is read against the configuration
+    directory by the check's construction (:mod:`little_sister.handbooks`). A missing
+    block is ``{}``; a malformed one raises :class:`CheckError`, so a typo fails the
+    load loudly.
 
     **The library is the caller**, like :func:`parse_show_when_quiet` beside it:
     ``Check._parse_common`` runs this for every type and ``Check.__init__``
@@ -192,15 +205,17 @@ def parse_subnodes(config: dict[str, Any]) -> dict[str, dict[str, str]]:
     if not isinstance(raw, dict):
         raise CheckError(
             "'subnodes' must be a mapping of leaf name -> "
-            "{title, about, show_when_quiet}")
+            "{title, about, handbook, details, tags, show_when_quiet}")
     parsed: dict[str, dict[str, str]] = {}
     for name, meta in raw.items():
         if not isinstance(meta, dict):
             raise CheckError(
                 f"subnodes.{name} must be a mapping with "
-                f"'title' / 'about' / 'show_when_quiet'")
+                f"'title' / 'about' / 'handbook' / 'details' / 'tags' / "
+                f"'show_when_quiet'")
         parsed[str(name)] = {"title": values.text(meta, "title"),
-                             "about": values.text(meta, "about")}
+                             "about": values.text(meta, "about"),
+                             "handbook": values.text(meta, "handbook")}
     return parsed
 
 
@@ -240,13 +255,14 @@ def parse_show_when_quiet(config: dict[str, Any]) -> dict[str, bool]:
     if not isinstance(raw, dict):
         raise CheckError(
             "'subnodes' must be a mapping of leaf name -> "
-            "{title, about, show_when_quiet}")
+            "{title, about, handbook, details, tags, show_when_quiet}")
     declared: dict[str, bool] = {}
     for name, meta in raw.items():
         if not isinstance(meta, dict):
             raise CheckError(
                 f"subnodes.{name} must be a mapping with "
-                f"'title' / 'about' / 'show_when_quiet'")
+                f"'title' / 'about' / 'handbook' / 'details' / 'tags' / "
+                f"'show_when_quiet'")
         if meta.get("show_when_quiet") is None:
             continue
         declared[str(name)] = values.strict_flag(
@@ -269,17 +285,74 @@ def parse_subnode_looks(config: dict[str, Any]) -> dict[str, Stated]:
     if not isinstance(raw, dict):
         raise CheckError(
             "'subnodes' must be a mapping of leaf name -> "
-            "{title, about, show_when_quiet}")
+            "{title, about, handbook, details, tags, show_when_quiet}")
     looks: dict[str, Stated] = {}
     for name, meta in raw.items():
         if not isinstance(meta, dict):
             raise CheckError(
                 f"subnodes.{name} must be a mapping with "
-                f"'title' / 'about' / 'show_when_quiet'")
+                f"'title' / 'about' / 'handbook' / 'details' / 'tags' / "
+                f"'show_when_quiet'")
         said = read_stated(meta, f"subnodes.{name}")
         if said.says_anything:
             looks[str(name)] = said
     return looks
+
+
+def parse_subnode_details(config: dict[str, Any]) -> dict[str, details.Details]:
+    """The ``details`` out of the same ``subnodes:`` block — ``{name: details}``, and
+    **only for the names that state some** (ADR-0133 decision 6), each in the order
+    written (:func:`little_sister.details.read`).
+
+    They are the deployment's details for the aspect of that name, at any depth,
+    which the engine writes on the child of that name as it writes each one — and,
+    unlike a label, they are given down: they hold for every node beneath the aspect,
+    a node a run names among them, which nothing declared for a name reaches
+    (ADR-0118). So they are no label and are not resolved as one: no ``{default}``,
+    since a type declares none for a name, and no token. The library is the caller,
+    as for the readers above."""
+    raw = config.get("subnodes") or {}
+    if not isinstance(raw, dict):
+        raise CheckError(
+            "'subnodes' must be a mapping of leaf name -> "
+            "{title, about, handbook, details, tags, show_when_quiet}")
+    stated: dict[str, details.Details] = {}
+    for name, meta in raw.items():
+        if not isinstance(meta, dict):
+            raise CheckError(
+                f"subnodes.{name} must be a mapping with "
+                f"'title' / 'about' / 'handbook' / 'details' / 'tags' / "
+                f"'show_when_quiet'")
+        if said := details.read(meta.get("details"), f"subnodes.{name}.details"):
+            stated[str(name)] = said
+    return stated
+
+
+def parse_subnode_tags(config: dict[str, Any],
+                       where: str = "") -> dict[str, tags.Tags]:
+    """The ``tags`` out of the same ``subnodes:`` block — ``{name: tags}``, and only
+    for the names that write some (ADR-0139 decision 2), each in the order written
+    (:func:`little_sister.tags.read`); ``where`` names the file for the startup
+    record, where a word that is no tag is named rather than read.
+
+    They are the deployment's tags for the aspect of that name, at any depth, which
+    the engine writes on the child of that name as it writes each one, as the
+    aspect's details are — and like them they come down: they hold for every node
+    beneath the aspect, a node a run names among them, which nothing declared for a
+    name reaches (ADR-0118). The library is the caller, as for the readers above."""
+    raw = config.get("subnodes") or {}
+    if not isinstance(raw, dict):
+        raise CheckError(
+            "'subnodes' must be a mapping of leaf name -> "
+            "{title, about, handbook, details, tags, show_when_quiet}")
+    stated: dict[str, tags.Tags] = {}
+    for name, meta in raw.items():
+        if not isinstance(meta, dict):
+            continue  # parse_subnode_details names it, and refuses the file
+        prefix = f"{where}: " if where else ""
+        if said := tags.read(meta.get("tags"), f"{prefix}subnodes.{name}.tags"):
+            stated[str(name)] = said
+    return stated
 
 
 def unknown_check_keys(config: Mapping[str, Any]) -> list[str]:
@@ -295,7 +368,8 @@ def unknown_check_keys(config: Mapping[str, Any]) -> list[str]:
     if isinstance(subnodes, Mapping):
         for name, meta in subnodes.items():
             if isinstance(meta, Mapping):
-                found.extend(unknown_keys(meta, SUBNODE_KEYS, f"subnodes.{name}"))
+                found.extend(unknown_keys(meta, STATED_SUBNODE_KEYS,
+                                          f"subnodes.{name}"))
     return found
 
 def resolve_text(configured: str, default: str,

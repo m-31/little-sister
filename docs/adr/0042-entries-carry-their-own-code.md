@@ -1,7 +1,7 @@
 # ADR-0042 — A reason entry carries its own code
 
 - **Status:** Accepted
-- **Date:** 2026-09-20 (accepted 2026-08-08, in the design round on information a
+- **Date:** 2026-10-25 (accepted 2026-08-08, in the design round on information a
   status code cannot carry)
 - **Related:** [ADR-0036](0036-addressable-reasons.md) (keyed entries — amended by
   this record: its decision 8's "an entry has no severity of its own" narrows to
@@ -14,11 +14,23 @@
   precedent, and why node pins are unaffected),
   [ADR-0040](0040-what-a-failing-check-becomes.md) (the failure path, which reports
   prose and keeps declaring `ERROR`),
-  [ADR-0024](0024-dashboard-layout.md) (`reason_cap`, which makes entry ordering
-  load-bearing; the non-color cue rule the italic must respect),
+  [ADR-0056](0056-stable-useful-dashboard-flow.md) (`reason_cap`, which makes entry
+  ordering load-bearing), [`../architecture.md`](../architecture.md) §6 (the non-color
+  cue rule the italic must respect),
   [ADR-0028](0028-design-tokens-and-themes.md) (the measured ink roster per-line
   status color joins),
-  [ADR-0008](0008-json-output-api.md) (the envelope, deliberately untouched here)
+  [ADR-0080](0080-the-envelope-is-the-snapshot-published.md) (the envelope, deliberately
+  untouched here),
+  [ADR-0137](0137-a-deployment-says-in-a-table-how-a-part-counts-above-it.md) (a coded
+  line's threshold, returned as a configured rule),
+  [ADR-0093](0093-a-record-the-seam-refuses-costs-its-line.md),
+  [ADR-0126](0126-a-line-is-a-template-over-its-record.md),
+  [ADR-0131](0131-a-type-declares-what-it-grades-and-the-library-grades-it.md) and
+  [ADR-0142](0142-a-failure-marked-seen-counts-as-ok-above-until-it-changes.md) (what
+  an entry carries beside its claim: a refused record, its form, its grading and its
+  occurrence),
+  [ADR-0135](0135-a-handled-part-keeps-its-true-color-and-every-surface-says-by-what.md)
+  (decision 2, maintenance's own words, which the decisions here take)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -63,7 +75,7 @@ showing a running one, both need.
    node).
 3. **A node with coded entries declares no code of its own; its own status is
    derived** — the worst of its entries' codes, `UNDEFINED` ignored, suppressed
-   entries contributing nothing, the silenced-versus-unreported tiebreak as in
+   entries contributing nothing, the maintenance-versus-unreported tiebreak as in
    [ADR-0039](0039-status-rollup-semantics.md) rule 5. This is not a new mechanism:
    ADR-0036's decision 7 already calls entries *virtual children* and already says
    the node's own status is the worst of what is left. Coded entries make that
@@ -91,18 +103,21 @@ showing a running one, both need.
    still the last completed run's verdict, so a red line whose job is re-running
    stays red, visibly rebuilding. The words still carry the meaning (`#4215 running
    2m`); the italic is the glance, not the channel — one sensory channel may not
-   carry a fact alone ([ADR-0024](0024-dashboard-layout.md)'s cue rule). `running`
-   and quiet compose; they are different channels.
+   carry a fact alone (the cue rule of [`../architecture.md`](../architecture.md) §6).
+   `running` and quiet compose; they are different channels.
 7. **The check-facing shape is a named value object** — `Entry(slug, text,
    code=None, running=False)`, frozen, accepted wherever a `(slug, text)` pair is.
    The tolerant forms (`str`, `list[str]`, mapping, pairs, `entries=True`) stay
    exactly as they are, so no existing check moves. Two optional attributes is
    where positional pairs run out; a third field must argue for itself harder than
    the second — ADR-0036 deliberately kept an entry from becoming a node, and a
-   value object makes creep cheap. The shape has since grown to `Entry(slug, text,
-   code=None, running=False, subject="", data=None)` and the rule beside it held: the
-   two added attributes are data *about* the line rather than a claim it makes, so
-   they declare no members, and the argument a third field owed is
+   value object makes creep cheap. The shape has grown to `Entry(slug, text,
+   code=None, running=False, subject="", data=None, refused="", form="", grading="",
+   occurrence="")` and the rule beside it holds: the added attributes are data *about*
+   the line rather than a claim it makes — what it is about and what it read, why its
+   record was refused (ADR-0093), the form it was written from (ADR-0126) and the
+   grading that decided it (ADR-0131), the failure it is an occurrence of
+   (ADR-0142) — so they declare no members, and the argument a third field owed is
    [ADR-0082](0082-a-line-carries-what-it-is-about-and-what-it-read.md). An entry is
    still not a node.
 8. **Healthy entries are opt-in, per aspect, off by default** — an alarm surface
@@ -114,20 +129,20 @@ showing a running one, both need.
    asked to see only problems has asked not to see it.
 9. **Ordering becomes load-bearing, and is the check's duty:** non-`OK` first, then
    in-flight, then healthy-and-idle — otherwise `reason_cap`
-   ([ADR-0024](0024-dashboard-layout.md)) folds the failures below the chevron on
-   exactly the crowded card where it matters.
+   ([ADR-0056](0056-stable-useful-dashboard-flow.md) decision 1) folds the failures
+   below the chevron on exactly the crowded card where it matters.
 10. **How a source severity maps to our codes stays deployment configuration** (a
     `severity_map`, grading a band or a line); whether lines carry codes at all is
     **not** configurable — it is the check's structural statement about its data,
     declared by the shape of what it hands over, like members and prose. A knob
     that let a deployment flatten real per-line severities would be a wrong
     statement, not a preference.
-11. **The JSON envelope changes nothing here.** `reasons` stays `[str]`; the
-    per-entry object — text, maintenance, `code`, `running` — is the client
-    contract round's one `schema_version` decision, and nothing ships piecemeal
-    before it ([ADR-0008](0008-json-output-api.md)).
+11. **The JSON envelope changes nothing here.** The per-entry object — text, `code`,
+    `running` and what handles the entry — is the client contract round's one
+    `schema_version` decision, and nothing ships piecemeal before it.
     [ADR-0080](0080-the-envelope-is-the-snapshot-published.md) is where that object
-    lands, and an entry's `code` is null there exactly where it takes the node's.
+    lands, `entries` in place of `reasons`, and an entry's `code` is null there
+    exactly where it takes the node's.
 
 ## Consequences
 
@@ -146,9 +161,13 @@ showing a running one, both need.
   surface class that has already produced one AA regression. The implementing slice
   decides the line's surface treatment (the precedent: paint your own tint) and
   extends the gate's contrast test and the browser sweep **in the same change**.
-- ADR-0036 decision 8's cap-not-`escapes` rule for entry pins stands for now; its
-  premise is narrowed, not its effect, and the pin-policy design pass owns the
-  re-examination.
+- **A pin holds a coded entry whole**, as it holds any part: the threshold a pin's
+  `escapes` would have been is a rule a deployment configures on its node's lines,
+  whose table maps each line by the code it declares
+  ([ADR-0137](0137-a-deployment-says-in-a-table-how-a-part-counts-above-it.md)
+  decisions 1 and 4) — healing, `{WARN: OK}`, where `escapes: error` would have let
+  only an error through. ADR-0036 decision 8, on an entry pin's cap and threshold, is
+  answered the same way.
 - Per-entry appear/resolve events stay out of the bounded log, as before — coded
   entries will invite them, and a two-hundred-entry check would wrap the deque.
 

@@ -13,10 +13,13 @@ with it (§3.1) — and what the browser pays for the same wall is
 The fixture itself is held to what it stands for: the prototype's tree byte for byte,
 the shape the note describes, lines of the recorded length, the four shapes made
 worse as §3.9 made them, the deployed wall as the deployment that runs mounts one
-team's checks, and not a word of the deployment's own (R13).
+team's checks, and not a word of the deployment's own (R13). So is the hosts tree
+(``tests/hosts_tree.py``), a second deployment's wall of hosts the library's own types
+write, whose fragment is held beside them.
 """
 from __future__ import annotations
 
+import json
 import re
 import statistics
 import time
@@ -27,9 +30,11 @@ from pathlib import Path
 from unittest import SkipTest, TestCase
 
 from little_sister import app as app_module
+from little_sister.checks.ssh import host_metrics, qnap_metrics
+from little_sister.first_look import FirstLooks
 from little_sister.status import StatusCode
-from little_sister.tree import StatusSnapshot
-from tests import anonymized_tree
+from little_sister.tree import StatusSnapshot, StatusTree
+from tests import anonymized_tree, hosts_tree
 from tests.render_ui_fixtures import FIXTURES_BY_NAME, render_page
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -86,14 +91,14 @@ class Cost:
 #: node with no pin of its own, a box's as well as a card's — some 90 bytes and one
 #: element a head, 790 heads on the recorded wall — where three cards' editors
 #: stood, which gzip takes to 2.8 KB more than a viewer's on the wire. Then, on
-#: Lex's word of 2026-10-16, **the caret left every head**, the row saying itself
+#: 2026-10-16, **the caret left every head**, the row saying itself
 #: under the pointer that a press opens or closes it: 54 bytes and one element a
 #: node, open or closed, 2.1 to 2.8 % of the bytes and 3.1 to 3.9 % of the
 #: elements, and 0.3 to 0.6 % on the wire. Before it the fragments were 589,068
 #: and 660,269 bytes (7,775 and 8,567 elements) on the recorded wall, 559,960 and
 #: 631,161 (7,409 and 8,201) in the outage, 517,797 and 588,998 (6,847 and 7,639)
 #: in the blackout, 1,751,569 and 1,970,823 (22,497 and 24,840) wide, and the
-#: workflow runs' page 1,371,527 (16,726). And on his word of the same day **a name
+#: workflow runs' page 1,371,527 (16,726). And the same day **a name
 #: breaks where its words meet**: a `<wbr>` after each `_`, `.` and `-` of a name
 #: in a card's or a box's head — 215 on the recorded wall, 829 on the wide one, a
 #: chip's name none — 0.2 % more bytes and 2.6 to 4.3 % more elements, 0.1 to 0.9 %
@@ -136,37 +141,111 @@ class Cost:
 #: **The deployed wall** (backlog #91's note, §2, 2026-10-17), alpha's five checks at
 #: the root as the deployment that runs mounts them, is about half the recorded one:
 #: 287,068 bytes and 3,949 elements for a viewer, 321,267 and 4,345 for an admin.
+#: **The hosts wall** (the note's §7.5, 2026-10-21), the second deployment's, nine
+#: hosts of five leaves each and a card of the family's checks, first read at 230,005
+#: bytes and 2,837 elements for a viewer and 255,260 and 3,134 for an admin, 11,818 and
+#: 12,897 on the wire. The same day its hover card's map came to carry what the
+#: packages and the library say of their own nodes, and each filesystem the disk's
+#: *about*, as on the wall it was read from — 8,200 bytes, 1.5 KB on the wire — and the
+#: library's host types came to propose how their levels first look (the third slice):
+#: 18 bytes more and an element fewer. The same day each leaf of a host
+#: node two of the types share starts as its own check proposes, and the Mac's watched
+#: processes are a chip where their branch stood open: 494 bytes more and an element
+#: fewer, 131 and 130 more on the wire. **Every other level of box steps its fill**
+#: (the same day, ADR-0028): ``is-stepped`` on the box of every second
+#: level, 11 bytes each and no element — 4,399 bytes more on the recorded walls, 9,279
+#: on the wide one, 10,500 on the workflow runs' page, 1,639 on the deployed wall and
+#: 693 on the hosts wall, 34 to 310 more on the wire. Then the mark moved from
+#: the box to its node, so that a chip steps with its level too, and no byte moved:
+#: 106 fewer to 11 more on the wire. Then **an open head's buttons stand where
+#: the look ``head_buttons`` puts them** (ADR-0127 decision 3), the state outside
+#: them: drawn in the look's order, the markup lost some of its whitespace — 3,448
+#: bytes on the recorded walls, 10,169 on the wide one, 8,609 on the workflow runs'
+#: page, 1,756 on the deployed wall and 1,303 on the hosts wall, no element — and
+#: gzip, whose runs the new order breaks, carries 17 to 1,563 bytes more. The
+#: findings page grew 986 bytes and 11 elements, the settings menu's group of the
+#: head's buttons. Before it the fragments were 586,430 and 657,631 bytes on the
+#: recorded wall, 557,322 and 628,523 in the outage, 515,159 and 586,360 in the
+#: blackout, 1,735,155 and 1,954,409 wide, 288,707 and 322,906 deployed and 239,410
+#: and 264,665 on the hosts wall, the workflow runs' page 1,360,542 and the findings
+#: page 267,262 (2,361), the elements as below. On 2026-10-22 **a state
+#: wider than its line breaks between its parts** (ADR-0127 decision 3): a card's cue
+#: and word are one part, a span of their own, 33 bytes and an element a card — 66
+#: bytes on the recorded walls, the wide one and the hosts wall, 165 on the deployed
+#: wall, 3,300 and 100 elements on the workflow runs' page — and 6 to 14 bytes more on
+#: the wire, a template's small change inside the tolerance, so the numbers below are
+#: before it. The same day **the head's own icons stand first in its
+#: toolbar**, the node's actions after them, and a fourth look joins
+#: ``head_buttons``: no byte and no element of a fragment moved, gzip carries 19 bytes
+#: fewer to 870 more of the same markup in its new order, and the findings page grew
+#: 285 bytes and 3 elements, the settings menu's fourth place for the head's buttons.
+#: On 2026-10-23 **the library's host types say what they do as ADR-0133
+#: divides it**, a handbook an aspect: an aspect's *about* draws its signs and a link
+#: into its handbook, and the map carries the handbook's address beside it; a
+#: filesystem, a sensor, a drive and a watched process, which have no *about*, say
+#: their description.
+#: All of it rides in the hover card's map: the hosts wall's fragments grew 22,910
+#: bytes and no element, 1,189 and 1,209 bytes on the wire — a sign is some 200 bytes
+#: of markup as the map escapes it. Before it they were 238,173 and 263,428 bytes,
+#: 13,689 and 14,733 on the wire, a card's cue and word one part among them: the hosts
+#: wall's numbers below are after both.
+#: At **the interactive wall's flip** (backlog #91's note, §7.5, 2026-10-25) a level
+#: nobody speaks for starts open, and the trees are drawn with what the family's
+#: packages propose, stated by path (``tests/family_looks.py``), as their deployments
+#: draw them. Every fragment moved within the tolerance, 93 to 4,320 bytes more, and
+#: the findings page grew 8,461 bytes and 17 elements, its 300 findings drawn folded by
+#: wiz's ``fold_ok``: it read 268,248 (2,372) before.
+#: **Seen** (ADR-0142, 2026-10-25) puts the ringed check after ‖ on every open head
+#: where something fails at or beneath its node, for whoever may mark it seen: a link
+#: to the node's page, as ‖ is, carrying the digest of the parts it would mark and
+#: how many — some 320 bytes and three elements a head on these trees, whose paths
+#: are long. An admin's fragment grew 1.0 % on the recorded wall, 5.3 % in the
+#: outage, 14.3 % in the blackout, whose 264 failing heads carry one each, 0.5 %
+#: wide, 0.9 % deployed and 0.4 % on the hosts wall, and 1.0 to 3.0 % on the wire;
+#: a viewer's did not move, and the findings page grew 326 bytes and 3 elements, the
+#: ringed check's shape in the page's sprite. Before it an admin's fragments were
+#: 655,389 bytes (8,731 elements) on the recorded wall, 627,769 (8,386) in the
+#: outage, 587,555 (7,866) in the blackout, 1,948,056 (25,717) wide, 321,617
+#: (4,348) deployed and 286,431 (3,129) on the hosts wall.
 BASELINE: dict[tuple[str, str, str], Cost] = {
-    ("recorded", "viewer", "/status?fragment=1"): Cost(582_031, 7_942),
-    ("recorded", "admin", "/status?fragment=1"): Cost(653_232, 8_734),
-    ("outage", "viewer", "/status?fragment=1"): Cost(552_923, 7_576),
-    ("outage", "admin", "/status?fragment=1"): Cost(624_124, 8_368),
-    ("blackout", "viewer", "/status?fragment=1"): Cost(510_760, 7_014),
-    ("blackout", "admin", "/status?fragment=1"): Cost(581_961, 7_806),
-    ("wide", "viewer", "/status?fragment=1"): Cost(1_725_876, 23_375),
-    ("wide", "admin", "/status?fragment=1"): Cost(1_945_130, 25_718),
-    ("findings", "viewer", "/status/alpha/wiz/informational"): Cost(267_210, 2_361),
+    ("recorded", "viewer", "/status?fragment=1"): Cost(582_982, 7_942),
+    ("recorded", "admin", "/status?fragment=1"): Cost(662_019, 8_800),
+    ("outage", "viewer", "/status?fragment=1"): Cost(553_874, 7_576),
+    ("outage", "admin", "/status?fragment=1"): Cost(661_172, 8_698),
+    ("blackout", "viewer", "/status?fragment=1"): Cost(511_711, 7_014),
+    ("blackout", "admin", "/status?fragment=1"): Cost(671_368, 8_658),
+    ("wide", "viewer", "/status?fragment=1"): Cost(1_724_986, 23_375),
+    ("wide", "admin", "/status?fragment=1"): Cost(1_957_246, 25_810),
+    ("findings", "viewer", "/status/alpha/wiz/informational"): Cost(276_709, 2_389),
     ("wide", "viewer", "/status/alpha/github/actions?fragment=1"):
-        Cost(1_350_042, 17_340),
-    ("deployed", "viewer", "/status?fragment=1"): Cost(287_068, 3_949),
-    ("deployed", "admin", "/status?fragment=1"): Cost(321_267, 4_345),
+        Cost(1_351_933, 17_340),
+    ("deployed", "viewer", "/status?fragment=1"): Cost(286_951, 3_949),
+    ("deployed", "admin", "/status?fragment=1"): Cost(324_397, 4_378),
+    ("hosts", "viewer", "/status?fragment=1"): Cost(261_083, 2_837),
+    ("hosts", "admin", "/status?fragment=1"): Cost(287_553, 3_141),
 }
 #: What the fragments weigh **on the wire**, gzipped where the request takes gzip,
-#: which every browser's does (`app._compressed_where_asked`, on Lex's word of
+#: which every browser's does (`app._compressed_where_asked`, since
 #: 2026-10-16): the recorded wall's, the deployed one's and the wide one's, for a
 #: viewer and for an admin, a twentieth to a thirty-fifth of the bytes rendered. The
 #: bytes above are what the browser parses; these are what the network carries every
 #: ten seconds to every open tab. Before the head's row the viewer's weighed 25,576
 #: and 48,583, and
 #: before the hover card's map rode in the fragment 26,986 and 51,580, an admin's
-#: 29,794 and 58,318, and before the chip runs 27,786 and 52,462, 30,551 and 59,044.
+#: 29,794 and 58,318, before the chip runs 27,786 and 52,462, 30,551 and 59,044,
+#: before every other level of box stepped its fill 27,908 and 52,484, 30,685 and
+#: 59,095, and before the head's buttons stood where a look puts them 28,063 and
+#: 52,683, 30,870 and 59,312. Before the ringed check an admin's weighed 31,483 on
+#: the recorded wall, 61,926 wide, 15,846 deployed and 15,990 on the hosts wall.
 WIRE: dict[tuple[str, str, str], int] = {
-    ("recorded", "viewer", "/status?fragment=1"): 27_908,
-    ("recorded", "admin", "/status?fragment=1"): 30_685,
-    ("wide", "viewer", "/status?fragment=1"): 52_484,
-    ("wide", "admin", "/status?fragment=1"): 59_095,
-    ("deployed", "viewer", "/status?fragment=1"): 14_234,
-    ("deployed", "admin", "/status?fragment=1"): 15_577,
+    ("recorded", "viewer", "/status?fragment=1"): 28_450,
+    ("recorded", "admin", "/status?fragment=1"): 32_431,
+    ("wide", "viewer", "/status?fragment=1"): 54_246,
+    ("wide", "admin", "/status?fragment=1"): 63_271,
+    ("deployed", "viewer", "/status?fragment=1"): 14_462,
+    ("deployed", "admin", "/status?fragment=1"): 16_263,
+    ("hosts", "viewer", "/status?fragment=1"): 14_878,
+    ("hosts", "admin", "/status?fragment=1"): 16_150,
 }
 #: gzip's output moves with the text it is given — a time of day, a name — so the
 #: wire's tolerance is wider than the rendering's.
@@ -199,6 +278,29 @@ class _StartTags(HTMLParser):
     def handle_startendtag(self, tag: str,
                            attrs: list[tuple[str, str | None]]) -> None:
         self.count += 1
+
+
+def tree_of(variant: str) -> StatusTree:
+    """The tree a variant names: the hosts tree's, or the anonymized tree's."""
+    if variant == hosts_tree.VARIANT:
+        return hosts_tree.build()
+    return anonymized_tree.build(variant)
+
+
+def reason_cap_of(variant: str) -> int:
+    """The line budget of the deployment a variant's tree is from."""
+    if variant == hosts_tree.VARIANT:
+        return hosts_tree.REASON_CAP
+    return anonymized_tree.REASON_CAP
+
+
+def looks_of(variant: str, tree: StatusTree) -> FirstLooks:
+    """The first look a variant's wall is drawn with: the hosts tree's from the
+    library's host types as its deployment mounts them, and each tree's from what the
+    family's packages propose, stated by path since they are not installed here."""
+    if variant == hosts_tree.VARIANT:
+        return hosts_tree.first_looks(tree, app_module.config)
+    return anonymized_tree.first_looks(tree, app_module.config)
 
 
 def cost(body: bytes) -> Cost:
@@ -395,8 +497,14 @@ class AnonymizedTreeTests(TestCase):
         html = render_page(fixture)
         self.assertIn('data-path="/alpha"', html)
         self.assertIn('data-path="/beta"', html)
-        # today's wall folds alpha's quiet repositories past branch_cap
-        self.assertIn("+16 more", html)
+        # nothing declared, the built-in look's net starts alpha's twenty
+        # repositories as chips — opened, with their workflows, 83 boxes — and the
+        # failure budget opens the one whose workflow fails
+        heads = re.findall(r'<div class="tree-node[^>]*'
+                           r'data-node="/alpha/github/actions/[^/"]+"[^>]*>', html)
+        self.assertEqual(len(heads), 20)
+        self.assertEqual(sum('data-state="closed"' in head for head in heads), 19)
+        self.assertEqual(sum('data-budget' in head for head in heads), 1)
         # and the page is the sheet's: every stamp pinned, the checks' next slot
         # with them, so two renders are the same bytes
         self.assertEqual(set(re.findall(r"→ (\d\d:\d\d)", html)), {"12:04"})
@@ -422,6 +530,178 @@ class AnonymizedTreeTests(TestCase):
                                   f"{pattern!r} in {what}")
 
 
+class HostsTreeTests(TestCase):
+    """The hosts tree is a second deployment's wall, and nothing of its own."""
+
+    def test_the_shapes_are_the_wall_as_it_was_drawn(self):
+        # 101 nodes a check wrote, 86 lines; nine hosts that host-metrics writes, each
+        # with its five leaves, a filesystem's own beneath one host's disk; the
+        # aws, github and API budget checks beside them; the engine's own branch
+        rows = hosts_tree.shapes()
+        paths = [path for path, _code, _lengths in rows]
+        self.assertEqual(len(rows), 101)
+        self.assertEqual(len(set(paths)), 101)
+        self.assertEqual(sum(len(lengths) for _path, _code, lengths in rows), 86)
+        self.assertEqual(len(hosts_tree.HOST_METRICS), 9)
+        for host in hosts_tree.HOST_METRICS:
+            self.assertEqual(
+                sorted(path.rsplit("/", 1)[-1] for path in paths
+                       if path.rsplit("/", 1)[0] == host
+                       and path.rsplit("/", 1)[-1] in
+                       ("cpu", "disk", "load", "memory", "ssh")),
+                ["cpu", "disk", "load", "memory", "ssh"], host)
+        disks = [path for path in paths
+                 if path.startswith("/computer/local/nas01/system/disk/")]
+        self.assertEqual(len(disks), 4)
+        self.assertEqual({path.split("/")[1] for path in paths},
+                         {"computer", "system", "little-sister"})
+        self.assertEqual(
+            {code for _path, code, _lengths in rows},
+            {StatusCode.OK, StatusCode.WARN, StatusCode.ERROR})
+
+    def test_every_line_has_its_recorded_length(self):
+        tree = hosts_tree.build()
+        for path, _code, lengths in hosts_tree.shapes():
+            node = tree.snapshot(path)
+            self.assertIsNotNone(node, path)
+            self.assertEqual(len(node.reasons), len(lengths), path)
+            for line, length in zip(node.reasons, lengths, strict=True):
+                self.assertLessEqual(len(line.text), length, (path, line.text))
+                self.assertGreaterEqual(len(line.text), length - 24, (path, line.text))
+
+    def test_the_text_is_the_same_on_every_build(self):
+        first, second = hosts_tree.build(), hosts_tree.build()
+        for path, _code, _lengths in hosts_tree.shapes():
+            self.assertEqual([line.text for line in first.snapshot(path).reasons],
+                             [line.text for line in second.snapshot(path).reasons])
+
+    def test_what_the_shapes_do_not_record_is_filled_in(self):
+        tree = hosts_tree.build()
+        # the two cards are containers; the checks' mounts carry their run facts
+        self.assertEqual([child.name for child in tree.snapshot("").children],
+                         ["computer", "little-sister", "system"])
+        self.assertIsNone(tree.snapshot("/computer").run)
+        self.assertIsNotNone(tree.snapshot("/computer/local/linux01").run)
+        self.assertIsNotNone(tree.snapshot("/computer/local/macmini/system").run)
+        self.assertIsNotNone(tree.snapshot("/system/aws").run)
+        # the titles the deployment's files give, and a long one
+        self.assertEqual(tree.snapshot("/computer/local/nas01").title, "Qnap NAS")
+        self.assertEqual(tree.snapshot("/system/aws").title, "AWS")
+        self.assertGreater(len(tree.snapshot("/computer/local/linux2").title), 60)
+        self.assertEqual(tree.snapshot("/computer/local/linux01/cpu").title, "")
+        # the host types' own about and handbook on their aspects, the deployment's
+        # about where it wrote one, made-up text of its length, and neither on a
+        # filesystem, which a run names (ADR-0133)
+        self.assertEqual(tree.snapshot("/computer/local/node2/ssh").about,
+                         host_metrics.ABOUT["ssh"])
+        self.assertTrue(tree.snapshot("/computer/local/node2/ssh").has_handbook)
+        self.assertEqual(len(tree.snapshot("/computer/local/nas01/system/load").about),
+                         228)
+        self.assertTrue(tree.snapshot("/computer/local/nas01/system/load").has_handbook)
+        self.assertEqual(tree.snapshot("/computer/local/nas01/qnap/smart").about,
+                         qnap_metrics.ABOUT["smart"])
+        for volume in tree.snapshot("/computer/local/nas01/system/disk").children:
+            self.assertEqual((volume.about, volume.has_handbook), ("", False))
+        self.assertEqual(tree.snapshot("/computer/local/linux01").about, "")
+        # aws's rosters claim show_when_quiet, billing and a host's leaf do not
+        self.assertTrue(tree.snapshot("/system/aws/ec2").show_when_quiet)
+        self.assertTrue(tree.snapshot("/system/aws/s3").show_when_quiet)
+        self.assertFalse(tree.snapshot("/system/aws/billing").show_when_quiet)
+        self.assertFalse(tree.snapshot("/computer/local/linux01/cpu").show_when_quiet)
+        # members where a line is one of a roster, prose where it is the node's own
+        self.assertTrue(tree.snapshot("/system/aws/lambda").members)
+        self.assertTrue(tree.snapshot("/system/github-rate-limit").members)
+        self.assertFalse(tree.snapshot("/computer/local/linux01/disk").members)
+        # what fails: the heartbeat file on the Mac that runs it
+        self.assertIs(tree.snapshot("/computer/local/macmini/beacon").code,
+                      StatusCode.ERROR)
+        with self.assertRaises(ValueError):
+            hosts_tree.build("recorded")
+
+    def test_the_host_types_stand_where_the_deployment_mounts_them(self):
+        # host-metrics on every host, macos-memory beside it on the Mac and
+        # qnap-metrics on the NAS, as the deployment's files have them; what each
+        # proposes reaches its levels, and on the Mac's node, which two of them share
+        # and whose own look neither speaks for, each leaf starts as its own check
+        # proposes (ADR-0128 decision 5, as amended)
+        checks = hosts_tree.checks()
+        self.assertEqual(
+            sorted((check.type_name, check.path) for check in checks),
+            sorted([("host-metrics", mount) for mount in hosts_tree.HOST_METRICS]
+                   + [("macos-memory", "/computer/local/macmini/system"),
+                      ("qnap-metrics", "/computer/local/nas01/qnap")]))
+        looks = hosts_tree.first_looks(hosts_tree.build(), app_module.config)
+        for mount in hosts_tree.HOST_METRICS:
+            self.assertIs(looks.look(mount).chips,
+                          None if mount == "/computer/local/macmini/system" else True,
+                          mount)
+        for level in ("/computer/local/nas01/system/disk",
+                      "/computer/local/nas01/qnap/smart",
+                      "/computer/local/nas01/qnap/temperature",
+                      "/computer/local/macmini/system/processes"):
+            self.assertIs(looks.look(level).chips, True, level)
+        self.assertIsNone(looks.look("/computer/local/nas01/qnap").chips)
+        self.assertIsNone(looks.look("/computer/local").chips)
+        mac = "/computer/local/macmini/system"
+        for leaf in ("cpu", "ssh", "swap", "pressure", "processes"):
+            self.assertIs(looks.children_chips(mac, f"{mac}/{leaf}"), True, leaf)
+
+    def test_the_hover_cards_map_says_what_the_packages_and_the_library_say(self):
+        # each node's about rides in the fragment as its first block and the count
+        # of the blocks after it: the packages' own aspects and the library's own
+        # branch say theirs, and the host types' aspects theirs, with their handbooks;
+        # a filesystem, which has no about, says its description (ADR-0133)
+        app_module.app.config["TESTING"] = True
+        saved = app_module.status_tree
+        self.addCleanup(setattr, app_module, "status_tree", saved)
+        app_module.status_tree = hosts_tree.build()
+        client = app_module.app.test_client()
+        client.post("/login", data={"username": "pan", "password": "12345678"})
+        body = client.get("/status?fragment=1").get_data(as_text=True)
+        found = re.search(r'<script type="application/json" id="node-meta">(.*?)'
+                          r"</script>", body, re.S)
+        assert found is not None
+        meta = json.loads(found.group(1))
+        self.assertEqual(len(meta), 87)
+        self.assertEqual(
+            {path: entry["more"] for path, entry in meta.items()
+             if path.startswith(("/system/aws/", "/system/github/"))},
+            {"/system/aws/batch": 4, "/system/aws/billing": 5,
+             "/system/aws/codepipeline": 9, "/system/aws/ec2": 10,
+             "/system/aws/lambda": 8, "/system/aws/s3": 6,
+             "/system/github/actions": 2, "/system/github/issues": 1,
+             "/system/github/pull_requests": 1})
+        self.assertEqual(sum(path.startswith("/little-sister/") for path in meta), 7)
+        self.assertEqual(meta["/computer/local/linux01/disk"]["handbook"],
+                         "/handbook/computer/local/linux01/disk")
+        volume = meta["/computer/local/nas01/system/disk/usb1"]
+        self.assertNotIn("handbook", volume)
+        self.assertIn("this filesystem", volume["about"])
+
+    def test_nothing_of_the_deployment_is_in_the_hosts_tree(self):
+        if not _PRIVATE_STRINGS.is_file():
+            raise SkipTest("the release's private strings are not in this tree")
+        patterns = [line.strip() for line in
+                    _PRIVATE_STRINGS.read_text(encoding="utf-8").splitlines()
+                    if line.strip() and not line.startswith("#")]
+        self.assertTrue(patterns)
+        app_module.app.config["TESTING"] = True
+        saved = app_module.status_tree
+        self.addCleanup(setattr, app_module, "status_tree", saved)
+        app_module.status_tree = hosts_tree.build()
+        client = app_module.app.test_client()
+        client.post("/login", data={"username": "pan", "password": "12345678"})
+        texts = {
+            "the shapes": hosts_tree.SHAPES.read_text(encoding="utf-8"),
+            "the builder": Path(hosts_tree.__file__).read_text(encoding="utf-8"),
+            "the wall": client.get("/status").get_data(as_text=True),
+        }
+        for what, text in texts.items():
+            for pattern in patterns:
+                self.assertIsNone(re.search(pattern, text, re.IGNORECASE),
+                                  f"{pattern!r} in {what}")
+
+
 class WallCostTests(TestCase):
     """The fragment's cost, the render's time and its peak memory."""
 
@@ -429,8 +709,9 @@ class WallCostTests(TestCase):
         app_module.app.config["TESTING"] = True
         self.saved_tree = app_module.status_tree
         self.saved_config = app_module.config
+        self.saved_looks = app_module.first_looks
         self.addCleanup(self._restore)
-        # the deployment's line budget (§3.9); density, branch_cap and depth default
+        # the deployment's line budget (§3.9); depth at its default
         app_module.config = replace(app_module.config,
                                     reason_cap=anonymized_tree.REASON_CAP)
         self.client = app_module.app.test_client()
@@ -439,13 +720,21 @@ class WallCostTests(TestCase):
     def _restore(self) -> None:
         app_module.status_tree = self.saved_tree
         app_module.config = self.saved_config
+        app_module.first_looks = self.saved_looks
 
     def _as(self, role: str) -> None:
         with self.client.session_transaction() as session:
             session["admin"] = role == "admin"
 
+    def _load(self, variant: str) -> None:
+        """The variant's tree, its deployment's line budget and its first look."""
+        app_module.status_tree = tree_of(variant)
+        app_module.config = replace(app_module.config,
+                                    reason_cap=reason_cap_of(variant))
+        app_module.first_looks = looks_of(variant, app_module.status_tree)
+
     def _fetch(self, variant: str, role: str, url: str) -> bytes:
-        app_module.status_tree = anonymized_tree.build(variant)
+        self._load(variant)
         self._as(role)
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200, url)
@@ -466,7 +755,7 @@ class WallCostTests(TestCase):
     def test_the_fragments_weight_on_the_wire_holds(self):
         for (variant, role, url), baseline in WIRE.items():
             with self.subTest(variant=variant, role=role, url=url):
-                app_module.status_tree = anonymized_tree.build(variant)
+                self._load(variant)
                 self._as(role)
                 response = self.client.get(url, headers={"Accept-Encoding": "gzip"})
                 self.assertEqual(response.headers.get("Content-Encoding"), "gzip")
@@ -478,6 +767,18 @@ class WallCostTests(TestCase):
                 # and it is the fragment, whole
                 rendered = cost(self._fetch(variant, role, url))
                 self.assertLess(actual * 15, rendered.bytes)
+
+    def test_the_hosts_wall_is_drawn_as_its_types_propose(self):
+        # the NAS's disk fans out, and host-metrics proposes its filesystems as chips
+        # and itself as one of its host's: a chip, where the density would leave a
+        # branch open — and on the Mac's node, which two types share, the watched
+        # processes are a chip as macos-memory proposes, where the density left
+        # their branch open
+        body = self._fetch("hosts", "viewer", "/status?fragment=1").decode("utf-8")
+        self.assertIn('data-node="/computer/local/nas01/system/disk" '
+                      'data-state="closed"', body)
+        self.assertIn('data-node="/computer/local/macmini/system/processes" '
+                      'data-state="closed"', body)
 
     def test_an_admins_fragment_carries_the_marks_and_no_editor(self):
         # what an admin's swap pays over a viewer's: ‖ on every open head of a node

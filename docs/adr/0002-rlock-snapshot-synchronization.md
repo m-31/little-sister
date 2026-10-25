@@ -1,9 +1,10 @@
 # ADR-0002 — Synchronize shared state with one RLock and copy-on-read snapshots
 
 - **Status:** Accepted
-- **Date:** 2026-09-05 (accepted 2026-06-20)
+- **Date:** 2026-10-24 (accepted 2026-06-20)
 - **Related:** [ADR-0001 — In-process threaded engine](0001-in-process-threaded-engine.md),
-  [ADR-0071 — what a restart keeps is a directory of files](0071-what-a-restart-keeps-is-a-directory-of-files.md)
+  [ADR-0071 — what a restart keeps is a directory of files](0071-what-a-restart-keeps-is-a-directory-of-files.md),
+  [ADR-0132 — a branch keeps the period of what it shows beside the log](0132-a-branch-keeps-the-period-of-what-it-shows-beside-the-log.md)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -18,6 +19,11 @@ atomic** under the GIL. Concurrent mutation during a read can cause torn reads o
   `threading.RLock`.
 - **Mutations** (a check writing its node; appending an event; change detection)
   take the lock.
+- **A run's store is one mutation.** The engine holds the lock from the first node a
+  run writes to the last — the run's node, the nodes beneath it, what it no longer
+  returns, a unit's failure over its node — each of those writes re-entering it, so no
+  reader, and no comparison of what a branch rolls up to, sees half a run
+  ([ADR-0132](0132-a-branch-keeps-the-period-of-what-it-shows-beside-the-log.md)).
 - **Reads for rendering** take the lock only long enough to build a lightweight
   **snapshot** (a copy of the branch being shown / a slice of events), then
   release the lock and render the snapshot **outside** it.
@@ -28,12 +34,14 @@ atomic** under the GIL. Concurrent mutation during a read can cause torn reads o
 
 ## Rationale
 - One lock for all shared state is the simplest thing that is correct; `RLock`
-  lets a locked method call another locked method without self-deadlock.
+  lets a locked method call another locked method without self-deadlock, which is also
+  what lets a run's store hold it across writes that each take it.
 - Copy-on-read keeps request latency **independent of check activity** and avoids
   holding the lock across template rendering.
 
 ## Consequences
 - Snapshot cost is O(size of the shown branch) — fine for expected tree sizes.
+- **A reader waits out a store**, which is in memory and takes milliseconds.
 - **Change detection** (old code vs new code, to emit an event) must happen
   **under the lock**, so two threads can't interleave and miss or duplicate a
   transition.

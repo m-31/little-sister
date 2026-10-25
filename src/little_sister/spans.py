@@ -168,16 +168,15 @@ def coarse_span(seconds: float) -> str:
     """A span as its largest one or two units: ``2d 3h`` / ``5h`` / ``12m``.
 
     Deliberately lossy, and its floor is the point. Both callers state a bound
-    rather than a measurement — *how long ago* a page's data was fetched, *how
+    rather than a measurement — *how long ago* a kept file was written, *how
     much is left* of a maintenance window — on surfaces that are not re-rendered
     while somebody reads them. A bound that names seconds is out of date before
     the sentence ends; ``> 2m ago`` starts true and stays true however long the
     window sits open.
 
     Under a minute there is no bound worth stating, so it says ``< 1m`` and the
-    caller decides whether to phrase it at all — :func:`little_sister.app._since`
-    substitutes a clock time there, because *less than a minute ago* is exactly
-    the reading that rots.
+    caller decides whether to phrase it at all, since *less than a minute ago* is
+    exactly the reading that rots.
 
     For a span whose exact size is the information, use :func:`format_span`.
     """

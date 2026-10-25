@@ -4,12 +4,13 @@ Mode 4 of the UI harness. Runs a real server, serves the vendored Bootstrap CSS
 and JS from disk (the dropdown needs the JS to open at all), and for every theme
 opens the gear menu, walks the `/links` rows and the folds of its setup guide, the
 **coded reason lines** of a seeded tree, a pin's block with its editor opened — on a
-leaf's page, in a card on the wall and in a branch's head — every culprit's own
-words, a failing box's, a warning's, a pinned box's and an undefined card's, the
-Maintenance page, and the chips and status words of the Events page and a node's
-History tab, reading each row's *computed* color and the background it actually lands
-on — compositing every translucent layer, folding stacked opacity — then reports the
-WCAG ratio.
+leaf's page, in a card on the wall, its marks and its dashed edge among it, and in a
+branch's head — a configured rule's block on the wall and its § on a line, every
+culprit's own words, a failing box's, a warning's, a pinned
+box's and an undefined card's, *Handled*, and the chips and status words of the
+Events page and a node's History tab, reading each row's *computed* color and the
+background it actually lands on — compositing every translucent layer, folding
+stacked opacity — then reports the WCAG ratio.
 
     npm i --prefix var/bootstrap bootstrap@5.3.2     # once; var/ is gitignored
     uv run python tests/sweep_contrast.py
@@ -55,8 +56,12 @@ from tests.browser_server import PageServer  # noqa: E402
 # `conftest.py` does it for the tests, a deployment's `wsgi.py` for itself).
 local_login.use_local()
 
+from datetime import date  # noqa: E402
+
 from little_sister import app as app_module  # noqa: E402
+from little_sister.aggregation import AggregationRule, RuleSet, Table  # noqa: E402
 from little_sister.app import app  # noqa: E402
+from little_sister.checks import Entry  # noqa: E402
 from little_sister.links import LinksConfig  # noqa: E402
 from little_sister.status import StatusCode  # noqa: E402
 from tests.ui_fixtures import coded_workflow_tree  # noqa: E402
@@ -106,6 +111,49 @@ for _read in (StatusCode.OK, StatusCode.UNDEFINED):
     app_module.status_tree.upsert(f"/{UNDEFINED_BRANCH}/probe", _read,
                                   f"it reads {_read.name.lower()}")
 
+# And a deployment's configured rules (ADR-0137). A rule's block on the wall has no
+# fill of its own — its words and its note mark in the node's ink, on the node's fill
+# — so it is read on each fill a rule leaves its node: red under a cap, amber under a
+# floor, green where a rule on its lines heals what it holds. And a line a rule
+# counts otherwise, § in the line's own ink on its tint, on the wall and on the
+# leaf's page. No engine reads the configuration here, so the sweep hands the tree
+# its rules as a start would.
+RULED_BRANCH = "rules"
+#: The rules' names, on a red node, an amber one and a green one.
+RULED_FILLS = ("capped", "floored", "healed green")
+app_module.status_tree.upsert(f"/{RULED_BRANCH}/capped/fn", StatusCode.ERROR,
+                              "timed out after 30 s")
+app_module.status_tree.upsert(f"/{RULED_BRANCH}/floored", StatusCode.WARN,
+                              "slower than it may be")
+# a branch, whose box the wall opens where a quiet leaf would be a chip
+app_module.status_tree.upsert(f"/{RULED_BRANCH}/green", StatusCode.WARN, [
+    Entry("slow", "the runner is slow", code=StatusCode.WARN),
+    Entry("idle", "the runner is idle", code=StatusCode.OK)], members=True)
+app_module.status_tree.upsert(f"/{RULED_BRANCH}/green/queue", StatusCode.OK,
+                              "nothing waits")
+app_module.status_tree.upsert(f"/{RULED_BRANCH}/healed", StatusCode.WARN, [
+    Entry("slow", "the runner is slow", code=StatusCode.WARN),
+    Entry("down", "the runner is down", code=StatusCode.ERROR)], members=True)
+
+
+def _configured(name: str, under: str, table: Table, order: int,
+                **where: object) -> AggregationRule:
+    return AggregationRule(
+        name=name, under=f"/{RULED_BRANCH}/{under}", segments=(RULED_BRANCH, under),
+        table=table, note=f"The rule {name}.", since=date(2026, 10, 24),
+        file=Path("config/aggregation.yaml"), root=Path("config"), order=order,
+        **where)  # type: ignore[arg-type]
+
+
+app_module.status_tree.use_aggregation(RuleSet((
+    _configured("capped", "capped", Table(((StatusCode.ERROR, StatusCode.WARN),)), 0),
+    _configured("floored", "floored", Table(((StatusCode.WARN, StatusCode.ERROR),)),
+                1),
+    _configured("healed green", "green", Table(((StatusCode.WARN, StatusCode.OK),)),
+                2, lines=("*",)),
+    _configured("slow runners heal", "healed",
+                Table(((StatusCode.WARN, StatusCode.OK),)), 3, lines=("*",)))))
+
 BOOTSTRAP = _HERE.parent / "var" / "bootstrap" / "node_modules" / "bootstrap" / "dist"
 AA = 4.5
 
@@ -125,34 +173,25 @@ CASES = (
 # its card is hovered, so at rest there is nothing of them to read.
 HOVER_ONLY = "hover only"
 
-# The rows a viewer reads in the open menu, and whether a pointer can wash them.
+# The rows a viewer reads in the open menu, and whether a pointer can wash them:
+# the session's row first — the name, and Log out, a button — then the headline over
+# the looks and its line, and a group's heading, its line and its choices.
 ROWS = (
-    (".ls-menu__heading", False),
-    (".ls-menu__item:not(.is-disabled):not(.ls-menu__logout)", True),
-    (".ls-menu__item.is-disabled", True),
+    (".ls-menu__who-name", False),
     (".ls-menu__logout", True),
+    (".ls-menu__title", False),
+    (".ls-menu__title-line", False),
+    (".ls-menu__heading", False),
+    (".ls-menu__line", False),
+    (".ls-menu__item", True),
+    (".ls-menu__help", True),
 )
 
-# And the rows on `/links` that are not plain body text: the freshness line, and
-# the *check now* button — which wears `btn btn-sm` plus an ink of our own for
-# exactly the reason this file exists. Bootstrap's `btn-outline-secondary` paints
-# #6c757d on every canvas, which measures 3.76:1 on the dark one; the button was
-# written that way first, and this sweep is what said so.
-#
-# A **verdict** row is not here, nor the freshness line's all-clear green: drawing
-# either needs an answer, and whether the demo file's hosts resolve is a property of
-# the machine you run this on. Those three inks land on our own canvas rather than
-# on a Bootstrap surface, so `tests/test_contrast.py` measures them from the tokens.
-#
-# The /about hero is not here either, and that one is worth a note: it paints no
-# surface at all — it sits on the page canvas — so `tests/test_contrast.py` can
-# measure every reading of it from the tokens. What no test can measure is the
-# *pairing*: that the term the eyes are on and the phrase it names light
-# together. That is what a browser is for; drive the page and watch it.
-PAGE_ROWS = (
-    (".ls-links__recheck .btn", True),
-    (".ls-links__probe", False),
-)
+# The /about hero is not here, and that one is worth a note: it paints no surface
+# at all — it sits on the page canvas — so `tests/test_contrast.py` can measure
+# every reading of it from the tokens. What no test can measure is the *pairing*:
+# that the term the eyes are on and the phrase it names light together. That is
+# what a browser is for; drive the page and watch it.
 
 # The setup guide's fold at the foot of the same page (ADR-0030). It is a **card**,
 # so it stands on a surface Bootstrap paints, as the menu does: its name in the
@@ -244,17 +283,48 @@ NEW_ROWS = (
 )
 
 # The same block on the wall (decisions 2 and 7), in a box inside a card, after
-# the box's head row (ADR-0127 decision 3): the box paints a status fill of its own
-# under the block, which paints its tint over it, so the pair is the block's again —
-# measured, like the coded lines above, because a pair that is right in the tokens
-# can still arrive re-composited. Its buttons show under the pointer only. The first
-# block on the page is the one read.
+# the box's head row (ADR-0127 decision 3), in the wall's lighter form (ADR-0135
+# decisions 3 and 4): its sentence, the mark that opens its note and an admin's pencil,
+# the marks in the block's ink and the pencil under the pointer only. The box paints a
+# status fill of its own under the block, which paints its tint over it, so the pair
+# is the block's again — measured, like the coded lines above, because a pair that is
+# right in the tokens can still arrive re-composited. The first block on the page is
+# the one read.
 WALL_ROWS = (
-    (".tree-box > .rule-block .rule-block__what", False),
-    (".tree-box > .rule-block .rule-block__note", False),
-    (".tree-box > .rule-block .rule-block__note a", True),
-    (".tree-box > .rule-block .rule-block__edit > summary", HOVER_ONLY),
-    (".tree-box > .rule-block .rule-block__clear .rule-button", HOVER_ONLY),
+    ('.tree-box > .rule-block[data-rule="maintenance"] .rule-block__what', False),
+    ('.tree-box > .rule-block[data-rule="maintenance"] .rule-note-mark', True),
+    ('.tree-box > .rule-block[data-rule="maintenance"] .rule-block__edit > summary',
+     HOVER_ONLY),
+)
+# Its edge, dashed (ADR-0135 decision 5): the block's ink at 65 %, as the stylesheet
+# mixes it, on the block's own surface, which the edge is drawn over — against the
+# non-text bar, since it says what the block is.
+WALL_EDGE_ROWS = ('.tree-box > .rule-block[data-rule="maintenance"]',)
+# A configured rule's block on the wall (ADR-0137 decision 10), which has no fill: its
+# sentence and its note mark are the node's own ink on the node's fill, its mark's wash
+# lighter than a pin's, its dashed edge that ink at 75 % — and § on a line its node
+# counts otherwise, the line's ink on the line's tint.
+CONFIGURED_ROWS = (
+    *((f'.tree-box > .rule-block[data-rule-name="{name}"] {part}', hoverable)
+      for name in RULED_FILLS
+      for part, hoverable in ((".rule-block__what", False),
+                              (".rule-note-mark", True))),
+    (".status-node__reason > .line-rule", False),
+)
+CONFIGURED_EDGE_ROWS = tuple(f'.tree-box > .rule-block[data-rule-name="{name}"]'
+                             for name in RULED_FILLS)
+# And § on the leaf's own page, where the line stands in its block of the lines.
+CONFIGURED_LINE_ROWS = ((".check-reason__body > .line-rule", False),)
+#: A block's dashed edge: its ink at 65 %.
+DASH_ALPHA = 0.65
+#: And a block with no fill of its own, on whatever fill its node's status gives it:
+#: its ink at 75 %, as a head's squares' edges are (ADR-0137).
+UNFILLED_DASH_ALPHA = 0.75
+# And its editor opened, where the wall's *Clear* stands in words beside *Save
+# changes* and *Cancel*, on the editor's panel.
+WALL_EDITOR_ROWS = (
+    (".tree-box > .rule-block .rule-block__clear-now", True),
+    (".tree-box > .rule-block .maintenance-editor-cancel", True),
 )
 
 # A culprit's own words — the name and the state of a node reporting its own problem
@@ -263,22 +333,22 @@ WALL_ROWS = (
 # keeps the quiet 80 % an error's and a warning's are lifted from.
 CULPRIT_ROWS = (
     (".status-node.s-error:not(.dim) > .status-node__self > .status-node__name", False),
-    (".status-node.s-error:not(.dim) > .status-node__self > .node-controls"
-     " > .status-node__state", False),
+    (".status-node.s-error:not(.dim) > .status-node__self > .status-node__state",
+     False),
     (".status-node.s-warn:not(.dim) > .status-node__self > .status-node__name", False),
-    (".status-node.s-warn:not(.dim) > .status-node__self > .node-controls"
-     " > .status-node__state", False),
+    (".status-node.s-warn:not(.dim) > .status-node__self > .status-node__state",
+     False),
     (".status-node.s-maintenance:not(.dim) > .status-node__self > .status-node__name",
      False),
-    (".status-node.s-maintenance:not(.dim) > .status-node__self > .node-controls"
+    (".status-node.s-maintenance:not(.dim) > .status-node__self"
      " > .status-node__state", False),
 )
 # And the fourth, on the probe's branch page, where the probe is an undefined card.
 UNDEFINED_ROWS = (
     (".status-card.s-undefined:not(.dim) > .status-card__head > .status-card__name",
      False),
-    (".status-card.s-undefined:not(.dim) > .status-card__head > .node-controls"
-     " > .status-card__state", False),
+    (".status-card.s-undefined:not(.dim) > .status-card__head > .status-card__state",
+     False),
 )
 
 # The head's row (ADR-0127 decision 3), its words: a node's action as a labelled
@@ -320,13 +390,13 @@ CARD_EDITOR_ROWS = (
 
 # A branch's page: *Set maintenance* in the head, on the head's own fill — a status
 # color, and one the block's buttons have not stood on before — as a page without
-# script shows it, and a pinned card's block in the card's body.
+# script shows it, and a pinned card's block in the card's body, in the wall's form
+# as every box a node's page shows beneath it (ADR-0135 decision 3).
 BRANCH_ROWS = (
     (".viewed-head .rule-setter__toggle", True),
     (".status-panel > .rule-block .rule-block__what", False),
-    (".status-panel > .rule-block .rule-block__note", False),
+    (".status-panel > .rule-block .rule-note-mark", True),
     (".status-panel > .rule-block .rule-block__edit > summary", HOVER_ONLY),
-    (".status-panel > .rule-block .rule-block__clear .rule-button", HOVER_ONLY),
 )
 
 # A node's page keeps the editor for the node's pin beneath its head's row, and where
@@ -350,7 +420,7 @@ HEAD_ROWS = (
     (".viewed-head .rule-block__clear .rule-button", True),
 )
 
-# The Maintenance page states the same blocks on the page's canvas (ADR-0104
+# *Handled* states the same blocks on the page's canvas (ADR-0104
 # decision 6): a line's sentence there carries links — the line's own, and the one
 # to the line — which wear the block's ink, and the pin's authors stand under the
 # note. The path that heads a node's pins is a link on the canvas itself.
@@ -432,6 +502,20 @@ MEASURE = """
   }
   const ink = read(getComputedStyle(el).color);
   return {ink: ink.slice(0, 3), alpha: alpha * ink[3], surface: surface};
+}
+"""
+
+
+#: Under the library's look a head's buttons show only while the pointer is on the
+#: head, the keyboard's focus is in it or its menu is open (`head_buttons: pointer`,
+#: ADR-0127 decision 3), so at rest there is nothing of them to read: a row in a head's
+#: toolbar is measured as it shows, its toolbar's opacity whole while it is measured,
+#: and given back after.
+SHOWN = """
+([selector, shown]) => {
+  const el = document.querySelector(selector);
+  const bar = el && el.closest('.node-controls');
+  if (bar) { bar.style.opacity = shown ? '1' : ''; }
 }
 """
 
@@ -529,7 +613,9 @@ def main() -> int:
                         if state == "hover":
                             page.hover(selector)
                             page.wait_for_timeout(200)
+                        page.evaluate(SHOWN, [selector, True])
                         seen = page.evaluate(MEASURE, selector)
+                        page.evaluate(SHOWN, [selector, False])
                         if "error" in seen:
                             findings.append(f"{label}: {seen['error']}")
                             continue
@@ -549,7 +635,9 @@ def main() -> int:
                 non-text bar: the edge is the ink at 75 %, as the stylesheet mixes
                 it, on the surface the square stands on."""
                 for selector, _ in rows:
+                    page.evaluate(SHOWN, [selector, True])
                     seen = page.evaluate(MEASURE, selector)
+                    page.evaluate(SHOWN, [selector, False])
                     if "error" in seen:
                         findings.append(f"{label}: {seen['error']}")
                         continue
@@ -565,6 +653,25 @@ def main() -> int:
                               f"{hexed(seen['ink']):9} {hexed(seen['surface']):9} "
                               f"{value:6.2f}{verdict}")
 
+            def dashes(label: str, rows: tuple[str, ...],
+                       alpha: float = DASH_ALPHA) -> None:
+                """A block's dashed edge against the non-text bar: its ink at
+                `alpha` on the surface the edge is drawn over, the block's own."""
+                for selector in rows:
+                    seen = page.evaluate(MEASURE, selector)
+                    if "error" in seen:
+                        findings.append(f"{label}: {seen['error']}")
+                        continue
+                    value = ratio(seen["ink"], seen["surface"],
+                                  seen["alpha"] * alpha)
+                    verdict = "" if value >= NON_TEXT else "  <-- under 3:1"
+                    if value < NON_TEXT:
+                        findings.append(f"{label} {selector} [dashes] {value:.2f}:1")
+                        verdict += " (gated)"
+                    print(f"{label:16} {selector[:44]:44} {'dash':5} "
+                          f"{hexed(seen['ink']):9} {hexed(seen['surface']):9} "
+                          f"{value:6.2f}{verdict}")
+
             print(f"{'theme':16} {'row':44} {'state':5} "
                   f"{'ink':9} {'on':9} {'ratio':>6}")
             print("-" * 100)
@@ -578,12 +685,9 @@ def main() -> int:
                 page.click("#ls-settings")
                 page.wait_for_selector(".dropdown-menu.show")
                 walk(label, ROWS, "#ls-settings")
-                # and the links page, whose rows sit on our own canvas rather than
-                # on the surface Bootstrap paints under the menu
+                # and the links page's guide fold, closed and then opened — the
+                # browser's own disclosure, like a block's editor further down
                 page.goto(f"{base}/links")
-                walk(label, PAGE_ROWS, "h1")
-                # its guide's fold, closed and then opened — the browser's own
-                # disclosure, like a block's editor further down
                 walk(label, FOLD_ROWS, "h1")
                 page.evaluate(
                     "document.querySelector('.ls-links__fold').open = true")
@@ -614,12 +718,20 @@ def main() -> int:
                     "document.querySelector('.rule-block__edit').open = false;"
                     "document.querySelector('.rule-setter').open = true")
                 walk(label, NEW_ROWS, "#ls-settings")
-                page.goto(f"{base}/maintenance")
+                page.goto(f"{base}/handled")
                 walk(label, PIN_PAGE_ROWS, "#ls-settings")
                 # and the wall: a pinned box's block, the head's row, then the editor
                 # ‖ clones into a card
                 page.goto(f"{base}/status")
                 walk(label, WALL_ROWS, "#ls-settings")
+                dashes(label, WALL_EDGE_ROWS)
+                wall_editor = ("document.querySelector("
+                               "'.tree-box > .rule-block .rule-block__edit')")
+                page.evaluate(f"{wall_editor}.open = true")
+                walk(label, WALL_EDITOR_ROWS, "#ls-settings")
+                page.evaluate(f"{wall_editor}.open = false")
+                walk(label, CONFIGURED_ROWS, "#ls-settings")
+                dashes(label, CONFIGURED_EDGE_ROWS, UNFILLED_DASH_ALPHA)
                 walk(label, CULPRIT_ROWS, "#ls-settings")
                 walk(label, TOOLBAR_ROWS, "#ls-settings")
                 # one card drawn narrow, so that its row folds *File it* behind ⋯
@@ -630,6 +742,9 @@ def main() -> int:
                 page.wait_for_selector("#status-grid .pin-setter[open]")
                 walk(label, CARD_EDITOR_ROWS, "#ls-settings")
                 page.keyboard.press("Escape")
+                # the leaf a configured rule counts a line of otherwise
+                page.goto(f"{base}/status/{RULED_BRANCH}/healed")
+                walk(label, CONFIGURED_LINE_ROWS, "#ls-settings")
                 # the probe's branch page, where the probe is an undefined card
                 page.goto(f"{base}/status/{UNDEFINED_BRANCH}")
                 walk(label, UNDEFINED_ROWS, "#ls-settings")

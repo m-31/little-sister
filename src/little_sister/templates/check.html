@@ -2,14 +2,17 @@
 <html>
 <head>
     {% from '_node_head.html' import frame_head, ok_mark with context %}
-    {% from '_status_cue.html' import cue_sprite %}
     {% from '_rule_block.html' import icon_sprite %}
     {# the node, not the section: three leaf tabs open at once should be
        tellable apart #}
     {% set page_title = node.name %}
     {% include '_header.html' %}
 
-    <div class="container-fluid mt-3 px-4" style="max-width: 820px">
+    {#- A leaf's page is 820 pixels wide, its lines and its facts at a reading
+        measure, and widens to about 1,300 where its node has an *About* card, so
+        that the card stands beside the facts while they keep their measure
+        (ADR-0133 decision 1); a page without one stays as it was. -#}
+    <div class="container-fluid mt-3 px-4" style="max-width: {{ '1300px' if about_card(node) else '820px' }}">
         {# The same band as the dashboard — a deep breadcrumb and an ellipsed
            title — minus the parts a detail page has no business showing: it is
            not polled, so it carries no freshness stamp, and it has nothing to
@@ -17,9 +20,10 @@
         {% include '_page_band.html' %}
         {% include '_said.html' %}
 
-        {#- The shapes of the cues and of the head's icons, drawn once for the page,
-            as the wall's page draws them: the frame's head refers to them. -#}
-        {{ cue_sprite() }}{{ icon_sprite() }}
+        {#- The shapes of the head's icons, drawn once for the page, as the wall's
+            page draws them and as `_page_end.html` draws the cues': the frame's head
+            refers to them. -#}
+        {{ icon_sprite() }}
         {#- **A leaf's page is framed as a branch's is** (backlog #91 §3.5): the page
             is the same tree, rooted at the leaf, and the leaf is always open. The
             frame's head is the one a branch's page draws (`frame_head`, the same
@@ -27,7 +31,7 @@
             fill the leaf's own — vivid where it fails, a leaf's status being its own
             — with the funnel where it has healthy lines, since ✓ ok is a leaf page's
             fold (§3.3) and `tree.js` keeps its entry in the tab's map, the same entry
-            the leaf's box carries on the wall; then the description, the rules acting
+            the leaf's box carries on the wall; then the rules acting
             on the leaf as the rows heading the frame, which is the border running
             round every line a pin covers (ADR-0104 decision 8), the lines in the
             check's order and the damping counter in words. Its status was a line of
@@ -39,9 +43,9 @@
             Time, report and configuration — the shared node-facts block
             (_node_facts.html), which the branch page renders too, so a container and
             a leaf say the same things in the same shapes (ADR-0044 decision 8) —
-            stand last in the frame, after the lines. The node's document is its Copy
-            view's, a tab in the band above, and this page carries none (ADR-0115
-            decision 7). -#}
+            stand last in the frame, after the lines, the node's *About* card beside
+            them (ADR-0133 decision 1). The node's document is its Copy view's, a tab
+            in the band above, and this page carries none (ADR-0115 decision 7). -#}
         {%- set pinning = namespace(count=0, may=is_admin, back='') %}
         {%- set fold = healthy_counts(node) %}
         {#- its fold as its files say (ADR-0128), drawn from the first paint -#}
@@ -54,7 +58,7 @@
         <div class="tree-box node-frame__box">
             {{ frame_head(node, pinning, branch, [], fold, surface='check', folds=folds) }}
             {{- ok_mark(fold, folds) }}
-            <div class="node-facts">
+            <div class="node-facts{% if about_card(node) %} node-facts--about{% endif %}">
                 {% include '_node_facts.html' %}
             </div>
         </div>

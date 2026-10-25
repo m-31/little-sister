@@ -7,7 +7,8 @@
   [ADR-0034](0034-template-slots-for-dependent-packages.md) (the sibling seam, decided
   in the same pass — a slot is where an extension's *HTML* goes, an aspect is where its
   *configuration* goes), [ADR-0023](0023-secret-references.md) (a credential in that
-  file is still a secret reference), [ADR-0020](0020-user-list-location.md),
+  file is still a secret reference),
+  [ADR-0046](0046-user-list-from-the-configuration-roots.md),
   [ADR-0100](0100-system-is-two-views.md) (the *Installed* view of `/system`, which
   shows the registered aspects)
 - **Register:** [`../decisions.md`](../decisions.md)

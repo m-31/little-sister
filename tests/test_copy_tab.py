@@ -82,7 +82,7 @@ class TheTabTests(_Pages):
                 with self.subTest(view=view, path=path):
                     found = tabs(self.page(f"/{view}{path}"))
                     self.assertEqual([word for word, _, _ in found],
-                                     ["Status", "History", "Copy"])
+                                     ["Status", "History", "Notes", "Copy"])
                     self.assertEqual(found[-1], ("Copy", f"/copy{path}", False))
 
     def test_the_roots_leads_to_the_trees_document(self):
@@ -105,6 +105,7 @@ class ThePageTests(_Pages):
                 self.assertEqual(tabs(page), [
                     ("Status", f"/status{path}", False),
                     ("History", f"/history{path}", False),
+                    ("Notes", f"/notes{path}", False),
                     ("Copy", f"/copy{path}", True)])
 
     def test_its_crumbs_open_the_copy_page_of_each_ancestor(self):
@@ -117,16 +118,21 @@ class ThePageTests(_Pages):
         self.assertEqual(tabs(page),
                          [("Status", "/status", False), ("Copy", "/copy", True)])
 
-    def test_the_trees_page_says_what_the_root_is_as_the_overview_does(self):
+    def test_the_trees_page_says_what_the_root_is_called_as_the_overview_does(self):
+        # the band says the root's title on both; what the root is about stands in
+        # its About card on the overview alone, at the wall's foot, as a node's
+        # stands on its Status tab alone (ADR-0133 decision 1)
         self.tree.set_title("", "The whole estate")
         self.tree.set_about("", "Everything this instance watches.")
         for url in ("/status", "/copy"):
             with self.subTest(url=url):
-                band = self.page(url).one("ls-band")
+                page = self.page(url)
+                band = page.one("ls-band")
                 self.assertEqual(band.one("node-title--header").text(),
                                  "The whole estate")
-                self.assertEqual(band.one("ls-band__about-body").text(),
-                                 "Everything this instance watches.")
+                self.assertEqual(band.all("ls-band__about-body"), [])
+                self.assertEqual(len(page.all("ls-node-about")),
+                                 1 if url == "/status" else 0)
 
     def test_a_lines_page_stands_in_its_nodes_band(self):
         page = self.page("/copy/ci/reviews?reason=pr-1")
@@ -136,6 +142,7 @@ class ThePageTests(_Pages):
         self.assertEqual(tabs(page), [
             ("Status", "/status/ci/reviews", False),
             ("History", "/history/ci/reviews", False),
+            ("Notes", "/notes/ci/reviews", False),
             ("Copy", "/copy/ci/reviews", True)])
 
     def test_it_says_which_document_it_holds_beneath_the_band(self):

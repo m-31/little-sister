@@ -2,9 +2,10 @@
 
 - **Status:** Accepted
 - **Date:** 2026-06-27
-- **Related:** [ADR-0004](0004-status-aggregation-semantics.md) /
+- **Related:** [ADR-0039](0039-status-rollup-semantics.md) /
   [ADR-0007](0007-check-result-branches.md) (the tree these paths address),
-  [ADR-0008](0008-json-output-api.md) (the JSON `path` field — schema-visible),
+  [ADR-0080](0080-the-envelope-is-the-snapshot-published.md) (the JSON `path` field —
+  schema-visible),
   [ADR-0015](0015-check-discovery-union.md) (check `owned_nodes` paths + coverage),
   [ADR-0012](0012-node-metadata.md) / [ADR-0014](0014-maintenance-persistence.md)
   (`nodes.yaml` keys / persisted maintenance paths).
@@ -53,7 +54,8 @@ Address a node by **one absolute, slash-separated path**.
   `<path:…>` converter (the default converter stops at `/`); link-building
   (`url_for('status', branch=…)`) must not double the leading slash. The root stays
   bare `/status`; breadcrumbs render the absolute path.
-- **The JSON `path` field changes shape** ([ADR-0008](0008-json-output-api.md)) —
+- **The JSON `path` field changes shape**
+  ([ADR-0080](0080-the-envelope-is-the-snapshot-published.md)) —
   `/system/alpha`, leading slash. This is **schema-visible**, but the Swift client
   and satellite federation do not exist yet, so it is a **free change now** and
   an expensive one once a consumer ships — doing it first is deliberate. The

@@ -1,9 +1,9 @@
 # ADR-0028 — Design tokens: one named palette, and a theme is an override of it
 
 - **Status:** Accepted
-- **Date:** 2026-10-18 (accepted 2026-08-01)
-- **Related:** [ADR-0024](0024-dashboard-layout.md) (the dim/vivid status model this
-  paints), [ADR-0005](0005-dashboard-freshness-and-self-monitoring.md) (the freshness
+- **Date:** 2026-10-25 (accepted 2026-08-01)
+- **Related:** [`../architecture.md`](../architecture.md) §6 (the dim/vivid status
+  model this paints), [ADR-0005](0005-dashboard-freshness-and-self-monitoring.md) (the freshness
   signals a theme must not weaken),
   [ADR-0029](0029-per-user-presentation-preferences.md) (how a viewer chooses one, and
   which theme a browser that never chose draws in),
@@ -20,7 +20,7 @@ editing the copies, so the schemes drift apart one fix at a time.
 
 The surface also already had a **model**, and it was not the one the design sheets used.
 The sheets described a warn card as a pale box with a filled "reason box" inside and a
-colored status word. What actually ships is the ADR-0024 dim/vivid split: per status a
+colored status word. What actually ships is the dim/vivid split: per status a
 **vivid** fill for a node reporting its own problem — the culprit — and a **pale tint**
 for a node that is merely healthy or derived, each with the ink that reads on it. Any
 token vocabulary had to mirror the shipped model, not the sketch of it.
@@ -46,6 +46,20 @@ The vocabulary mirrors the shipped model, per status `S`:
   alpha the surface wants, so a scheme that moves an ink moves its edges with it.
 - Chrome — canvas, ink, muted, panel, line, nav, rail, accent, and the brand mark's own
   inks — is named the same way, so a theme can re-ink the brand without forking its SVG.
+
+**Every other level of node steps its pale fill toward its state's ink**, so that a pale
+box nested in a box of its own fill — a failing host's box in the failing card, a
+healthy host's in the healthy box around it — and a quiet chip in a box of its own fill
+read apart from it rather than as one with it, a 22 % edge the only line between them: a
+card's own boxes and chips step, and so do the boxes and chips two levels inside them,
+and so on down, counting from a page's cards on a node's page as on the wall. The
+template marks the node, `is-stepped`, so that one mark serves its box and its chip. How
+far is each theme's, `--ls-tint-step`: 12 % in the plain palette, 14 % in cyberpunk,
+whose near-black tints need the longer step, and 8 % in the dark theme and auto's dark
+half, whose tints sit nearer their inks. The words on a stepped fill step the other way,
+30 % toward the page's ink, so each name, count and state word reads there at the bar
+or, where it was below it — the quiet OK — no lower than on the fill it stepped from;
+the title keeps its own look. A culprit keeps its vivid fill, as a failing chip does.
 
 **A theme is an override block, never a fork:** `body[data-ls-theme="…"]` restates the
 variables it changes, which wins over `:root` for everything inside `<body>`. The
@@ -92,13 +106,18 @@ as an error's and a warning's do; a state word on those two keeps the quiet 80 %
 error's and a warning's are lifted from, so each ink is as dark as keeps that word over
 the bar too — `#030810` reads 6.06:1 on the blue and 4.77:1 at 80 %, `#15181b` 6.75:1 on
 the grey and 4.81:1 at 80 % — and every culprit's words are measured, from the tokens
-and in the browser. Cyberpunk's muted ink, `#6593a5`, reads 4.61:1 on Bootstrap's dark
-`#212529`, the surface the contrast test reads six rows on — the menu's headings and its
-disabled item, the links page's aside and the curve's axes words — and 5.5:1 or more on
-the theme's own surfaces; the contrast test and the browser's sweep gate it with the
-others. When a pick and the bar collide the bar wins and **the pick finds a different
-vehicle**, flagged for a look, never silently both. Two recorded exceptions, both
-deliberate:
+and in the browser. Every pale pair but the quiet OK's keeps a state word over the bar
+at the quiet 80 % — the undefined pair's ink is `#45494d`, 7.97:1 on its tint and 4.75:1
+at 80 % in the plain palette, which the vivid and pastel themes keep, and cyberpunk's
+`#86a0ae`, 6.75:1 and 4.73:1, the undefined culprit's neon there too, where the dark
+theme's reads 5.15:1 — and the contrast test holds every pale pair's state word in every
+theme, so that none falls below the bar where one appears. Cyberpunk's muted ink,
+`#6593a5`, reads 4.61:1 on Bootstrap's dark `#212529`, the surface the contrast test
+reads six rows on — the menu's headings and its disabled item, the links page's aside
+and the curve's axes words — and 5.5:1 or more on the theme's own surfaces; the contrast
+test and the browser's sweep gate it with the others. When a pick and the bar collide
+the bar wins and **the pick finds a different vehicle**, flagged for a look, never
+silently both. Two recorded exceptions, both deliberate:
 
 - the **quiet OK** — the healthy status word and the strip's state sit at `opacity: .8`
   and measure 3.6–4.1:1 in the light themes. A healthy node is meant to recede, the
@@ -123,6 +142,9 @@ red-line lesson — measured per theme.
 - `auto` duplicates the dark block inside a `prefers-color-scheme` query, because a
   media query cannot share a selector with a rule outside it. A test compares the two
   blocks so they cannot drift.
+- **A nested box stands off the box around it**: 1.16:1 to 1.46:1 where it stood at
+  1.00, and a healthy box's title in the dark theme, which keeps its own look on a
+  stepped fill, reads 4.3:1 where it read 4.7.
 - One token, `--ls-warn-accent`, is defined and deliberately unused: it is the picked Y3
   yellow, barred from being a status word by the rule above, kept for a decorative use
   at ≥3:1. If none materializes it retires unused, which is an acceptable outcome.
@@ -136,6 +158,11 @@ red-line lesson — measured per theme.
 - **The sheets' three-slot warn vocabulary** (`warn-bg`, `warn-word`, `reason-bg`).
   Rejected: it describes a card that does not exist here. Mapping it onto the shipped
   dim/vivid model is what this ADR records instead.
+- **A firmer edge alone** for a nested box: it drew the line and left the fills alike.
+- **A step at every level**: it put the third level's words below the bar in the plain
+  theme, and past it gave a box its parent's fill again.
+- **The tint on the card alone**: it gave two failing boxes inside each other one
+  neutral fill again.
 - **Tokenizing borders as their own variables.** Rejected: the alphas differ per surface
   (22/25/28/50%), so it would have meant several border tokens per status that a theme
   would have to remember to move together with the ink.

@@ -13,11 +13,13 @@ Three methods, and no vocabulary of its own::
     save(name, data) -> None        # put these bytes there
     list() -> Sequence[str]         # every file the store holds
 
-and three a keeper **may** answer, which the layer looks for by name and does without::
+and five a keeper **may** answer, which the layer looks for by name and does without::
 
     tick(interval_seconds) -> bool  # once per interval, before any save: take saves?
     close() -> None                 # once, at graceful shutdown, after the last save
     changed_since_sync() -> Sequence[str]  # at a takeover: what the store changed
+    push(name, data) -> None        # a save between two ticks: what an operator set
+    standing_by() -> bool           # after the tick: does another instance stand by?
 
 ``tick`` is where a keeper does whatever it must do *every* interval whether or not
 a file changed — a store that holds a lease on its prefix renews it here, and one
@@ -44,10 +46,25 @@ with its own data, silently. A keeper without the method is the successor that
 always continues, which is what every keeper did before the method existed; one
 whose answer raises has failed its tick, and no save runs behind it that interval.
 
-Bytes, not parsed state: a keeper carries `events.json` and a package's sqlite file
-with the same code, and a store that understood its cargo would have to be released
-whenever the cargo's shape moved. **One keeper per instance**, registered in the
-import-before-app slot beside the resolvers and under ADR-0064's rules — a name
+``push`` and ``standing_by`` are the keeper's **two cadences** (ADR-0134 decision
+6). What an operator sets — a file the layer writes through, the pins — goes at the
+next scheduler tick after it changes, as it goes to the disk the moment it does:
+``push`` is a save between two of the keeper's ticks, which the keeper lands only
+while it holds its store — a store with a lease puts it behind a heartbeat of its
+own — and the layer asks it only while the keeper takes saves. What is observed —
+the event log and the series — goes every ``keeper_interval`` while nobody stands
+by, and every interval while anyone does: ``standing_by`` says which, as the keeper
+last saw. A takeover, the stop's one save and the two flushes an action runs
+between send everything at once — so a release a keeper offers as an action needs
+nothing of its own to send what the process holds before its store is given up. A
+keeper without ``push`` is handed the pins with the interval's saves, and one
+without ``standing_by`` counts as always watched and is sent the observed state
+every interval — both as every keeper was before the methods existed.
+
+Bytes, not parsed state: a keeper carries `events.json.gz` and a package's sqlite
+file with the same code, and a store that understood its cargo would have to be
+released whenever the cargo's shape moved. **One keeper per instance**, registered in
+the import-before-app slot beside the resolvers and under ADR-0064's rules — a name
 claimed once, the registering package inferred and recorded, ``/system`` listing it.
 A local installation registers none and loses nothing by it.
 
@@ -128,6 +145,38 @@ def changed_since_sync(keeper: Keeper) -> list[str]:
     if ask is None:
         return []
     return [str(name) for name in ask()]
+
+
+def push(keeper: Keeper, name: str, data: bytes) -> bool:
+    """Hand the keeper one file between two of its ticks — what an operator set,
+    at the next scheduler tick after it changed (ADR-0134 decision 6) — and say
+    whether it took it there.
+
+    A keeper without ``push`` takes nothing between its ticks, and the answer is
+    ``False``: the file goes with the interval's saves, as every file did before
+    the method existed. Whatever ``push`` raises travels; the layer turns it into
+    its line, and the interval's saves send the file again.
+    """
+    method = getattr(keeper, "push", None)
+    if method is None:
+        return False
+    method(name, data)
+    return True
+
+
+def standing_by(keeper: Keeper) -> bool:
+    """Whether another instance stands by, as the keeper last saw — so the
+    observed state goes every interval, and while nobody does every
+    ``keeper_interval`` (ADR-0134 decision 6).
+
+    A keeper without ``standing_by`` counts as always watched, and is sent the
+    observed state every interval, as every keeper was before the method existed.
+    Whatever it raises travels; the layer counts that as watched too, and says so.
+    """
+    ask = getattr(keeper, "standing_by", None)
+    if ask is None:
+        return True
+    return bool(ask())
 
 
 class KeeperConflictError(RuntimeError):

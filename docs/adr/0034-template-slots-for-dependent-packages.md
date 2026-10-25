@@ -1,20 +1,23 @@
 # ADR-0034 — Template slots for dependent packages
 
 - **Status:** Accepted
-- **Date:** 2026-10-18 (accepted 2026-08-01)
+- **Date:** 2026-10-25 (accepted 2026-08-01)
 - **Related:** [ADR-0001](0001-in-process-threaded-engine.md) (the import-before-app
-  registration slot this reuses), [ADR-0018](0018-markdown-rendering.md) (what a
-  reason is made of, and why raw HTML is escaped there),
-  [ADR-0030](0030-curated-links.md) §3 / `icons.py` (the other extension registry, and
-  the precedence rule this one deliberately inverts),
-  [ADR-0024](0024-dashboard-layout.md) (the surfaces a slot appears on),
-  [ADR-0035](0035-registering-a-config-aspect.md) (where an extension's *configuration*
-  goes — the sibling seam taken in the same pass),
-  [ADR-0008](0008-json-output-api.md) (untouched: a slot is presentation only),
-  [ADR-0100](0100-system-is-two-views.md) (the *Installed* view of `/system`, which
-  lists what registered),
+  registration slot this reuses), [ADR-0018](0018-markdown-rendering.md) (what a reason
+  is made of, and why raw HTML is escaped there), [ADR-0030](0030-curated-links.md) §3 /
+  `icons.py` (the other extension registry, and the precedence rule this one
+  deliberately inverts), [ADR-0056](0056-stable-useful-dashboard-flow.md) (the surfaces
+  a slot appears on), [ADR-0035](0035-registering-a-config-aspect.md) (where an
+  extension's *configuration* goes — the sibling seam taken in the same pass),
+  [ADR-0080](0080-the-envelope-is-the-snapshot-published.md) (untouched: a slot is
+  presentation only), [ADR-0100](0100-system-is-two-views.md) (the *Installed* view of
+  `/system`, which lists what registered),
   [ADR-0127](0127-the-wall-is-a-tree-and-a-click-opens-or-closes-a-node.md) (the tree,
-  whose head's row holds a node's actions, and the frame a node's page stands in)
+  whose head's toolbar holds a node's actions where decision 3's `head_buttons` look
+  stands it, and the frame a node's page stands in),
+  [ADR-0133](0133-a-node-says-what-it-is-in-a-card-and-at-length-in-a-handbook.md)
+  (decisions 4 to 6: what a draft made from a node is written with, which both slots
+  hand a filler)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -176,19 +179,42 @@ dependent package fills a slot with **a template of its own** plus an optional
     extension seam leaking into the design. The rail collapses when nobody fills it —
     a deployment with no extension pays one empty `<span>` per box.
 
-    The actions stand **in the head's own row**: before the head's own icons, which hold
-    its upper right corner, and before its state word where the state shares the row.
-    Nothing is laid over the title, so on a phone nothing covers a name, and they are
-    shown always, as the icons are. An action that names an icon
+    The actions stand **in the head's toolbar**, after the head's own icons — ↗, the
+    folds and ‖ — with ⋯ after them, and where the toolbar stands is a look,
+    `head_buttons`
+    ([ADR-0127](0127-the-wall-is-a-tree-and-a-click-opens-or-closes-a-node.md) decision
+    3): `pointer`, the library's, right after the name, the title and the state after
+    it, and shown while the pointer is on the head or the keyboard's focus is in it —
+    always on a touch screen; `pointer-name`, there too, with the name a link to the
+    node's page in ↗'s stead; `line`, on a line of its own beneath the row; or `name`,
+    at the row's end, after the state. Under the last two the actions are shown always,
+    as the icons are. Where a pointer can rest on a head, the toolbar of the first two
+    takes no room in the row, the title standing right after the name, and, shown, lies
+    over the title on the box's own fill, covering what it covers: an action lies over
+    the title again, as the rail this record set aside did, but only while the pointer
+    or the keyboard is on the head, and never on a touch screen, which keeps the
+    toolbar's room. An action that names an icon
     ([ADR-0038](0038-declarative-action-list.md)) is a square of the icons' shape, the
     icon alone, its label its tooltip and accessible name; one that names none keeps its
     label as a small chip, as the self-report buttons do
     ([ADR-0076](0076-the-instance-node-is-a-branch.md)); the stylesheet offers the
     square beside the chip, for a package's filler to use. The title gives way to them,
-    and what does not fit even then folds behind a ⋯ just before the icons, so that no
+    and what does not fit even then folds behind ⋯ at the toolbar's end, so that no
     action cuts the name and none moves to a line beneath it. With ⋯ and the head's own
     icons they are one toolbar, a single tab stop the arrow keys walk, so the script,
     not a filler, sets their `tabindex`.
+
+12. **Both slots hand a filler what a draft is written with**, beside the node
+    ([ADR-0133](0133-a-node-says-what-it-is-in-a-card-and-at-length-in-a-handbook.md)
+    decisions 4 to 6): `written_out(text, inline=False)`, a text of the node written out
+    as the Copy document writes one — a status its braces name as its word and cue, a
+    link in the short form to the absolute address of the node's handbook — and
+    `details()`, the rows of the node's *About* card as `(key, value)`, those given down
+    to it among them, each value written out the same way. They are functions, called by
+    a filler for a draft it makes and costing nothing otherwise, since a slot is filled
+    for every node at every render; `reason.actions`' context is
+    `(node, reason, line, index, surface, written_out, details)` and `node.actions`'
+    `(node, surface, place, written_out, details)`, grown additively (decision 1).
 
 ## Consequences
 
@@ -197,7 +223,7 @@ dependent package fills a slot with **a template of its own** plus an optional
   issue-tracker button on a failing leaf — is one template, one provider and one
   registered configuration aspect in the deployment repository; nothing about it is
   visible here.
-- The JSON envelope (ADR-0008) is **unchanged**. A slot is presentation; a native
+- The JSON envelope (ADR-0080) is **unchanged**. A slot is presentation; a native
   client sees nothing new, and nothing about the status model moves.
 - **An extension renders link-shaped and inline-styled interactions, and may ship its
   own assets.** A filler's template may contain a `<form>` posting to the deployment's
@@ -222,7 +248,8 @@ dependent package fills a slot with **a template of its own** plus an optional
   sat in the title's space on purpose, a chip being something to click and a title a
   nicety, and the rail repainted the box's fill beneath them, quiet until the card was
   hovered — after a deployment's `+ Jira` had landed in the middle of the word
-  *analysis*. In the tree's head the row has a place for them, and nothing is covered.
+  *analysis*. In the tree's head the toolbar has a place for them, and lies over the
+  title only while the pointer or the keyboard is on the head (decision 11).
 - **A Python callable returning `Markup`.** The obvious seam, and rejected on the one
   point that matters here: it hands the deployment the job of escaping a reason line
   assembled from captured command output. That is precisely the job ADR-0018 decided

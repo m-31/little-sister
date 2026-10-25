@@ -1,4 +1,4 @@
-"""The series file (ADR-0087): ``series.json`` joins the state writer, so a
+"""The series file (ADR-0087): ``series.json.gz`` joins the state writer, so a
 restarted instance shows yesterday's records, a keeper carries them with the rest,
 and a file of another shape is a load failure and never a refusal to start.
 
@@ -25,6 +25,7 @@ from little_sister.series import MemoryStore, SeriesKey, SeriesRecord
 from little_sister.state import BACKUP_SUFFIX, SERIES_FILE, StateLayer
 from little_sister.status import StatusCode
 from little_sister.tree import StatusTree
+from tests.state_files import encoded, on_disk
 
 T0 = datetime(2026, 9, 20, 12, 0, tzinfo=UTC)
 
@@ -240,7 +241,7 @@ class RestartTests(TestCase):
             self.assertFalse(state.path(SERIES_FILE).exists())
             engine.run_once()
             state.flush()
-            written = json.loads(state.path(SERIES_FILE).read_text())
+            written = on_disk(state.path(SERIES_FILE))
             self.assertEqual([item["subject"] for item in written["series"]],
                              ["macmini"])
 
@@ -248,13 +249,16 @@ class RestartTests(TestCase):
         with tempfile.TemporaryDirectory() as directory:
             state = StateLayer(directory)
             state.path(SERIES_FILE).parent.mkdir(parents=True, exist_ok=True)
-            state.path(SERIES_FILE).write_text('{"series": [{"torn": true}]}')
+            state.path(SERIES_FILE).write_bytes(
+                encoded(SERIES_FILE, {"series": [{"torn": True}]}))
             engine = self._engine()
             with self.assertLogs(level="ERROR"):
                 app_module._restore_series(engine, state)
             self.assertEqual(engine.series.held(), 0)
             (line,) = state.lines()
             self.assertEqual(line.slug, f"load.{SERIES_FILE}")
+            # refused for its shape, past the decoding (ADR-0134)
+            self.assertIn("does not name its type", line.text)
 
     def test_a_time_utc_cannot_hold_starts_empty_and_is_a_line_too(self) -> None:
         # The one damage that got past the load failure: startup catches the
@@ -268,13 +272,14 @@ class RestartTests(TestCase):
             payload["series"][0]["records"][0]["observed_at"] = (
                 "0001-01-01T00:00:00+01:00")
             state.path(SERIES_FILE).parent.mkdir(parents=True, exist_ok=True)
-            state.path(SERIES_FILE).write_text(json.dumps(payload))
+            state.path(SERIES_FILE).write_bytes(encoded(SERIES_FILE, payload))
             engine = self._engine()
             with self.assertLogs(level="ERROR"):
                 app_module._restore_series(engine, state)
             self.assertEqual(engine.series.held(), 0)
             (line,) = state.lines()
             self.assertEqual(line.slug, f"load.{SERIES_FILE}")
+            self.assertIn("outside the years 1 to 9999", line.text)
 
     def test_the_first_tick_meets_the_file_with_this_configurations_retention(
             self) -> None:
@@ -310,7 +315,7 @@ class RestartTests(TestCase):
                                         texts=("unreachable",), load=None),
                       keep=5)
             backup = state.path(SERIES_FILE + BACKUP_SUFFIX)
-            backup.write_text(json.dumps(older.payload()))
+            backup.write_bytes(encoded(SERIES_FILE, older.payload()))
             os.utime(backup, (1, 1))
             state.take_stock()
             state.take_backups()

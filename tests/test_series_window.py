@@ -250,7 +250,8 @@ class WindowTests(TestCase):
         tabs = [_query(href) for href in
                 re.findall(r'<a class="ls-views__tab[^"]*" href="([^"]*)"', body)]
         self.assertEqual(tabs, [(f"/status{HOST}", {}), (f"/series{HOST}", {}),
-                                (f"/history{HOST}", {}), (f"/copy{HOST}", {})])
+                                (f"/history{HOST}", {}), (f"/notes{HOST}", {}),
+                                (f"/copy{HOST}", {})])
 
     def test_the_index_and_a_node_s_page_take_none(self) -> None:
         # the page is the same but for its own address, which the menu posts back to

@@ -10,6 +10,7 @@ from little_sister.copy_status import (
     format_node_markdown,
     format_reason_markdown,
     status_icon,
+    written_out,
 )
 from little_sister.reasons import Entry
 from little_sister.render import render_markdown
@@ -45,6 +46,51 @@ class CopyStatusTests(TestCase):
                 "UNDEFINED": "❓",
             },
         )
+
+    def test_a_text_writes_a_status_it_names_as_the_document_does(self):
+        # the library's one function for a text leaving the instance (ADR-0133
+        # decision 5): a placeholder the page draws as a sign is written in this
+        # document's words — the word and the portable cue — and the rest stays
+        self.assertEqual(
+            written_out("{error}: restart the gateway; {WARN} waits, `{ok}` stays."),
+            "error ⛔: restart the gateway; warn ⚠️ waits, `{ok}` stays.")
+        for code in StatusCode:
+            with self.subTest(status=code.name):
+                self.assertEqual(written_out(f"{{{code.name.lower()}}}"),
+                                 f"{code.name.lower()} {status_icon(code)}")
+        # as the page renders the text: inline, as a title is, indented words are no
+        # code block, and the page draws their sign
+        self.assertEqual(written_out("    {error} when it fails", inline=True),
+                         "    error ⛔ when it fails")
+        self.assertEqual(written_out("    {error} when it fails"),
+                         "    {error} when it fails")
+        # as the head of a node's document says the status it reported
+        self.tree.upsert("/svc/api", StatusCode.ERROR, "down")
+        node = self.tree.snapshot("/svc/api")
+        assert node is not None
+        self.assertIn(f"**Reported:** {written_out('{error}')}",
+                      format_node_markdown(node, BERLIN))
+
+    def test_every_text_it_carries_writes_out_the_statuses_it_names(self):
+        # one renderer draws a sign in every text the page shows (ADR-0018 decision
+        # 14), so both documents write each out as they write a status: a line, a
+        # title, an admin's note and what the run found
+        self.tree.upsert("/svc/api", StatusCode.ERROR, "the probe said {error}",
+                         report="- the last run {warn}")
+        self.tree.set_title("/svc/api", "Gateway {ok}")
+        self.tree.set_maintenance("/svc/api", "back {OK} by noon", set_by="lex",
+                                  expires_at=datetime.now(UTC) + timedelta(days=1))
+        node = self.tree.snapshot("/svc/api")
+        assert node is not None
+        tree_document = self._copy()
+        node_document = format_node_markdown(node, BERLIN)
+        for document in (tree_document, node_document):
+            with self.subTest(document=document[:20]):
+                self.assertIn("Gateway ok ✅", document)
+                self.assertIn("the probe said error ⛔", document)
+                self.assertIn("back ok ✅ by noon", document)
+                self.assertNotIn("{", document)
+        self.assertIn("- the last run warn ⚠️", node_document)
 
     def test_keeps_non_ok_leaves_and_their_minimum_ancestor_chain(self):
         self.tree.upsert("/aws/quality/healthy", StatusCode.OK)

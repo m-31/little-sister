@@ -1,13 +1,13 @@
 # ADR-0098 — A Series view is drawn over the window its URL names
 
 - **Status:** Accepted
-- **Date:** 2026-10-03
+- **Date:** 2026-10-25 (accepted 2026-10-03)
 - **Related:** [ADR-0097](0097-a-nodes-series-have-a-view-of-their-own.md) (the Series
   view; decision 1 amended), [ADR-0092](0092-a-check-declares-its-measures.md) (a curve
   drawn on the server, with no script of its own; decision 5, its breaks),
   [ADR-0096](0096-a-measure-names-its-node-and-its-things.md) (decision 4, a failed
-  reading's mark), [ADR-0006](0006-config-file-and-timezones.md) (the configured
-  timezone and time format), [ADR-0101](0101-the-events-page-is-filtered-by-its-url.md)
+  reading's mark), [ADR-0120](0120-every-stored-time-is-an-instant.md) (decision 7,
+  the configured timezone and time format), [ADR-0101](0101-the-events-page-is-filtered-by-its-url.md)
   (the Events page, which reads the same window with the same bar),
   [ADR-0111](0111-a-runs-mark-says-how-the-run-stood.md) (decision 4, decision 5's
   counterpart for a series of runs)
@@ -87,9 +87,10 @@ Every stretch of a curve's time axis between two of its labels, and from an end 
 label nearest it, is a link to the view over that stretch, which returns to the curve it
 was chosen on. The axis is drawn as a track divided at its labels, and the pointer over
 a stretch is a zoom. Each curve's stretches are the same links, so the first curve's are
-in the tab order and the others are for the pointer alone. Nothing follows the pointer
-across a plot: a band there would promise a drag the view does not have. Every control
-that applies is a link the server draws.
+in the tab order and the others are for the pointer alone. Without the view's script
+nothing follows the pointer across a plot; with it, a drag chooses a stretch and one
+line reads every curve at one instant (decision 6). Every control that applies is a
+link the server draws.
 
 ### 4. Time labels fall on round times in the configured timezone
 
@@ -159,8 +160,9 @@ text or picked up as a link, with the script or without it.
   third lighter; a single reading is reached by zooming in. A view without a window
   shows everything kept, as it did.
 - **A script, over links that work without it**: a drag writes the `from` and `to` a
-  link does, so a page without the script loses the gesture, not the way. A year needs
-  a `y` duration unit, or `365d`, once a series keeps one.
+  link does, so a page without the script loses the gesture, not the way. The family's
+  durations have no `y`, so a year is written `365d`: the presets *1y* and *7y* are
+  `now-365d` and `now-2555d`.
 
 ## Alternatives considered
 

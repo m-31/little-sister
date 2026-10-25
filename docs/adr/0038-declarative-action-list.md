@@ -1,7 +1,7 @@
 # ADR-0038 — The declarative action list: `config/actions.yaml`
 
 - **Status:** Accepted
-- **Date:** 2026-10-04 (accepted 2026-08-02)
+- **Date:** 2026-10-25 (accepted 2026-08-02)
 - **Related:** [ADR-0034](0034-template-slots-for-dependent-packages.md) (the slot
   seam this is built **on top of**, and which rejected a config-only list as the
   *sole* answer), [ADR-0036](0036-addressable-reasons.md) (the members/prose split
@@ -11,9 +11,12 @@
   resolves through — reused, not duplicated),
   [ADR-0037](0037-extension-static-assets.md) (what a filler needs when a link is not
   enough — the case this one deliberately does not serve),
-  [ADR-0008](0008-json-output-api.md) (untouched: an action is presentation),
+  [ADR-0080](0080-the-envelope-is-the-snapshot-published.md) (untouched: an action is
+  presentation),
   [ADR-0100](0100-system-is-two-views.md) (the *Installed* view of `/system`, which
-  lists both kinds of filler)
+  lists both kinds of filler),
+  [ADR-0139](0139-a-node-carries-every-tag-written-for-it-or-above-it.md) (decision 7:
+  `tag:`, the selector's other half)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -40,7 +43,7 @@ The library ships a **filler of its own**, driven by configuration.
    **Layered like the checks, not merged like the settings**: a site root *adds* its
    actions to a base root's, because an action is a whole thing and a site should not
    have to restate the base's to add one.
-2. **An entry is `label`, `url`, `slot`, and optionally `icon` and `under`.**
+2. **An entry is `label`, `url`, `slot`, and optionally `icon`, `under` and `tag`.**
    `slot` is one of the library's two ([ADR-0034](0034-template-slots-for-dependent-packages.md)),
    so this invents **no placement rule of its own** — `reason.actions` already means
    *about one reason* and `node.actions` *about the whole node*, which
@@ -57,9 +60,12 @@ The library ships a **filler of its own**, driven by configuration.
    button that silently sends the operator somewhere useless, and a monitoring tool
    should not have buttons that lie.
 6. **`under` is a node path, compared segment-wise** — `/system/alpha` covers
-   `/system/alpha/disk` and never `/system/alphaville`. It is the half of the selector
-   vocabulary that is already settled; a `tag:` selector waits for node tags to exist,
-   and an action written today keeps working when it arrives.
+   `/system/alpha/disk` and never `/system/alphaville` — **and `tag` one tag**, the
+   selector vocabulary's other half
+   ([ADR-0139](0139-a-node-carries-every-tag-written-for-it-or-above-it.md) decision 7):
+   the action is offered on every node that carries the tag, and where both are
+   written, on a node both pick. A `tag:` the configuration writes for no node drops
+   the action, the startup record saying why, as for an entry that cannot apply.
 7. **It registers through the slot seam**, as a `builtin` filler, rather than being
    rendered beside it. So a configured chip and a deployment's coded one land in one
    rail in one order, `/system`'s *Installed* view at `/system/installed`
@@ -104,7 +110,7 @@ The library ships a **filler of its own**, driven by configuration.
   written against the first.
 - **Wait for node tags and use `tag:`.** The eventual right selector.
   Rejected as a blocker: `under:` is already frozen vocabulary, covers the case, and
-  composes with `tag:` when it lands.
+  composes with `tag:` (decision 6).
 - **Fold it into `config/links.yaml`.** An action is a labeled URL with an icon, and
   that loader already resolves icons. Rejected: a link is navigation the *viewer*
   chose and an action is something done *to a node*. Conflating them would make the

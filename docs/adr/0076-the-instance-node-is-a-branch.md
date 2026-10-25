@@ -1,17 +1,18 @@
 # ADR-0076 — The instance's node is a branch: a child per contributor, an action per child
 
 - **Status:** Accepted
-- **Date:** 2026-09-20 (accepted 2026-09-05)
+- **Date:** 2026-10-24 (accepted 2026-09-05)
 - **Related:** [ADR-0072](0072-the-instance-reports-on-itself.md) (the self-report
   seam whose contributors become the children, and whose §7 records are what the
   children carry), [ADR-0005](0005-dashboard-freshness-and-self-monitoring.md) (the
   heartbeat this branch is rooted on, and the stale beat that stays the root's own),
   [ADR-0056](0056-stable-useful-dashboard-flow.md) (the status strip, whose
-  decision 3 this record amends), [ADR-0024](0024-dashboard-layout.md)
-  (where the strip came from), [ADR-0036](0036-addressable-reasons.md) (a pin holds
+  decision 3 this record amends), [ADR-0036](0036-addressable-reasons.md) (a pin holds
   against `(path, slug)`, which is why this is a breaking change),
   [ADR-0034](0034-template-slots-for-dependent-packages.md) (the slot seam the action buttons render
-  through), [ADR-0039](0039-status-rollup-semantics.md) (the roll-up the strip shows)
+  through), [ADR-0039](0039-status-rollup-semantics.md) (the roll-up the strip shows),
+  [ADR-0134](0134-the-state-is-compressed-and-stamped.md) (what each of the two flushes
+  an action runs between sends)
 
 ## Context
 
@@ -97,29 +98,31 @@ were the package's, and the seam carried lines and nothing else.
 
 6. **A package may offer an action on its child.** `self_report.register_action(
    contributor, slug, label, handler)`, claimed once under the same rules as a
-   contributor name and from the same import-before-app block, in either order
-   with the contributor's own registration. The library mounts one route,
+   contributor name and from the same import-before-app block, in either order with the
+   contributor's own registration. The library mounts one route,
    `POST /little-sister/<contributor>/act/<slug>`, gated like every route and
-   **admin-only** like every write; it runs the handler, logs who ran what, and
-   comes back to the child's page with the sentence the handler returned — or,
-   where the handler raised, with the label and the error, because a button that
-   answers with a traceback page has said nothing about the thing it was pressed
-   for. **A handler that ran is followed by a flush of the state layer** (ADR-0071):
-   an action is a write into this process, and what it changed reaches the store
-   now rather than at the next interval — the keeper's *take over* adopts and saves
-   in the click, and pressed on the instance that holds the lease already it is
-   the save; a handler that raised is not followed by one. The flush is the
-   scheduler's own, serialized with it, so the click waits at most one interval's
-   flush; a handler's sentence may promise what the flush does. A button is offered
-   in every state rather than disabled by a state read before the click — the page
-   is a snapshot, and the lease can change hands between the render and the POST —
-   and the handler's sentence says what actually happened. The buttons are a
-   **built-in slot filler** on `node.actions` (ADR-0034),
-   rendered only on a child of `/little-sister` and only for an admin, as POST forms
-   because an action is a write. Nothing new is invented for the rail: a package's
-   button lands beside the declarative chips (ADR-0038) in the one order the slot
-   seam already keeps. The first package to register two is the S3 keeper — *take
-   over* and *release* — in `little-sister-aws`.
+   **admin-only** like every write; it runs the handler, logs who ran what, and comes
+   back to the child's page with the sentence the handler returned — or, where the
+   handler raised, with the label and the error, because a button that answers with a
+   traceback page has said nothing about the thing it was pressed for. **An action runs
+   between two flushes of the state layer** (ADR-0071, ADR-0134 decision 6): an action
+   is a write into this process, and the flush before its handler sends the keeper
+   everything the process holds while the lease is still its own — a keeper's *release*
+   gives it up in its handler — and the flush after a handler that ran sends what the
+   action changed now rather than at the next interval; each sends everything, whatever
+   `keeper_interval` says. The keeper's *take over* adopts and saves in the click, and
+   pressed on the instance that holds the lease already the flushes are the save; a
+   handler that raised is not followed by one. The flushes are the scheduler's own,
+   serialized with it, so the click waits at most one interval's flush besides its own
+   two; a handler's sentence may promise what the flush after it does. A button is
+   offered in every state rather than disabled by a state read before the click — the
+   page is a snapshot, and the lease can change hands between the render and the POST —
+   and the handler's sentence says what actually happened. The buttons are a **built-in
+   slot filler** on `node.actions` (ADR-0034), rendered only on a child of
+   `/little-sister` and only for an admin, as POST forms because an action is a write.
+   Nothing new is invented for the rail: a package's button lands beside the declarative
+   chips (ADR-0038) in the one order the slot seam already keeps. The first package to
+   register two is the S3 keeper — *take over* and *release* — in `little-sister-aws`.
 
 ## Consequences
 

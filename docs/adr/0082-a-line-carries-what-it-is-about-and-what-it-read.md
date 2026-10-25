@@ -1,7 +1,7 @@
 # ADR-0082 — A line carries what it is about and what it read
 
 - **Status:** Accepted
-- **Date:** 2026-10-04 (accepted 2026-09-19)
+- **Date:** 2026-10-25 (accepted 2026-09-19)
 - **Related:** [ADR-0036](0036-addressable-reasons.md) (the entry, and the rule that
   it is not a node), [ADR-0042](0042-entries-carry-their-own-code.md) (the entry's
   own claim, and the value object this extends),
@@ -10,15 +10,26 @@
   (decision 1, which this is the first exercise of),
   [ADR-0002](0002-rlock-snapshot-synchronization.md) (why the stored record is a
   copy), [ADR-0018](0018-markdown-rendering.md) (escaping moves from the check's
-  sentence to the renderer's field), [ADR-0006](0006-config-file-and-timezones.md)
-  (the configured timezone and time format a record's time is shown in),
+  sentence to the renderer's field),
   [ADR-0075](0075-a-check-declares-what-it-costs.md) (declare-and-measure, the shape
-  a later limit negotiation would take),
+  a later limit negotiation would take; decision 5, the share of the limit at which a
+  start says a declared record is close),
   [ADR-0093](0093-a-record-the-seam-refuses-costs-its-line.md) (a refused record costs
   its line or its reading, never the run), [ADR-0085](0085-a-measure-is-read-out-of-a-record.md)
-  (the node's measured record, shown beside the line's),
+  (the node's measured record, shown beside the line's, and the measure read out of a
+  record when it is drawn), [ADR-0086](0086-a-check-measures-and-grades.md) (decision
+  7, the record the library's command types are sized to, a number of their own),
+  [ADR-0087](0087-a-check-keeps-its-subjects-readings.md) (a reading's identity, which
+  `Check.line` carries onto the line it writes),
   [ADR-0120](0120-every-stored-time-is-an-instant.md) (the node's own stamp, an instant
-  too, and the offset the tree requires of every time it stores)
+  too, and the offset the tree requires of every time it stores; decision 7, the
+  configured timezone and time format a record's time is shown in),
+  [ADR-0126](0126-a-line-is-a-template-over-its-record.md) (decision 4, the link's
+  shape this left to the line template),
+  [ADR-0135](0135-a-handled-part-keeps-its-true-color-and-every-surface-says-by-what.md)
+  (decision 2, maintenance's own words, which the decisions here take),
+  [ADR-0142](0142-a-failure-marked-seen-counts-as-ok-above-until-it-changes.md) (a
+  line's occurrence, which a *seen* on it is bound to)
 - **Register:** [`../decisions.md`](../decisions.md)
 - **Contract:** [`../api/openapi.yaml`](../api/openapi.yaml) — `Entry`, from 2.1.0.
 
@@ -76,8 +87,8 @@ per-line claim and a claim on an indivisible condition is meaningless
 its unit of suppression.
 
 **The subject is not an address.** Nothing may be pinned by it, now or later. A pin
-holds an identifier and only a line has one, and a subject pin would silence
-everything about a repository — including the nineteen findings nobody has looked
+holds an identifier and only a line has one, and a subject pin would put everything
+about a repository in maintenance — including the nineteen findings nobody has looked
 at. A per-repository *node*, which is a different thing and a breaking one, is how
 that wish is granted honestly, and it is not granted here.
 
@@ -109,12 +120,14 @@ absent and one that was never asked for.
 
 **Nothing else is typed, and the omissions are deliberate.** The test a name has to
 pass is that some surface does something with it that it could not do without the
-type. A *link* fails it: `text` is Markdown and has carried links all along, and
-letting the surface decide what is clickable is the point of the line *template*,
-two slices away, which is where a link's shape should be settled with a template in
-front of it. An *actor* and a *state word* fail it too — nothing renders either
-differently today, and a state's reader is the grading seam. A **measurement** — a
-number with a unit — is the interesting omission and is covered by decision 4.
+type. A *link* fails it: `text` is Markdown and has carried links all along, and a
+link's shape is settled where a line is a template over its record, with the template
+in front of it — a link is Markdown in the template, and which words link where is the
+template's ([ADR-0126](0126-a-line-is-a-template-over-its-record.md) decision 4). An
+*actor* and a *state word* fail it too — nothing renders either differently today, and
+a state's reader is the grading seam. A **measurement** — a number with a unit — is the
+interesting omission: a measure is read out of the record when it is drawn, not typed
+into it ([ADR-0085](0085-a-measure-is-read-out-of-a-record.md) decision 1).
 
 The vocabulary is enforced here rather than merely documented. A documented type
 nothing checks is the worst of both: every renderer still has to defend itself, so
@@ -158,12 +171,21 @@ record costs in: the envelope sent to every client, and a series file later. The
 same serialization proves the JSON-serializable promise and measures it, so one
 step does both jobs.
 
-**The default is 2 KB.** The line is drawn where a composed record ends and a
-payload dump begins, which is what the limit exists to stop: the first records
+**The default is 3 KB, 3,072 bytes.** The line is drawn where a composed record ends
+and a payload dump begins, which is what the limit exists to stop: the first records
 assembled by hand come to a few hundred bytes, while a single raw row from a
 provider's API is already several kilobytes. A more generous number would let an
 unexamined API row through, and then the limit no longer guards the thing it was
-drawn for.
+drawn for. It stands far enough above the records the family composes that a start
+does not say one is close: `little-sister-github` declares its workflow run's record,
+a ceiling built of pathological input, at 1,896 bytes, 62 % of 3,072 — of 2,048 it
+would be 93 %, past the 80 % at which a start says a declared record is close, with
+nothing to act on but raising the limit
+([ADR-0075](0075-a-check-declares-what-it-costs.md) decision 5). The library's command
+types are not sized to it: their records are sized to 2,048 bytes, a number of their
+own ([ADR-0086](0086-a-check-measures-and-grades.md) decision 7), so a type is still
+written against the default and the library's own leave a third of it free. A
+deployment that writes `record_limit: 2048` keeps the line at 2 KB.
 
 **`record_limit` in `settings.yaml` overrides it**, like the engine's other
 numbers. The deployment owns the memory, the poll and the clients, so it is the
@@ -209,7 +231,8 @@ surface a reader reaches when the line is not enough.
 
 That list reads decision 2's names. A value under `at`, `started` or `ended`, at any
 depth, is shown in the configured `timezone` and `time_format`, as every other time is
-([ADR-0006](0006-config-file-and-timezones.md)); everything else as it was stored — a
+([ADR-0120](0120-every-stored-time-is-an-instant.md) decision 7); everything else as it
+was stored — a
 null, a time the zone cannot hold (the seam accepts any instant UTC can, and the last
 half hour of the year 9999 in UTC is the year 10000 in Berlin), and a time-shaped value
 under a name decision 2 does not type, since the type is the name's and never the
@@ -221,6 +244,17 @@ says so in its own sentence, as [ADR-0060](0060-a-line-makes-no-claim.md) decisi
 has a carried reading do, and an age written by a page that is not polled would be
 wrong a minute later. The envelope carries a record's times in UTC, and a client
 renders them as it chooses.
+
+### 6. A line carries its occurrence, what tells its failure from the next
+
+Beside its subject and its record a line carries its **occurrence**
+([ADR-0142](0142-a-failure-marked-seen-counts-as-ok-above-until-it-changes.md)
+decision 3): the record field its type names as `occurrence=` on `Check.__init__`, one
+it declares in `line_fields`, and otherwise the identity of the reading `Check.line`
+wrote it from ([ADR-0087](0087-a-check-keeps-its-subjects-readings.md)); it is empty
+where neither is there. A *seen* on the line is bound to it and ends when another
+comes. The envelope does not serve it on the line: the *seen* bound to it says it, in
+its part's `handled`.
 
 ## Consequences
 
@@ -240,12 +274,13 @@ renders them as it chooses.
   be argued with a caller in hand.
 - **A measurement is not here either**, and this is the omission most likely to be
   read as an oversight. A number with a unit has exactly one consumer — the series
-  that will draw it — and that consumer is not built. Its shape is also not obvious:
-  a series draws curves of a subject's *measures*, plural, and the single
-  `number`/`unit` pair the original sketch proposed cannot hold two. Deciding it
-  with the first curve in front of us is cheaper than deciding it now and living
-  with the answer. Nothing is reserved against it, for the reason ADR-0080 gave
-  about tags: a name is claimed when it exists.
+  that draws it — and its shape is not obvious: a series draws curves of a subject's
+  *measures*, plural, and the single `number`/`unit` pair the original sketch
+  proposed cannot hold two. It is decided with the first curve in front of it: a
+  measure is read out of the record when it is drawn, its unit belonging to the
+  projection ([ADR-0085](0085-a-measure-is-read-out-of-a-record.md) decision 1).
+  Nothing is reserved against it, for the reason ADR-0080 gave about tags: a name is
+  claimed when it exists.
 - **A check that adopts the record can stop welding data into its sentence** — but
   none is obliged to, and a type's sentences are rewritten when that type adopts
   the record, never before.

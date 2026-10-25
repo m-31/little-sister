@@ -20,7 +20,7 @@ from little_sister.checks import Check, CheckResult, Measurement
 from little_sister.checks.base import _parse_common
 from little_sister.checks.metadata import Stated
 from little_sister.config import DEFAULT_REASON_CAP, Config
-from little_sister.first_look import FirstLook, FirstLooks, draw, statement
+from little_sister.first_look import BIG_LEVEL, FirstLook, FirstLooks, draw, statement
 from little_sister.nodes import NodeMeta
 from little_sister.status import StatusCode, join_path
 from little_sister.tree import StatusSnapshot, StatusTree
@@ -95,8 +95,8 @@ class EachLayerBeatsTheNextTests(TestCase):
                          [1, 2, 3, 4, DEFAULT_REASON_CAP])
 
     def test_a_node_nobody_speaks_for_is_left_to_the_page(self) -> None:
-        # until the interactive wall's last step the built-in look is today's
-        # density, which the page decides: the resolver says nobody spoke
+        # the built-in look, open but for a big level, is the page's to draw, since
+        # it counts what a level would draw: the resolver says nobody spoke
         self.assertEqual(_looks(_check()).look("/hosts/alpha/disk"),
                          FirstLook(chips=None, fold_ok=None,
                                    reason_cap=DEFAULT_REASON_CAP))
@@ -225,6 +225,31 @@ class WhichCheckWritesANodeTests(TestCase):
         self.assertIs(looks.look("/hosts/alpha/raid").chips, True)
         self.assertIsNone(looks.writer("/hosts/alpha/memory"))
 
+    def test_each_child_of_a_shared_mount_starts_as_its_own_check_says(self) -> None:
+        # decision 5 as amended: the mount's own look stays nobody's but nodes.yaml's,
+        # and each child starts as the check whose subtree it is says of the children
+        # of the node it is mounted on — its file before its type — with nodes.yaml's
+        # word on the mount first and settings.yaml's last
+        one = _check(chips=True, owns=("cpu",))
+        two = _check(own={"chips": False}, owns=("raid",))
+        three = _check(owns=("notes",))
+        looks = _looks(one, two, three)
+        self.assertIsNone(looks.look("/hosts/alpha").chips)
+        self.assertIs(looks.children_chips("/hosts/alpha", "/hosts/alpha/cpu"), True)
+        self.assertIs(looks.children_chips("/hosts/alpha", "/hosts/alpha/raid"), False)
+        self.assertIsNone(looks.children_chips("/hosts/alpha", "/hosts/alpha/notes"))
+        self.assertIsNone(looks.children_chips("/hosts/alpha", "/hosts/alpha/other"))
+        nodes = {"/hosts/alpha": NodeMeta(look=Stated(chips=False))}
+        self.assertIs(_looks(one, two, nodes=nodes).children_chips(
+            "/hosts/alpha", "/hosts/alpha/cpu"), False)
+        self.assertIs(_looks(one, three, config=Config(chips=True)).children_chips(
+            "/hosts/alpha", "/hosts/alpha/notes"), True)
+        # a mount one check writes alone answers as its own look does, for a child
+        # that is another check's mount too: a share is two checks on one path
+        solo = _looks(_check("/solo", chips=True), _check("/solo/site", chips=False))
+        self.assertIs(solo.children_chips("/solo", "/solo/x"), True)
+        self.assertIs(solo.children_chips("/solo", "/solo/site"), True)
+
     def test_the_deepest_mount_writes_what_lies_beneath_it(self) -> None:
         host = _check("/macmini", subnodes={"website": {"chips": True}})
         site = _check("/macmini/website", chips=False)
@@ -282,8 +307,9 @@ def _root(tree: StatusTree, path: str = "") -> StatusSnapshot:
 
 class WhatTheServerDrawsTests(TestCase):
     """How each node starts as the page arrives (§7.5's *What the server draws*):
-    closed where its parent's ``chips`` says, today's density where nobody spoke, a
-    ``depth=`` level closed — and, beside it, what the planner prices."""
+    closed where its parent's ``chips`` says, open where nobody spoke but for a big
+    level (:class:`TheNetForABigLevelTests`), a ``depth=`` level closed — and, beside
+    it, what the planner prices."""
 
     def setUp(self) -> None:
         self.tree = StatusTree()
@@ -300,28 +326,23 @@ class WhatTheServerDrawsTests(TestCase):
         self.assertEqual(drawn.closed, {"/c/host/disk", "/c/host/raid"})
         # and the planner prices what the configuration closes
         self.assertEqual(drawn.priced, {"/c/host/disk", "/c/host/raid"})
-        self.assertNotIn("/c/host", drawn.dense)
 
     def test_a_level_whose_node_says_no_chips_starts_open(self) -> None:
         drawn = self._draw(_said(**{"/c/host": Stated(chips=False)}))
         self.assertEqual(drawn.closed, frozenset())
         self.assertEqual(drawn.priced, frozenset())
-        self.assertNotIn("/c/host", drawn.dense)        # no *+N more* either
 
-    def test_where_nobody_spoke_todays_density_holds(self) -> None:
+    def test_where_nobody_spoke_every_node_starts_open_its_healthy_shown(self) -> None:
+        # the built-in look (§3.4): a quiet leaf, a failing one, a claim and every
+        # branch open, and nothing folded
         self.tree.upsert("/c/host/raid", StatusCode.WARN, "degraded")
         drawn = self._draw()
-        # a quiet leaf closed; a failing one, a claim and every branch open
-        self.assertEqual(drawn.closed, {"/c/host/disk"})
-        self.assertEqual(drawn.priced, frozenset())      # status decides it
-        self.assertEqual(drawn.dense, {"/c", "/c/host"})
-        # the harness's knob leaves those levels open
-        drawn = self._draw(dense=False)
-        self.assertEqual((drawn.closed, drawn.dense), (frozenset(), frozenset()))
+        self.assertEqual((drawn.closed, drawn.priced, drawn.folded),
+                         (frozenset(), frozenset(), frozenset()))
 
     def test_the_cards_start_open_whatever_is_said(self) -> None:
         # the wall's root takes no key: `chips: true` in settings.yaml closes every
-        # level beneath the cards and none of the cards — nor does today's density
+        # level beneath the cards and none of the cards — nor does the built-in look
         # close a card that is a quiet leaf
         self.tree.upsert("/leafcard", StatusCode.OK)
         drawn = self._draw(config=Config(chips=True))
@@ -350,6 +371,137 @@ class WhatTheServerDrawsTests(TestCase):
         self.assertNotIn("/", self._draw(config=everywhere).folded)
         page = draw(_root(self.tree, "c/host"), _looks(nodes=said))
         self.assertIn("/c/host", page.folded)
+
+
+class TheNetForABigLevelTests(TestCase):
+    """Where nobody spoke, a level whose children, opened, would draw more than
+    :data:`BIG_LEVEL` boxes starts as chips, as ``chips: true`` would start it: the
+    net for the level nobody expected to be big (§3.4; §2, 2026-10-24). The boxes are
+    counted all the way down, the deeper levels deciding first, so a child counts what
+    it draws once it has decided; no status counts, so the planner prices what it
+    decides, and every statement wins over it."""
+
+    def setUp(self) -> None:
+        self.tree = StatusTree()
+
+    def _leaves(self, parent: str, count: int,
+                code: StatusCode = StatusCode.OK) -> set[str]:
+        paths = {f"{parent}/n{index:02d}" for index in range(count)}
+        for path in sorted(paths):
+            if code is StatusCode.OK:
+                self.tree.upsert(path, code)
+            else:
+                self.tree.upsert(path, code, "down")
+        return paths
+
+    def _draw(self, nodes: dict[str, NodeMeta] | None = None,
+              config: Config | None = None, *checks: Check, **how: Any):
+        looks = _looks(*checks, nodes=nodes, config=config)
+        return draw(_root(self.tree), looks, **how)
+
+    def test_the_notes_four_levels(self) -> None:
+        # sixty pods stand as chips, and so do thirty repositories with two workflows
+        # each, ninety boxes; ten hosts of ten leaves each stand as ten chips with
+        # their counts; seven repositories with their build and deploy, twenty-one
+        # boxes, stand open
+        pods = self._leaves("/k/pods", 60)
+        repositories = {f"/g/actions/r{index:02d}" for index in range(30)}
+        for repository in repositories:
+            self._leaves(repository, 2)
+        hosts = {f"/m/host{index}" for index in range(10)}
+        for host in hosts:
+            self._leaves(host, 10)
+        for index in range(7):
+            self._leaves(f"/s/actions/r{index}", 2)
+        drawn = self._draw()
+        self.assertEqual(drawn.closed, pods | repositories | hosts)
+        # the tree's shape decides it, so the planner prices it as configured
+        self.assertEqual(drawn.priced, drawn.closed)
+
+    def test_a_level_is_big_past_its_boxes_not_at_them(self) -> None:
+        self._leaves("/at", BIG_LEVEL)
+        past = self._leaves("/past", BIG_LEVEL + 1)
+        self.assertEqual(self._draw().closed, past)
+
+    def test_the_deeper_levels_decide_first(self) -> None:
+        # three hosts of forty leaves: each host's leaves are chips, so each host
+        # counts its own box alone and the card's level of three stands open, where
+        # counted before they decided the hosts were 123 boxes, and chips too
+        leaves: set[str] = set()
+        for index in range(3):
+            leaves |= self._leaves(f"/m/host{index}", 40)
+        self.assertEqual(self._draw().closed, leaves)
+
+    def test_a_level_counts_everything_its_children_draw(self) -> None:
+        # one child of a card holding thirty leaves is thirty-one boxes: the card's
+        # level is big, and its child starts as a chip with the leaves beneath it
+        self._leaves("/c/at", BIG_LEVEL)
+        self.assertEqual(self._draw().closed, {"/c/at"})
+
+    def test_a_claim_stays_open_and_counts_what_it_draws(self) -> None:
+        # opened, x's level draws its 25 leaves and y with its 20, 46 boxes: chips, but
+        # for y, which claims the room it takes and keeps its leaves open; so x counts
+        # its own box and y's twenty-one, and beside w's ten the card's level draws 32
+        # and starts as chips too
+        quiet = self._leaves("/c/x", 25)
+        self._leaves("/c/x/y", 20)
+        self.tree.set_show_when_quiet("/c/x/y", True)
+        self._leaves("/c/w", 9)
+        self.assertEqual(self._draw().closed, quiet | {"/c/x", "/c/w"})
+
+    def test_a_status_decides_nothing_and_the_budget_opens_its_way(self) -> None:
+        # a failure turns no level into chips nor one out of them: thirty failing
+        # leaves stand open, and of thirty-one the failure budget opens three
+        self._leaves("/at", BIG_LEVEL, StatusCode.ERROR)
+        failing = self._leaves("/past", BIG_LEVEL + 1, StatusCode.ERROR)
+        drawn = self._draw()
+        opened = set(sorted(failing)[:3])
+        self.assertEqual(drawn.budget, opened)
+        self.assertEqual(drawn.closed, failing - opened)
+        self.assertEqual(drawn.priced, failing)
+        # kept shut, the budget opens nothing, and the net's chips stay chips
+        self.assertEqual(self._draw(failures_open=False).closed, failing)
+
+    def test_every_statement_wins_over_it(self) -> None:
+        pods = self._leaves("/pods", 60)
+        few = self._leaves("/few", 3)
+        # settings.yaml's `chips: false` for every level nobody else spoke for, and
+        # nodes.yaml's for one, open what the net would close
+        self.assertEqual(self._draw(config=Config(chips=False)).closed, frozenset())
+        self.assertEqual(self._draw(_said(**{"/pods": Stated(chips=False)})).closed,
+                         frozenset())
+        # and `chips: true` closes a level the net leaves open
+        self.assertEqual(self._draw(_said(**{"/few": Stated(chips=True)})).closed,
+                         pods | few)
+
+    def test_a_level_a_statement_opens_counts_what_it_opens(self) -> None:
+        # a statement speaks for its own level: the one above, which nobody spoke
+        # for, counts the sixty boxes it opened, and starts as chips
+        self._leaves("/k/pods", 60)
+        drawn = self._draw(_said(**{"/k/pods": Stated(chips=False)}))
+        self.assertEqual(drawn.closed, {"/k/pods"})
+
+    def test_neither_the_cards_nor_a_pages_cards_are_its(self) -> None:
+        # the wall's root takes no key and no net: forty cards stand open, and so do a
+        # page's cards, its node's children, sixty of them
+        for index in range(40):
+            self.tree.upsert(f"/card{index:02d}", StatusCode.OK)
+        self.assertEqual(self._draw().closed, frozenset())
+        self._leaves("/k/pods", 60)
+        self.assertEqual(draw(_root(self.tree, "k/pods"), _looks()).closed, frozenset())
+
+    def test_beneath_a_shared_mount_it_closes_only_what_nobody_spoke_for(self) -> None:
+        # each child of a mount two checks share starts as its own check says: one
+        # says its twenty leaves start open, the other says nothing of its twenty;
+        # opened, the level is forty boxes, and only the second's start as chips
+        said = _check(own={"chips": False}, owns=tuple(f"c{i:02d}" for i in range(20)))
+        silent = _check(owns=tuple(f"d{i:02d}" for i in range(20)))
+        for index in range(20):
+            self.tree.upsert(f"/hosts/alpha/c{index:02d}", StatusCode.OK)
+            self.tree.upsert(f"/hosts/alpha/d{index:02d}", StatusCode.OK)
+        drawn = self._draw(None, None, said, silent)
+        self.assertEqual(drawn.closed,
+                         {f"/hosts/alpha/d{index:02d}" for index in range(20)})
 
 
 class TheFailureBudgetTests(TestCase):
@@ -387,6 +539,18 @@ class TheFailureBudgetTests(TestCase):
         self.assertEqual(drawn.budget, {"/c/n1", "/c/n2", "/c/n3",
                                         "/e/n1", "/e/n2", "/e/n3"})
 
+    def test_kept_shut_the_budget_opens_nothing_and_the_wall_keeps_its_size(self):
+        # the browser's look *Failures: stay chips*: what the budget would open stays as
+        # the look drew it, and nothing else moves
+        for name in ("n1", "n2", "n3", "n4"):
+            self.tree.upsert(f"/c/{name}", StatusCode.ERROR, "x")
+        opened = self._draw()
+        shut = self._draw(failures_open=False)
+        self.assertEqual(shut.budget, frozenset())
+        self.assertEqual(shut.closed, opened.closed | opened.budget)
+        self.assertEqual((shut.priced, shut.folded, shut.caps),
+                         (opened.priced, opened.folded, opened.caps))
+
     def test_a_branch_that_fails_for_itself_opens_and_its_healthy_children_wait(self):
         self.tree.upsert("/c/repo", StatusCode.ERROR, "the webhook is gone")
         self.tree.upsert("/c/repo/build", StatusCode.OK)
@@ -404,7 +568,7 @@ class TheFailureBudgetTests(TestCase):
         self.assertEqual((drawn.closed, drawn.budget), (frozenset(), {"/c/api"}))
 
     def test_a_failure_in_sight_spends_none(self) -> None:
-        # nobody spoke for /f: today's density keeps its failure open, and the
+        # nobody spoke for /f: the built-in look keeps its failure open, and the
         # budget has nothing to open
         self.tree.upsert("/f/x", StatusCode.ERROR, "x")
         self.assertEqual(self._draw().budget, frozenset())
@@ -423,6 +587,6 @@ class TheFailureBudgetTests(TestCase):
         self.tree.upsert("/f/host/cpu", StatusCode.OK)
         drawn = self._draw(depth_closed=2)
         self.assertEqual(drawn.budget, {"/f/host"})
-        self.assertEqual(drawn.closed, {"/f/host/cpu"})   # the density's chip
+        self.assertEqual(drawn.closed, frozenset())       # the host's leaves open
         drawn = self._draw(depth_closed=1)
         self.assertEqual(drawn.budget, {"/f"})            # the card, in its place

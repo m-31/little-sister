@@ -7,7 +7,9 @@ from unittest import TestCase, mock
 from little_sister import process
 from little_sister.checks import CheckError, Measurement
 from little_sister.checks.ssh import HostMetricsCheck, _parse_disk_path
+from little_sister.checks.ssh.host_metrics import MEMORY_DESCRIPTION
 from little_sister.checks.ssh.metrics import volume_name
+from little_sister.details import TYPE, Detail
 from little_sister.engine import Engine
 from little_sister.limits import RECORD_LIMIT
 from little_sister.status import StatusCode
@@ -210,9 +212,9 @@ class HostMetricsCheckTests(TestCase):
 
     def test_metric_nodes_carry_the_declared_about(self):
         # Each aspect leaf gets the type-inherent `about` this check declares
-        # (ADR-0025); the copy lives in the ABOUT map, so every deployment's hover
-        # cards explain these leaves out of the box. A deployment's nodes.yaml
-        # still overrides per field.
+        # (ADR-0025); the copy lives in the ABOUT map, so every deployment's cards
+        # say what to do out of the box (ADR-0133). A deployment's nodes.yaml still
+        # overrides per field.
         from little_sister.checks.ssh.host_metrics import ABOUT
         with tempfile.TemporaryDirectory() as directory:
             nodes = self._nodes(directory, SSH_SAMPLE)
@@ -233,8 +235,8 @@ class HostMetricsCheckTests(TestCase):
                 self.assertEqual((child.about, child.title), ("", ""))
 
     def test_unavailable_aspect_still_carries_about(self):
-        # a missing aspect is a WARN "unavailable" leaf, but its hover still
-        # explains what the leaf is (ADR-0025).
+        # a missing aspect is a WARN "unavailable" leaf, but its card still says
+        # what to do (ADR-0025).
         from little_sister.checks.ssh.host_metrics import ABOUT
         stdout = "disk_pct=10\ncpu_pct=5\nload1=0.1\nncpu=2\n"   # memory absent
         with tempfile.TemporaryDirectory() as directory:
@@ -243,11 +245,11 @@ class HostMetricsCheckTests(TestCase):
         self.assertEqual(list(memory.reason), ["unavailable"])
         self.assertEqual(memory.about, ABOUT["memory"])
 
-    def test_disk_volumes_carry_the_disk_about(self):
-        # the `disk_path: all` branch and each per-filesystem volume carry the
-        # disk about, so every volume hover explains itself too. The branch is
-        # named `disk` and is labeled by the library; a volume is named by the
-        # host, so its label rides its result — the dynamic-child channel.
+    def test_a_volume_carries_its_mount_and_no_label(self):
+        # the `disk_path: all` branch carries the disk aspect's about, which the
+        # library writes by its name; a volume is named by the host and carries no
+        # label of its own — nothing copies the aspect's onto it any more — but the
+        # details of its object, its mount point (ADR-0133 decision 6, ADR-0118).
         from little_sister.checks.ssh.host_metrics import ABOUT
         stdout = (
             "disk_count=2\n"
@@ -259,8 +261,12 @@ class HostMetricsCheckTests(TestCase):
         with tempfile.TemporaryDirectory() as directory:
             nodes = self._nodes(directory, stdout)
         self.assertEqual(nodes["/ssh/disk"].about, ABOUT["disk"])
-        self.assertEqual(nodes["/ssh/disk/root"].about, ABOUT["disk"])
-        self.assertEqual(nodes["/ssh/disk/ext"].about, ABOUT["disk"])
+        for volume, mount in (("/ssh/disk/root", "`/`"),
+                              ("/ssh/disk/ext", "`/mnt/ext`")):
+            with self.subTest(volume=volume):
+                self.assertEqual(nodes[volume].about, "")
+                self.assertEqual(nodes[volume].details,
+                                 (Detail("mount", mount, TYPE),))
 
     def test_a_volume_the_host_names_like_an_aspect_is_still_a_volume(self):
         # `/mnt/memory` is a filesystem and `/mnt/cpu` one whose numbers did not
@@ -293,7 +299,7 @@ class HostMetricsCheckTests(TestCase):
                        "/ssh/disk/backup"):
             with self.subTest(volume=volume):
                 self.assertEqual((nodes[volume].title, nodes[volume].about),
-                                 ("", ABOUT["disk"]))
+                                 ("", ""))
         for unread in ("/ssh/disk/cpu", "/ssh/disk/backup"):
             self.assertEqual(list(nodes[unread].reason), ["unavailable"])
 
@@ -332,21 +338,39 @@ class HostMetricsCheckTests(TestCase):
         self.assertEqual(nodes["/ssh/memory"].about,
                          ABOUT["memory"] + "\n\nAlso ping #oncall.")
 
-    def test_subnodes_override_reaches_disk_branch_and_volumes(self):
-        # the disk override applies to the `disk_path: all` branch and each volume
-        # (they share the disk aspect's label — the volumes because this check
-        # hands them the *resolved* text, the override included).
+    def test_what_holds_for_every_volume_is_given_down_from_the_disk(self):
+        # a deployment's override of the disk aspect's about stands on the branch
+        # alone; what holds for every volume beneath it reaches each as the details
+        # its `subnodes:` entry gives the branch, after the volume's own mount
+        # (ADR-0133 decision 6).
         stdout = (
             "disk_count=1\n"
             "disk1_path=/\ndisk1_total_kb=1000000\ndisk1_used_kb=520000\n"
             "disk1_avail_kb=480000\ndisk1_pct=52\n"
             "mem_pct=30\ncpu_pct=5\nload1=0.5\nncpu=2\n")
         with tempfile.TemporaryDirectory() as directory:
-            nodes = self._nodes(
-                directory, stdout,
-                subnodes={"disk": {"about": "Volumes on this NAS."}})
-        self.assertEqual(nodes["/ssh/disk"].about, "Volumes on this NAS.")
-        self.assertEqual(nodes["/ssh/disk/root"].about, "Volumes on this NAS.")
+            check = self._check(
+                directory, subnodes={"disk": {"about": "Volumes on this NAS.",
+                                              "details": {"owner": "Storage"}}})
+            tree = StatusTree()
+            with mock.patch(SSH_RUN, return_value=finished(stdout, 0, "")):
+                Engine([check], tree).run_once()
+        self.assertEqual(tree.about("/ssh/disk"), "Volumes on this NAS.")
+        self.assertEqual(tree.about("/ssh/disk/root"), "")
+        self.assertEqual([(row.key, row.text, row.at)
+                          for row in tree.details("/ssh/disk/root")],
+                         [("mount", "`/`", "/ssh/disk/root"),
+                          ("owner", "Storage", "/ssh/disk")])
+
+    def test_the_host_node_carries_the_host_the_check_reaches(self):
+        # the details of the host node's object (ADR-0133 decision 6): the host as
+        # this check reaches it — its node's alone, and withheld where another check
+        # shares the node
+        with tempfile.TemporaryDirectory() as directory:
+            nodes = self._nodes(directory, SSH_SAMPLE)
+        self.assertEqual(nodes["/ssh"].details,
+                         (Detail("host", "`host.example`", TYPE),))
+        self.assertEqual(nodes["/ssh/memory"].details, ())
 
     def test_descriptions_override_leaf_descriptions(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -356,7 +380,7 @@ class HostMetricsCheckTests(TestCase):
         kids = self._kids(result)
         self.assertEqual(kids["disk"].description, "root volume")
         self.assertEqual(kids["ssh"].description, "the link")
-        self.assertIn("Memory", kids["memory"].description)   # default kept
+        self.assertEqual(kids["memory"].description, MEMORY_DESCRIPTION)  # its own
 
     def test_thresholds_grade_each_aspect(self):
         stdout = ("disk_pct=95\nmem_pct=90\ncpu_pct=99\n"

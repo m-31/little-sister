@@ -63,7 +63,7 @@ def shown_path(path: str, *, environment: Iterable[str] | None = None,
 
     ``environment`` and ``project`` default to this process's answers — the
     interpreter's ``site-packages`` directories and the working directory a
-    deployment is started from (ADR-0020). They are arguments at all so that the
+    deployment is started from (ADR-0031). They are arguments at all so that the
     rule can be exercised against roots a test chooses, rather than against
     whichever machine happens to run the suite.
 

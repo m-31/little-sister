@@ -9,10 +9,10 @@ drawing puts where it says.
 its own ``at``, or when it was first observed (:class:`~little_sister.series.Placed`)
 — to scale, so a night without readings is a night wide. On the value axis, to
 scale from a baseline at zero, in the measure's unit; a size steps in powers of two
-of a unit, so a tick lands on a whole one (ADR-0096 decision 3). The axis spans the
-whole kept window — ``series_keep`` is its one span — or, on a page that stands
-several curves one above the other, the page's span, so that they share one time
-axis (ADR-0097 decision 1).
+of a unit, so a tick lands on a whole one (ADR-0096 decision 3). The axis spans what
+the series keeps, or the window the Series view's URL names (ADR-0098 decisions 1
+and 2) — or, on a page that stands several curves one above the other, the page's
+span, so that they share one time axis (ADR-0097 decision 1).
 
 **Where the line breaks, and what says why.** A reading that **failed** — its
 record carries an ``error`` that is not null — breaks the line and is **marked** at
@@ -22,17 +22,21 @@ lane is below the axis so that it cannot be read as one. A reading that answered
 gives the measure no number — a null, a field the record does not have, anything
 that is not a number — breaks the line with no mark: a field a release added, or a
 sensor a model does not have, is not a failure. Two neighboring readings further
-apart than the node's freshness tolerance have a **hole** between them — a restart, a
-pause, a machine asleep — and the line breaks there with no mark either; one missed
-poll is not a hole, as it does not make the node stale either. The line crosses none
-of them: across them there is nothing that was read.
+apart than the freshness tolerance their check's own period implies have a **hole**
+between them — a restart, a pause, a machine asleep — and the line breaks there with
+no mark either; one missed poll is not a hole, as it does not make the node stale
+either. The line crosses none of them: across them there is nothing that was read. A
+window that holds more readings than the plot has columns is drawn column by column
+(ADR-0098 decision 5): the line breaks at a hole at least a column wide and at a
+column none of whose readings has a number, and a column that holds a failed reading
+carries one mark.
 
 **What it says in words.** Each reading's time and value where the pointer is —
 the whole height of the plot between two readings' midpoints belongs to the nearer
 one, so the pointer finds a date and never has to land on a two-pixel line — and a
 summary beside the title. The readings table beneath carries every value too, so
 nothing is only a tooltip. The times read in the configured timezone and
-``time_format`` (ADR-0006), as every time the page shows does.
+``time_format`` (ADR-0120 decision 7), as every time the page shows does.
 
 **A run is a mark, and no line joins two** (ADR-0106 decision 5, ADR-0111). A
 series' **runs** are its records with an identity — an event its source keeps: a

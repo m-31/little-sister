@@ -32,7 +32,9 @@
 # lists them by their labels — never one alone where the state's own line beneath
 # keeps it in the row. `under` is optional and limits the action to one subtree,
 # compared segment-wise, so /system/alpha covers /system/alpha/disk and never
-# /system/alphaville. Omit it and the action is offered everywhere.
+# /system/alphaville; `tag` is optional too and limits it to what carries one tag
+# (ADR-0139), and where both are written both must hold. Omit them and the action is
+# offered everywhere.
 
 actions: []
 

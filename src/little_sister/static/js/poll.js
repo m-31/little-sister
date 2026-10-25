@@ -34,14 +34,21 @@
  * once. Not every close is: a swap takes the keyboard's focus with it, and
  * Cancel has just put that back on what opened the editor. An editor is the
  * editor's own open disclosure, `details.maintenance-editor-disclosure` or a
- * line's `details.reason-pin`, around a `form.maintenance-editor-form`, which is
+ * line's `details.reason-pin` or `details.reason-ack`, around a
+ * `form.maintenance-editor-form`, which is
  * how `_rule_block.html` and `_own_lines.html` write every one of them; named by
  * its class so that no other disclosure the grid may hold matches it.
  *
+ * Each swap ends in an `ls:swapped` event on the container, which bubbles: a card
+ * that stands outside the container and points at an element in it — a rule's note
+ * opened on the wall (ADR-0135 decision 3) — finds that element again there, so that
+ * no further script has to watch the grid.
+ *
  * What a viewer opened stands through the swap (ADR-0127 decision 10): where the
  * page carries the tab's map, `tree.js`, the swap is bracketed by its `before`,
- * which notes the keyboard's focus, and its `apply`, which puts the map and the
- * focus back on the new markup before anything paints. The scroll of a table or a
+ * which notes the keyboard's focus and what the window shows, and its `apply`,
+ * which puts the map and the focus back on the new markup before anything paints
+ * and scrolls the window back over what it showed. The scroll of a table or a
  * curve is put back after that: a box the map opens has no layout before. The
  * system page has no map, and nothing is called there.
  *
@@ -73,7 +80,7 @@
     var INTERVAL_MS = 10000;
     // How long the page may wait for an open editor before it dims.
     var WAIT_DIMS_AFTER_MS = 60000;
-    var EDITOR = 'details.maintenance-editor-disclosure[open] form.maintenance-editor-form, details.reason-pin[open] form.maintenance-editor-form';
+    var EDITOR = 'details.maintenance-editor-disclosure[open] form.maintenance-editor-form, details.reason-pin[open] form.maintenance-editor-form, details.reason-ack[open] form.maintenance-editor-form';
     var lastOk = stamp.getAttribute('data-rendered-at') || null;
     // Wall clock of the last good response (seeded by the page's own render):
     // ages computed from it stay sane under background-tab timer throttling,
@@ -210,7 +217,7 @@
                               cache: 'no-store'})
             .then(function (r) {
                 // The server formats this stamp with config.yaml's time_format
-                // and timezone (ADR-0006), so it matches every other displayed
+                // and timezone (ADR-0120), so it matches every other displayed
                 // time instead of the browser's locale. Its absence means this
                 // is not a fragment — treat it as a failed poll.
                 var renderedAt = r.headers.get('X-Rendered-At');
@@ -240,6 +247,9 @@
                 container.innerHTML = got.html;
                 if (tree) { tree.apply(container); }
                 restore(left);
+                // Said once the swap is whole, for what keeps a card of its own on
+                // its element through it without watching the grid (`note-card.js`).
+                container.dispatchEvent(new CustomEvent('ls:swapped', {bubbles: true}));
                 misses = 0;
                 expired = false;
                 sayUpdated();

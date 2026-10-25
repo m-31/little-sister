@@ -4,8 +4,8 @@
 - **Date:** 2026-09-27 (accepted 2026-08-29)
 - **Related:** [ADR-0005](0005-dashboard-freshness-and-self-monitoring.md) (what this
   application already says about itself, and where a dead engine is loud),
-  [ADR-0008](0008-json-output-api.md) (the token-authed JSON API this is **not** part
-  of), [ADR-0048](0048-an-assembled-content-security-policy.md) §6 (the other route
+  [ADR-0080](0080-the-envelope-is-the-snapshot-published.md) (the token-authed JSON
+  API this is **not** part of), [ADR-0048](0048-an-assembled-content-security-policy.md) §6 (the other route
   with no login gate), [ADR-0091](0091-an-import-is-not-an-instance.md) (the server's
   start is what starts the engine, and a server without the hooks has none)
 - **Register:** [`../decisions.md`](../decisions.md)
@@ -83,7 +83,8 @@ is a field published, and that is the question to ask before adding one.
 ### 4. It is not part of the JSON API
 
 No bearer token, no envelope, no `schema_version`, and it is not in `api/openapi.yaml`
-([ADR-0008](0008-json-output-api.md)). The JSON API is a read-only *status* contract for
+([ADR-0080](0080-the-envelope-is-the-snapshot-published.md)). The JSON API is a
+read-only *status* contract for
 clients that authenticate; this is one line for an infrastructure probe that cannot. Two
 contracts with different audiences and different lifetimes should not be one because
 both happen to return JSON.

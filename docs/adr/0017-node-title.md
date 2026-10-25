@@ -5,7 +5,8 @@
 - **Related:** [ADR-0012](0012-node-metadata.md) (node metadata — `about`; `title`
   shares its sources and `nodes.yaml` shape), [ADR-0016](0016-node-addressing.md)
   (`name` is the derived last path segment `title` sits beside),
-  [ADR-0008](0008-json-output-api.md) (JSON envelope, unchanged here),
+  [ADR-0080](0080-the-envelope-is-the-snapshot-published.md) (JSON envelope, unchanged
+  here),
   [ADR-0127](0127-the-wall-is-a-tree-and-a-click-opens-or-closes-a-node.md) (the tree,
   whose chips draw no title), [ADR-0019](0019-inspection-popover.md) (the inspection
   card, headed with the name and the title). The Markdown-rendering item renders
@@ -57,7 +58,8 @@ Add an optional **`title`** — a short display label for the node.
    drawn*).
 4. **Web-only in this slice, in the envelope since contract v1.1.** The field
    surfaces in the snapshot and renders in the web UI, and the JSON envelope
-   ([ADR-0008](0008-json-output-api.md)) came after: `title` joined it in contract
+   ([ADR-0080](0080-the-envelope-is-the-snapshot-published.md)) came after: `title`
+   joined it in contract
    **v1.1** with the other node-metadata fields, which is why decision 3 says the
    envelope emits it. `docs/api/openapi.yaml` keeps that history.
 

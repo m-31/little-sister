@@ -1,23 +1,20 @@
 # ADR-0030 — Curated links come from a deployment-supplied file
 
 - **Status:** Accepted
-- **Date:** 2026-10-10 (accepted 2026-08-01)
+- **Date:** 2026-10-25 (accepted 2026-08-01)
 - **Related:** [ADR-0031](0031-deployment-config-directory.md) (the `config/` directory
   and its layering, which this file is an aspect of),
   [ADR-0015](0015-check-discovery-union.md) (the path-list underneath it),
-  [ADR-0012](0012-node-metadata.md) (`nodes.yaml` — the precedent for a
-  non-check YAML beside the checks), [ADR-0021](0021-script-resolution.md) (packaged
-  defaults with an override — the shape the icon packs copy),
-  [ADR-0018](0018-markdown-rendering.md) (the
-  renderer, and images-on), [ADR-0005](0005-dashboard-freshness-and-self-monitoring.md)
-  (the reserved `/little-sister` line), [ADR-0024](0024-dashboard-layout.md) (the status
-  strip this deliberately does not disturb),
+  [ADR-0012](0012-node-metadata.md) (`nodes.yaml` — the precedent for a non-check YAML
+  beside the checks), [ADR-0021](0021-script-resolution.md) (packaged defaults with an
+  override — the shape the icon packs copy), [ADR-0018](0018-markdown-rendering.md) (the
+  renderer, and images-on),
+  [ADR-0133](0133-a-node-says-what-it-is-in-a-card-and-at-length-in-a-handbook.md) (a
+  node's handbook and its details, which hold its runbook and its own links),
   [ADR-0028](0028-design-tokens-and-themes.md) (themes the icons must survive),
-  [ADR-0029](0029-per-user-presentation-preferences.md) (`DARK_THEMES` → `bs_theme`,
-  the seam the icon variants ride), [ADR-0088](0088-a-stop-ends-at-its-save.md) (the
-  stop that abandons a pass in flight),
-  [ADR-0048](0048-an-assembled-content-security-policy.md) (decision 4: the page's own
-  policy allows the hosts its icons load from).
+  [ADR-0029](0029-per-user-presentation-preferences.md) (`DARK_THEMES` → `bs_theme`, the
+  seam the icon variants ride), [ADR-0048](0048-an-assembled-content-security-policy.md)
+  (decision 4: the page's own policy allows the hosts its icons load from).
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -40,11 +37,12 @@ directory named `checks/` is what prompted
 
 **Runbooks are already elsewhere.** A check carries its own `description` and `about`
 ([ADR-0012](0012-node-metadata.md), [ADR-0013](0013-check-config-on-node.md),
-[ADR-0025](0025-check-provided-subnode-metadata.md)), and a subject's runbook belongs
-there, next to the thing that fails. So this page is **general helpers** — the shared
-Grafana, the ticket queue, the team's toolbox — not per-node documentation. That
-removes the temptation to design a link record rich enough to also hang off a status
-node.
+[ADR-0025](0025-check-provided-subnode-metadata.md)), and a node's runbook is its
+`handbook`, from the same sources
+([ADR-0133](0133-a-node-says-what-it-is-in-a-card-and-at-length-in-a-handbook.md)), next
+to the thing that fails. So this page is **general helpers** — the shared Grafana, the
+ticket queue, the team's toolbox — not per-node documentation. That removes the
+temptation to design a link record rich enough to also hang off a status node.
 
 **A restart is expensive.** Status history is derived from an in-memory
 `deque` and does not survive the process ([ADR-0001](0001-in-process-threaded-engine.md);
@@ -74,8 +72,7 @@ three broken-image glyphs, all of them internal hosts.
    The guide in full — a sample file, where it goes, every name of the registry with
    both its drawings, and how to add a mark — is more than a screen before anybody has
    a link. Every reader gets the same page, the file's path included: the page knows
-   no roles — *check now* (decision 9) is open to everyone who is logged in — because
-   whoever maintains the file is not necessarily an admin.
+   no roles, because whoever maintains the file is not necessarily an admin.
 
 2. **One level of grouping, merged by title, in file order.** Groups with the same
    title across directories **concatenate**, base first, so a site can add entries to a
@@ -87,8 +84,7 @@ three broken-image glyphs, all of them internal hosts.
 
 3. **Icons are referenced by name, and the names aggregate.** An entry says
    `icon: grafana`; it never carries a URL. The same application appears many times on a
-   real page, so a dozen Grafana links cost **one** icon — one definition, one fetch, one
-   probe. A name resolves through a search path, first match wins, in the shape
+   real page, so a dozen Grafana links cost **one** icon — one definition, one fetch. A name resolves through a search path, first match wins, in the shape
    [ADR-0021](0021-script-resolution.md) already uses for scripts:
 
    1. the deployment's own `icons:` map — a remote URL, or a file beside the config;
@@ -172,126 +168,37 @@ three broken-image glyphs, all of them internal hosts.
 
 5. **Links on a node stay prose — this page does not change node metadata.** A node's
    `about` and `description` are Markdown ([ADR-0018](0018-markdown-rendering.md)) and
-   already carry links, and a check ships its runbook through **its own config** — an
-   inline `about`, or a `subnodes:` block layered over a hardcoded per-aspect default via
-   `{default}` ([ADR-0013](0013-check-config-on-node.md),
-   [ADR-0025](0025-check-provided-subnode-metadata.md)). That already delivers the one
-   thing a structured per-node `links:` field would have added — a check shipping its
-   runbook once instead of every deployment retyping it — so a second, typed channel for
-   the same content is not worth a status-model field, a JSON contract change and an
-   `openapi.yaml` bump. The two surfaces stay separate: **this page is general helpers,
-   the node knows its own subject.**
+   already carry links. Its runbook is its `handbook`
+   ([ADR-0133](0133-a-node-says-what-it-is-in-a-card-and-at-length-in-a-handbook.md)),
+   from the `about`'s sources — a type ships its reference once, and a deployment writes
+   its own around it with `{default}` ([ADR-0013](0013-check-config-on-node.md),
+   [ADR-0025](0025-check-provided-subnode-metadata.md)) — read on a tab of its own and
+   linked from the node's texts as `handbook#<section>`; and what a team keeps of a node
+   by name — its console, its board, whom to ask — is its `details`, each a line of
+   Markdown that may hold a link. Those are fields of the node's own, and the contract
+   changed with them — a status-model field, a JSON contract change and an
+   `openapi.yaml` bump — but for what a team says of a node at length and by name. A
+   node grows no `links:` list: a link on a node stays prose, in its texts and its
+   details, and a second, typed channel for it is not worth that cost. The two surfaces
+   stay separate: **this page is general helpers, the node knows its own subject.**
 
 6. **An entry may carry one line of Markdown.** `note:` renders inline and muted under
    the title — room for *"page the ISP before touching this"*. No page introduction, no
-   group prose: the runbooks live on the checks, and this page is a launcher.
+   group prose: the runbooks are the nodes' handbooks, and this page is a launcher.
 
 7. **The file is re-read when its mtime changes**, not loaded once at startup. A
    `stat()` per request, a parse only when the file actually changed. Editing links must
    not cost a restart, for the reason given in the context.
 
-8. **Validation splits by cost.** *Structural* checks — schema, unknown icon name,
-   duplicate titles within a group, a rejected URL scheme — run **at load**: offline,
-   instant, warn-and-continue, in the spirit of the `nodes.yaml` consistency pass
-   ([ADR-0012](0012-node-metadata.md)). *Reachability* is a network question and never
-   runs at startup: this application must come up while the network is broken.
-
-9. **Reachability is probed on a slow schedule and reported on the page — not on the
-   status tree.** Results live in memory and render beside the entry that failed. The
-   audience is the person who maintains `links.yaml`, and that person is looking at this
-   page; the reader mid-incident finds out by clicking.
-
-   **A probe pass is triggered by somebody opening the page, and only when the newest
-   answer is older than `interval:`** — the key keeps its `6h` default, and means *how
-   stale an answer may be before an open refreshes it*. The pass never blocks the
-   response: the page renders from what is already in memory, each verdict carrying its
-   own age, and the answers one open triggers appear on the next. One pass at a time,
-   however many readers arrive together.
-
-   Two things the trigger has to survive. An `interval:` this cannot read **falls back
-   to the default** instead of raising: the loader keeps the key as raw text and does
-   not validate it, so a plausible typo like `6 hours` took the whole page to a 500 with
-   nothing warned first; a non-positive one falls back too, since it would make every
-   open due. And one target that answers **garbage** costs its own verdict and not the
-   sweep — `http.client.HTTPException` is neither an `OSError` nor a `ValueError` and
-   came back out of the probe unwrapped, so a typo'd port left every other entry
-   unanswered, which the trigger then read as "never asked" and retried on every open.
-
-   Two things follow from that audience. **Most deployments would probe an empty set:**
-   decision 8's structural pass already rejects a local icon file that is not there and
-   a pack member that is not there, both offline and at load, so the only icon a probe
-   can discover anything about is a **remote** one — the fill this ADR ranks last and
-   expects to be rare — while links are opt-in and default off. And **the tick would
-   have cost a seam for it**: a periodic callback on a scheduler built for checks,
-   skipped wherever the engine is disabled, which is exactly where the page still works.
-   Triggering from the page needs none of that, and probes where the page is read.
-
-   *Never blocks* is a rule about the **open**, not about the reader. A deliberate
-   **check now** control re-probes on demand and, unlike an open, **waits for the
-   answer** under an overall deadline — the person who has just fixed a URL is the one
-   case the time gate gets wrong, and they are waiting on purpose. It shares the single
-   pass, so a press that lands mid-pass joins it; whatever has not answered by the
-   deadline keeps its previous verdict and age.
-
-10. **Probing is opt-in, and the defaults split by how trustworthy the answer is.**
-   **Icons are probed by default** — a static asset, no auth, an unambiguous failure.
-   **Links are not** — most are behind a corporate login, where `403` may mean "not
-   signed in", "your user agent is blocked", or a real wall, and the three are
-   indistinguishable from the server. A link opts in per entry, and only
-   `404` / `410` / DNS failure / connection refused count as dead; `401` and `403` are
-   *alive*. `HEAD` falls back to `GET`, because a `405` is a server's opinion about
-   methods, not about existence.
-
-11. **A pass carries a deadline of its own, and abandons what has not answered when it
-   runs out.** This is the rule that makes *one pass at a time* survivable.
-
-   The gap this closes: `REQUEST_TIMEOUT` bounds one **socket operation**, not one
-   request. A server that sends a byte every four seconds never times out, and the pass
-   waiting on it could not end — the executor was entered as a context manager, and
-   leaving one waits for every worker. Because the single pass slot was released only on
-   the way out, one such host froze reachability for the life of the process: no open
-   and no *check now* could ever start another pass. The page went on showing ages that
-   crept upward with nothing behind them.
-
-   **It cannot be cancellation.** A request already on the wire cannot be recalled, and
-   a thread blocked in `recv` cannot be interrupted. So it is **abandonment**: at the
-   deadline the pass keeps what came back, says what did not, stops waiting, and lets
-   the next pass have the slot. The three fates are exact, and the middle one is why
-   this is worth writing down. **Answered** — the verdict, at the age it arrived.
-   **Never started** (still queued, so canceled) — nothing was asked, so nothing
-   changes and the previous verdict and age stand; overwriting it would be this module
-   inventing a failure it never observed. **Started and unfinished** — *no answer*,
-   which is a value this ADR already has (§10) and deliberately not a death: silence
-   would leave an hours-old *alive* beside an entry whose host has been swallowing
-   requests all morning.
-
-   The deadline is **derived, not fixed**: `CONCURRENCY` probes run at once, so the
-   honest unit is rounds, and sixty entries are ten rounds where six are one. It has a
-   floor comfortably above the *check now* deadline, so "the pass carries on without me"
-   stays true rather than becoming "the pass expired before you stopped waiting".
-
-   Two passes can be alive at once, so **one has to lose**. Each carries a generation;
-   every write, the prune of what the file no longer names, and the release of the pass
-   slot check it first. A superseded pass stops writing — two passes interleaving into
-   one store would produce a set of answers with no single age, and the freshness line
-   on the page is a single age.
-
-   What abandonment leaks is **threads and sockets a host is refusing to release**, and
-   nothing this side of the wire can make it let go. So there is a cap: past three
-   outstanding, no new pass starts. That is a real degradation, and the page **says so**
-   rather than looking like a control that does nothing — this is the one condition
-   under which the ages beside the entries stop meaning what they say.
-
-   Verdicts are stored *as they arrive*, and not in `Executor.map`'s **submission**
-   order. The probes did run concurrently; the storing did not, so a slow first target
-   held every later answer out of the store until it finished. That is harmless while a
-   pass always completes, and load-bearing the moment one may not — "keep what came
-   back" is the whole promise of a deadline.
-
-   **The instance's stop is a deadline as well.** A pass in flight when the instance
-   stops is abandoned the way it is at its own deadline, and its probes run on a pool the
-   interpreter does not join, so a pass never holds the process after its save
-   ([ADR-0088](0088-a-stop-ends-at-its-save.md) decision 6).
+8. **The file is validated at load, offline.** Its checks — schema, unknown icon name,
+   duplicate titles within a group, a rejected URL scheme — run **at load**: instant,
+   warn-and-continue, in the spirit of the `nodes.yaml` consistency pass
+   ([ADR-0012](0012-node-metadata.md)). A key the file does not have is reported as such
+   — a `check:` block or an entry's `check:` among them, left from when the page probed
+   its entries (*Alternatives considered*) — and the entry it sits on is still shown.
+   Nothing asks whether a link or an icon answers: a dead link is found by clicking it
+   and fixed in the file, and a tool whose availability matters is a node, through an
+   `http` check, with the pins, the history and the strip that come with one.
 
 Local icon files make this aspect a **directory**, so the example below is
 `config/links/links.yaml` with its files in `config/links/icons/`. A flat
@@ -302,12 +209,6 @@ built-in or remote URLs needs no directory and can stay flat.
 
 ```yaml
 # config/links/links.yaml   (icon files live in config/links/icons/)
-check:
-  icons: true                            # each distinct icon, once
-  links: false                           # most are auth-walled; opt in per entry
-  interval: 6h
-  alive: [200, 301, 302, 401, 403]
-
 icons:
   # grafana, prometheus, jenkins, github … need no entry — they are built in.
   phoenix: icons/phoenix.svg                           # single file → on the chip
@@ -322,7 +223,6 @@ groups:
       - title: Cyber Chef
         url: https://gchq.github.io/CyberChef/
         icon: cyberchef
-        check: true
         note: offline-capable, safe for production data
 ```
 
@@ -342,16 +242,8 @@ groups:
   reader cannot see in the title it landed on is the failure mode records were chosen to
   avoid. Tokens match with **and**, in any order, so a second word narrows. Order is
   untouched — the filter hides, it never sorts.
-- **The status strip is untouched.** `_split_heartbeat` lifts the heartbeat into the
-  one-line strip only when it has no children — the guard exists precisely so the strip
-  can never hide a subtree ([ADR-0024](0024-dashboard-layout.md)). The reserved
-  `/little-sister` line *is* the right home for engine-owned children, and the loader's
-  reservation exists to keep it free for them; but the **first** such child costs the
-  strip a redesign, and a link checker is too thin a reason to spend that. Deferring
-  keeps the option open: if link health should ever roll up into the traffic light, this
-  ADR is what gets superseded.
-- A dead link is visible where it can be fixed, and never turns the dashboard amber for
-  everyone because a Confluence page moved.
+- **Nothing measures the links**, so a moved Confluence page never turns the dashboard
+  amber for everyone, and the instance asks no host anything for this page.
 - **The built-in pack makes the common page zero-configuration**, and a page built only
   from built-in and local icons makes **no outbound request at all**. Remote URLs remain
   possible, with the tradeoff [ADR-0018](0018-markdown-rendering.md) already accepted for
@@ -396,8 +288,7 @@ groups:
   menu entry" honestly means an index plus subpages plus slugs — a wiki, which is not
   what a monitoring tool should grow. Markdown survives as the `note:` field.
 - **An icon URL on every entry.** One less indirection and a flatter schema, but the
-  same URL repeats on every entry of an application, and both the fetch and the probe
-  multiply with it.
+  same URL repeats on every entry of an application, and the fetch multiplies with it.
 - **Auto-favicon only, no icon field.** Zero configuration, and it is visibly what the
   reference implementation does — including the three broken glyphs, because internal
   hosts often serve no favicon and there is no way to override. Kept as the *fallback*,
@@ -410,16 +301,18 @@ groups:
 - **Two levels of category.** Rejected: nesting is navigation, and the reader is
   mid-incident. If one level ever stops being enough, that is evidence the deployment
   wants a wiki, not that this page wants a deeper tree.
-- **A `links` check type configured deployment-side.** Avoids the reserved line
-  entirely, but links are not infrastructure and have no honest node in a deployment's
-  tree — the placement would be arbitrary in every installation.
-- **Probing at startup.** Simple and needs no scheduler, but it slows boot, needs the
-  network at the worst possible moment, and files its answer in a log nobody reads.
-  Triggering from the page is that argument one step further — not at boot, not on a
-  clock, but when somebody asks.
-- **Every n-th open.** A count is unpredictable in both directions: five reloads while
-  somebody watches a dashboard would spend five passes, and a page opened twice a day
-  would refresh on neither. Time is the honest unit, and it is the one already in the
-  file.
+- **Probing the entries**, as the page once did: icons by default and links per entry,
+  on a pass an open of the page set off once its answers were six hours old, each
+  verdict beside its entry and none on the status tree, and a *check now* that waited
+  for the answer. No deployment had switched a link on, so what a pass asked was a
+  handful of remote icons, whose failure the neutral glyph already absorbs, and the
+  answer cost a module of its own, a pass deadline and threads a host could keep.
+  Probing at startup had been rejected already, for slowing boot and needing the network
+  at the worst possible moment, and a pass every n-th open for being unpredictable in
+  both directions.
+- **A `links` check type configured deployment-side**, measuring the links as nodes:
+  links are not infrastructure and have no honest node in a deployment's tree, so the
+  placement would be arbitrary in every installation. A tool whose availability matters
+  is a node already, through an `http` check.
 - **Loading once at startup**, consistent with the checks. Rejected for what a restart
   costs while history is in memory.

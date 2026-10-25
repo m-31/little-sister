@@ -194,11 +194,11 @@ def test_both_openers_say_who_is_knocking() -> None:
 
 def test_a_caller_may_say_which_subsystem_is_knocking() -> None:
     """A caller-supplied header reaches the request, and urllib only fills in the
-    opener's defaults for names the request does not already carry — which is how the
-    link prober keeps its own suffix."""
+    opener's defaults for names the request does not already carry — which is how a
+    caller keeps a suffix of its own."""
     opener = _Opener()
-    _fetch(opener, headers={"User-Agent": f"{USER_AGENT} (link probe)"})
-    assert opener.requests[0].get_header("User-agent") == f"{USER_AGENT} (link probe)"
+    _fetch(opener, headers={"User-Agent": f"{USER_AGENT} (sweep)"})
+    assert opener.requests[0].get_header("User-agent") == f"{USER_AGENT} (sweep)"
 
 
 def test_a_caller_supplied_header_reaches_the_request() -> None:
@@ -219,8 +219,8 @@ def test_the_method_and_body_reach_the_request() -> None:
 
 def test_following_redirects_and_reporting_them_are_different_openers() -> None:
     """The one policy with no default: both are right somewhere, so neither is
-    assumed. The prober needs a 301 to *stay* a 301; a health check needs the answer
-    at the end of the chain."""
+    assumed. An `http` check told not to follow needs a 301 to *stay* a 301; one
+    told to follow needs the answer at the end of the chain."""
     from little_sister.fetch import _FOLLOWING, _REPORTING
 
     assert _FOLLOWING is not _REPORTING

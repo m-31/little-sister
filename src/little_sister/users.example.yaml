@@ -1,4 +1,4 @@
-# Example user list for little-sister (ADR-0020, ADR-0031).
+# Example user list for little-sister (ADR-0046, ADR-0031).
 #
 # Copy this to `config/users/users.yaml` — the directory form of the `users`
 # configuration aspect — and edit it. Put optional pictures in

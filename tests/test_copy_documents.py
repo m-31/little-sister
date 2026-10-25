@@ -5,8 +5,10 @@ since when each finding has stood, and for a branch what is beneath it.
 a leaf's facts, a line's — and still do. These are written from the record's
 sentences: the two lines every document gains, the instant on each finding, what a
 branch's line in an outline says of the branch itself, the head of the tree's
-document, a branch's document, and the period of a node nothing has written. The
-last class asks the routes, since the address and the periods are theirs to supply.
+document, a branch's document, and the period of a node nothing has written — and
+ADR-0133's: the *Handbook* line of a node that has one, and a link a text writes in
+the short form written out to its node's handbook. The last class asks the routes,
+since the addresses and the periods are theirs to supply.
 
 What a browser has to show — that *Copy Rich HTML* puts both members on the clipboard,
 also over plain http — is ``tests/test_copy_browser.py``'s, and the page as a view of
@@ -57,6 +59,17 @@ SOON = datetime.now(UTC) + timedelta(days=2)
 
 def origin(path: str = "") -> Origin:
     return Origin(f"{SITE}/status{path}", MADE)
+
+
+def handbooks(path: str) -> str:
+    """A node's handbook as a route addresses it, absolute (ADR-0133 decision 3):
+    the root's at `/handbook`."""
+    return f"{SITE}/handbook{path.rstrip('/')}"
+
+
+def addressed(path: str = "") -> Origin:
+    """An origin that says where each node's handbook is, as the routes' does."""
+    return Origin(f"{SITE}/status{path}", MADE, handbooks=handbooks)
 
 
 @dataclass(frozen=True)
@@ -157,6 +170,71 @@ class WhereAndWhenTests(_Tree):
                          format_reason_markdown(node, node.reasons[0], BERLIN)):
             self.assertNotIn("Dashboard", document)
             self.assertNotIn("As of", document)
+
+
+class HandbookTests(_Tree):
+    """ADR-0133 decisions 3 and 4: a node that has a handbook names it beside its
+    page, and a link any text of the document writes in the short form leaves the
+    instance written out to the handbook of the node the text belongs to."""
+
+    LED = "[what to do](handbook#when-it-fails)"
+
+    def test_a_node_and_a_line_name_the_handbook_beside_the_page(self):
+        self.tree.upsert("/ci/reviews", WARN, {"pr-1": "PR one waits"}, members=True)
+        self.tree.set_handbook("/ci/reviews", "## When it fails\n")
+        node = self.node("ci/reviews")
+        for document in (
+                format_node_markdown(node, BERLIN, origin=addressed("/ci/reviews")),
+                format_reason_markdown(node, node.reasons[0], BERLIN,
+                                       origin=addressed("/ci/reviews"))):
+            with self.subTest(document=document[:40]):
+                said = lines(document)
+                dashboard = said.index(f"- **Dashboard:** {SITE}/status/ci/reviews")
+                self.assertEqual(said[dashboard + 1:dashboard + 3], [
+                    f"- **Handbook:** {SITE}/handbook/ci/reviews",
+                    f"- **As of:** {AS_OF}"])
+
+    def test_one_without_names_none_and_so_does_a_caller_that_cannot_say(self):
+        self.tree.upsert("/ci/reviews", WARN, "waits")
+        self.assertNotIn("Handbook", format_node_markdown(
+            self.node("ci/reviews"), BERLIN, origin=addressed("/ci/reviews")))
+        self.tree.set_handbook("/ci/reviews", "## When it fails\n")
+        self.assertNotIn("Handbook", format_node_markdown(
+            self.node("ci/reviews"), BERLIN, origin=origin("/ci/reviews")))
+
+    def test_a_branch_and_the_tree_name_theirs(self):
+        self.host()
+        self.tree.set_handbook("/nexus", "## Sign in\n")
+        self.tree.set_handbook("", "## Whom to call\n")
+        self.assertIn(f"- **Handbook:** {SITE}/handbook/nexus",
+                      lines(format_node_markdown(self.node("nexus"), BERLIN,
+                                                 origin=addressed("/nexus"))))
+        self.assertIn(f"- **Handbook:** {SITE}/handbook",
+                      lines(format_tree_markdown(self.root(), BERLIN, addressed())))
+
+    def test_every_text_writes_the_short_form_out_to_its_own_nodes_handbook(self):
+        self.tree.upsert("/svc/api", ERROR, f"503 — {self.LED}",
+                         report=f"- {self.LED}", config=f"- **url:** {self.LED}")
+        self.tree.set_title("/svc/api", "Gateway [runbook](handbook)")
+        self.tree.set_maintenance("/svc/api", f"deploying — {self.LED}",
+                                  set_by="lex", expires_at=SOON)
+        node_document = format_node_markdown(self.node("svc/api"), BERLIN,
+                                             origin=addressed("/svc/api"))
+        led = f"[what to do]({SITE}/handbook/svc/api#when-it-fails)"
+        self.assertEqual(node_document.count(led), 4)
+        self.assertIn(f"Gateway [runbook]({SITE}/handbook/svc/api)", node_document)
+        self.assertNotIn("](handbook", node_document)
+        # the tree's outline writes each node's out to its own node's handbook
+        self.tree.upsert("/svc/db", ERROR, "[restore it](handbook#restore)")
+        tree_document = format_tree_markdown(self.root(), BERLIN, addressed())
+        self.assertIn(led, tree_document)
+        self.assertIn(f"[restore it]({SITE}/handbook/svc/db#restore)", tree_document)
+        self.assertNotIn("](handbook", tree_document)
+
+    def test_without_the_addresses_the_short_form_stays_as_written(self):
+        self.tree.upsert("/svc/api", ERROR, self.LED)
+        self.assertIn(self.LED, format_node_markdown(self.node("svc/api"), BERLIN,
+                                                     origin=origin("/svc/api")))
 
 
 class SinceWhenTests(_Tree):
@@ -348,7 +426,7 @@ class TreeDocumentTests(_Tree):
         self.assertEqual(said[5:9], [
             "  - the site is being moved",
             "",
-            "**Silenced by the pin** — 2 of 3 nodes would need attention: "
+            "**Under the pin** — 2 of 3 nodes would need attention: "
             "1 error ⛔, 1 warn ⚠️",
             "",
         ])
@@ -433,6 +511,8 @@ class BranchDocumentTests(_Tree):
 
     def test_a_branch_that_declares_nothing_says_what_it_shows_and_why(self):
         self.host()
+        shows = self.node("nexus").period
+        assert shows is not None
         self.assertEqual(lines(self.document(
             "nexus", disk=Stood(_utc(2026, 1, 15, 8, 10)),
             memory=Stood(_utc(2026, 1, 13, 8, 0), before=True))), [
@@ -443,6 +523,10 @@ class BranchDocumentTests(_Tree):
             f"- **As of:** {AS_OF}",
             "- **Shown as:** error ⛔ — rolled up from the 3 nodes beneath it. "
             "It reports nothing of its own.",
+            # the period of what it shows, above its observation (ADR-0132
+            # decision 6)
+            f"- **Status error** since {BERLIN.at(shows.began.at)}, begun by a "
+            "reading of disk beneath it",
             "- **Observed:** 2026-01-15 09:59:00 +01:00",
             "- **Checked every:** 2m",
             "",
@@ -516,7 +600,7 @@ class BranchDocumentTests(_Tree):
             "  - Shelf swap.",
             "- **Status maintenance** since 2026-01-15 08:00:00 +01:00",
             "",
-            "**Beneath it**, silenced by the pin — 1 of 2 nodes would need attention",
+            "**Beneath it**, under the pin — 1 of 2 nodes would need attention",
             "",
             "- nas",
             "  - fan ⚠️ — warn since 2026-01-14 08:00:00 +01:00",
@@ -530,12 +614,18 @@ class BranchDocumentTests(_Tree):
                          [Entry("scope", "2 of 3 accounts are read", WARN)],
                          members=True)
         self.tree.upsert("/aws/prod", ERROR, "budget exceeded")
+        shows = self.node("aws").period
+        assert shows is not None
         said = lines(self.document("aws", Stood(_utc(2026, 1, 15, 7, 0))))
         self.assertEqual(said[0], "## aws ⛔")
-        self.assertEqual(said[5:13], [
+        self.assertEqual(said[5:14], [
             "- **Reported:** warn ⚠️",
             "- **Shown as:** error ⛔ — rolled up from its own reading and the one "
             "node beneath it.",
+            # the period of what it shows, above that of its own status (ADR-0132
+            # decision 6)
+            f"- **Status error** since {BERLIN.at(shows.began.at)}, begun by a "
+            "reading of prod beneath it",
             "- **Its own status warn** since 2026-01-15 08:00:00 +01:00",
             "- **Last observed:** 2026-01-15 09:59:00 +01:00",
             "",
@@ -543,7 +633,7 @@ class BranchDocumentTests(_Tree):
             "",
             "- ⚠️ 2 of 3 accounts are read",
         ])
-        self.assertEqual(said[13:], [
+        self.assertEqual(said[14:], [
             "",
             "**Beneath it** — 1 of 1 node needs attention",
             "",
@@ -724,6 +814,22 @@ class RouteTests(TestCase):
         self.assertNotIn("since before", disk)       # the tree saw it turn
         reviews, = (line for line in said if line.lstrip().startswith("- reviews"))
         self.assertRegex(reviews, r"^  - reviews ⚠️ — warn since before \d{4}-")
+
+    def test_a_document_names_its_nodes_handbook_and_leads_into_it(self):
+        # ADR-0133 decisions 3 and 4: from the base the request came by
+        self.tree.set_handbook("/nexus/disk", "## When it fills\n")
+        self.tree.upsert("/nexus/disk", ERROR, "97 % used — [what to do]"
+                                               "(handbook#when-it-fills)")
+        said = self.source("/copy/nexus/disk")
+        self.assertEqual(said[3:6], [
+            "- **Dashboard:** http://localhost/status/nexus/disk",
+            "- **Handbook:** http://localhost/handbook/nexus/disk", self.as_of()])
+        self.assertIn("[what to do](http://localhost/handbook/nexus/disk#when-it-"
+                      "fills)", "\n".join(said))
+        # the tree's, the root's handbook at its own address
+        self.tree.set_handbook("", "## Whom to call\n")
+        self.assertEqual(self.source("/copy")[3],
+                         "- **Handbook:** http://localhost/handbook")
 
     def test_a_tree_that_is_well_is_offered_as_a_document(self):
         self.tree.upsert("/nexus/disk", OK, "61 % used")

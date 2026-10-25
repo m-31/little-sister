@@ -260,7 +260,7 @@ class PhoneLayoutTests(unittest.TestCase):
         "/status/alpha/disk", "/status/db/replica", "/status/ci/reviews",
         f"/status{HOST}", "/events", "/system", "/system/installed",
         "/series", f"/series{HOST}", f"/history{HOST}", "/history/db/replica",
-        "/maintenance", "/links", "/copy", "/copy/db", "/about",
+        "/handled", "/links", "/copy", "/copy/db", "/about",
         # a trail wider than the phone: a leaf's page, its branch's with the
         # filters beside it, and its other views
         f"/status{_DEEP}", f"/status{_DEEP.rsplit('/', 1)[0]}",
@@ -303,7 +303,7 @@ class PhoneLayoutTests(unittest.TestCase):
             for route in ("/status", "/status?depth=8", f"/status{_DEEP}",
                           f"/status{_UNBROKEN}", "/events", "/system",
                           "/system/installed", "/history/db/replica",
-                          "/maintenance", f"/copy{_DEEP}"):
+                          "/handled", f"/copy{_DEEP}"):
                 with self.subTest(layout=layout, route=route):
                     self.page.goto(f"{self.base}{route}")
                     self.page.wait_for_load_state("load")
@@ -655,8 +655,7 @@ class PhoneLayoutTests(unittest.TestCase):
     def test_the_icon_names_under_a_page_of_links_fit_a_phone(self):
         # the same roster, at the foot of a page that has links
         self._sign_in()
-        with (mock.patch.object(app_module, "current_links", return_value=FILLED),
-              mock.patch.object(app_module.link_probe, "refresh_if_due")):
+        with mock.patch.object(app_module, "current_links", return_value=FILLED):
             self.page.goto(f"{self.base}/links")
         fold = self.page.locator(".ls-links__foot details.ls-links__fold")
         self.assertEqual(fold.count(), 1)
@@ -667,7 +666,7 @@ class PhoneLayoutTests(unittest.TestCase):
     def test_an_open_editor_fits_a_phone(self):
         self._sign_in()
         for route, opener in (
-                ("/maintenance", ".rule-block__edit > summary"),
+                ("/handled", ".rule-block__edit > summary"),
                 ("/status/alpha/disk", ".rule-block--node .rule-block__edit > summary"),
                 ("/status/ci/reviews", ".reason-pin > summary")):
             with self.subTest(route=route):
@@ -675,7 +674,7 @@ class PhoneLayoutTests(unittest.TestCase):
                 self.page.locator(opener).first.click()
                 self.page.wait_for_function(
                     "document.activeElement !== null"
-                    " && document.activeElement.name === 'reason'")
+                    " && document.activeElement.name === 'note'")
                 self.assert_fits_the_phone(f"{route}, an editor open")
                 # and with the list of formats its expiry field takes
                 self.page.locator(

@@ -15,7 +15,8 @@ note):
 3. the check's type, the same way: ``subnode_defaults`` by name and ``node_defaults``
    for its own node — a proposal, which the deployment takes back in the file;
 4. ``settings.yaml``, for everything nobody spoke for;
-5. built in.
+5. built in: open, its healthy ones shown — but a level that, opened, would draw more
+   than :data:`BIG_LEVEL` boxes, counted all the way down, starts as chips.
 
 A node a run names takes nothing declared for its name, since the names a file and a
 type speak of are the ones a type always emits (ADR-0118); it takes its parent's
@@ -30,24 +31,27 @@ exception, a statement on the snapshot the contract publishes: the engine asks
 Two things are not in the tree, and this module is told them: which check writes a
 path — the check whose path the node's is or lies beneath, the deepest mount on its
 line, where a mount two checks share speaks for neither, though beneath it the one
-whose subtree a node is in does — and which paths a run named, which the status tree
-keeps beside its mounts as runs write them (``StatusTree.named_by_run``). Until the
-interactive wall's last step a node nobody speaks for keeps today's density, so the
-built-in look here is *nobody said* and the page decides, as it does today.
+whose subtree a node is in does, and each of its children starts as the check that
+writes it says of the children of its own node — and which paths a run named, which
+the status tree keeps beside its mounts as runs write them
+(``StatusTree.named_by_run``). The built-in look counts what a level would draw, so
+here it is *nobody said* and :func:`draw` decides it for the page it draws.
 
 **What the server draws** (:func:`draw`, §7.5 and §7.9 of the note) is the second
 half: the looks of a page's nodes turned into the faces it renders as it arrives.
 The cards a page shows start open — the wall's root and a page's node take no
 ``chips`` — and beneath them a node starts closed where its parent's ``chips`` says
 so and it claims no ``show_when_quiet``, where a ``depth=`` closes its level, and,
-where nobody spoke, as today's density has it: a quiet leaf closed. Then the failure
+where nobody spoke, where its level is big: opened, more than :data:`BIG_LEVEL`
+boxes, counted all the way down, the deeper levels deciding first. Then the failure
 budget opens, in each card, the first three failures the first look hides — errors
 before warnings, in the card's order — with the nodes on their paths
-(:func:`~little_sister.tree.own_failure`). ``fold_ok`` folds a node's healthy ones,
-and each box takes its ``reason_cap``. Beside the faces it keeps what the planner
-prices (:mod:`little_sister.dashboard_layout`): which nodes the configuration alone
-closes, since the planner reads no status — not the density's leaves, not what the
-budget opens.
+(:func:`~little_sister.tree.own_failure`) — unless the browser's look says *Failures:
+stay chips*, where a failure stays as its look drew it, red, and the wall keeps its
+size. ``fold_ok`` folds a node's healthy ones, and each box takes its
+``reason_cap``. Beside the faces it keeps what the planner
+prices (:mod:`little_sister.dashboard_layout`): which nodes the configuration and the
+tree's shape close, since the planner reads no status — not what the budget opens.
 """
 from __future__ import annotations
 
@@ -70,9 +74,8 @@ if TYPE_CHECKING:
 class FirstLook:
     """How the wall first draws a node: ``chips``, whether its children start as
     chips, and ``fold_ok``, whether its healthy lines and children start folded —
-    ``None`` where nobody spoke, which until the interactive wall's last step is
-    today's density — and ``reason_cap``, its box's line budget, which
-    ``settings.yaml`` always states."""
+    ``None`` where nobody spoke, which :func:`draw` draws as the built-in look — and
+    ``reason_cap``, its box's line budget, which ``settings.yaml`` always states."""
     chips: bool | None
     fold_ok: bool | None
     reason_cap: int
@@ -173,6 +176,31 @@ class FirstLooks:
             return owners[0] if len(owners) == 1 else None
         return None
 
+    def shared(self, path: str) -> bool:
+        """Whether two checks or more are mounted on ``path``."""
+        return len(self._mounts.get(join_path(path), ())) > 1
+
+    def children_chips(self, parent: str, child: str) -> bool | None:
+        """Whether ``child`` starts closed: what the look of ``parent`` says of its
+        children, its ``chips`` — ``None`` where nobody spoke, which :func:`draw`
+        draws as the built-in look. Beneath a mount two checks share, whose own look
+        neither speaks for, each child starts as the check that writes it says of the
+        children of the node it is mounted on: ``nodes.yaml``'s word on the mount
+        first, for every child alike, then that check's file and its type, then
+        ``settings.yaml`` (ADR-0128 decision 5, as amended) — so a host's two metrics
+        checks each speak for their own leaves."""
+        if not self.shared(parent):
+            return self.look(parent).chips
+        mount = join_path(parent)
+        said = statement("chips", mount, check=None, nodes=self._nodes,
+                         named_by_run=self._named_by_run)
+        if said is None:
+            owner = self.writer(child)
+            if owner is not None:
+                said = statement("chips", mount, check=owner, nodes={},
+                                 named_by_run=self._named_by_run)
+        return self._config.chips if said is None else bool(said)
+
     def look(self, path: str) -> FirstLook:
         """The node's first look, each key from the first layer that states it and
         else ``settings.yaml`` — ``None`` for a switch it leaves unset too."""
@@ -195,6 +223,13 @@ class FirstLooks:
 #: their paths (backlog #91 §3.3): the failure budget, which holds the wall's shape
 #: in an outage — a card grows by at most this many paths.
 FAILURE_BUDGET = 3
+#: How many boxes a level nobody configured may draw opened before it starts as
+#: chips: the net for the level nobody expected to be big, a run that suddenly
+#: names a great many children (backlog #91 §2, 2026-10-24). Counted all the way
+#: down, each child as it has decided, and never by a status — the same on every
+#: screen, the planner pricing what it decides. The library's, not a setting: a
+#: deployment that wants a level otherwise states its ``chips``.
+BIG_LEVEL = 30
 #: The order the budget takes the failures it finds in: errors before warnings.
 _SEVERITY = {"error": 0, "warn": 1}
 
@@ -203,16 +238,15 @@ _SEVERITY = {"error": 0, "warn": 1}
 class Drawn:
     """What the server draws of a page's nodes as they arrive (:func:`draw`): which
     start closed, and which of those the failure budget opened instead; whose healthy
-    ones start folded; which levels nobody spoke for, where today's density and its
-    *+N more* still hold; and each box's line budget. Beside them, ``priced``: the
-    nodes the configuration alone closes, what the planner prices, since it reads no
-    status — neither the density's quiet leaves nor what the budget opens."""
+    ones start folded; and each box's line budget. Beside them, ``priced``: the nodes
+    the configuration and the tree's shape close — a statement, a ``depth=``, the net
+    for a big level — what the planner prices, since it reads no status and so not
+    what the budget opens."""
 
     closed: frozenset[str] = frozenset()
     priced: frozenset[str] = frozenset()
     budget: frozenset[str] = frozenset()
     folded: frozenset[str] = frozenset()
-    dense: frozenset[str] = frozenset()
     caps: Mapping[str, int] = field(default_factory=dict)
 
     def faces(self, children: Sequence[StatusSnapshot]) -> list[bool]:
@@ -221,72 +255,91 @@ class Drawn:
 
 
 def draw(page: StatusSnapshot, looks: FirstLooks, *, depth_closed: int | None = None,
-         dense: bool = True) -> Drawn:
+         failures_open: bool = True) -> Drawn:
     """The first look of ``page``'s nodes, as the server draws it (§7.5, §7.9 of the
     interactive wall's note): ``page`` is the wall's root or the node a page is about,
     its children the page's cards, level 1, which start open.
 
     Beneath them a node starts closed where its parent's ``chips`` says so, unless it
-    claims ``show_when_quiet``, and open where it says otherwise; where nobody spoke,
-    as today's density has it — a quiet leaf closed — until the interactive wall's
-    last step. A ``depth=`` in the address closes its level whatever is said, the
-    cards' among them. Then, in each card, the first :data:`FAILURE_BUDGET` failures
-    the first look hides — on the node itself or beneath a closed node above it —
-    errors before warnings and in the card's order, open with every node on their
-    path, and those it opened are its own (``budget``). ``fold_ok`` and
-    ``reason_cap`` are each node's, the page's own node's fold among them; the wall's
-    root is nobody's node and takes neither. ``dense`` is the harness's knob for a
-    wall that leaves the levels nobody spoke for open."""
+    claims ``show_when_quiet``, and open where it says otherwise — beneath a mount two
+    checks share, where its own check says so (:meth:`FirstLooks.children_chips`).
+    Where nobody spoke, the built-in look: open, its healthy ones shown — but a level
+    that, opened, would draw more than :data:`BIG_LEVEL` boxes starts as chips, as
+    ``chips: true`` would start it, the deeper levels deciding first
+    (:func:`_drawn_beneath`). A ``depth=`` in the address closes its level whatever is
+    said, the cards' among them. Then, in each card, the first :data:`FAILURE_BUDGET`
+    failures the first look hides — on the node itself or beneath a closed node above
+    it — errors before warnings and in the card's order, open with every node on
+    their path, and those it opened are its own (``budget``) — unless
+    ``failures_open`` is false, the browser's look *Failures: stay chips*
+    (``looks.py``), where a failure stays as its look drew it and the wall keeps its
+    size. ``fold_ok`` and ``reason_cap`` are each node's, the page's own node's fold
+    among them; the wall's root is nobody's node and takes neither."""
     closed: set[str] = set()
     priced: set[str] = set()
     folded: set[str] = set()
-    dense_levels: set[str] = set()
     caps: dict[str, int] = {}
 
-    def walk(node: StatusSnapshot, level: int, chips: bool | None) -> None:
-        """``chips`` is what ``node``'s look says of its children, ``None`` for the
-        page's own node, whose cards take no key."""
-        if dense and level > 1 and chips is None and node.children:
-            dense_levels.add(node.path)
+    def walk(node: StatusSnapshot, level: int, chips: bool | None) -> int:
+        """Draw ``node``'s children, level ``level``, and answer how many boxes they
+        draw beneath it once they have decided. ``chips`` is what ``node``'s look
+        says of its children, ``None`` for the page's own node, whose cards take no
+        key; beneath a mount two checks share, each child's own check says it."""
+        shared = level > 1 and looks.shared(node.path)
+        said = {child.path: (looks.children_chips(node.path, child.path) if shared
+                             else chips)
+                for child in node.children}
+        beneath: dict[str, int] = {}
         for child in node.children:
             look = looks.look(child.path)
             caps[child.path] = look.reason_cap
             if look.fold_ok:
                 folded.add(child.path)
+            beneath[child.path] = walk(child, level + 1, look.chips)
+        big = _drawn_beneath(node.children, said, beneath, big=False) > BIG_LEVEL
+        for child in node.children:
+            above = said[child.path]
             if depth_closed == level:
-                configured = shut = True
-            elif level == 1 or chips is False:
-                configured = shut = False
-            elif chips:
-                configured = shut = not child.show_when_quiet
+                shut = True
+            elif level == 1 or above is False:
+                shut = False
+            elif above or big:
+                shut = not child.show_when_quiet
             else:
-                configured = False
-                shut = dense and _quiet_leaf(child)
-            if configured:
-                priced.add(child.path)
+                shut = False
             if shut:
+                priced.add(child.path)
                 closed.add(child.path)
-            walk(child, level + 1, look.chips)
+        return _drawn_beneath(node.children, said, beneath, big=big)
 
     if page.path != "/" and looks.look(page.path).fold_ok:
         folded.add(page.path)
     walk(page, 1, None)
     budget: set[str] = set()
-    for card in page.children:
+    for card in page.children if failures_open else ():
         for path in _budgeted(card, closed):
             if path in closed:
                 closed.discard(path)
                 budget.add(path)
     return Drawn(closed=frozenset(closed), priced=frozenset(priced),
-                 budget=frozenset(budget), folded=frozenset(folded),
-                 dense=frozenset(dense_levels), caps=caps)
+                 budget=frozenset(budget), folded=frozenset(folded), caps=caps)
 
 
-def _quiet_leaf(node: StatusSnapshot) -> bool:
-    """Today's density: a leaf that neither fails nor claims ``show_when_quiet``
-    starts as a chip."""
-    return (not node.children and node.code.name not in ("WARN", "ERROR")
-            and not node.show_when_quiet)
+def _drawn_beneath(children: Sequence[StatusSnapshot],
+                   said: Mapping[str, bool | None], beneath: Mapping[str, int], *,
+                   big: bool) -> int:
+    """How many boxes a level draws: each child a box with what it draws beneath it
+    where it stands open — as its parent's ``chips`` says, or where nobody spoke and
+    the level is not ``big`` — and nothing where it stands a chip, but for a child
+    that claims ``show_when_quiet``, which stays open whatever is said. No status
+    counts, nor a ``depth=``: the net reads the tree's shape and what is said."""
+    boxes = 0
+    for child in children:
+        above = said[child.path]
+        shut = bool(above) or (above is None and big)
+        if not shut or child.show_when_quiet:
+            boxes += 1 + beneath[child.path]
+    return boxes
 
 
 def _budgeted(card: StatusSnapshot, closed: set[str]) -> list[str]:

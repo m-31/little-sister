@@ -1,7 +1,7 @@
 # ADR-0101 — The Events page is filtered by its URL
 
 - **Status:** Accepted
-- **Date:** 2026-10-03
+- **Date:** 2026-10-25 (accepted 2026-10-03)
 - **Related:** [ADR-0098](0098-a-series-view-is-drawn-over-a-window.md) (the window
   as a URL writes it, and the bar that names and moves it, which this page shares),
   [ADR-0038](0038-declarative-action-list.md) (decision 6, `under` compared
@@ -15,7 +15,9 @@
   (the status page's switches, remembered per browser),
   [ADR-0048](0048-an-assembled-content-security-policy.md) (a switch submits its form
   without an inline handler), [ADR-0109](0109-a-node-says-its-children-are-complete.md)
-  (decision 5, a removal's row, which the third switch group hides)
+  (decision 5, a removal's row, which the third switch group hides),
+  [ADR-0139](0139-a-node-carries-every-tag-written-for-it-or-above-it.md) (decision 7,
+  `tag`, the selector's other half)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -48,9 +50,9 @@ unlike the status page's switches (ADR-0029): `/events` without parameters is al
 whole log, because a filter that outlived its question would make the next visit look
 emptier than the log is. A value the page cannot read is answered `400`, naming the
 parameter and what it takes: a `status`, `held` or `cause` that is not one of its words,
-or a window ADR-0098 decision 1 refuses.
+a `tag` that is no tag, or a window ADR-0098 decision 1 refuses.
 
-### 2. `under` is a node and everything beneath it; `words` are found in the reason
+### 2. `under` is a node and everything beneath it, `tag` a tag; `words` are found in the reason
 
 `under` is a node path compared segment-wise, as an action's is (ADR-0038 decision 6):
 `/hosts/nas` holds `/hosts/nas` and `/hosts/nas/disk` and never `/hosts/nas2`; its
@@ -60,6 +62,11 @@ event was recorded under, so a node removed since is found as well; `/` filters 
 order and ignoring case: `disk full` finds *Disk nearly full* and *full: /dev/disk2*.
 They are two fields because they are two questions — one box would find `nas` in every
 reason that mentions the NAS, and a reason's words in the paths.
+
+`tag` is one tag ([ADR-0139](0139-a-node-carries-every-tag-written-for-it-or-above-it.md)
+decision 7): `?tag=production` lists the changes of the nodes that carry it, and beside
+`under` both must hold. An event whose node the tree no longer holds is matched by the
+tags written for its path and above it.
 
 ### 3. A switch per status, one each for reached and held back, and three by cause
 
@@ -115,7 +122,7 @@ one. A *reset* link to `/events` stands beside the line whenever anything is set
 
 - **ADR-0098 decisions 2 and 3 are rewritten in place**, since the record has not
   shipped: the window and its bar belong to the Series view and to this page.
-- **The parameters are a contract**, as the Series view's are: `under`, `words`,
+- **The parameters are a contract**, as the Series view's are: `under`, `tag`, `words`,
   `status`, `held`, `cause`, `from` and `to` are read as written here, by a bookmark as
   by a link the page drew.
 - **Retention stays open, and now alone**: what the log keeps, for how long, and whether

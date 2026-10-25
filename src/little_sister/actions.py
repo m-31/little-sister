@@ -22,7 +22,7 @@ never be a way to get markup onto a page.
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -35,6 +35,7 @@ from little_sister.config_dir import aspect_files
 from little_sister.logger import logger
 from little_sister.reasons import plain, slug
 from little_sister.status import HEARTBEAT_PATH
+from little_sister.tags import spelled
 
 #: The configuration aspect this reads — `config/actions.yaml`.
 ACTIONS_ASPECT = "actions"
@@ -64,16 +65,20 @@ class Action:
     slot: str
     icon: str = ""
     under: str = ""
+    tag: str = ""
 
-    def applies_to(self, path: str) -> bool:
-        """Whether this action is offered on the node at ``path``.
+    def applies_to(self, path: str, tags: Collection[str] = ()) -> bool:
+        """Whether this action is offered on the node at ``path``, which carries
+        ``tags``.
 
         ``under`` is a **node path**, compared segment-wise, so ``/system/alpha``
-        covers ``/system/alpha/disk`` and never ``/system/alphaville``. It is the
-        half of the selector vocabulary that is already settled; a `tag:` selector
-        waits for tags to exist, and an action written today keeps working when it
-        arrives.
+        covers ``/system/alpha/disk`` and never ``/system/alphaville``. ``tag`` is a
+        tag the node carries (ADR-0139 decision 7) — the selector vocabulary's other
+        half, as a configured rule writes it — and where both are written both must
+        hold.
         """
+        if self.tag and self.tag not in tags:
+            return False
         if not self.under:
             return True
         under = self.under if self.under.startswith("/") else "/" + self.under
@@ -173,15 +178,45 @@ def _read_entry(entry: Any, path: Path, index: int) -> Action | None:
         logger.info(
             "actions: %s is a node action using {reason}, which is the node's "
             "first line only — {reasons} carries all of them", where)
+    # The tag it is offered on (ADR-0139 decision 7): one tag, read as every tag is;
+    # one that is no tag, or that the configuration writes for no node, picks nothing
+    # for good — a lie about coverage, not a no-op — so the action is not shown.
+    written = values.text(entry, "tag").strip()
+    tag = spelled(written)
+    if written and not tag:
+        _refused(path, f"writes tag: {written}, which is no tag — one tag, lowercase "
+                       f"letters and digits with hyphens between them; it is ignored",
+                 index)
+        return None
+    if tag and _written_tags is not None and tag not in _written_tags:
+        _refused(path, f"is offered on what carries {tag}, a tag the configuration "
+                       f"writes for no node — a typo in the tag, or a tag no longer "
+                       f"written; it is ignored", index)
+        return None
     return Action(label=label, url=url, slot=slot,
                   icon=values.text(entry, "icon").strip(),
-                  under=values.text(entry, "under").strip())
+                  under=values.text(entry, "under").strip(), tag=tag)
 
 
 #: Loaded once at startup and held for the process, like the check set: an action is
 #: configuration, not status, and re-reading it per render would put a file read in
 #: the ~10s poll.
 _actions: tuple[Action, ...] | None = None
+
+#: Every tag the configuration writes for a node (ADR-0139 decision 7), which an
+#: action's ``tag:`` is held to — ``None`` until the start hands them over
+#: (:func:`use_tags`), and then no action is refused for its tag.
+_written_tags: frozenset[str] | None = None
+
+
+def use_tags(written: Collection[str] | None) -> None:
+    """Hold an action's ``tag:`` to the tags the configuration writes, once, at the
+    start: an action offered on a tag no node is given is refused, the startup
+    record saying why, as for any entry that cannot apply. ``None`` holds it to
+    nothing, as before a start."""
+    global _written_tags
+    _written_tags = None if written is None else frozenset(written)
+    forget_actions()
 
 
 def current_actions(config_dir: str | Path | None = None) -> tuple[Action, ...]:
@@ -198,19 +233,20 @@ def forget_actions() -> None:
     _actions = None
 
 
-def for_node(slot: str, path: str) -> tuple[Action, ...]:
-    """The actions that fill ``slot`` and apply to the node at ``path``."""
+def for_node(slot: str, path: str, tags: Collection[str] = ()) -> tuple[Action, ...]:
+    """The actions that fill ``slot`` and apply to the node at ``path``, which
+    carries ``tags``."""
     return tuple(action for action in current_actions()
-                 if action.slot == slot and action.applies_to(path))
+                 if action.slot == slot and action.applies_to(path, tags))
 
 
 # --- the library's own filler (ADR-0038) -------------------------------------
 #
 # The declarative list registers through the **slot seam** rather than beside it,
 # so a configured chip and a deployment's coded one land in one rail in one order,
-# `/system` lists both, and there is a single render path to reason about. It is
-# marked `builtin`, which is the one thing `slots.forget_fillers` puts back — the
-# same posture the icon registry takes with its built-in pack.
+# `/system/installed` lists both, and there is a single render path to reason about.
+# It is marked `builtin`, which is the one thing `slots.forget_fillers` puts back —
+# the same posture the icon registry takes with its built-in pack.
 
 #: The template both fillers use; the provider decides which chip class it wears.
 FILLER_TEMPLATE = "_config_action.html"
@@ -241,7 +277,8 @@ def reason_context(*, node: Any, reason: str, index: int,
                    surface: str) -> Mapping[str, object] | None:
     """Provider for `reason.actions`: the actions aimed at this node, for this line."""
     del index, surface
-    actions = for_node("reason.actions", getattr(node, "path", ""))
+    actions = for_node("reason.actions", getattr(node, "path", ""),
+                       getattr(node, "tags", ()))
     if not actions:
         return None
     entries = _entries(actions, path=getattr(node, "path", ""),
@@ -258,7 +295,8 @@ def node_context(*, node: Any, surface: str) -> Mapping[str, object] | None:
     of them, so a "file a ticket about this node" URL can carry the whole condition.
     """
     del surface
-    actions = for_node("node.actions", getattr(node, "path", ""))
+    actions = for_node("node.actions", getattr(node, "path", ""),
+                       getattr(node, "tags", ()))
     if not actions:
         return None
     reasons = list(getattr(node, "reason", ()))

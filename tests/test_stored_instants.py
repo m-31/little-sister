@@ -29,8 +29,9 @@ from zoneinfo import ZoneInfo
 from little_sister import api, instants
 from little_sister import app as app_module
 from little_sister.keeper import forget_keeper, register_keeper
-from little_sister.maintenance import MaintenanceEntry, MaintenanceStore
-from little_sister.state import EVENTS_FILE, MAINTENANCE_FILE, StateLayer
+from little_sister.pins import MAINTENANCE as PIN_MAINTENANCE
+from little_sister.pins import Pin, PinStore, PinTables
+from little_sister.state import EVENTS_FILE, PINS_FILE, StateLayer
 from little_sister.status import HEARTBEAT_PATH, Status, StatusCode
 from little_sister.tree import (
     Beginning,
@@ -41,6 +42,7 @@ from little_sister.tree import (
     nodes_from_payload,
     stopped_at_of,
 )
+from tests.state_files import encoded, tables
 from tests.test_keeper import _TakeoverStore
 
 OK, ERROR = StatusCode.OK, StatusCode.ERROR
@@ -126,7 +128,7 @@ class TravelTests(_Started):
         state = StateLayer(directory)
         with _zone(zone):
             tree = StatusTree()
-            tree.use_maintenance_store(MaintenanceStore(state))
+            tree.use_pin_store(PinStore(state))
             with _at("2026-10-04T10:51:48Z"):
                 tree.upsert(HEARTBEAT_PATH, OK)
                 tree.upsert(PATH, OK)
@@ -165,12 +167,14 @@ class TravelTests(_Started):
                     self.start(directory)
                     entry = self.tree.maintenance_entry(PATH)
                     assert entry is not None, "the pin was expired where it arrived"
-                    self.assertEqual(api._maintenance(entry), {
+                    self.assertEqual(api._pin(entry), {
+                        "id": entry.id, "kind": "maintenance", "source": "person",
                         "note": "planned", "set_by": "ada",
                         "set_at": "2026-10-04T12:00:00Z",
                         "expires_at": "2026-10-04T14:00:00Z",
                         "created_by": "ada",
-                        "created_at": "2026-10-04T12:00:00Z"})
+                        "created_at": "2026-10-04T12:00:00Z",
+                        "counts_as": "nothing"})
                 with _at("2026-10-04T13:59:59Z"):
                     self.assertEqual(self.tree.sweep_expired(), [])
                 with _at("2026-10-04T14:00:00Z"):
@@ -317,7 +321,8 @@ OLD_LOG: dict[str, Any] = {
     "stopped_at": "2026-10-04T14:18:20.123392",
 }
 
-#: And its pins, a node's and a line's, each set for ten years.
+#: And its pins, a node's and a line's, each set for ten years — in
+#: ``maintenance.json``, which this release does not read (ADR-0141).
 OLD_PINS: dict[str, Any] = {
     "entries": {"/db": {"line": {
         "created_at": "2026-10-04T14:18:20.123255", "created_by": "ben",
@@ -339,14 +344,14 @@ def _failures(state: StateLayer) -> list[tuple[str, StatusCode | None]]:
 class VersionBeforeTests(_Started):
     """A state file as the version before wrote it carries times without a zone.
     It is a load failure and an ERROR line on ``/little-sister/state``; that state
-    starts empty, and nothing is migrated."""
+    starts empty, and nothing is migrated. Its pins were in ``maintenance.json``,
+    which this release does not read at all (ADR-0141): a retired name, said once."""
 
     def _directory(self, directory: str, *, log: object = None,
                    pins: object = None) -> None:
-        for name, payload in ((EVENTS_FILE, log), (MAINTENANCE_FILE, pins)):
+        for name, payload in ((EVENTS_FILE, log), ("maintenance.json", pins)):
             if payload is not None:
-                (StateLayer(directory).path(name)
-                 .write_text(json.dumps(payload), encoding="utf-8"))
+                StateLayer(directory).path(name).write_bytes(encoded(name, payload))
 
     def test_its_event_log_is_a_load_failure_and_the_log_starts_empty(
             self) -> None:
@@ -366,17 +371,17 @@ class VersionBeforeTests(_Started):
             state.flush()
             self.assertEqual(state.read(EVENTS_FILE), {"events": [], "nodes": {}})
 
-    def test_its_pins_are_a_load_failure_and_no_pin_is_in_force(self) -> None:
+    def test_its_pins_file_is_retired_and_no_pin_is_in_force(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             self._directory(directory, pins=OLD_PINS)
-            with self.assertLogs(level="ERROR"):
+            with self.assertLogs(level="WARNING"):
                 state = self.start(directory)
             self.assertEqual(_failures(state),
-                             [(f"load.{MAINTENANCE_FILE}", ERROR)])
+                             [("load.maintenance.json", StatusCode.WARN)])
             self.assertEqual(self.tree.pins(), ({}, {}))
-            # the start rewrites the file: the old pins are gone from the directory
-            self.assertEqual(state.read(MAINTENANCE_FILE),
-                             {"nodes": {}, "entries": {}})
+            # the start writes the pins' own file, and leaves the old one be
+            self.assertEqual(state.read(PINS_FILE), {"pins": []})
+            self.assertTrue(state.path("maintenance.json").exists())
 
     def test_both_files_are_two_lines_and_the_start_is_not_refused(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -385,7 +390,7 @@ class VersionBeforeTests(_Started):
                 state = self.start(directory)
             self.assertEqual(sorted(_failures(state)),
                              [(f"load.{EVENTS_FILE}", ERROR),
-                              (f"load.{MAINTENANCE_FILE}", ERROR)])
+                              ("load.maintenance.json", StatusCode.WARN)])
             self.assertEqual(self.tree.recent_events(), ())
 
     def test_the_line_names_the_time_it_could_not_take(self) -> None:
@@ -396,8 +401,8 @@ class VersionBeforeTests(_Started):
             said = {line.slug: line.text for line in state.lines()}
             self.assertIn("an event's timestamp is not an instant with an offset",
                           said[f"load.{EVENTS_FILE}"])
-            self.assertIn("a pin's set_at is not an instant with an offset",
-                          said[f"load.{MAINTENANCE_FILE}"])
+            self.assertIn("maintenance.json is no longer read",
+                          said["load.maintenance.json"])
 
     def test_a_takeover_from_a_holder_still_on_it_takes_neither_file(self) -> None:
         # an instance of this version stood by while a holder on the version before
@@ -413,25 +418,25 @@ class VersionBeforeTests(_Started):
                 PATH, "mine", expires_at=datetime.now(UTC) + timedelta(days=1))
             store.wanted = False
             state.flush()
-            store.held.update({EVENTS_FILE: json.dumps(OLD_LOG).encode(),
-                               MAINTENANCE_FILE: json.dumps(OLD_PINS).encode()})
-            store.changed = [MAINTENANCE_FILE, EVENTS_FILE]
+            store.held.update({EVENTS_FILE: encoded(EVENTS_FILE, OLD_LOG),
+                               PINS_FILE: encoded(PINS_FILE, OLD_PINS)})
+            store.changed = [PINS_FILE, EVENTS_FILE]
             store.wanted = True
             with self.assertLogs(level="ERROR"):
                 state.flush()
             said = {line.slug: line.text for line in state.lines()}
-            for name in (EVENTS_FILE, MAINTENANCE_FILE):
+            for name in (EVENTS_FILE, PINS_FILE):
                 with self.subTest(name=name):
                     self.assertIn("could not be adopted", said[f"load.{name}"])
                     self.assertIn("held out of the mirror", said[f"load.{name}"])
             # what the process holds stands, and none of it reaches the store
             entry = self.tree.maintenance_entry(PATH)
             assert entry is not None
-            self.assertEqual(entry.reason, "mine")
+            self.assertEqual(entry.note, "mine")
             self.assertEqual([event.new for event in self.tree.recent_events()],
                              [ERROR, MAINTENANCE])
             self.assertEqual(store.saved, [])
-            self.assertEqual(json.loads(store.held[EVENTS_FILE]), OLD_LOG)
+            self.assertEqual(tables(EVENTS_FILE, store.held[EVENTS_FILE]), OLD_LOG)
             # and the next interval fetches both and refuses them again
             self.tree.upsert(PATH, OK)
             with self.assertLogs(level="ERROR") as again:
@@ -471,13 +476,19 @@ def _pins_file(directory: str) -> dict[str, Any]:
     """A pins file as this version writes it: a node's pin and a line's."""
     state = StateLayer(directory)
     tree = StatusTree()
-    tree.use_maintenance_store(MaintenanceStore(state))
+    tree.use_pin_store(PinStore(state))
     with _stop_the_clock_at(SEEN):
         tree.set_maintenance(PATH, "planned", expires_at=LATER, set_by="ada")
         tree.set_entry_maintenance(PATH, "line", "on it", expires_at=LATER,
                                    set_by="ben")
-    kept: dict[str, Any] = state.read(MAINTENANCE_FILE)
+    kept: dict[str, Any] = state.read(PINS_FILE)
     return kept
+
+
+def _row(pins: dict[str, Any], slug: str = "") -> dict[str, Any]:
+    """The pin a pins file holds on ``PATH``, or on its line ``slug``."""
+    return next(row for row in pins["pins"]
+                if row["path"] == PATH and row["slug"] == slug)
 
 
 class SpelledInTheFilesTests(TestCase):
@@ -493,8 +504,8 @@ class SpelledInTheFilesTests(TestCase):
     def test_the_pins_file_spells_a_pins_three_times(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             kept = _pins_file(directory)
-        for raw in (kept["nodes"][PATH], kept["entries"][PATH]["line"]):
-            with self.subTest(pin=raw["reason"]):
+        for raw in (_row(kept), _row(kept, "line")):
+            with self.subTest(pin=raw["note"]):
                 self.assertEqual(
                     (raw["set_at"], raw["created_at"], raw["expires_at"]),
                     (SPELLED, SPELLED, "2026-10-04T12:51:48.500000Z"))
@@ -506,7 +517,7 @@ class SpelledInTheFilesTests(TestCase):
         self.assertEqual({raw["timestamp"] for raw in log["events"]}, {"spelled"})
         self.assertEqual((log["nodes"][PATH]["since"], log["stopped_at"]),
                          ("spelled", "spelled"))
-        self.assertEqual({pins["nodes"][PATH][key]
+        self.assertEqual({_row(pins)[key]
                           for key in ("set_at", "created_at", "expires_at")},
                          {"spelled"})
 
@@ -521,7 +532,7 @@ class SpelledInTheFilesTests(TestCase):
         self.assertEqual(began.at, SEEN)
         self.assertEqual(stopped_at_of(kept), SEEN)
         with tempfile.TemporaryDirectory() as directory:
-            node_pins, line_pins = MaintenanceStore.tables(_pins_file(directory))
+            node_pins, line_pins, *_rest = PinStore.tables(_pins_file(directory))
         for entry in (node_pins[PATH], line_pins[PATH, "line"]):
             self.assertEqual((entry.set_at, entry.created_at, entry.expires_at),
                              (SEEN, SEEN, LATER))
@@ -600,35 +611,35 @@ class OneTimeWithoutAZoneTests(_Started):
         self.assertIsNone(stopped_at_of(["not", "a", "log"]))
 
     def test_in_the_pins_file_it_refuses_the_pins(self) -> None:
-        for table, key in (("nodes", "set_at"), ("nodes", "expires_at"),
-                           ("nodes", "created_at"), ("entries", "set_at"),
-                           ("entries", "expires_at"), ("entries", "created_at")):
-            with self.subTest(table=table, key=key), \
+        for slug, key in (("", "set_at"), ("", "expires_at"), ("", "created_at"),
+                          ("line", "set_at"), ("line", "expires_at"),
+                          ("line", "created_at")):
+            with self.subTest(slug=slug, key=key), \
                     tempfile.TemporaryDirectory() as directory:
                 pins = _pins_file(directory)
-                raw = pins[table][PATH]
-                (raw if table == "nodes" else raw["line"])[key] = self.WITHOUT
+                _row(pins, slug)[key] = self.WITHOUT
                 with self.assertRaises(ValueError) as said:
-                    MaintenanceStore.tables(pins)
+                    PinStore.tables(pins)
                 self.assertEqual(
                     str(said.exception),
                     f"a pin's {key} is not an instant with an offset: "
                     f"{self.WITHOUT!r}")
                 state = StateLayer(directory)
-                state.write(MAINTENANCE_FILE, pins)
+                state.write(PINS_FILE, pins)
                 with self.assertLogs(level="ERROR"):
-                    self.assertEqual(MaintenanceStore(state).load_all(), ({}, {}))
+                    self.assertEqual(PinStore(state).load_all(),
+                                     PinTables({}, {}, {}, {}))
                 self.assertEqual(_failures(state),
-                                 [(f"load.{MAINTENANCE_FILE}", ERROR)])
+                                 [(f"load.{PINS_FILE}", ERROR)])
 
     def test_a_pin_that_says_no_creation_was_created_when_it_was_set(self) -> None:
         # an absent creation is the set, as for a pin built without one; it is a
         # time that is there and has no zone that refuses the file
         with tempfile.TemporaryDirectory() as directory:
             pins = _pins_file(directory)
-        del pins["nodes"][PATH]["created_at"]
-        del pins["nodes"][PATH]["created_by"]
-        entry = MaintenanceStore.tables(pins)[0][PATH]
+        del _row(pins)["created_at"]
+        del _row(pins)["created_by"]
+        entry = PinStore.tables(pins)[0][PATH]
         self.assertEqual((entry.created_at, entry.created_by), (SEEN, "ada"))
 
 
@@ -661,14 +672,14 @@ class BuiltWithAZoneTests(TestCase):
                 ("created_at", {"set_at": SEEN, "expires_at": LATER,
                                 "created_at": BARE})):
             with self.subTest(where=where), self.assertRaises(ValueError) as said:
-                MaintenanceEntry(reason="planned", **times)
+                Pin(PIN_MAINTENANCE, note="planned", **times)
             self.assertIn(f"a pin's {where} is a time without a zone",
                           str(said.exception))
 
     def test_each_holds_its_instant_in_utc(self) -> None:
         there = SEEN.astimezone(ZoneInfo("Asia/Kathmandu"))
         self.assertNotEqual(there.utcoffset(), timedelta(0))
-        entry = MaintenanceEntry("planned", there, there, created_at=there)
+        entry = Pin(PIN_MAINTENANCE, "planned", there, there, created_at=there)
         for held in (self._event(there).timestamp, Beginning(there).at,
                      entry.set_at, entry.expires_at, entry.created_at):
             self.assertEqual(held, SEEN)
@@ -704,7 +715,7 @@ class BuiltWithAZoneTests(TestCase):
 
     def test_a_moment_the_tree_is_asked_at_is_an_instant(self) -> None:
         tree = StatusTree()
-        entry = MaintenanceEntry("planned", SEEN, LATER)
+        entry = Pin(PIN_MAINTENANCE, "planned", SEEN, LATER)
         for asked in (lambda: tree.snapshot("", now=BARE),
                       lambda: tree.sweep_expired(now=BARE),
                       lambda: tree.restore_maintenance({PATH: entry}, now=BARE),
@@ -739,7 +750,7 @@ class TokenTests(TestCase):
     spelled — and it is the same text before a restart and after."""
 
     def test_the_token_is_the_set_spelled(self) -> None:
-        entry = MaintenanceEntry("planned", SEEN, LATER)
+        entry = Pin(PIN_MAINTENANCE, "planned", SEEN, LATER)
         self.assertEqual(entry.token, SPELLED)
 
     def test_a_write_that_names_the_token_is_taken_and_any_other_refused(
@@ -761,7 +772,7 @@ class TokenTests(TestCase):
     def test_the_token_a_form_holds_survives_a_restart(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             pins = _pins_file(directory)
-            node_pins, line_pins = MaintenanceStore.tables(pins)
+            node_pins, line_pins, *_rest = PinStore.tables(pins)
         tree = StatusTree()
         tree.restore_maintenance(node_pins, now=SEEN, entry_pins=line_pins)
         self.assertTrue(tree.clear_entry_maintenance(
@@ -786,19 +797,14 @@ class EdgeTests(_Started):
                 self.assertEqual(app_module._copy_style().at(SEEN),
                                  "2026-10-04 12:51:48 +02:00")
 
-    def test_how_long_ago_is_measured_on_the_one_clock(self) -> None:
-        with _zone(NEW_YORK):
-            with _at("2026-10-04T10:52:00Z"):
-                self.assertEqual(app_module._since(SEEN), "at 12:51")
-            with _at("2026-10-04T10:54:00Z"):
-                self.assertEqual(app_module._since(SEEN), "> 2m ago")
-                self.assertEqual(app_module._time_left(LATER), "1h 57m left")
+    def test_how_long_is_left_is_measured_on_the_one_clock(self) -> None:
+        with _zone(NEW_YORK), _at("2026-10-04T10:54:00Z"):
+            self.assertEqual(app_module._time_left(LATER), "1h 57m left")
 
     def test_where_there_is_no_instant_each_says_so(self) -> None:
         self.assertEqual(app_module._localtime(None), "—")
         self.assertEqual(app_module._expiry_input(None), "")
         self.assertEqual(app_module._time_left(None), "expired")
-        self.assertEqual(app_module._since(None), "—")
         self.assertEqual(app_module._copy_style().at(None), "—")
 
     def test_the_start_says_in_the_log_since_when_nothing_watched(self) -> None:

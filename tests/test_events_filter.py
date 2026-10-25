@@ -292,7 +292,8 @@ class EventsFilterTests(TestCase):
     def test_a_reason_of_two_lines_is_searched_whole(self) -> None:
         self.assertEqual(_rows(self._get("/events?words=slow+nearly")), [BACKUP])
 
-    # --- decision 3: a switch per status, and one each for reached and held back ---
+    # --- decision 3: a switch per status, one each for reached and held back -----
+    # (and three by cause, whose rows `tests/test_pruning_pages.py` filters)
 
     def test_every_switch_is_on_by_default_in_the_records_order(self) -> None:
         body = self._get("/events")

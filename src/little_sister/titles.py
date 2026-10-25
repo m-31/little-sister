@@ -15,12 +15,12 @@ nothing may make it stop being true:
 * the **snapshot keeps the title** — :class:`~little_sister.tree.StatusSnapshot`
   is read by everything and must stay the record of what the check said;
 * the **JSON API keeps emitting it** — dropping a field is a contract change
-  (ADR-0008), and a client rendering its own chips is entitled to its own
+  (ADR-0080 decision 1), and a client rendering its own chips is entitled to its own
   decision about the word.
 
 What *is* a surface, and therefore folds: the grid's leaf chips, box and card
 head lines and the heartbeat strip, the page band beside the breadcrumb (so the
-detail page too), and the Maintenance page's headings — plus the ``/copy``
+detail page too), and *Handled*'s headings — plus the ``/copy``
 hand-off, which is read somewhere with no chips and no styling, where ``critical``
 alone is a fine name and the title adds nothing either. They all call
 :func:`shown_title`; none of them re-implements it. The inspection popover
@@ -48,7 +48,7 @@ title, never dropping one that said something.
 
 **A second question, for the one surface that draws the title instead of the name**
 (ADR-0061). The rest of the list above draws both — the chip, the card head, the
-strip, the band, the Maintenance page and the popover all put the name down and the
+strip, the band, *Handled* and the popover all put the name down and the
 title beside it — and for those the only question is the one above. ``/copy`` carries
 the title *alone*, which is right while a title is a **word**: a node titled
 *Cluster A* is better named that way in a document pasted into a ticket.

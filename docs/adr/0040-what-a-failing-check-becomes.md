@@ -1,25 +1,22 @@
 # ADR-0040 — What a failing check becomes
 
 - **Status:** Accepted
-- **Date:** 2026-09-27 (accepted 2026-08-02; decided 2026-08-01 as part of
-  [ADR-0004](0004-status-aggregation-semantics.md); lifted into its own record by the
-  split that ADR-0032 promised)
-- **Supersedes:** [ADR-0004](0004-status-aggregation-semantics.md)'s *A check that
-  fails* section
+- **Date:** 2026-09-27 (accepted 2026-08-02; decided 2026-08-01)
 - **Related:** [ADR-0039](0039-status-rollup-semantics.md) (the roll-up this feeds),
   [ADR-0018](0018-markdown-rendering.md) (why the message is escaped),
-  [ADR-0024](0024-dashboard-layout.md) (`reason_cap`, which clamps the trace),
-  [ADR-0008](0008-json-output-api.md) (the envelope carries it with no schema change),
+  [ADR-0056](0056-stable-useful-dashboard-flow.md) (`reason_cap`, which clamps the
+  trace), [ADR-0080](0080-the-envelope-is-the-snapshot-published.md) (the envelope
+  carries it with no schema change),
   [ADR-0023](0023-secret-references.md) (the one check that fails without running),
   [ADR-0086](0086-a-check-measures-and-grades.md) (the two methods a check runs as)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
 
-`engine.py` cited ADR-0004 for "any failure becomes an `ERROR`" from the day it was
-written, and ADR-0004 covered only roll-up. The citation was given something to point
-at in July; the split gives it a record of its own, because what a *failure* means is
-not the same kind of decision as how a parent accumulates.
+`engine.py` has turned any failure into an `ERROR` since the day it was written; the
+rule was recorded on 2026-08-01, and it is a record of its own because what a *failure*
+means is not the same kind of decision as how a parent accumulates
+([ADR-0039](0039-status-rollup-semantics.md)).
 
 ## Decision
 

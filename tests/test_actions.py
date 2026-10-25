@@ -471,9 +471,10 @@ class ChipsWhereTheyStandTests(TestCase):
                      again.all("reason-action") + again.all("node-action")])
 
     def test_a_chip_is_one_chip_wherever_it_stands(self):
-        # a link, about the node whose row it stands in; the one chip that is not a
-        # link is an admin's mark that pins the line, which wears the chip's shape on
-        # purpose (`_own_lines.html`), and says so by its own class
+        # a link, about the node whose row it stands in; the chips that are not links
+        # are an admin's marks on the line — the one that pins it and the one that
+        # marks it seen — which wear the chip's shape on purpose (`_own_lines.html`),
+        # and say so by their own class
         for url in ("/status", "/status/ci", "/status/ci/reviews", "/status/db"):
             page = self._page(url)
             chips = page.all("reason-action") + page.all("node-action")
@@ -481,7 +482,8 @@ class ChipsWhereTheyStandTests(TestCase):
             for chip in chips:
                 with self.subTest(url=url, chip=chip.text()):
                     if chip.tag == "summary":
-                        self.assertTrue(chip.has("reason-pin__toggle"))
+                        self.assertTrue(chip.has("reason-pin__toggle")
+                                        or chip.has("reason-ack__toggle"))
                         continue
                     self.assertEqual(chip.tag, "a")
                     href = chip.attrs.get("href", "")

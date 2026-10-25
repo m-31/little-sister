@@ -13,6 +13,7 @@ from unittest import TestCase
 
 from little_sister.checks.base import CheckError
 from little_sister.checks.metadata import (
+    SUBNODE_KEYS,
     Stated,
     expand_tokens,
     parse_show_when_quiet,
@@ -28,7 +29,16 @@ class ParseSubnodesTests(TestCase):
     def test_reads_title_and_about(self):
         parsed = parse_subnodes({"subnodes": {
             "disk": {"title": "Disk", "about": "Free space."}}})
-        self.assertEqual(parsed, {"disk": {"title": "Disk", "about": "Free space."}})
+        self.assertEqual(parsed, {"disk": {"title": "Disk", "about": "Free space.",
+                                           "handbook": ""}})
+
+    def test_reads_a_handbook_as_written(self):
+        # ADR-0133 decision 3: a file's name is read by the check's construction,
+        # against the configuration directory, and not here
+        parsed = parse_subnodes({"subnodes": {
+            "ec2": {"handbook": "handbook/ec2.md"}}})
+        self.assertEqual(parsed["ec2"]["handbook"], "handbook/ec2.md")
+        self.assertIn("handbook", SUBNODE_KEYS)
 
     def test_missing_is_empty(self):
         self.assertEqual(parse_subnodes({}), {})
@@ -82,7 +92,8 @@ class ParseShowWhenQuietTests(TestCase):
         config = {"subnodes": {"ec2": {"about": "the inventory",
                                        "show_when_quiet": True}}}
         self.assertEqual(parse_subnodes(config),
-                         {"ec2": {"title": "", "about": "the inventory"}})
+                         {"ec2": {"title": "", "about": "the inventory",
+                                  "handbook": ""}})
 
 
 class ExpandTokensTests(TestCase):

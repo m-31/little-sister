@@ -5,7 +5,8 @@
 > the date. The digest says **what** was decided; the record says why, and holds the
 > history.
 >
-> A decision is in force unless its heading is marked **superseded**.
+> Every decision here is in force: a record that is superseded or withdrawn leaves, and
+> its digest with it.
 
 ---
 
@@ -20,22 +21,15 @@ rather than waiting for it; every check keeps a timeout of its own. → [record]
 ### ADR-0002 — Synchronizing the shared state
 
 One `threading.RLock` guards the tree and the event log, since the GIL makes no compound
-operation atomic. Writers and change detection hold it; readers copy a snapshot under it
-and render outside it. → [record](adr/0002-rlock-snapshot-synchronization.md)
+operation atomic. Writers and change detection hold it — a run's store from its first
+write to its last, so nobody reads half a run — and readers copy a snapshot under it and
+render outside it. → [record](adr/0002-rlock-snapshot-synchronization.md)
 
 ### ADR-0003 — Configuration & secrets via a `.env` file
 
 The Flask secret key and the check and API credentials come from one git-ignored
 `.env`, read through the process environment — never from code or version control.
 → [record](adr/0003-config-and-secrets-via-env-file.md)
-
-### ADR-0004 — Status aggregation (roll-up) semantics — **superseded**
-
-Superseded by [ADR-0039](adr/0039-status-rollup-semantics.md) (roll-up),
-[ADR-0040](adr/0040-what-a-failing-check-becomes.md) (a failing check) and
-[ADR-0041](adr/0041-maintenance-is-a-contribution-rule.md) (maintenance): three unrelated
-decisions had grown under one title until its `MAINTENANCE` half contradicted its
-roll-up half unnoticed. → [record](adr/0004-status-aggregation-semantics.md)
 
 ### ADR-0005 — Dashboard freshness & engine self-monitoring
 
@@ -47,13 +41,6 @@ a failed refresh; the engine heartbeats a `little-sister` node each tick, so a s
 scheduler goes red through staleness, and an external supervisor handles whole-process
 death. → [record](adr/0005-dashboard-freshness-and-self-monitoring.md)
 
-### ADR-0006 — General config file & display timezones — **superseded**
-
-Superseded by [ADR-0120](adr/0120-every-stored-time-is-an-instant.md), which restates
-the settings file, the display zone and format and how a typed expiry is read, and
-replaces how a time is stored: no longer the machine's clock without a zone.
-→ [record](adr/0006-config-file-and-timezones.md)
-
 ### ADR-0007 — Checks may report a branch (recursive `CheckResult`)
 
 `CheckResult` is a small recursive value with `name`, `description` and `children`; the
@@ -61,31 +48,12 @@ engine upserts the root at `check.full_path` and each child beneath it, while id
 observation time, maintenance and events stay the tree's concern. A leaf result is
 unchanged. → [record](adr/0007-check-result-branches.md)
 
-### ADR-0008 — JSON output (backend mode) — **superseded**
-
-JSON by content negotiation on the unversioned `GET /status[/<node_path>]`
-(`Accept: application/json`): an envelope (`schema_version`, `generated_at`, `status`)
-around a recursive snapshot with `snake_case` properties, `UPPER_SNAKE` codes, plural
-`reasons`, UTC `date-time`, both `own_code` and rolled-up `code`. Errors are Problem
-JSON (RFC 9457); auth is a named per-client bearer token from `.env`; the contract is
-`api/openapi.yaml`. → [record](adr/0008-json-output-api.md)
-
-Superseded by [ADR-0080](adr/0080-the-envelope-is-the-snapshot-published.md), which
-keeps the routes, the envelope, Problem JSON and the token and rewrites the node.
-
 ### ADR-0009 — Per-profile remote metrics scripts
 
 The `host-metrics` script is three scripts by userland —
 `host-metrics-{linux,macos,busybox}.sh` — chosen by a host's `profile` (default
 `linux`), which also picks the interpreter; each self-guards on `uname` and reports a
 mismatch as a visible `WARN`. → [record](adr/0009-per-profile-metrics-scripts.md)
-
-### ADR-0010 — Target Python 3.14 — **superseded**
-
-Superseded by [ADR-0054](adr/0054-python-floor-and-development-version.md), which
-restates what still stands and lowers the floor to 3.11. Kept `requires-python >= 3.14`
-as a single modern target while the host was provisioned by uv.
-→ [record](adr/0010-python-version.md)
 
 ### ADR-0011 — SSH check family
 
@@ -100,7 +68,8 @@ A node's `about` is a Markdown note fed in precedence order `nodes.yaml` (keyed 
 path, so container nodes and graft points are reachable) > inline on the owning check >
 empty, kept separate from `description`; branch checks describe each leaf through a
 `descriptions:` map; a startup pass warns about an `about` path no check covers and
-notes one past 400 characters, since every view of a node shows its `about` open.
+notes one past 400 characters, an `about` being a node's short account (ADR-0133). An
+entry's `tags:` add up with every other place that writes them (ADR-0139).
 → [record](adr/0012-node-metadata.md)
 
 ### ADR-0013 — Surface check config as node display metadata
@@ -112,11 +81,11 @@ aggregation, without an event, and not in the JSON envelope. Refines
 
 ### ADR-0014 — Persist maintenance to a file, with auto-expiry
 
-A maintenance side-table written through to `var/state/maintenance.json` and replayed
-before the engine runs, keyed by `path` and by `(path, slug)`; a pin is held against its
-path and makes no node. Its times are instants in UTC, and a file of another shape or
-with a time without a zone is refused, never migrated. Every pin expires — a week by
-default, at least the slowest covered check's interval, at most a year — is swept by the
+A maintenance side-table written through to `var/state/pins.json` and replayed before
+the engine runs, keyed by `path` and by `(path, slug)`; a pin is held against its path
+and makes no node. Its times are instants in UTC, and a file of another shape or with a
+time without a zone is refused, never migrated. Every pin expires — a week by default,
+at least the slowest covered check's interval, at most a year — is swept by the
 scheduler, and is reaped at startup unless a check or the instance's own node covers it.
 An edit is a compare-and-set on `set_at`, keeps an expiry left as it was filled, and
 writes nothing where nothing changed. → [record](adr/0014-maintenance-persistence.md)
@@ -143,28 +112,25 @@ replacing the name. → [record](adr/0017-node-title.md)
 
 ### ADR-0018 — Markdown rendering for node text
 
-`title`, `about`, `description`, `reasons` and a maintenance reason render server-side
-through markdown-it-py with safe defaults — raw HTML escaped, link schemes validated,
-`noopener noreferrer` on links, bare `http(s)` URLs linkified and nothing else — and the
-check base provides `plain()` and `code()` so captured output is folded in safely. The
-JSON envelope keeps raw Markdown. → [record](adr/0018-markdown-rendering.md)
+Every text — `title`, `about`, `description`, a handbook, `reasons`, a maintenance
+reason — renders server-side through one markdown-it-py renderer with safe defaults —
+raw HTML escaped, link schemes validated, `noopener noreferrer` on links, bare `http(s)`
+URLs linkified, GitHub's tables and strikethrough — and the check base provides
+`plain()` and `code()` so captured output is folded in safely. The renderer is handed
+the node: `handbook#…` leads into its handbook, and a status a text names, `{error}`, is
+drawn as its sign (ADR-0133). The JSON envelope keeps raw Markdown.
+→ [record](adr/0018-markdown-rendering.md)
 
 ### ADR-0019 — Inspection popover (hover card)
 
-A client-side hover card shows a node's name, title and the first block of its
-`about`, as server-rendered Markdown from a path-keyed map every refresh of the grid
-carries, and never its live state. It opens on a pause on a node's name where a
-browser's look says so — the library's look keeps it closed — is not offered on touch,
-stays on its node through the grid swaps, replaces the `title=` tooltips and needs no
-new route.
+A client-side hover card shows a node's name, title and the first block of its `about` —
+its `description` where it has none — its tags and a link to its handbook, as
+server-rendered Markdown from a path-keyed map every refresh of the grid carries, and
+never its live state. It opens on a pause on a node's name where a browser's look says
+so — the library's look keeps it closed — is not offered on touch, stays on its node
+through the grid swaps, replaces the `title=` tooltips and needs no new route. A rule's
+note opens in a card of its look, on its machinery.
 → [record](adr/0019-inspection-popover.md)
-
-### ADR-0020 — Deployment-supplied user list — **superseded**
-
-Superseded by [ADR-0046](adr/0046-user-list-from-the-configuration-roots.md): the
-`users` aspect of the configuration roots is the only input. Read the list from a
-deployment-controlled path (`LITTLE_SISTER_USERS`, else the cwd) and ship only an
-example. → [record](adr/0020-user-list-location.md)
 
 ### ADR-0021 — Script resolution: packaged defaults with an override
 
@@ -189,22 +155,15 @@ configuration. Secrets resolve once, at check instantiation; a malformed referen
 fails the load, a failed resolution pins the check to ERROR; `SECRET_KEY` and the API
 tokens may themselves be references. → [record](adr/0023-secret-references.md)
 
-### ADR-0024 — Dashboard layout: bounded heights, positional stability — **superseded**
-
-Superseded by [ADR-0056](adr/0056-stable-useful-dashboard-flow.md), which restates the
-density, heartbeat and maintenance rules and replaces the visible-node budget
-allocator. A card's position is a function of the node set alone; size variance is
-bounded by reason caps, chips for quiet leaves and a status strip for the heartbeat.
-→ [record](adr/0024-dashboard-layout.md)
-
 ### ADR-0025 — Check-provided subnode metadata (`about` / `title` on `CheckResult`)
 
 A type declares `subnode_defaults` and `label_tokens` as data; the library resolves each
-field once (configured text, else the default, `{default}` and `{token}`s substituted)
-and the engine stores it per child name. Precedence per field is `nodes.yaml` > declared
-or check-provided > empty, kept by seed-once semantics, and labels freeze at first fill.
-A label on a `CheckResult` child stays the fallback, and beneath `nodes.yaml` it is the
-only source for a child that says a run names it, `dynamic=True` (ADR-0118).
+field once (configured text, else the default, `{default}` and `{token}`s substituted —
+no token named `default` or for a status) and the engine stores it per child name.
+Precedence per field is `nodes.yaml` > declared or check-provided > empty, kept by
+seed-once semantics; labels — `title`, `about`, `handbook` — freeze at first fill, a
+`CheckResult` child's the fallback and, beneath `nodes.yaml`, the only source for a
+child a run names (ADR-0118). `details` are no label, and the block carries `tags:` too.
 → [record](adr/0025-check-provided-subnode-metadata.md)
 
 ### ADR-0026 — Reading values from decoded bags (`values.py`)
@@ -235,12 +194,12 @@ theme, and a pick that collides finds another vehicle.
 ### ADR-0029 — Presentation preferences live in a cookie, not in the server
 
 One long-lived `ls_prefs` cookie per browser, read server-side onto `<body>` — the
-layout and the looks of one roster, the theme, how a run of chips is drawn, whether the
-inspection card opens and how a head's row and a chip answer the pointer, the looks
-defaulting to the deployment's `settings.yaml` — so the page renders in the chosen
-look; every failure mode lands on the defaults per key; the settings menu posts to
-`/preferences`. The look belongs to the browser, not the session; functional per-user
-settings wait for a real store.
+layout, the theme and the looks of one roster: how chips run and boxes fill a level,
+whether the inspection card opens, how a row answers the pointer, where a head keeps its
+buttons, whether a failure opens its way — each defaulting to the deployment's
+`settings.yaml`, so the page renders in the chosen look; every failure mode lands on the
+defaults per key; the settings menu, a line beneath each heading saying what it changes,
+posts to `/preferences`. The look is the browser's; per-user settings wait for a store.
 → [record](adr/0029-per-user-presentation-preferences.md)
 
 ### ADR-0030 — Curated links come from a deployment-supplied file
@@ -250,29 +209,29 @@ merged by title across roots, file order preserved — with icons resolved by na
 the deployment's map and `links/icons/`, packages' packs, the built-in pack, the origin's
 favicon and a neutral glyph; a remote mark or a favicon is fetched by the viewer's
 browser from a host the page's own policy allows. Structural validation runs at load and
-never touches the network; reachability is probed when the page is opened and its answer
-is older than `interval:`, under a pass deadline, reported on the page and never on the
-status tree. → [record](adr/0030-curated-links.md)
+never touches the network, and nothing is probed: a dead link is found by clicking it, a
+tool whose availability matters is an `http` check. → [record](adr/0030-curated-links.md)
 
 ### ADR-0031 — One deployment config directory, split by aspect
 
-`config/` is one layered directory whose entries are aspects — `LITTLE_SISTER_CONFIG_DIR`
-is a path list of roots — and each aspect says how its layers combine: checks union with
-a hard error on overlap, `nodes.yaml` later-root-wins per field, links merge by title,
-`settings.yaml` per key, `users` whole from the first root. `.env` and `var/` stay out;
-startup refuses a missing tree or a root without `checks` and warns about an unclaimed
-file. The override ladder — packaged default → package-registered override → deployment
-file, per named item — is the house pattern. → [record](adr/0031-deployment-config-directory.md)
+`config/` is one layered directory of aspects, `LITTLE_SISTER_CONFIG_DIR` a path list of
+roots, each saying how its layers combine: checks union, an overlap a hard error;
+`actions`, `csp`, `tags.yaml` and `nodes.yaml`'s tags add up; `nodes.yaml` otherwise wins
+per field from the later root, `settings.yaml` per key, links by title; `users` is the
+first root's whole; `aggregation.yaml` reads every root's rules, the last-named first; a
+`handbook/` file is named in its own root. `.env` and `var/` stay out; startup refuses a
+missing tree or no `checks` and warns about an unclaimed file. The override ladder —
+packaged default → package override → deployment file — is the house pattern. → [record](adr/0031-deployment-config-directory.md)
 
 ### ADR-0032 — The contribution boundary: what a node shows and what it publishes
 
 A node has three statuses — reported (stored), own and effective (`own_code`, `code`)
 and its **contribution** to the parent — and every policy that changes what a node
-reports upward (maintenance, staleness, a cap, a shield, a counter) is a contribution
-rule applied in the snapshot, never a value written into the tree and never a sixth
-code. A transformed contribution is visible and attributable, keeps a liveness
-backstop, and an unusable rule does not apply. The boundary reaches one level below a
-node: its addressable entries are virtual children.
+reports upward (maintenance, staleness, a shield, a counter, a deployment's configured
+table, ADR-0137) is a contribution rule applied in the snapshot, never a value written
+into the tree and never a sixth code. A transformed contribution is visible and
+attributable, keeps a liveness backstop, and an unusable rule does not apply. The
+boundary reaches one level below a node: its addressable entries are virtual children.
 → [record](adr/0032-status-contribution-boundary.md)
 
 ### ADR-0033 — A faster second look: the budgeted failure retry
@@ -286,13 +245,13 @@ check never retries. `retry_interval` is off by default.
 
 ### ADR-0034 — Template slots for dependent packages
 
-The library declares a closed roster of named slots with the context each hands over;
-a dependent package registers a template of its own (reachable only as
-`ext/<package>/<name>`, additive, never shadowing) plus an optional context provider,
-which receives the names it declares and returns `None` for *nothing here*. A broken
-filler contributes nothing and the page renders. Slots: `reason.actions` (with the whole
-`line`) and `node.actions`, in the head's row of every open box and of a node's page's
-frame, `place` telling a card, a box and a frame apart.
+The library declares a closed roster of named slots with the context each hands over; a
+dependent package registers its own template (only as `ext/<package>/<name>`, additive,
+never shadowing) plus an optional context provider, which receives the names it declares
+and returns `None` for *nothing here*. A broken filler contributes nothing and the page
+renders. Slots: `reason.actions` (with the whole `line`) and `node.actions`, in the
+head's row of every open box and of a node's page's frame, `place` telling a card, a box
+and a frame apart; both hand over `written_out` and `details` for a draft.
 → [record](adr/0034-template-slots-for-dependent-packages.md)
 
 ### ADR-0035 — A dependent package registers its own configuration aspect
@@ -325,22 +284,22 @@ the kiosk. An extension's script runs with the page's full authority.
 ### ADR-0038 — The declarative action list: `config/actions.yaml`
 
 A built-in aspect, layered like the checks: an entry is `label`, `url`, `slot` and
-optionally `icon` and `under` (a node path compared segment-wise); `url` is a template
-over `{path}`, `{name}`, `{code}`, `{reason}`, `{reasons}`, every value percent-encoded,
-an unknown placeholder refused at load. It registers through the slot seam as a
-`builtin` filler, so a configured chip and a coded one share one rail; a configured
-action is a link, and anything more is a package filler.
+optionally `icon`, `under` (a node path compared segment-wise) and `tag` (one tag);
+`url` is a template over `{path}`, `{name}`, `{code}`, `{reason}`, `{reasons}`, every
+value percent-encoded, an unknown placeholder refused at load. It registers through the
+slot seam as a `builtin` filler, so a configured chip and a coded one share one rail; a
+configured action is a link, and anything more is a package filler.
 → [record](adr/0038-declarative-action-list.md)
 
 ### ADR-0039 — Status roll-up: how a parent derives its status
 
-The pure derivation: worst-of `ERROR > WARN > OK` among counted statuses; `UNDEFINED`
-(*not reported yet*) ignored; `MAINTENANCE` — a pin on the node, or its check's word for
-it — contributes nothing and cancels its subtree, while a node whose lines are all
-silenced counts nothing for itself and cancels nothing; an updater owning a branch may
-set its status explicitly. A node whose children are all ignored reads `MAINTENANCE`
-when any was silenced and `UNDEFINED` when they merely have not reported.
-`Status.get_status_code()` implements this and nothing else.
+The pure derivation: worst-of `ERROR > WARN > OK` among counted statuses, never a
+downgrade — a rule a deployment declares may transform what a part counts above, visibly
+(ADR-0137); `UNDEFINED` (*not reported yet*) ignored; `MAINTENANCE` — a pin on the node,
+or its check's word for it — contributes nothing and cancels its subtree, while a node
+whose lines are all pinned cancels nothing; an updater owning a branch may set its
+status explicitly. A node whose children are all ignored reads `MAINTENANCE` when any
+was in maintenance, else `UNDEFINED`. `Status.get_status_code()` is this and no more.
 → [record](adr/0039-status-rollup-semantics.md)
 
 ### ADR-0040 — What a failing check becomes
@@ -399,16 +358,19 @@ file. → [record](adr/0045-user-avatars.md)
 `LITTLE_SISTER_USERS` is retired and startup refuses while it is set: `users` is taken
 whole from the first root, so a users-only root named first in the path list already is
 a single-file override. `LITTLE_SISTER_CONFIG` stays, since settings merge per key.
-→ [record](adr/0046-user-list-from-the-configuration-roots.md)
+The library ships no users, only an example, and a list that is not there fails the
+start. → [record](adr/0046-user-list-from-the-configuration-roots.md)
 
 ### ADR-0047 — A node keeps notes, and they outlive it
 
-The pin's explanation is renamed `note` and a node keeps a note history: appended when
-the pin is set, editable while the pin is live and frozen afterwards, capturing the
-node's code and reason lines as they stood. Notes transform no code, are exempt from
-coverage reaping, live in `var/notes.json`, and retire by four `settings.yaml`
-parameters (`notes_keep` 10, `notes_cap` 50, `notes_max_age` 13mo, `notes_min_age`
-25mo), the count floor winning. → [record](adr/0047-node-notes-and-their-retention.md)
+The pin's explanation is renamed `note` and a node keeps a note history: a pin's note
+appended when the pin is set, editable while the pin is live and frozen afterwards, and
+an admin's own, on a node or a line, editable while it is the newest — each capturing
+the node's code and reason lines as they stood, read on the node's *Notes* tab. Notes
+transform no code, are exempt from coverage reaping, live in `var/state/notes.json`, and
+retire by four `settings.yaml` parameters (`notes_keep` 10, `notes_cap` 50,
+`notes_min_age` 13mo, `notes_max_age` 25mo), the count floor winning.
+→ [record](adr/0047-node-notes-and-their-retention.md)
 
 ### ADR-0048 — The Content-Security-Policy is assembled, never a constant
 
@@ -474,13 +436,14 @@ stated `0` is a real declaration. Ordering by the live grade stays rejected.
 
 ### ADR-0056 — Dashboard layout follows stable, useful flow
 
-Supersedes ADR-0024 and keeps its position rule. Each root gets a stable flow profile
-derived from the filtered topology, the first look it starts in (ADR-0128) and the
-configured `reason_cap` — never from status, reasons, a click or measured height; a
-span is a useful step only when it removes a modeled row per added track; the server
-publishes `(tenths, tracks, plan)` breakpoints and the browser sets exactly that many
-tracks from its measured width. `dashboard_columns: plain` withholds the plan; auto-fill
-CSS is the fallback. → [record](adr/0056-stable-useful-dashboard-flow.md)
+Under the library's rows a card's position is a function of the node set alone (a viewer
+may pack, ADR-0138); reason caps, chips and the status strip bound its height. Each
+root's flow profile comes from the filtered topology, its first look (ADR-0128) and
+`reason_cap` — never from status, reasons, a click or measured height; a span is useful
+only when it removes a modeled row per added track; the server publishes
+`(tenths, tracks, plan)` breakpoints and the browser sets that many tracks from its
+width. `dashboard_columns: plain` withholds the plan; auto-fill CSS is the fallback.
+→ [record](adr/0056-stable-useful-dashboard-flow.md)
 
 ### ADR-0058 — `little_sister.transport`: a vocabulary for asking something that might not answer
 
@@ -572,12 +535,12 @@ One `before_request` hook refusing by default; `OPEN_ENDPOINTS` answer with no i
 
 Deciding who somebody is is not the library's job: a provider answers `identify()` and
 `challenge()`, with four optional login hooks, and the installation registers every
-**door** by name — the built-in list included, through `local_login.use_local()`.
-Several doors are allowed, an ordered chain is not: a session records its door and
-`current_user()` asks that provider only. A duplicate door or default refuses, a missing
-one logs, a provider that raises is no identity, a failed credential closes its door and
-the application serves. The library ships one door of its own, the **system admin**, and
-`choose_at_login()` makes `/login` a chooser. → [record](adr/0069-identity-comes-from-outside-and-one-account-does-not.md)
+**door** by name, the built-in list too (`local_login.use_local()`). Several doors are
+allowed, an ordered chain is not: a session records its door and `current_user()` asks
+that provider only. A duplicate door or default refuses, a missing one logs, a provider
+that raises is no identity, a failed credential closes its door. The library ships one
+door of its own, the **system admin**; `choose_at_login()` makes `/login` a chooser; and
+a route asks `Identity.may(<act>)`, never `admin`. → [record](adr/0069-identity-comes-from-outside-and-one-account-does-not.md)
 
 ### ADR-0070 — The report on unclaimed configuration files runs at the end of registration
 
@@ -589,14 +552,14 @@ itself the first resolution, so no ordering could avoid the warning.
 
 ### ADR-0071 — What a restart keeps is a directory of files, and a keeper carries it
 
-Three layers: memory; `var/state/`, JSON files read at startup — `maintenance.json`
-(moved from `var/`, a clean break), `events.json`, and the notes and series files as
-they are built — written through for pins, kept at most once per `state_interval` and
-at the stop's one save for the rest, by temp file and `os.replace`, by the one process
-holding the directory's lease; and packages behind two seams, a store per record and a
-**keeper** that mirrors the directory (S3 first). A failure never refuses to start and is a line on `/little-sister`: a load
-that failed at ERROR while the process runs, a save that failed at WARN until one
-succeeds. → [record](adr/0071-what-a-restart-keeps-is-a-directory-of-files.md)
+Three layers: memory; `var/state/`, JSON files read at startup — `pins.json`,
+`events.json.gz`, `series.json.gz`, `notes.json` — written through for pins and notes,
+kept at most once per `state_interval` and at the stop's one save for the rest, by temp
+file and `os.replace`, by the directory's one leaseholder; and packages behind two
+seams, a store per record and a **keeper** mirroring the directory (S3 first). A failure
+never refuses to start and is a line on `/little-sister`: a load that failed at ERROR
+while the process runs, a save that failed at WARN until one succeeds.
+→ [record](adr/0071-what-a-restart-keeps-is-a-directory-of-files.md)
 
 ### ADR-0072 — The instance reports on itself through one seam, in lines that clear
 
@@ -646,13 +609,6 @@ every limit here is a setting. → [record](adr/0075-a-check-declares-what-it-co
 
 Small display and contract changes recorded here and nowhere else.
 
-### Node sibling ordering — natural, case-insensitive (no ADR) — **superseded**
-
-Superseded by [ADR-0055](adr/0055-sibling-order.md), which keeps the name sort and puts
-a declared rank in front of it. Siblings sort by name, case-insensitive and natural
-(`node2` before `node10`), once in the snapshot; insertion order and live-grade order
-are rejected.
-
 ### A title that only repeats the name is not drawn (no ADR)
 
 One predicate in `titles.py`, called by every surface, folds case, `_`, `-`, spaces and
@@ -663,13 +619,6 @@ Display only: the snapshot and the JSON envelope keep the field.
 
 Each ancestor segment of the header trail links to its level through a `breadcrumbs`
 filter and a shared partial; the current node is plain text.
-
-### Envelope fields — node metadata + maintenance details (no ADR)
-
-`about`, `title` and `config` (raw Markdown) and a `maintenance_details` object
-(`reason`, `set_by`, `set_at`, `expires_at`, null when not pinned) join the JSON
-envelope additively, `schema_version` staying 1 and the `maintenance` bool unchanged.
-Contract: [`api/openapi.yaml`](api/openapi.yaml).
 
 ### The core stays service-free; deployments extend through the seams (no ADR)
 
@@ -712,8 +661,8 @@ one-unit check — today's behavior as the degenerate case. Additive, so the che
 epoch does not move and no package has to release. A unit answers for the nodes it
 writes, so [ADR-0044](adr/0044-run-facts-on-the-node.md)'s ownership rule counts units
 rather than checks, and failure, retry and coverage are per unit rather than per check.
-The envelope carries `run` wherever a unit answered and an optional `unit` naming
-which. → [record](adr/0078-the-unit-is-what-the-engine-releases.md)
+The envelope carries `run` wherever a unit answered, and no key names the unit.
+→ [record](adr/0078-the-unit-is-what-the-engine-releases.md)
 
 ### ADR-0079 — Freshness is judged against a stated tolerance, never a derived one
 
@@ -726,16 +675,16 @@ collapsed pace is a fact about the engine, not about somebody's repository. The
 envelope publishes the verdict and the tolerance applied (`run.stale_after_seconds`),
 never the rule. → [record](adr/0079-freshness-is-a-stated-tolerance.md)
 
-### ADR-0080 — The envelope is the snapshot, published: `schema_version` 2
+### ADR-0080 — The envelope is the snapshot, published: `schema_version` 3
 
 What the JSON publishes is what the dashboard renders, and **a field added to the
 snapshot is added to the envelope in the same change**, additively. `reported` / `own`
 / `code` with a `contribution` naming the rule the parent's count came from; `entries`
-(addressable or prose) for the string `reasons`; `maintenance` one object or null;
+(addressable or prose) for the string `reasons`; `handled` for every rule on a part;
 `run` — present where a **unit** answered, absent elsewhere — for the nullable
 `timestamp`; `report`, `order`, `show_when_quiet`; an `instance` block. No versioned
-media type: the client ships with the server. Supersedes
-[ADR-0008](adr/0008-json-output-api.md). → [record](adr/0080-the-envelope-is-the-snapshot-published.md)
+media type: the client ships with the server. Content negotiation, Problem JSON and a
+per-client bearer token stand. → [record](adr/0080-the-envelope-is-the-snapshot-published.md)
 
 ### ADR-0081 — An instance's own node states a freshness tolerance, never a period
 
@@ -752,12 +701,12 @@ where there is one and the promise where there is not. The envelope does not mov
 
 An entry gains **`subject`** — the source's identifier for the entity the line stands
 for, which a slug cannot be split back into and which nothing may be pinned by — and
-**`data`**, the record of what the check read beside the sentence it wrote. `text` does
-not move, and neither field declares members. Typed: `at`, `started`, `ended` at any
-depth, offset-bearing ISO-8601 or null, converted to UTC at the seam. The seam refuses a
-record — not a mapping, a non-time under a timed name, or over `record_limit` bytes
-(default 2 KB) — at the cost of its line, not the run (ADR-0093), and stores the JSON
-read back. → [record](adr/0082-a-line-carries-what-it-is-about-and-what-it-read.md)
+**`data`**, the record of what the check read beside the sentence it wrote; `text` does
+not move, and neither declares members. Typed: `at`, `started`, `ended` at any depth,
+offset-bearing or null, UTC at the seam. A refused record — not a mapping, a non-time
+under a timed name, or over `record_limit` bytes (default 3 KB) — costs its line, not
+the run (ADR-0093). A line also carries its occurrence, which a *seen* is bound to.
+→ [record](adr/0082-a-line-carries-what-it-is-about-and-what-it-read.md)
 
 ### ADR-0083 — A node may wait before it escalates
 
@@ -912,8 +861,9 @@ writes `load1_per_core`, and the library's types declare the numbers they grade.
 on, on one time axis, with each series' newest `reading_cap` readings folded beneath; a
 series with no measure links its History page. A node's page shows only the curves that
 stand on it. The breadcrumb starts at `nodes` and keeps the view, tabs switch between
-Status, Series, History and Copy, and the rail gains Series. `/status` stays the
-overview, `/series` is an index, and there is no `/history` root.
+Status, Series, History, Notes, a handbook where there is one, and Copy, and the rail
+gains Series. `/status` stays the overview, `/series` is an index, and there is no
+`/history` root.
 → [record](adr/0097-a-nodes-series-have-a-view-of-their-own.md)
 
 ### ADR-0098 — A Series view is drawn over the window its URL names
@@ -931,12 +881,12 @@ lowest and highest, which a bucket keeps.
 
 The Time card and a node's Copy document state a status that still holds *since* its
 start, read from the kept table where its row has left the log, and when it was *last
-observed*; History's current row reads *current*. A period is the node's own status's,
-named so on a node above others, and a run of events that show one status: a pin's edit
-is none, and a period a pin's end began says so. A first reading is a bound, *since
-before*, kept until the node changes; no gap ends a period. A node is observed, not
-checked; the `file` check writes a long age in days; a run's log line adds a roll-up
-unlike its own code. → [record](adr/0099-a-status-that-still-holds-says-since-when.md)
+observed*; History's current row reads *current*. A node above others states first the
+period of what it shows, then its own status's, named so. A period is a run of events
+that show one status: a pin's edit is none, and a period a pin's end began says so. A
+first reading is a bound, *since before*, kept until the node changes; no gap ends a
+period. A node is observed, not checked; the `file` check writes a long age in days; a
+run's log line adds a roll-up unlike its own code. → [record](adr/0099-a-status-that-still-holds-says-since-when.md)
 
 ### ADR-0100 — System is two views: what is running, and what is installed
 
@@ -950,12 +900,12 @@ the type's estimate, beside *Seen*, the heaviest record the last run carried.
 
 ### ADR-0101 — The Events page is filtered by its URL
 
-`under`, a node and everything beneath it; `words`, each found in the reason; a switch
-per status an event moved to, *reached* and *held back* apart from them, and one per
-kind of cause — a reading, a pin, a removal; and the Series view's window, with its bar.
-Nothing remembers a filter, and held-back rows stay shown by default — what the log
-keeps is retention's. A line counts what matches in the window, an empty table says
-which empty it is, and *reset* is `/events`.
+`under`, a node and everything beneath it; `tag`, the nodes that carry one; `words`, each
+found in the reason; a switch per status an event moved to, *reached* and *held back*
+apart from them, and one per kind of cause — a reading, a pin, a removal; and the Series
+view's window, with its bar. Nothing remembers a filter, and held-back rows stay shown
+by default — what the log keeps is retention's. A line counts what matches in the
+window, an empty table says which empty it is, and *reset* is `/events`.
 → [record](adr/0101-the-events-page-is-filtered-by-its-url.md)
 
 ### ADR-0102 — A readings table keeps time and names in view; a quiet log says what it means
@@ -963,10 +913,10 @@ which empty it is, and *reset* is `/events`.
 A readings table is a box as wide as the page and about as tall as the window, its
 heading row and Time column held while it scrolls both ways, every reading on the page.
 A declared measure heads its column by label and unit over the field's name, and the
-declared columns lead. Where the log holds no change of a node, History says it
-declares nothing of its own, or shows the period that holds, begun when the kept table
-says or *before* its bound.
-→ [record](adr/0102-a-readings-table-keeps-time-and-names-in-view.md)
+declared columns lead. A node above others has two tables of periods, of what it shows
+and of its own status. Where the log holds no change, History says it declares nothing
+of its own, or shows the period that holds, begun when the kept table says or *before*
+its bound. → [record](adr/0102-a-readings-table-keeps-time-and-names-in-view.md)
 
 ### ADR-0103 — The Series index says where each link leads, and names each node once
 
@@ -976,16 +926,16 @@ column counts the curves a node's own series draw, the labels folded behind the 
 A root appears once: its heading is its own row, the nodes beneath it indented.
 → [record](adr/0103-the-series-index-says-where-each-link-leads.md)
 
-### ADR-0104 — A pin is one block on what it silences, and it is edited there
+### ADR-0104 — A pin is one block on what it holds, and it is edited there
 
 One block states a pin wherever one shows — who, until when and what is left, the note
-in full, *Edit* and *Clear* for an admin — and where it stands says what it covers: a
-node's frames its lines, a line's hangs beneath it, and a pin above a node is stated on
-its page too, without buttons. A pin is set and edited in place, on a node's page, the
-Maintenance page and the wall, whose refresh waits for an open editor; an edit shows
-the expiry it would keep, and one that changes nothing writes nothing. The block is a
-rule's, maintenance its first kind.
-→ [record](adr/0104-a-pin-is-one-block-on-what-it-silences.md)
+in full, *Edit* and *Clear* for an admin, on the wall its note behind a mark and *Edit*
+a pencil — and where it stands says what it covers: a node's frames its lines, a line's
+hangs beneath it, and a pin above a node is stated on its page too, without buttons. A
+pin is set and edited in place, on a node's page, *Handled* and the wall, whose refresh
+waits for an open editor; an edit shows the expiry it would keep, and one that changes
+nothing writes nothing. The block is a rule's: maintenance's, *seen*'s (ADR-0142), and
+without buttons a configured rule's (ADR-0137). → [record](adr/0104-a-pin-is-one-block-on-what-it-silences.md)
 
 ### ADR-0105 — A page is laid out at its screen's width, and is no wider
 
@@ -1013,11 +963,11 @@ failed run also in the lane beneath. The API reads a series at the Series view's
 
 The log records every change of what a node shows — a reading's, its pin's, a line's
 pin set or ended — and nothing for a line by itself. A change of the reading the node
-does not show is a row of its own, held back as `maintenance`, also where only some
-lines are pinned; a run that does both writes two rows. An event carries its cause — a
-chip on Events, *when a line was silenced* on the Time card — and what the check
-reported, which the restart and the count of changes read. A restart replays nothing:
-the first reading is compared with what the log last showed and last reported.
+does not show is a row of its own, held back as `maintenance` — also where only some
+lines are pinned — or as `aggregation` where a configured rule counts its lines
+otherwise; a run that does both writes two rows. An event carries its cause and what
+the check reported, which the restart and the count of changes read. A restart replays
+nothing: the first reading is compared with what the log last showed and reported.
 → [record](adr/0107-an-event-is-a-change-of-what-a-node-shows.md)
 
 ### ADR-0108 — The wait before an escalation counts what a node shows
@@ -1035,18 +985,18 @@ A node in a result may say `children_complete=True`, and only then is a direct c
 no longer returns removed, at once; a result that says nothing keeps what it leaves out.
 A removal takes the node and nothing kept about it: its readings stay until the ceiling
 forgets them, its history is the log's, and a pin on it — held against its path, making
-no node — is suspended until the node returns or the pin expires. Each node removed
-writes an event with the cause *removed*, the first run after a restart too, which the
-Events page can hide; a series no node stands for is listed on its check's History page.
-→ [record](adr/0109-a-node-says-its-children-are-complete.md)
+no node — is suspended until the node returns or the pin expires; a seen ends with it.
+Each node removed writes an event with the cause *removed*, the first run after a
+restart too, which the Events page can hide; a series no node stands for is listed on
+its check's History page. → [record](adr/0109-a-node-says-its-children-are-complete.md)
 
 ### ADR-0110 — What every node last showed is kept beside the log, and a wait counts from it
 
-A node's first reading in a process is counted from what the node last showed: a
-failure a restart finds waits like any other, one that stood stays published, and a
-wait under way at a stop goes on, its entry saying what a waiting node publishes.
-`events.json` carries, beside its rows, what every node shows, what its check last
-reported and when its period began — for a pin the tree did not see set, the pin's
+A node's first reading in a process is counted from what the node last showed: a failure
+a restart finds waits like any other, one that stood stays published, and a wait under
+way at a stop goes on. The event log carries, beside its rows, what every node shows,
+what its check last reported, what a waiting node publishes and when its period began —
+a node above others the period of what it shows too, a pin the tree did not see set its
 creation — so a quiet node writes no *undefined → …* at a restart and keeps its *since*.
 A file written before is read by its rows; an entry goes when no check covers its node.
 → [record](adr/0110-what-every-node-last-showed-is-kept-beside-the-log.md)
@@ -1093,24 +1043,24 @@ draws none.
 
 ### ADR-0115 — A Copy document says where it is from, when it was made and since when
 
-Every Copy document names the address of the page it was made from and the instant it
-was made, and each finding says since when it has stood. The tree's document has a head
-and a count, and is one also where nothing needs attention; an outline says what a
-branch itself holds — a pin, a status of its own, a stale reading — and a branch's
-document hands over what is beneath it. Copy is a tab on every node's views. A period
-is stated wherever there is one, and Copy Rich HTML copies through the copy event where
-a page has no clipboard interface.
-→ [record](adr/0115-a-copy-document-says-where-it-is-from-and-since-when.md)
+Every Copy document names the page it was made from — a node's its handbook too — and
+the instant it was made, and each finding says since when it has stood. The tree's
+document has a head and a count, also where nothing needs attention; an outline says
+what a branch itself holds, and a branch's document hands over what is beneath it, the
+period of what it shows and what is handled there. A node's document carries its
+details, its tags and its newest note, and writes a handbook link and `{error}` out.
+Copy is a tab on every node's views, a period is stated wherever there is one, and Copy
+Rich HTML copies through the copy event where a page has no clipboard interface. → [record](adr/0115-a-copy-document-says-where-it-is-from-and-since-when.md)
 
 ### ADR-0116 — A path with no node has one page, and it says what is known of the path
 
 `/status/<path>`, `/series/<path>`, `/history/<path>` and `/copy/<path>` with no node
 at the path answer `404` with one page, under the breadcrumb and without tabs; the part
-an open Status page refreshes is still `200`. The page says what the event log and the
-pins know: the removal, with when and why and a link to its rows on Events; every pin
-held against the path or beneath it, edited there by an admin; and the nearest node
-above that stands, where the kept readings of a removed subject are listed. Nothing is
-stored for it.
+an open Status page refreshes is still `200`. The page says what the event log, the pins
+and the notes know: the removal, with when and why and a link to its rows on Events;
+every pin held against the path or beneath it, edited there by an admin; the notes
+written for it and beneath it; and the nearest node above that stands, where the kept
+readings of a removed subject are listed. Nothing else is stored for it.
 → [record](adr/0116-a-path-with-no-node-says-what-is-known-of-it.md)
 
 ### ADR-0117 — A measure says where its axis reaches
@@ -1175,20 +1125,20 @@ draws them — one for every key the kept readings hold, only those at or beneat
 node asked. A node that stands answers a list, empty where none stands; `404` is a path
 no node stands at, `400` a window that cannot be read. Its first reader is a script or a
 session reading a running instance, and `test_api.sh` takes a path. One answer is
-written down, `series-2.json`. → [record](adr/0122-a-series-is-read-over-the-api-as-it-stands.md)
+written down, `series-3.json`. → [record](adr/0122-a-series-is-read-over-the-api-as-it-stands.md)
 
 ### ADR-0123 — A node says one status wherever it is read
 
 The head of a node's page says what its card says one page up: what the node rolls up
 to. Whose a status is, the snapshot says — what a node counts for itself, a stale
 reading of its own degraded, and whether what it shows is derived from beneath it — and
-a head, a card and a box are pale by that. A node's periods stay its own status's, and
-no row is written for a node when one beneath it changes: on a node above others the
-Time card, History and the Copy document name the period *its own status*, and the card
-first names the node beneath that makes what it shows, with that node's *since*.
+a head, a card and a box are pale by that. A node above others keeps two periods, of
+what it shows and of its own status, and no row is written for a node when one beneath
+it changes: its Time card says the first, naming the node beneath that makes it so, and
+names the second *its own status*, as History and the Copy document do.
 → [record](adr/0123-a-node-says-one-status-wherever-it-is-read.md)
 
-### ADR-0124 — A node whose lines are all silenced still counts the nodes beneath it
+### ADR-0124 — A node whose lines are all in maintenance still counts the nodes beneath it
 
 A node whose lines are all pinned has an own status of `MAINTENANCE` that counts
 nothing and cancels nothing: the nodes beneath it count, it shows what they roll up to,
@@ -1196,7 +1146,7 @@ and it reads `MAINTENANCE` whole only where nothing beneath it counts either. Wh
 cancels a subtree is a pin on the node or its check's word for it, said by one
 expression the roll-up and the snapshot share. Its head and its card say what it rolls
 up to, its Time card names its period its own, and its Copy document says that every
-line of its own is silenced.
+line of its own is in maintenance.
 → [record](adr/0124-a-node-whose-lines-are-all-silenced-still-counts-the-nodes-beneath-it.md)
 
 ### ADR-0125 — The failure retry reads what a run rolls up to
@@ -1224,22 +1174,22 @@ names its form. → [record](adr/0126-a-line-is-a-template-over-its-record.md)
 
 Every node on the wall and its pages is a chip — its state's cue, its name and its
 counts, a branch's own failure among them — or a box; a click changes which where it
-stands, a level keeping its order, and a top-level card closes to one line in its place.
-An open head's corner holds ↗, the healthy fold and ▤ as icons, its actions before them.
-Three failures to a card open their way past chips; `branch_cap`, depth and the chips
-switch go. What a viewer opens is a map of what differs, kept for the tab and put back
-after every refresh; chip runs line up in columns, or wrap where a browser says so.
-→ [record](adr/0127-the-wall-is-a-tree-and-a-click-opens-or-closes-a-node.md)
+stands, a level keeping its order, and a top-level card closes to its head in its place.
+An open head's icons and actions stand where a look puts them. Three failures to a card
+open their way past chips unless a browser keeps them shut; `branch_cap`, depth and the
+chips switch go, and a tag filters the wall. What a viewer opens is a map of what
+differs, kept for the tab and put back after every refresh; chip runs line up in
+columns, or wrap where a browser says so. → [record](adr/0127-the-wall-is-a-tree-and-a-click-opens-or-closes-a-node.md)
 
 ### ADR-0128 — Where a node's first look comes from: `chips`, `fold_ok` and `reason_cap`
 
 Three keys per node — whether its children start as chips, whether its healthy ones
 start folded, its line budget — resolved most specific first: the viewer for the tab,
 `nodes.yaml` by path, the check's file, the type's declaration, `settings.yaml`, built
-in (open, healthy shown). They ride the labels'
-addresses and `children:`, which reaches a level a run names; `show_when_quiet` stays a
-key of its own on the same addresses. They are the web page's settings, never on the
-snapshot, and the planner prices the first look they give.
+in (open, healthy shown, a level that would draw over thirty boxes as chips). They ride
+the labels' addresses and `children:`, which reaches a level a run names;
+`show_when_quiet` stays a key of its own there. They are the web page's settings, never
+on the snapshot, and the planner prices the first look they give.
 → [record](adr/0128-where-a-nodes-first-look-comes-from.md)
 
 ### ADR-0129 — A rule list is the library's, and a value matches it exactly
@@ -1273,3 +1223,120 @@ applies it, handing the line its `reason`. A pair is `<name>_warn` and `_error` 
 below; a map folds its words and logs a key no word matches; a rule writes what its
 block grades; a window is handed to the seam cut at the reading, `since` first.
 → [record](adr/0131-a-type-declares-what-it-grades-and-the-library-grades-it.md)
+
+### ADR-0132 — A branch keeps the period of what it shows beside the log
+
+Every node above others, the root included, keeps beside the log the period of what it
+shows — since when, what came before, what moved it and the node whose change it was —
+written at every change of what it rolls up to, staleness included, and never as a row;
+a run's store holds the tree's lock whole and is compared once, and a restart carries
+each node at its entry until its unit has run. The Time card says that period, History
+lists it above the own status's, and the envelope carries `period` beside `code` and
+`own_period` beside `own`.
+→ [record](adr/0132-a-branch-keeps-the-period-of-what-it-shows-beside-the-log.md)
+
+### ADR-0133 — A node says what it is in a card, and at length in a handbook
+
+A node's short account stands in a card, *About*, beside its facts on its Status tab:
+its `description`, what the check reads; its `about`, where the thing stands, how to
+reach it and what to do; its `details`, named values a team keys — the type's per run,
+the deployment's given down key by key, the nearest winning. At length it has a
+`handbook`, text or a file from the `about`'s sources, on a tab at `/handbook/<path>`
+that a text links as `handbook#<section>`; `{error}` and its kin are drawn as signs.
+Copy and the API point to the handbook and carry the details.
+→ [record](adr/0133-a-node-says-what-it-is-in-a-card-and-at-length-in-a-handbook.md)
+
+### ADR-0134 — The state is compressed and stamped, and a keeper takes it in two cadences
+
+The event log and the series are written as `events.json.gz` and `series.json.gz`,
+compact JSON under gzip at level 1, fixed; `events.json` and `series.json` are retired,
+a clean break that starts both empty once at the upgrade. Every file carries a
+`generation` — writer, count, held — and at a start a local copy newer by the same
+writer, written holding, wins over the store's. Pins go to the keeper as they change;
+the observed state every `keeper_interval` (900 s) while nobody stands by, every interval
+while anyone does, and at once at a flip, a stop and an action, run between two flushes.
+→ [record](adr/0134-the-state-is-compressed-and-stamped.md)
+
+### ADR-0135 — A handled part keeps its true color, and every surface says by what
+
+Every part keeps its true color under the mark of the rule acting on it — ‖ maintenance,
+a ringed check accepted, a bell struck through silenced, § a configured rule — and what
+it counts as shows one level up; maintenance alone paints blue, in words of its own. On
+the wall a block says its sentence, its note opening from a mark in a card, *Edit* a
+pencil and *Clear* in the editor, its edge dashed and its fill only where its rule
+paints. A closed chip says what is handled beneath it as ◇ and a total, a branch why it
+has its color after Time, and every rule stands in one index, *Handled*, at `/handled`.
+→ [record](adr/0135-a-handled-part-keeps-its-true-color-and-every-surface-says-by-what.md)
+
+### ADR-0136 — How the wall is used is one file the package ships, read at `/help`
+
+One Markdown file, `src/little_sister/help/using-the-wall.md`, says what a viewer sees on
+the wall and what a click does — chips and boxes, the band, a head's buttons, a node's
+tabs, what is handled, each group of the settings menu, the kiosk. The package ships it,
+the page draws it at `/help` as a handbook is, its headings anchored, and the settings
+menu's foot links it, in the room the last column leaves; the README and the
+specification point to it, and a test holds it to the menu it describes.
+→ [record](adr/0136-how-the-wall-is-used-is-one-file-the-package-ships.md)
+
+### ADR-0137 — A deployment says in a table how a part of its tree counts above it
+
+`config/aggregation.yaml`'s rules, every root's read, the last-named first, each named,
+noted and dated: a table per status that never reorders — the cap, healing, the floor, a
+part left out — at the top of a part `under:` or `tag:` picks, on its nodes' lines, or
+over its children while fewer than N fail; the first written for a place decides, whole.
+The table comes last, after damping, and never beneath staleness; `/little-sister` is
+out of reach; what cannot apply is named at the start. Every part keeps its true color
+under §, and `contribution.by` says `aggregation`, on an entry too (2.11.0).
+→ [record](adr/0137-a-deployment-says-in-a-table-how-a-part-counts-above-it.md)
+
+### ADR-0138 — A viewer may pack a level's boxes into its columns
+
+A look, `boxes`: `rows`, the library's, ADR-0056's rows, or `packed`, each box of a grid
+of open boxes beneath the shortest column — the leftmost within 32 pixels — so that a
+tall box leaves no gap beside it, a run of chips in one column as a box, and the plan
+priced for packing. A node takes its column when the page is drawn and when its level's
+columns change, and keeps it as a box and as a chip through a refresh, a click and its
+own growth; a packed wall is shown once drawn; the page's order stays the source's.
+→ [record](adr/0138-a-viewer-may-pack-a-levels-boxes.md)
+
+### ADR-0139 — A node carries every tag written for it or above it
+
+A tag is a word a deployment writes for a node — a fact about the subject, never its
+status — in a check's file, its `subnodes:` block or `nodes.yaml`, and a node carries
+every tag written for it or above it, added up, and never one from beneath. `tags.yaml`
+names the known tags, each with what it means. The *About* card shows them as chips, a
+wall filtered by one draws the tagged parts as its cards, `tag:` picks for the rules,
+the actions and the Events page, and the envelope carries `tags` (2.12.0).
+→ [record](adr/0139-a-node-carries-every-tag-written-for-it-or-above-it.md)
+
+### ADR-0140 — A node's notes stand on a tab of their own, and its hand-off carries the newest
+
+An admin writes a note of its own on a node or on one of its lines, changed while it is
+the newest; a pin's note joins the same notes as the pin is set. *Notes*, a tab after
+History with its count, lists them newest first with what the node showed then; a
+line leads there too, a node's Copy document carries the newest, and the page of a
+path no node stands at lists its notes. `reason` became `note` in the model, the form
+and `pins.json` at once; the notes are `var/state/notes.json`, retired on the tick.
+→ [record](adr/0140-a-nodes-notes-stand-on-a-tab-of-their-own.md)
+
+### ADR-0141 — Every pin is one thing with a kind, in one file, and the envelope lists what handles a part
+
+Every pin a person sets is one thing with a kind — maintenance and *seen* so far — in
+one list, `var/state/pins.json`, beside its node's path or its line's, with an id of its
+own; `maintenance.json` is retired, a clean break that drops the pins standing at the
+upgrade. The envelope is at `schema_version` 3: `handled` lists every pin and every
+acting configured rule on a part, `contribution.rule` names the one that decided, and
+`maintenance` is gone. Each act has a route and a permission named for its kind,
+`Identity.may(<act>)`.
+→ [record](adr/0141-every-pin-is-one-thing-with-a-kind-and-the-envelope-lists-what-handles-a-part.md)
+
+### ADR-0142 — A failure marked seen counts as OK above until it changes
+
+A person who has looked into a failure marks it seen with the ringed check: a pin of the
+kind `seen` on a line or on a node's own failure, bound to the status it was set at and
+to its occurrence — the field a type names as `occurrence=`, else its reading's
+identity, else the failing stretch. Its part keeps its color and counts as OK above. It
+ends at a recovery, a worsening, a new occurrence, when its part is no longer reported,
+at an end it was given or by hand, each end a row saying why. A head's ✓ marks every
+failure at and beneath it, each its own.
+→ [record](adr/0142-a-failure-marked-seen-counts-as-ok-above-until-it-changes.md)

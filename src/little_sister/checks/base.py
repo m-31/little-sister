@@ -14,7 +14,9 @@ tempos of their own declares them as units — :class:`Unit`, :meth:`Check.units
 from __future__ import annotations
 
 import abc
+import hashlib
 import inspect
+import json
 import logging
 import re
 import sys
@@ -25,20 +27,26 @@ from fractions import Fraction
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
-from little_sister import secrets
+from little_sister import handbooks, secrets
+from little_sister import tags as node_tags
 from little_sister.checks.metadata import (
     NODE_DEFAULTS_KEYS,
     SUBNODE_KEYS,
     Stated,
     Statements,
     parse_show_when_quiet,
+    parse_subnode_details,
     parse_subnode_looks,
+    parse_subnode_tags,
     parse_subnodes,
     read_stated,
     resolve_text,
     unknown_keys,
 )
 from little_sister.checks.output import failure_text
+from little_sister.details import Details
+from little_sister.details import given as given_details
+from little_sister.details import read as read_details
 from little_sister.errors import CheckError as CheckError
 from little_sister.errors import ConfigError
 from little_sister.grading import (
@@ -65,7 +73,9 @@ from little_sister.line_template import (
     Declarations,
     TemplateError,
     Wording,
+    absent,
     declare,
+    field_of,
     read_display,
     render,
     resolve,
@@ -92,6 +102,7 @@ from little_sister.reasons import (
 from little_sister.reasons import (
     plain as _plain,
 )
+from little_sister.render import names_a_status
 from little_sister.rules import RULE_WORD, Rule
 from little_sister.spans import format_duration, format_span
 from little_sister.status import StatusCode, join_path, leaf_name, split_path
@@ -205,7 +216,9 @@ class CheckResult:
     nothing could have declared: the **dynamic** one, a volume or a repository the
     run discovered. A stamped label is read per field: where the resolved map says
     nothing for that name, and — whatever the map says — on a child that says
-    ``dynamic`` (below).
+    ``dynamic`` (below). It is the type's text as much as a declared one, so the
+    ``label_tokens`` the type offers expand in it too (ADR-0133 decision 2); a
+    ``{default}`` means nothing there, and stays as written.
 
     ``order`` is a **declared rank** among a node's siblings (ADR-0055). Siblings
     render alphabetically, which destroys the one order a severity band set has:
@@ -289,6 +302,25 @@ class CheckResult:
     nothing is read by its name, as every node is that says nothing — the
     default. Like ``name`` and the labels it is **ignored on the root**, which a
     check's ``path:`` names.
+
+    ``handbook`` is a label as ``about`` is (ADR-0133 decision 3): what a team
+    reads at length about the child, on a tab of its own — text, or a single line
+    ending in ``.md`` that names a Markdown file the type's package ships, read
+    against the package. Like the labels it fills an empty field once, beneath what
+    is declared for the child's name and ``nodes.yaml``, the type's ``label_tokens``
+    expanded in it, a file's text too; and it is ignored on the root, whose handbook
+    is its check file's.
+
+    ``details`` are the details of the object this node stands for (ADR-0133
+    decision 6) — an account, a region, a function, a host, a bay — named values,
+    each a line of Markdown under a key the type chooses, in the order its node's
+    *About* card shows them, first: ``details={"function": "`batch-import`",
+    "region": "eu-west-1"}``. They are **not** a label: like ``description`` they are
+    written through on every run, the root's too, so what the last run said is what
+    the node holds, and they are the node's own — given down to no node beneath it,
+    where what the deployment gives is. On a node two checks share they are withheld,
+    as ``report`` is. A value that is empty says nothing and is left out; one that is
+    not text is the check author's error.
     """
     code: StatusCode | None = None
     reason: ReasonInput = field(default_factory=list)
@@ -305,6 +337,8 @@ class CheckResult:
     for_record: Sequence[ReasonEntry] = ()
     children_complete: bool = False
     dynamic: bool = False
+    handbook: str = ""
+    details: Mapping[str, str] = field(default_factory=dict)
     #: Derived in :meth:`__post_init__` — the one internal form (ADR-0036).
     reason_entries: tuple[ReasonEntry, ...] = field(
         init=False, default=(), repr=False, compare=False)
@@ -331,6 +365,10 @@ class CheckResult:
             raise CheckError(
                 "dynamic is True or False: a child says that a run names it, or "
                 f"says nothing — not {self.dynamic!r} (ADR-0118)")
+        # The object's details, read once into the form the engine writes: each value
+        # text on one line, an empty one left out (ADR-0133 decision 6).
+        object.__setattr__(self, "details", dict(given_details(
+            self.details, f"the details of {self.name or 'the result'}")))
         # Normalize where the outside world enters (ADR-0026): five accepted input
         # forms, one internal one. A malformed slug is the check author's error and
         # surfaces as a failing check, not as a silent re-key.
@@ -739,6 +777,12 @@ class Check(abc.ABC):
 
     def __init__(self, *, path: str, description: str = "",
                  about: str = "", title: str = "", order: int | None = None,
+                 handbook: str = "",
+                 details: Mapping[str, object] | Details | None = None,
+                 subnode_details: Mapping[str, Mapping[str, object] | Details]
+                 | None = None,
+                 tags: Iterable[str] | None = None,
+                 subnode_tags: Mapping[str, Iterable[str]] | None = None,
                  show_when_quiet: bool | None = None,
                  subnode_show_when_quiet: Mapping[str, bool] | None = None,
                  subnode_labels: Mapping[str, Mapping[str, str]] | None = None,
@@ -760,6 +804,7 @@ class Check(abc.ABC):
                  line_forms: Mapping[str, object] | None = None,
                  line_words: Mapping[str, object] | None = None,
                  line_fields: Mapping[str, object] | None = None,
+                 occurrence: str = "",
                  display: Mapping[str, str] | None = None,
                  gradings: Mapping[str, object] | None = None,
                  configured: Mapping[str, Any] | None = None,
@@ -776,6 +821,31 @@ class Check(abc.ABC):
         # is a declaration, not a silence.
         self.about = about
         self.title = title
+        # The check's own node's handbook (ADR-0133 decision 3), as text: a file its
+        # file named was read against the configuration directory when the check
+        # was built from it (`from_config`), and what a constructor is handed
+        # directly is the text itself.
+        self.handbook = handbook
+        # The deployment's details (ADR-0133 decision 6): for the check's own node,
+        # which `nodes.yaml` wins over key by key, and under each aspect's name in the
+        # `subnodes:` block, which the engine writes on the child of that name — and
+        # which, unlike the labels, hold for every node beneath. Kept as written, an
+        # empty value among them: it says the key has no value there, nor beneath.
+        self.details: Details = _stated_details(details, "details")
+        self.subnode_details: dict[str, Details] = {
+            str(name): stated for name, value in (subnode_details or {}).items()
+            if (stated := _stated_details(value, f"subnodes.{name}.details"))}
+        # The deployment's tags (ADR-0139 decision 2): for the check's own node, and
+        # under each aspect's name in the `subnodes:` block, which the engine writes
+        # on the child of that name as it writes its details. Each adds up with every
+        # other place's and holds for every node beneath; a word that is no tag is
+        # not read, the startup record naming it.
+        self.tags: node_tags.Tags = node_tags.given(
+            tags, f"the check {self.path}'s tags")
+        self.subnode_tags: dict[str, node_tags.Tags] = {
+            str(name): stated_tags for name, value in (subnode_tags or {}).items()
+            if (stated_tags := node_tags.given(
+                value, f"the check {self.path}'s subnodes.{name}.tags"))}
         self.order = order
         self.show_when_quiet = show_when_quiet
         # The per-subnode `show_when_quiet` map the engine applies by child
@@ -829,8 +899,14 @@ class Check(abc.ABC):
         # time**: a label freezes at the node's first fill (ADR-0025 decision 3),
         # so a token whose value could change between runs was never legal in one.
         # A structure that resolves once cannot express the illegal thing.
+        _refuse_a_taken_token(label_tokens)
         self.subnode_labels: dict[str, dict[str, str]] = _resolve_subnode_labels(
-            subnode_labels, subnode_defaults, label_tokens)
+            subnode_labels, _read_declared_handbooks(type(self), subnode_defaults),
+            label_tokens)
+        # The same values, kept for what a run hands over: a label a child's result
+        # carries is the type's text as much as one it declares, so the engine
+        # expands them there too (ADR-0133 decision 2) — fixed here all the same.
+        self.label_tokens: dict[str, str] = dict(label_tokens or {})
         self.frequency_seconds = frequency_seconds
         self.timeout_seconds = timeout_seconds
         # The budgeted failure retry (ADR-0033, ADR-0125): while what the last
@@ -918,6 +994,21 @@ class Check(abc.ABC):
                 {name: text for name, text in written.items() if name in WINDOW_FORMS})
         except TemplateError as error:
             raise CheckError(str(error)) from error
+        # **What tells one of its failures from the next** (ADR-0142): a field of
+        # its records it declares in `line_fields`, where its readings' identity
+        # does not — a function's held error, whose time `error.at` holds while each
+        # run reads it again under an identity of its own. A *seen* on a line is
+        # bound to it, and a new one ends that. A name the type does not declare is
+        # refused here, as a template naming one is, so its own tests meet it.
+        if occurrence and occurrence not in {
+                item.name for item in self.line_declarations.fields}:
+            named = type(self).type_name or type(self).__name__
+            fields = ", ".join(item.name for item in self.line_declarations.fields)
+            raise CheckError(
+                f"{named} names {occurrence!r} as what tells one occurrence from the "
+                f"next (occurrence=), a field it does not declare (line_fields): "
+                + (f"it declares {fields}" if fields else "it declares none"))
+        self.occurrence = occurrence
         # How many of a subject's readings the node that stands for it shows
         # (ADR-0092 decision 7): this check's own answer, or `None` to leave
         # `settings.yaml`'s `reading_cap` in force — resolved by the page, the way
@@ -1318,8 +1409,9 @@ class Check(abc.ABC):
         value escaped as :func:`plain` escapes one, a link's target written as a
         URL, a time in the configured zone, and a value that is not there as ``—``.
         The line carries the reading's record as its ``data``, the reading's subject
-        as its own and the form it was written from; ``slug``, ``code`` and
-        ``running`` are the line's, as on any :class:`Entry`.
+        as its own, the form it was written from, and its ``occurrence`` — the field
+        this type names for it, else the reading's identity (ADR-0142); ``slug``,
+        ``code`` and ``running`` are the line's, as on any :class:`Entry`.
 
         A line a grading decided is handed its :class:`~little_sister.grading.Verdict`
         (ADR-0131 decision 1): the line takes its code from it, names the grading it
@@ -1374,7 +1466,28 @@ class Check(abc.ABC):
                          beneath=wording.beneath),
             code=code, running=running, subject=reading.subject,
             data=dict(reading.record), form=form,
-            grading="" if verdict is None else verdict.grading)
+            grading="" if verdict is None else verdict.grading,
+            occurrence=self._occurrence_of(reading))
+
+    def _occurrence_of(self, reading: Measurement) -> str:
+        """What tells the failure a line says of ``reading`` from the next one
+        (ADR-0142): the field this type names (``occurrence=``), where the record
+        holds it, and else the reading's identity — empty where neither is there,
+        and the line's failure is the failing stretch it stands in. A value that is
+        no text is written as its JSON, and one too long or not plain enough to
+        travel as a line's occurrence stands as its digest, so that two values are
+        never told apart less than they are."""
+        if self.occurrence:
+            value = field_of(reading.record, self.occurrence)
+            if not absent(value):
+                said = (value if isinstance(value, str)
+                        else json.dumps(value, sort_keys=True, default=str))
+                try:
+                    check_subject(said, "an occurrence")
+                except ReasonError:
+                    said = "sha256:" + hashlib.sha256(said.encode()).hexdigest()
+                return said
+        return reading.identity
 
     @abc.abstractmethod
     def measure(self) -> Measurement | Sequence[Measurement]:
@@ -1486,7 +1599,8 @@ class Check(abc.ABC):
         loader, naming neither the file nor the type; a `CheckError` naming both
         is the difference between a five-minute fix and an afternoon.
         """
-        common = _parse_common(config)
+        common = _read_stated_handbooks(
+            _parse_common(config), handbooks.configuration_directory(base_dir))
         extra = cls._extra_from_config(config, base_dir)
         try:
             return cls(**common, **extra)
@@ -1707,7 +1821,28 @@ def _keywords_refused_by(cls: type[Check], kwargs: dict[str, Any]) -> list[str]:
     return sorted(key for key in kwargs if key not in parameters)
 
 
-_LABEL_FIELDS = ("title", "about")
+_LABEL_FIELDS = ("title", "about", "handbook")
+
+
+def _refuse_a_taken_token(tokens: Mapping[str, str] | None) -> None:
+    """Refuse a label token by a name that is taken, which would never expand as the
+    type means it. ``{default}`` is where a deployment's text puts the type's own
+    (ADR-0025 decision 5), substituted before any token, so a token named ``default``
+    was overridden in silence. ``{ok}``, ``{warn}``, ``{error}``, ``{maintenance}``
+    and ``{undefined}``, in either case, are how a node's text names a status, which
+    the page draws as its sign (ADR-0133 decision 5) — and a token by one of those
+    names would be expanded before the page ever saw it."""
+    for name in tokens or {}:
+        if str(name) == "default":
+            raise CheckError(
+                "label_tokens offers 'default', which is where a deployment's text "
+                "puts the type's own: {default} is replaced before any token, so a "
+                "type's token takes another name")
+        if names_a_status(str(name)):
+            raise CheckError(
+                f"label_tokens offers {name!r}, which a node's text names a status "
+                f"by: the page draws {{{name}}} as that status's sign, so a type's "
+                f"token takes another name")
 
 
 def _resolve_subnode_labels(
@@ -1758,9 +1893,9 @@ def _declared_show_when_quiet(
     the same ``subnode_defaults`` entries that declare its labels (ADR-0063 §2).
 
     The type's half of the block is therefore one map shaped like the block
-    itself — ``name -> {title, about, show_when_quiet}`` — and an aspect that is a
-    roster *by construction* is declared once in the package instead of once per
-    account per installation in somebody's ``nodes.yaml``.
+    itself — ``name -> {title, about, handbook, show_when_quiet}`` — and an aspect
+    that is a roster *by construction* is declared once in the package instead of
+    once per account per installation in somebody's ``nodes.yaml``.
 
     **Only for the names that state it**, like the configuration reader beside it:
     absence is the tri-state's third value and has to stay absent, or a type
@@ -1800,6 +1935,51 @@ def _declared_statements(declared: Mapping[str, Mapping[str, object]] | None,
     return Statements(own=read_stated(own or {}, "node_defaults"), by_name=by_name)
 
 
+def _read_stated_handbooks(common: dict[str, Any], directory: Path) -> dict[str, Any]:
+    """The common fields with each handbook the check's file states read
+    (ADR-0133 decision 3): its own node's ``handbook:`` and each aspect's under
+    ``subnodes:``, a file's name read against ``directory`` — the configuration
+    directory the file belongs to — and text kept as written."""
+    where = f"the check {common['path']}"
+    common["handbook"] = handbooks.resolve(common["handbook"], directory, where=where)
+    common["subnode_labels"] = {
+        name: {**labels, "handbook": handbooks.resolve(
+            labels.get("handbook", ""), directory,
+            where=f"{where}'s subnodes.{name}")}
+        for name, labels in common["subnode_labels"].items()}
+    return common
+
+
+def _read_declared_handbooks(
+        kind: type, declared: Mapping[str, Mapping[str, object]] | None,
+) -> Mapping[str, Mapping[str, object]] | None:
+    """A type's ``subnode_defaults`` with each handbook it declares read (ADR-0133
+    decision 3): a file's name against the type's own package, which ships it, and
+    text kept as written — so that ``{default}`` in a deployment's handbook places
+    the type's text."""
+    if not declared:
+        return declared
+    package = handbooks.package_directory(kind)
+    name_of = getattr(kind, "type_name", "") or kind.__name__
+    return {
+        name: ({**entry, "handbook": handbooks.resolve(
+                    str(entry["handbook"]), package,
+                    where=f"the type {name_of}'s {name}")}
+               if isinstance(entry, Mapping) and entry.get("handbook") else entry)
+        for name, entry in declared.items()}
+
+
+def _stated_details(value: Mapping[str, object] | Details | None,
+                    where: str) -> Details:
+    """The deployment's details as a check is handed them — read from its file
+    (:func:`~little_sister.details.read`), or given to its constructor as a mapping or
+    as pairs, which are read the same way, so that a check built in code keeps them as
+    a file would."""
+    if value is None:
+        return ()
+    return read_details(value if isinstance(value, Mapping) else dict(value), where)
+
+
 def _undeclared_keys(declared: Mapping[str, Mapping[str, object]] | None,
                      own: Mapping[str, object] | None) -> list[str]:
     """The keys a type's declarations carry that the library does not read, for one
@@ -1832,6 +2012,21 @@ def _parse_common(config: dict[str, Any]) -> dict[str, Any]:
         "description": str(config.get("description", "")),
         "about": str(config.get("about", "")),
         "title": str(config.get("title", "")),
+        # The check's own node's handbook (ADR-0133 decision 3) as the file states
+        # it: text, or a Markdown file's name, which `from_config` reads against
+        # the configuration directory the file belongs to.
+        "handbook": str(config.get("handbook", "")),
+        # The deployment's details for the check's own node and for each aspect under
+        # `subnodes:` (ADR-0133 decision 6), read for every type as the labels are,
+        # each value as written: one YAML reads as anything but text fails the load,
+        # naming the key, since what it would show is not what the file says.
+        "details": read_details(config.get("details"), "details"),
+        "subnode_details": parse_subnode_details(config),
+        # Its tags for the check's own node and for each aspect under `subnodes:`
+        # (ADR-0139 decision 2), read for every type as the details are; a word that
+        # is no tag is not read, and the startup record names where it is written.
+        "tags": node_tags.read(config.get("tags"), f"the check {path}'s tags"),
+        "subnode_tags": parse_subnode_tags(config, f"the check {path}"),
         # A rank beside the labels it sits with (ADR-0055). Read only when the key
         # is *present*, so an absent one stays "nobody said" while a stated `0`
         # reaches the tree; a non-numeric one fails the load rather than being

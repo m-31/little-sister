@@ -180,8 +180,9 @@ class OriginRef:
 class Source:
     """One source in the assembled policy, and who is answerable for it.
 
-    ``by`` is what makes the ``/system`` readout worth having: a request blocked inside
-    somebody else's package is otherwise undebuggable from the running instance.
+    ``by`` is what makes the ``/system/installed`` readout worth having: a request
+    blocked inside somebody else's package is otherwise undebuggable from the running
+    instance.
     """
     value: str
     by: str
@@ -246,8 +247,8 @@ class Policy:
         return Policy(directives=tuple(directives))
 
 
-#: Accepted contributions, in registration order — so a deployment reading ``/system``
-#: sees them in the order its wrapper made them.
+#: Accepted contributions, in registration order — so a deployment reading
+#: ``/system/installed`` sees them in the order its wrapper made them.
 _contributions: list[Contribution] = []
 
 
@@ -262,9 +263,9 @@ def allow(directive: str, source: str | OriginRef, *, by: str) -> None:
         csp.allow("connect-src", "https://api.example-tracker.com", by="ls_tickets")
         csp.allow("connect-src", csp.origin_of("tickets.base_url"), by="ls_tickets")
 
-    ``by`` names the contributor, for the ``/system`` readout. A refusal is a warning
-    and a skip: a malformed source costs the deployment its feature, never its
-    monitoring — and never quietly widens the policy either.
+    ``by`` names the contributor, for the ``/system/installed`` readout. A refusal is
+    a warning and a skip: a malformed source costs the deployment its feature, never
+    its monitoring — and never quietly widens the policy either.
     """
     if directive not in CONTRIBUTABLE:
         known = ", ".join(sorted(CONTRIBUTABLE))
@@ -281,8 +282,8 @@ def allow(directive: str, source: str | OriginRef, *, by: str) -> None:
     if not by or not by.strip():
         logger.warning(
             "csp: a contribution to %r names no contributor — `by` is what the "
-            "/system readout answers \"who asked for this source?\" with, so it is "
-            "required (ADR-0048)", directive)
+            "/system/installed readout answers \"who asked for this source?\" with, "
+            "so it is required (ADR-0048)", directive)
         return
     if isinstance(source, str):
         accepted = _package_origin(source, directive, by)
@@ -492,7 +493,7 @@ def _package_origin(source: str, directive: str, by: str) -> str | None:
     What comes back is the origin **as the parse sees it** — a scheme and host are
     case-insensitive to a browser, so `HTTPS://A.EXAMPLE` is accepted but stored
     lower-cased; otherwise two packages naming one host in different cases would put
-    two entries in the policy and two lines on ``/system``.
+    two entries in the policy and two lines on ``/system/installed``.
     """
     text = source.strip()
     if not _usable_token(text):

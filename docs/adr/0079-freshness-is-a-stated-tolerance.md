@@ -12,7 +12,8 @@
   [ADR-0075](0075-a-check-declares-what-it-costs.md) (what startup refuses, and the
   shape of a refusal that names the checks),
   [ADR-0044](0044-run-facts-on-the-node.md) (the `run` object this adds one field
-  to), [ADR-0008](0008-json-output-api.md) (the envelope that publishes the verdict)
+  to), [ADR-0080](0080-the-envelope-is-the-snapshot-published.md) (the envelope that
+  publishes the verdict)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context

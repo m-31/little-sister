@@ -1,23 +1,28 @@
 # ADR-0072 — The instance reports on itself through one seam, in lines that clear
 
 - **Status:** Accepted
-- **Date:** 2026-10-04 (accepted 2026-09-05)
+- **Date:** 2026-10-25 (accepted 2026-09-05)
 - **Related:** [ADR-0005](0005-dashboard-freshness-and-self-monitoring.md) (the
-  heartbeat and staleness, untouched), [ADR-0024](0024-dashboard-layout.md)
+  heartbeat and staleness, untouched), [ADR-0056](0056-stable-useful-dashboard-flow.md)
   (the strip that draws the heartbeat), [ADR-0031](0031-deployment-config-directory.md)
   (§7, the one line the beat used to carry), [ADR-0036](0036-addressable-reasons.md)
   / [ADR-0042](0042-entries-carry-their-own-code.md) (entries with slugs and codes,
   which the lines are), [ADR-0064](0064-the-resolver-is-a-registration.md) (the
   registration rules), [ADR-0071](0071-what-a-restart-keeps-is-a-directory-of-files.md)
   (the first contributor), [ADR-0100](0100-system-is-two-views.md) (the *Installed*
-  view of `/system`, which prints each package's contributors)
+  view of `/system`, which prints each package's contributors),
+  [ADR-0135](0135-a-handled-part-keeps-its-true-color-and-every-surface-says-by-what.md)
+  (decision 2, maintenance's own words — what a pin holds in maintenance, *silenced*
+  being the word of the kind that holds a flapping thing; decision 8, *Handled*, which
+  lists every pin), [ADR-0142](0142-a-failure-marked-seen-counts-as-ok-above-until-it-changes.md)
+  (*seen*, the acknowledgment a person sets)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
 
 `/little-sister` is the engine's own node: it beats every scheduler tick, so a
 stalled scheduler shows as staleness (ADR-0005), and the dashboard draws it as the
-status strip (ADR-0024). Beyond liveness it could say exactly one thing, fixed at
+status strip (ADR-0056 decision 3). Beyond liveness it could say exactly one thing, fixed at
 construction — that no checks are configured (ADR-0031 §7). Everything else the
 process knows about its own state went to the log: a maintenance file that could
 not be written, a pool with every worker busy, a run that outgrew its period. A
@@ -58,7 +63,7 @@ take the scheduler down with it.
    (a reloading server), a claim from another package refuses at startup naming
    both, `replace=True` says the replacement is the point and is recorded —
    ADR-0064's rules, for ADR-0064's reason: the name is the path a pin is written
-   against, and import order must not decide what a pin silences. The flat view
+   against, and import order must not decide what a pin holds. The flat view
    `current_lines()` still prefixes each slug with the name, for a reader that
    wants the whole report in one sequence.
 
@@ -129,18 +134,20 @@ take the scheduler down with it.
   this process is a line, or its call site says why not) is the roadmap's, not
   this record's.
 - Pinning a line silences the instance's own warning, as pinning any entry does.
-  That is an operator's call, and it is visible on `/maintenance` like every pin.
+  That is an operator's call, and it is visible on *Handled* like every pin
+  (ADR-0135 decision 8).
 
 ## Alternatives considered
 
 - **Each fact its own node under `/little-sister`.** Rejected: a node per fact
   would put the engine's internals in the tree the dashboard lays out, and the
-  strip exists to keep the self-monitor out of the grid (ADR-0024).
+  strip exists to keep the self-monitor out of the grid (ADR-0056 decision 3).
 - **A probing report** — let a contributor measure when asked. Rejected for the
   thread it runs on; the one rule that keeps the tick a tick is that reading a
   report costs nothing.
 - **Remember a line until somebody clears it.** Rejected: that is acknowledgment,
-  a separate primitive with its own record to come; a report that had to be
-  cleared by hand would be a report nobody trusts after the first stale one.
+  a separate primitive, a pin of a kind of its own that a person sets — *seen*
+  (ADR-0142); a report that had to be cleared by hand would be a report nobody
+  trusts after the first stale one.
 - **Prose reasons, as the no-checks warning was.** Rejected: prose has no slug, so
   nothing on it can be pinned, and a re-wording would move a pin that existed.

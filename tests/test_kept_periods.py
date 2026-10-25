@@ -37,7 +37,8 @@ from little_sister import tree as tree_module
 from little_sister.checks.base import Check, CheckResult, Measurement
 from little_sister.copy_status import TimeStyle
 from little_sister.engine import Engine
-from little_sister.maintenance import MaintenanceEntry, MaintenanceStore
+from little_sister.pins import MAINTENANCE as PIN_MAINTENANCE
+from little_sister.pins import Pin, PinStore
 from little_sister.reasons import Entry
 from little_sister.state import EVENTS_FILE, StateLayer
 from little_sister.status import HEARTBEAT_PATH, StatusCode
@@ -49,6 +50,7 @@ from little_sister.tree import (
     events_from_payload,
 )
 from tests.page_tree import Element, parse
+from tests.test_branch_periods import as_before_the_key
 
 OK, WARN, ERROR = StatusCode.OK, StatusCode.WARN, StatusCode.ERROR
 MAINTENANCE, UNDEFINED = StatusCode.MAINTENANCE, StatusCode.UNDEFINED
@@ -97,8 +99,12 @@ def _codes(shows: StatusCode, reported: StatusCode | None = None
 
 
 def _kept(tree: StatusTree) -> dict[str, Any]:
-    """What the tree writes to its file, through the file's own shape."""
+    """What the tree writes to its file, through the file's own shape — its table as
+    this record keeps it, without the period of what a branch shows, which is
+    ADR-0132's and ``tests/test_branch_period_kept.py``'s
+    (:func:`as_before_the_key`)."""
     kept: dict[str, Any] = json.loads(json.dumps(tree.events_payload()))
+    kept["nodes"] = as_before_the_key(kept["nodes"])
     return kept
 
 
@@ -148,7 +154,7 @@ def _said(period: StatusPeriod) -> tuple[StatusCode, datetime, bool]:
     return period.code, period.since, period.before
 
 
-def _pin(note: str) -> MaintenanceEntry:
+def _pin(note: str) -> Pin:
     """A pin as the store holds one."""
     tree = StatusTree()
     tree.set_maintenance("/any", note, expires_at=_SOON, set_by="lex")
@@ -157,9 +163,9 @@ def _pin(note: str) -> MaintenanceEntry:
     return entry
 
 
-def _pin_from(minutes: int, note: str = "planned") -> MaintenanceEntry:
+def _pin_from(minutes: int, note: str = "planned") -> Pin:
     """A pin as the store holds one that was set at ``minutes``, and not edited."""
-    return MaintenanceEntry(reason=note, set_at=_at(minutes),
+    return Pin(PIN_MAINTENANCE, note=note, set_at=_at(minutes),
                             expires_at=_SOON, set_by="lex")
 
 
@@ -1111,8 +1117,8 @@ class PinTests(TestCase):
         assert mine is not None
         began = _current(tree)
         # the store's copy was edited elsewhere, and says an older creation
-        tree.adopt_maintenance({PATH: MaintenanceEntry(
-            reason="planned", set_at=_at(8), expires_at=mine.expires_at,
+        tree.adopt_maintenance({PATH: Pin(PIN_MAINTENANCE,
+            note="planned", set_at=_at(8), expires_at=mine.expires_at,
             set_by="ada", created_at=_at(3), created_by="ada")})
         self.assertEqual(_last_row(tree).cause, "pin-edited")
         self.assertEqual(_said(_current(tree)), _said(began))
@@ -1125,8 +1131,9 @@ class PinTests(TestCase):
         # its own names the same instant, and the kept log spells it its one way
         there = _at(3).astimezone(timezone(timedelta(hours=2)))
         new = _started(_file(nodes={}))
-        new.restore_maintenance({PATH: MaintenanceEntry.from_dict({
-            "reason": "planned", "set_at": there.isoformat(sep=" "),
+        new.restore_maintenance({PATH: Pin.from_dict({
+            "id": "0123456789abcdef", "kind": "maintenance",
+            "note": "planned", "set_at": there.isoformat(sep=" "),
             "expires_at": instants.stamp(_SOON), "set_by": "lex"})})
         self.assertEqual(_kept(new)["nodes"][PATH]["since"], _spelled(3))
 
@@ -1383,7 +1390,7 @@ class StartTests(TestCase):
     def test_a_start_dates_a_pin_its_log_does_not_hold_by_the_store(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             state = StateLayer(directory)
-            MaintenanceStore(state).save({"/x/probe": _pin_from(3)})
+            PinStore(state).save({"/x/probe": _pin_from(3)})
             state.write(EVENTS_FILE, _file(nodes={
                 "/x/probe": {**_codes(OK), "since": _spelled(1), "before": True}}))
             app_module._restore_state(_Roots("/x"), state)  # type: ignore[arg-type]

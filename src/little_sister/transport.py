@@ -15,8 +15,8 @@ separate things here.
 It also imports nothing from ``little_sister``, for the reason
 :mod:`little_sister.errors` gives for its own existence: importing the ``checks``
 package registers every built-in check type as a side effect, and this module is used
-by a built-in check, by the link prober and by installed packages, none of which has
-any business triggering that.
+by a built-in check and by installed packages, neither of which has any business
+triggering that.
 
 What is deliberately **not** here is any mapping from a :class:`Fault` to a
 ``StatusCode``. For an ``http`` check the endpoint *is* the subject of the
@@ -49,15 +49,10 @@ class Fault(Enum):
     A ``404`` is about the thing being measured; a list arriving where an object was
     promised is about the reading, or about the API.
 
-    **Not the link prober's** :class:`~little_sister.link_probe.Verdict`, which is also
-    three-valued and is about something else. That one answers *what is true of the
-    target* — alive, gone, or no answer — and it is a reading a page shows.
-    This one answers *what happened when we asked*, and nothing here says whether the
+    It answers *what happened when we asked*, and nothing here says whether the
     subject is healthy: for an ``http`` check a failure to answer **is** the
     measurement, while for a check reading an API to grade something else the same
-    failure says nothing about the subject (ADR-0058, `implementing-checks.md` §7). Two
-    three-valued types in one process is deliberate, not duplication — and if either
-    grows a member, this paragraph is where the distinction is written down.
+    failure says nothing about the subject (ADR-0058, `implementing-checks.md` §7).
     """
 
     #: We could not ask — a 5xx, a timeout, a transport failure. Asking again could

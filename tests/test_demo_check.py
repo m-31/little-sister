@@ -21,7 +21,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest import TestCase, mock
 
-from little_sister import self_report, slots
+from little_sister import handbooks, self_report, slots
 from little_sister.actions import PLACEMENTS, load_actions
 from little_sister.checks import load_checks
 from little_sister.checks.base import (
@@ -30,11 +30,16 @@ from little_sister.checks.base import (
     Measurement,
     parse_duration,
 )
-from little_sister.config import DEFAULT_BRANCH_CAP, load_config
+from little_sister.config import load_config
 from little_sister.engine import Engine
-from little_sister.first_look import FirstLooks, statement
+from little_sister.first_look import BIG_LEVEL, FirstLooks, draw, statement
 from little_sister.links import load_links
-from little_sister.nodes import NodeMeta, load_nodes, resolve_metadata
+from little_sister.nodes import (
+    NodeMeta,
+    load_nodes,
+    resolve_metadata,
+    run_consistency_pass,
+)
 from little_sister.reasons import DERIVED_PREFIX, Entry
 from little_sister.status import (
     HEARTBEAT_PATH,
@@ -97,18 +102,15 @@ class DemoScenarioTests(TestCase):
         self.assertEqual({c.name for c in result.children},
                          {"disk", "memory", "load"})
 
-    def test_the_fleet_folds_two_quiet_boxes_and_one_steps_out_when_it_fails(self):
-        # five hosts of two leaves each: a box each, five quiet boxes on one level
-        # past the branch cap of three — the "+N more" the tab's map keeps open
-        # (ADR-0127 decision 9) — and mid-cycle one host's disk fails, so that box
-        # is never folded while it does
+    def test_the_fleet_is_twelve_hosts_and_one_disk_fills_mid_cycle(self):
+        # twelve hosts of two leaves each, a level that opened draws thirty-six boxes
+        # (the net's, `DemoFirstLookTests`) — and mid-cycle one host's disk fails
         quiet = SCENARIOS["fleet"](0.1 * 60, 60)
         self.assertEqual([c.name for c in quiet.children],
-                         ["node-01", "node-02", "node-03", "node-04", "node-05"])
+                         [f"node-{index:02d}" for index in range(1, 13)])
         for host in quiet.children:
             self.assertEqual([k.name for k in host.children], ["cpu", "disk"])
             self.assertTrue(all(k.code is StatusCode.OK for k in host.children))
-        self.assertGreater(len(quiet.children), DEFAULT_BRANCH_CAP)
         failing = SCENARIOS["fleet"](0.5 * 60, 60)
         failed = {host.name: [k.code for k in host.children]
                   for host in failing.children if any(
@@ -941,13 +943,34 @@ class DemoFirstLookTests(TestCase):
         self.assertIsNone(self.looks.writer("/network"))
         self.assertIs(self.looks.look("/network").chips, True)
 
-    def test_every_other_level_is_left_to_todays_density(self):
+    def test_every_other_level_is_left_to_the_built_in_look(self):
         said = {path for path in self.checks
                 if self.looks.look(path).chips is not None
                 or self.looks.look(path).fold_ok is not None}
         self.assertEqual(said, {"/ci/jobs", "/ci/workflows", "/ci/pipelines",
                                 "/hosts/nas", "/storage/backup", "/security/wiz"})
-        self.assertIsNone(self.looks.look("/hosts/fleet").chips)   # its *+N more*
+        self.assertIsNone(self.looks.look("/hosts/fleet").chips)   # the net's
+
+    def test_the_fleets_hosts_start_as_chips_by_the_net(self):
+        # nobody speaks for the fleet's twelve hosts, and opened, two leaves each,
+        # they would draw thirty-six boxes, past the net's: they start as chips, and
+        # the failure budget opens the one whose disk fills
+        fleet = self.checks["/hosts/fleet"]
+        hosts = {f"/hosts/fleet/node-{index:02d}" for index in range(1, 13)}
+        self.assertGreater(len(hosts) * 3, BIG_LEVEL)
+        for phase, opened in ((0.1, set()), (0.5, {"/hosts/fleet/node-04"})):
+            with self.subTest(phase=phase):
+                tree = StatusTree()
+                with mock.patch("tests.demo_check.time") as clock:
+                    clock.monotonic.return_value = fleet._start + phase * fleet._period
+                    Engine([fleet], tree).run_once()
+                settings = load_config(config_dir=_DEMO_CONFIG_DIR)
+                looks = FirstLooks([fleet], {}, settings, tree.named_by_run)
+                root = tree.snapshot("")
+                assert root is not None
+                drawn = draw(root, looks)
+                self.assertEqual(drawn.closed, hosts - opened)
+                self.assertEqual(drawn.budget, opened)
 
 
 class DemoCheckTests(TestCase):
@@ -972,6 +995,29 @@ class DemoCheckTests(TestCase):
                           "/ci/jobs",
                           "/network/vpn", "/storage/backup", "/hosts/nas",
                           "/hosts/fleet", "/security/audit", "/security/wiz"})
+
+    def test_the_demos_handbooks_are_read(self):
+        # ADR-0133 decision 3: the gateway's a file of the demo's handbook/ that its
+        # check's file names, and the services' text in nodes.yaml — and nothing on
+        # the startup record: no file nothing names, no link into either that leads
+        # nowhere (decision 4)
+        self_report.startup.forget()
+        self.addCleanup(self_report.startup.forget)
+        handbooks.forget()
+        self.addCleanup(handbooks.forget)
+        checks = load_checks(_DEMO_CONFIG_DIR)
+        gateway = next(check for check in checks if check.path == "/services/api")
+        self.assertEqual(
+            gateway.handbook,
+            (_DEMO_CONFIG_DIR / "handbook" / "api-gateway.md").read_text())
+        self.assertIn("## Sign in", gateway.handbook)
+        self.assertIn("(handbook#when-it-fails)", gateway.about)
+        declared = load_nodes(_DEMO_CONFIG_DIR)
+        self.assertIn("## Who to call", declared["/services"].handbook)
+        handbooks.note_unnamed([_DEMO_CONFIG_DIR])
+        run_consistency_pass(checks, resolve_metadata(checks, declared))
+        self.assertEqual([line.text for line in self_report.startup.lines()
+                          if line.slug.startswith("handbook")], [])
 
     def test_dropped_child_ages_to_stale(self):
         # the mechanism the `silent` scenario relies on: a child omitted from a

@@ -1,15 +1,13 @@
 # ADR-0055 — Sibling order: alphabetical, unless somebody declares a rank
 
 - **Status:** Accepted
-- **Date:** 2026-09-20 (accepted 2026-08-09)
-- **Supersedes:** the *Node sibling ordering* entry in
-  [`../decisions.md`](../decisions.md) (2026-06, no ADR of its own), whose decision
-  is restated in full below
+- **Date:** 2026-09-20 (accepted 2026-08-09; the name order decided 2026-06)
 - **Related:** [ADR-0016](0016-node-addressing.md) (`name` is the derived last path
   segment being sorted), [ADR-0012](0012-node-metadata.md) (node metadata — where a
-  deployment overrules what a check declared), [ADR-0024](0024-dashboard-layout.md)
-  (positional stability, which rests on this order),
-  [ADR-0008](0008-json-output-api.md) (the JSON envelope reads the same snapshot),
+  deployment overrules what a check declared),
+  [ADR-0056](0056-stable-useful-dashboard-flow.md) (positional stability, which rests
+  on this order), [ADR-0080](0080-the-envelope-is-the-snapshot-published.md) (the JSON
+  envelope reads the same snapshot),
   [ADR-0036](0036-addressable-reasons.md) (a node's entries are **virtual** children
   and keep the check's own order — untouched here)
 - **Register:** [`../decisions.md`](../decisions.md)
@@ -31,7 +29,7 @@ emits a set with a natural sequence of its own: a host's `disk / memory / cpu / 
 is a narrative, and alphabetical files `load` in the middle of it. The bands know their
 order; the display throws it away.
 
-The original decision considered a check's curated leaf order and rejected preserving
+The decision of 2026-06 considered a check's curated leaf order and rejected preserving
 it — "uniform alphabetical wins on predictability" — because the alternative on the
 table was *insertion* order, which a check produces by accident. A rank a check states
 **on purpose** is a different proposal, and it is the one this record accepts.
@@ -40,7 +38,7 @@ table was *insertion* order, which a check produces by accident. A rank a check 
 
 ### 1. Siblings sort by `(order, name)` — the original name order, with a rank in front
 
-*(the name half restated from the superseded entry, 2026-06; the rank is new, 2026-08-09)*
+*(the name half decided 2026-06; the rank 2026-08-09)*
 
 Sort siblings by their **declared rank** first and then by **name**,
 **case-insensitive** and **natural** — digit runs compared numerically, so `node2`
@@ -51,7 +49,7 @@ live tree keeps insertion order untouched.
 
 **Ordering by the live grade stays rejected**, as it was in 2026-06: a row that
 re-sorts on every poll cannot be read, and a card that moves when a status changes
-breaks [ADR-0024](0024-dashboard-layout.md)'s positional rule. A rank is not a status.
+breaks [ADR-0056](0056-stable-useful-dashboard-flow.md)'s positional rule. A rank is not a status.
 It says what a node is *about* — the severity it collects when something turns up in
 it — and a band's subject never moves, so neither does its rank.
 
@@ -121,8 +119,9 @@ hatch is real; it is just per node, not per set.
 
 The envelope reads the same snapshot, so a ranked node's `children` order moves there
 too. Order is not usually part of a contract
-([ADR-0008](0008-json-output-api.md)) and the change is **accepted**: a client that
-renders in received order will see it move, and what it sees is better.
+([ADR-0080](0080-the-envelope-is-the-snapshot-published.md)) and the change is
+**accepted**: a client that renders in received order will see it move, and what it
+sees is better.
 
 This one is not left implicit, because the spec had actually promised it: `openapi.yaml`
 said *children are returned in natural, case-insensitive name order*, and that sentence
@@ -145,11 +144,10 @@ published there beside them.
   host's aspects read as the narrative the check meant.
 - **Every existing deployment is unchanged on upgrade.** Nothing declares a rank until
   somebody writes one, and the default reproduces the old sort exactly.
-- [ADR-0024](0024-dashboard-layout.md)'s positional stability survives: a card's
-  position stays a function of **the node set** — now the node set plus what its
+- [ADR-0056](0056-stable-useful-dashboard-flow.md)'s positional stability survives: a
+  card's position stays a function of **the node set** — now the node set plus what its
   checks and its configuration declare, all of which are static — and never of a live
-  status. That ADR's citation of *Node sibling ordering* in the register still
-  resolves; the register entry points forward to this record.
+  status.
 - **A root rank reaches past nodes another check owns, and that is accepted.** Ranks
   are compared across the whole sibling set, so a plugin setting `order=-1` on its own
   root moves its card ahead of every unranked card on the wall — cards belonging to

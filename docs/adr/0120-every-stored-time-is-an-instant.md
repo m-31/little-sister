@@ -1,13 +1,8 @@
 # ADR-0120 — Every stored time is an instant
 
 - **Status:** Accepted
-- **Date:** 2026-10-04
-- **Supersedes:** [ADR-0006](0006-config-file-and-timezones.md) wholly (accepted
-  2026-06-20, rewritten 2026-08-23). What that record decided and this one keeps is
-  restated in decision 7 with its reasoning, so nothing has to be read out of a
-  superseded record: the settings file, the display zone and format, and how an expiry
-  an admin types is read. What changes is the one thing it left as it found it: how a
-  time is stored.
+- **Date:** 2026-10-25 (accepted 2026-10-04; decision 7 accepted 2026-06-20 and
+  rewritten 2026-08-23)
 - **Related:** [ADR-0087](0087-a-check-keeps-its-subjects-readings.md) (a reading's
   `observed_at`, the instant the tree's times now are),
   [ADR-0082](0082-a-line-carries-what-it-is-about-and-what-it-read.md) (a record's own
@@ -23,8 +18,7 @@
   a period's beginning; decision 6, a pin's creation),
   [ADR-0044](0044-run-facts-on-the-node.md) (a run's next slot),
   [ADR-0080](0080-the-envelope-is-the-snapshot-published.md) (the envelope, which does
-  not move), [ADR-0030](0030-curated-links.md) (the reachability probe's times),
-  [ADR-0098](0098-a-series-view-is-drawn-over-a-window.md) (an axis's round times),
+  not move), [ADR-0098](0098-a-series-view-is-drawn-over-a-window.md) (an axis's round times),
   [ADR-0104](0104-a-pin-is-one-block-on-what-it-silences.md) (decision 5, the expiry an
   edit keeps), [ADR-0031](0031-deployment-config-directory.md) (where the settings file
   lives), [ADR-0003](0003-config-and-secrets-via-env-file.md) (secrets in `.env`),
@@ -33,13 +27,16 @@
   [ADR-0091](0091-an-import-is-not-an-instance.md) (the log file the start opens, with
   what the import logged), [ADR-0095](0095-the-instance-states-its-memory.md) (the
   memory line's ten-minute marks), [ADR-0076](0076-the-instance-node-is-a-branch.md)
-  (a note, which stands for the life of the process)
+  (a note, which stands for the life of the process),
+  [ADR-0141](0141-every-pin-is-one-thing-with-a-kind-and-the-envelope-lists-what-handles-a-part.md)
+  (the pins' file, which keeps every time in UTC)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
 
-ADR-0006 gave the pages a time zone and left storage as it found it. A node's
-observation time, an event's time and a pin's three times were the machine's wall clock,
+The pages have had a time zone since 2026-06-20 (decision 7), and storage was left as
+it was found. A node's observation time, an event's time and a pin's three times were
+the machine's wall clock,
 written without a zone, and every surface converted on the way out: a time without a
 zone was read as the machine's own. That reading is right on the machine that wrote the
 time, for as long as its clock has not changed. It stops being right in three ways, and
@@ -85,13 +82,12 @@ A node's observation time, an event's time, the beginning of a period and a pin'
 held in UTC, as a reading's `observed_at` is (ADR-0087). So is what is derived from
 them or kept beside them in memory: a period's two ends, the time a snapshot publishes,
 the moment the engine started, a run's start and the slot its next run is armed for
-(ADR-0044), the stop's stamp (ADR-0094), and the times the reachability probe keeps of
-an answer and of a pass (ADR-0030).
+(ADR-0044), and the stop's stamp (ADR-0094).
 
 ### 2. An instant without a zone cannot be built
 
 What holds an instant refuses a time without a zone where it is built — an event, a
-period's beginning, a pin, a run's facts, a probe's answer — and keeps the instant in
+period's beginning, a pin, a run's facts — and keeps the instant in
 UTC whatever zone it was built in. A node is stamped by the clock alone. The moment a
 method of the tree is asked at is an instant as well, and a time without a zone is
 refused there; so is a clock handed to the engine that answers one.
@@ -110,9 +106,12 @@ that name where the time stood.
 
 ### 4. A file that carries a time without a zone is refused whole
 
-`events.json` and `maintenance.json` carry every time in UTC. A file in which one time
-has no zone — an event's, a node's `since`, the stop's stamp, any of a pin's three — is
-a load failure: nothing of it is taken, that state starts empty, the start is not
+`events.json.gz` and `pins.json`, which keeps every pin of every kind
+([ADR-0141](0141-every-pin-is-one-thing-with-a-kind-and-the-envelope-lists-what-handles-a-part.md)
+decision 1), carry every time in UTC; `maintenance.json`, where the pins were kept
+before it, is a retired name, which no release from then on reads. A file in which one
+time has no zone — an event's, a node's `since`, the stop's stamp, any of a pin's three
+— is a load failure: nothing of it is taken, that state starts empty, the start is not
 refused, and the file is an ERROR line on `/little-sister/state` until the process ends
 (ADR-0071). A copy adopted at a takeover is refused the same way, and what the process
 holds stands (ADR-0077).
@@ -127,8 +126,8 @@ upgrade may break the code before it.
 ### 5. Every comparison is made on instants
 
 A pin's expiry, a node's age, which checks shield a node, the gap an instance was not
-running, which of two periods began first, the soonest of several pins and how long ago
-a link answered: each compares or subtracts two instants, so the answer is the same on
+running, which of two periods began first and the soonest of several pins: each
+compares or subtracts two instants, so the answer is the same on
 every machine and through every change of a clock. The compare-and-set token of a pin
 (ADR-0014 decision 8) stays text — the pin's `set_at` as it is spelled — and is the
 same text before a restart and after it.
@@ -136,15 +135,12 @@ same text before a restart and after it.
 ### 6. A surface spells an instant at its edge
 
 A page writes an instant in the configured zone and format (decision 7), a copied
-document adds the offset in force at it, and the API spells it in UTC. Where the
-library names an instant in a sentence of its own — the line that says a reachability
-pass overran, the log's line that says since when nothing watched — it writes it as a
-page does. The envelope serves the same text for the same instant: `schema_version` and
-the spec do not move (ADR-0080).
+document adds the offset in force at it, and the API spells it in UTC. Where the library
+names an instant in a sentence of its own — the log's line that says since when nothing
+watched — it writes it as a page does. The envelope serves the same text for the same
+instant: `schema_version` and the spec do not move (ADR-0080).
 
-### 7. What ADR-0006 decided and this record keeps
-
-Restated so the superseded record never has to be read.
+### 7. Settings, the display zone and a typed expiry — decided 2026-06-20
 
 **General options live in a settings file.** Options that are no secret — the display
 timezone was the first — are not hard-coded and have a home of their own: a YAML file,
@@ -251,7 +247,7 @@ date read from text, a `time.localtime` and a `strftime` pass them. Those are de
 
 - **An upgrade starts the event log and the pins empty.** At the first start on this
   version both files of the version before are load failures. `maintenance.json` is
-  rewritten at that start and `events.json` at the first save, so the old log and the
+  rewritten at that start and the event log at the first save, so the old log and the
   old pins are gone from the directory, and from a keeper's store once the instance
   holds its lease. A pin still wanted is set again.
 - **Every instance on one keeper's prefix is stopped before the first one starts on
@@ -280,9 +276,6 @@ date read from text, a `time.localtime` and a `strftime` pass them. Those are de
 - **The three cases of the context are tests**, each seen failing on the code before:
   a state written on a machine in one zone and read on a machine in another, the hour a
   clock repeats and the hour it skips.
-- **A duration the probe measures no longer jumps with a clock.** It is still the
-  difference of two instants; measuring it on the monotonic clock is a change of its
-  own.
 - **ADR-0014 decisions 8, 11 and 22, ADR-0080 decision 8, ADR-0082 decision 2 and
   ADR-0110 decision 6 are amended.**
 
@@ -314,5 +307,6 @@ date read from text, a `time.localtime` and a `strftime` pass them. Those are de
   The three other answers to decision 9. A log is read beside a page, and only the
   configured zone makes the two one clock; the offset gives a machine what UTC would
   have, and the line a start writes says where gunicorn's clock is another.
-- **Storage as it was**, which ADR-0006 chose when it weighed UTC and found no benefit
-  for the display. That held for one process on one machine whose clock never changes.
+- **Storage as it was**, chosen on 2026-06-20 when UTC was weighed and found no
+  benefit for the display. That held for one process on one machine whose clock never
+  changes.

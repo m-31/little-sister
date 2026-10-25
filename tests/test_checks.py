@@ -26,6 +26,7 @@ from little_sister.checks.command import CommandCheck
 from little_sister.checks.file import FileFreshnessCheck
 from little_sister.checks.http import HttpCheck
 from little_sister.checks.metadata import Stated
+from little_sister.checks.output import OUTPUT_RECORD
 from little_sister.checks.ssh.command import RemoteCommandCheck
 from little_sister.checks.ssh.connect import ConnectCheck
 from little_sister.checks.ssh.host_metrics import HostMetricsCheck
@@ -34,7 +35,7 @@ from little_sister.checks.ssh.script import ScriptCheck
 from little_sister.errors import ConfigError
 from little_sister.fetch import Response
 from little_sister.instance import this_instance
-from little_sister.limits import RECORD_LIMIT
+from little_sister.limits import AMBER_SHARE, RECORD_LIMIT, Limits, capacity
 from little_sister.status import StatusCode
 from little_sister.transport import Fault, RemoteError
 from tests.running import measured, pid_gone, record_of, run_check
@@ -721,6 +722,24 @@ class CommandCheckTests(TestCase):
         can actually produce, so startup's comparison says something."""
         self.assertLess(self._check("true", max_chars=50).expected_record(),
                         self._check("true", max_chars=1000).expected_record())
+
+    def test_the_default_declares_the_record_the_type_is_sized_to(self):
+        """At the default `max_chars` the byte budget binds, and the declaration is
+        `OUTPUT_RECORD`, 2,048 bytes — the type's own number, not the default
+        limit's — which stands under the share of the default at which a start says
+        a declared record is close, so a start at the default says nothing of it,
+        and one at 2,048 takes it as it did."""
+        check = self._check("true")
+        self.assertEqual(check.expected_record(), OUTPUT_RECORD)
+        self.assertLess(OUTPUT_RECORD, AMBER_SHARE * RECORD_LIMIT)
+        for limit in (RECORD_LIMIT, OUTPUT_RECORD):
+            with self.subTest(limit=limit):
+                start = capacity([check], max_workers=8,
+                                 limits=Limits(record_limit=limit), record_floor=0)
+                self.assertEqual(start.refusals(), ())
+        quiet = capacity([check], max_workers=8,
+                         limits=Limits(record_limit=RECORD_LIMIT), record_floor=0)
+        self.assertNotIn("record", [limit for limit, _ in quiet.warnings()])
 
 
 class CheckResultTreeTests(TestCase):
@@ -1455,6 +1474,41 @@ class SubnodeLabelTests(TestCase):
         self.assertEqual(check.subnode_labels["disk"],
                          {"title": "Disk", "about": "Volumes on alpha."})
         self.assertEqual(check.subnode_show_when_quiet, {"disk": True})
+
+    def test_a_status_placeholder_passes_through_for_the_page_to_draw(self):
+        # `{error}` names a status in a node's text (ADR-0133 decision 5): it is no
+        # token, and the page draws it as its sign
+        labels = self._check(subnodes={"disk": {"about": "{error}: {default}"}}
+                             ).subnode_labels
+        self.assertEqual(labels["disk"]["about"], "{error}: Volumes on alpha.")
+
+    def test_no_type_offers_a_token_by_a_taken_name(self):
+        # the five status names, in either case, are taken: a token by one would be
+        # expanded before the page ever drew the sign
+        def offering(token: str) -> type[Check]:
+            class _Offering(_DeclaringCheck):
+                def __init__(self, **kwargs: object) -> None:
+                    Check.__init__(self, subnode_defaults=self.DEFAULTS,
+                                   label_tokens={"host": "alpha", token: "x"},
+                                   **kwargs)
+            return _Offering
+
+        for name in ("error", "OK", "Maintenance", "warn", "undefined"):
+            with self.subTest(name=name), self.assertRaisesRegex(
+                    CheckError, rf"label_tokens offers '{name}', which a node's "
+                                r"text names a status by"):
+                offering(name).from_config({"type": "x", "path": "/host"}, HERE)
+        # nor `default`, which is where a deployment's text puts the type's own and
+        # is replaced before any token: the token was overridden in silence
+        with self.assertRaisesRegex(CheckError, r"label_tokens offers 'default', "
+                                                r"which is where a deployment's text"):
+            offering("default").from_config({"type": "x", "path": "/host"}, HERE)
+        # a name `{default}` does not take is a token like any other
+        labels = offering("Default").from_config(
+            {"type": "x", "path": "/host",
+             "subnodes": {"memory": {"about": "{Default}: {default}"}}},
+            HERE).subnode_labels
+        self.assertEqual(labels["memory"]["about"], "x: RAM in use.")
 
 
 if __name__ == '__main__':

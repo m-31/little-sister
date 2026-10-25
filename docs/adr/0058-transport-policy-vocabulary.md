@@ -1,14 +1,12 @@
 # ADR-0058 — `little_sister.transport`: a vocabulary for asking something that might not answer
 
 - **Status:** Accepted
-- **Date:** 2026-08-23 (accepted 2026-08-15)
+- **Date:** 2026-10-24 (accepted 2026-08-15)
 - **Related:** [ADR-0049](0049-the-check-authoring-surface.md) (the surface this adds
   five names to, and its add-is-compatible rule),
   [ADR-0051](0051-what-startup-refuses.md) (the epoch those names sit in),
   [ADR-0033](0033-budgeted-failure-retry.md) (the *other* retry — the engine's,
   between runs; this one is inside a single run and they must not be confused),
-  [ADR-0030](0030-curated-links.md) (§10, the link prober's classification of a
-  transport failure — the first time this reasoning was written down),
   [ADR-0042](0042-entries-carry-their-own-code.md) (the entry vocabulary a
   classification is eventually read into),
   [ADR-0039](0039-status-rollup-semantics.md) (why the mapping to a status code is
@@ -38,9 +36,8 @@ rule the other does not follow, and none of it is visible in the tree. The libra
 the only place a single answer can live.
 
 **A client is not that answer.** The call shapes genuinely differ — one check reads a
-single URL, another posts GraphQL, another walks a paginated `Link` header, the link
-prober fans sixty targets out over a thread pool — and a `Client` class fitting all of
-them would fit none of them well. More decisively, a check whose transport is a **vendor
+single URL, another posts GraphQL, another walks a paginated `Link` header — and a
+`Client` class fitting all of them would fit none of them well. More decisively, a check whose transport is a **vendor
 SDK** (boto3 for a CloudWatch reading, an OIDC client, anything with its own connection
 pool and retry mode) cannot reach a shared client at all, while still needing all four
 answers above.
@@ -75,8 +72,7 @@ its exit code — for the *check* to interpret."
    stdlib-only, performs **no I/O**, and imports nothing from `little_sister` — for the
    reason `errors.py` gives for its own existence: importing the `checks` package
    registers every built-in check type as a side effect, which a module used by a
-   built-in check, by the link prober and by an installed package has no business
-   triggering. Five names, and the smallness is deliberate: a promised name is
+   built-in check and by an installed package has no business triggering. Five names, and the smallness is deliberate: a promised name is
    permanent, so this is the whole of it.
 
    The word is claimed here because *transport policy* is what this is, and therefore
@@ -239,11 +235,10 @@ its exit code — for the *check* to interpret."
 
     **Two limits are stated rather than implied.** A caller passing `read_body=False` is
     not exposed to a slow body at all, so a deadline buys it nothing here — which is why
-    **neither built-in caller was given one**, against the expectation the roadmap
+    **the one built-in caller was not given one**, against the expectation the roadmap
     carried: the `http` check makes a single request, so the clamp is `min(t, t)` and
-    the entry check looks at a full budget, and it reads no body; the link prober
-    already bounds a hung probe by abandoning it at the pass deadline (ADR-0030). A
-    bound that does nothing is worse than no bound, because the next reader believes it.
+    the entry check looks at a full budget, and it reads no body. A bound that does
+    nothing is worse than no bound, because the next reader believes it.
 
     And the clock does not reach the **status line and headers**, which urllib reads
     inside `opener.open` before this module is handed a stream. A server trickling those

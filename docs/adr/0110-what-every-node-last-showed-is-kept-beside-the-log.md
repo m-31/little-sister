@@ -1,7 +1,7 @@
 # ADR-0110 — What every node last showed is kept beside the log, and a wait counts from it
 
 - **Status:** Accepted
-- **Date:** 2026-10-03
+- **Date:** 2026-10-25 (accepted 2026-10-03)
 - **Related:** [ADR-0083](0083-a-node-may-wait-before-it-escalates.md) (the wait, whose
   consequence on restarts this corrects),
   [ADR-0094](0094-a-restart-is-no-transition.md) (a restart is no transition, which this
@@ -11,8 +11,8 @@
   [ADR-0108](0108-the-wait-before-an-escalation-counts-what-a-node-shows.md) (the
   counter counts what a node shows; decision 2, what a pin publishes),
   [ADR-0071](0071-what-a-restart-keeps-is-a-directory-of-files.md) (the kept files, of
-  which `events.json` gains a key), [ADR-0001](0001-in-process-threaded-engine.md) (the
-  log's bound), [ADR-0014](0014-maintenance-persistence.md) (reaping what no check
+  which `events.json.gz` gains a key),
+  [ADR-0001](0001-in-process-threaded-engine.md) (the log's bound), [ADR-0014](0014-maintenance-persistence.md) (reaping what no check
   covers, and a pin's creation, which the store keeps),
   [ADR-0077](0077-authority-follows-the-lease.md) (a file adopted in a running
   process), [ADR-0109](0109-a-node-says-its-children-are-complete.md) (decision 5, a
@@ -22,7 +22,12 @@
   [ADR-0119](0119-a-wait-that-ends-by-its-count-writes-a-row.md) (the row that says a
   wait had ended, and the key decision 1 reads),
   [ADR-0120](0120-every-stored-time-is-an-instant.md) (a pin's creation and an entry's
-  `since` are instants)
+  `since` are instants),
+  [ADR-0132](0132-a-branch-keeps-the-period-of-what-it-shows-beside-the-log.md) (the
+  second period an entry of a node above others keeps),
+  [ADR-0134](0134-the-state-is-compressed-and-stamped.md) (the event log kept compressed),
+  [ADR-0135](0135-a-handled-part-keeps-its-true-color-and-every-surface-says-by-what.md)
+  (decision 2, maintenance's own words, in which a pin's period is said)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -82,13 +87,13 @@ instance was down, which that reading writes (ADR-0108 decision 2).
 
 ### 2. The kept log says what every node last showed, beside its rows
 
-`events.json` carries a table beside the events, `nodes`: for each node, what it `shows`
-and what its check last `reported`, by name — the two things a first reading is compared
-with (ADR-0107 decision 5). It is the tree's own derivation at the moment of the save
-(ADR-0032 rule 3): for a node a check has written in this process, its own status and
-its reading; for one not written yet, what was restored. A node that shows nothing and
-whose check reported nothing has no entry, unless the tree saw it begin to show nothing
-(decision 5).
+`events.json.gz` carries a table beside the events, `nodes`: for each node, what it
+`shows` and what its check last `reported`, by name — the two things a first reading is
+compared with (ADR-0107 decision 5). It is the tree's own derivation at the moment of
+the save (ADR-0032 rule 3): for a node a check has written in this process, its own
+status and its reading; for one not written yet, what was restored. A node that shows
+nothing and whose check reported nothing has no entry, unless the tree saw it begin to
+show nothing (decision 5).
 
 Either code changes only with a row (ADR-0107 decisions 1 and 2), and so does what an
 entry says of its period, so the table changes only when the log does and costs no
@@ -139,6 +144,15 @@ entry says `since` and `before`, and neither of the other two. So a period's beg
 outlives its row: the Time card, History and the Copy document read it from the entry
 where the log no longer holds the row that began the period.
 
+The entry of a node above others keeps a second period, of what it shows, in a key of
+its own beside these: since when — or since and before, where the beginning is a bound —
+what it showed before, what moved it, and `by`, the node whose change it was
+([ADR-0132](0132-a-branch-keeps-the-period-of-what-it-shows-beside-the-log.md)). It is
+written at every change of what the node rolls up to, staleness included, carried across
+a restart until each node's unit has run, and seeded at the first start on its release
+from the log that start restores. A release before it reads the keys it knows and passes
+over the new one.
+
 The tree keeps it as it writes. A row that changes what a node shows begins its period;
 an edit of a pin, and a row of a reading the node did not show, begin none; and a node's
 first reading with nothing kept of it is a bound at that reading, except on the
@@ -177,7 +191,7 @@ the date of an earlier replay, or a bound — takes the creation as well when th
 replayed. One that began no later stands: the node showed `MAINTENANCE` before it was
 pinned. Where the log's rows say the node began to show something else after the pin
 was created, they stand as they are, and the period begins at the row the tree wrote. A
-line's pin dates nothing: what a node shows with a line silenced is its reading's to
+line's pin dates nothing: what a node shows with a line pinned is its reading's to
 say, and its first reading is a bound like any other.
 
 A pin's creation is an instant wherever a pin exists
@@ -194,8 +208,9 @@ another shape does.
   writes no row for a node that reads what it read, also one the log holds no row of.
 - **A failure a restart finds waits**, wherever its node waits; one that stood before it
   is published at the first reading; and a wait under way at a stop goes on.
-- **The kept log gains a key** an older reader passes over, and ADR-0071 decision 2
-  says what it holds. The envelope and `Event` do not move.
+- **The kept log gains its keys**, which an older reader passes over, and ADR-0071
+  decision 2 says what it holds. `Event` does not move; the envelope carries the two
+  periods since ADR-0132 (decision 7).
 - **A quiet node keeps its *since*.** Once its row has left the log, its Time card,
   History and Copy document read the entry (decision 5), and no restart gives it a row
   again, whose date was the restart's. A period whose beginning was lost before the

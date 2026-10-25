@@ -1,7 +1,7 @@
 # ADR-0118 — A child a run names says so, and takes nothing declared for its name
 
 - **Status:** Accepted
-- **Date:** 2026-10-18 (accepted 2026-10-04)
+- **Date:** 2026-10-25 (accepted 2026-10-04)
 - **Related:** [ADR-0025](0025-check-provided-subnode-metadata.md) (decision 5: a label
   is declared for a subnode's name, and a result's own is the fallback — which this
   amends), [ADR-0063](0063-declining-the-density-trade.md) (decisions 2 and 3:
@@ -15,7 +15,9 @@
   [ADR-0049](0049-the-check-authoring-surface.md) (what a name on the surface costs),
   [ADR-0051](0051-what-startup-refuses.md) (decision 2, the epoch),
   [ADR-0128](0128-where-a-nodes-first-look-comes-from.md) (the first look's keys, on the
-  same addresses, and `children:`)
+  same addresses, and `children:`),
+  [ADR-0133](0133-a-node-says-what-it-is-in-a-card-and-at-length-in-a-handbook.md) (a
+  node's `handbook`, a label as its `about` is, and its `details`, given down the tree)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -82,13 +84,17 @@ snapshot.
 
 ### 3. Its labels are the ones its result carries
 
-`title`, `about` and `show_when_quiet` on its own `CheckResult`, each field for itself,
-and nothing where the result carries none — but for `show_when_quiet` where its
-parent's `children:` says it, which beats what its own result stamps, a declaration over
-a stamp (decision 2). What those two records kept as a fallback is the one source a
-type has for such a child's labels. A `nodes.yaml` entry for the node's path
-beats it as it beats everything a check says, by being seeded before the first run, and
-what a run writes still fills an empty field only.
+`title`, `about`, `handbook` and `show_when_quiet` on its own `CheckResult`, each field
+for itself — a `handbook` is a label as an `about` is
+([ADR-0133](0133-a-node-says-what-it-is-in-a-card-and-at-length-in-a-handbook.md)) — and
+nothing where the result carries none, but for `show_when_quiet` where its parent's
+`children:` says it, which beats what its own result stamps, a declaration over a stamp
+(decision 2). What those two records kept as a fallback is the one source a type has for
+such a child's labels. A `nodes.yaml` entry for the node's path beats it as it beats
+everything a check says, by being seeded before the first run, and what a run writes
+still fills an empty field only. The details a deployment gives a node are no label:
+they hold for every node beneath it, key by key, and so reach a child a run names, which
+nothing declared for its name reaches — they come down the tree, not by its name.
 
 ### 4. It is said of one node
 
@@ -101,10 +107,10 @@ word is ignored, as the root's `name` and its labels are: a root is named by its
 ### 5. `host-metrics` says it of a volume
 
 Where `disk_path` is `all` or a list, each filesystem's node says that the host names
-it, the leaf of a volume whose numbers did not arrive among them. It carries the `disk`
-aspect's resolved `about`, as it did. `host-metrics` is the library's one type that
-declares labels by name and hands back nodes its source names. A package's type says it
-in a release of its own.
+it, the leaf of a volume whose numbers did not arrive among them. It carries no `about`
+of the `disk` aspect's: what holds for every volume of a host reaches it as the details
+given down to it. `host-metrics` is the library's one type that declares labels by name
+and hands back nodes its source names. A package's type says it in a release of its own.
 
 **`macos-memory` and `qnap-metrics` say nothing, and stay so.** The one names a leaf by
 a process its deployment configured, the other by a drive's bay. Neither type declares a

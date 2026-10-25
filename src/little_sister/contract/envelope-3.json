@@ -1,0 +1,1061 @@
+{
+  "envelope": {
+    "generated_at": "<volatile>",
+    "instance": {
+      "engine": "disabled",
+      "version": "<volatile>"
+    },
+    "schema_version": 3,
+    "status": {
+      "about": "",
+      "changes": 0,
+      "children": [
+        {
+          "about": "",
+          "changes": 0,
+          "children": [
+            {
+              "about": "",
+              "changes": 0,
+              "children": [],
+              "code": "ERROR",
+              "config": "",
+              "contribution": null,
+              "description": "",
+              "entries": {
+                "addressable": false,
+                "items": [
+                  {
+                    "code": null,
+                    "contribution": null,
+                    "data": null,
+                    "form": null,
+                    "grading": null,
+                    "handled": [],
+                    "refused": null,
+                    "running": false,
+                    "slug": "h-f221d92839",
+                    "subject": "",
+                    "text": "the tunnel is down"
+                  }
+                ]
+              },
+              "handled": [],
+              "name": "vpn",
+              "order": 0,
+              "own": "ERROR",
+              "own_period": {
+                "before": true,
+                "since": "<volatile>"
+              },
+              "path": "/network/vpn",
+              "record": null,
+              "report": "",
+              "reported": "ERROR",
+              "run": {
+                "next_at": null,
+                "observed_at": "<volatile>",
+                "wall_seconds": null
+              },
+              "shielded_by": null,
+              "show_when_quiet": null,
+              "stale": false,
+              "subject": "",
+              "title": ""
+            }
+          ],
+          "code": "ERROR",
+          "config": "",
+          "contribution": null,
+          "description": "",
+          "entries": {
+            "addressable": false,
+            "items": []
+          },
+          "handled": [],
+          "name": "network",
+          "order": 0,
+          "own": "UNDEFINED",
+          "path": "/network",
+          "period": {
+            "before": true,
+            "since": "<volatile>"
+          },
+          "record": null,
+          "report": "",
+          "reported": "UNDEFINED",
+          "shielded_by": null,
+          "show_when_quiet": null,
+          "stale": false,
+          "subject": "",
+          "title": ""
+        },
+        {
+          "about": "",
+          "changes": 0,
+          "children": [
+            {
+              "about": "[Sign in](handbook#sign-in) first.",
+              "changes": 0,
+              "children": [],
+              "code": "OK",
+              "config": "",
+              "contribution": null,
+              "description": "",
+              "details": [
+                {
+                  "by": "type",
+                  "key": "host",
+                  "text": "`api01.example.test`"
+                },
+                {
+                  "by": "type",
+                  "key": "region",
+                  "text": "eu-central-1"
+                },
+                {
+                  "by": "deployment",
+                  "key": "region",
+                  "text": "Frankfurt"
+                },
+                {
+                  "by": "deployment",
+                  "key": "tickets",
+                  "text": ""
+                }
+              ],
+              "entries": {
+                "addressable": false,
+                "items": []
+              },
+              "handbook": "http://localhost/handbook/services/api",
+              "handled": [],
+              "name": "api",
+              "order": 0,
+              "own": "OK",
+              "own_period": {
+                "before": true,
+                "since": "<volatile>"
+              },
+              "path": "/services/api",
+              "record": null,
+              "report": "",
+              "reported": "OK",
+              "run": {
+                "frequency_seconds": 300,
+                "next_at": "<volatile>",
+                "observed_at": "<volatile>",
+                "stale_after_seconds": 900.0,
+                "wall_seconds": 0.42
+              },
+              "shielded_by": null,
+              "show_when_quiet": null,
+              "stale": false,
+              "subject": "",
+              "tags": [
+                "production",
+                "rack-4"
+              ],
+              "title": ""
+            },
+            {
+              "about": "",
+              "changes": 0,
+              "children": [],
+              "code": "UNDEFINED",
+              "config": "",
+              "contribution": {
+                "by": "undefined",
+                "code": null,
+                "rule": null
+              },
+              "description": "",
+              "entries": {
+                "addressable": false,
+                "items": []
+              },
+              "handled": [],
+              "name": "backup",
+              "order": 0,
+              "own": "UNDEFINED",
+              "path": "/services/backup",
+              "record": null,
+              "report": "",
+              "reported": "UNDEFINED",
+              "run": {
+                "next_at": null,
+                "observed_at": null,
+                "wall_seconds": null
+              },
+              "shielded_by": null,
+              "show_when_quiet": null,
+              "stale": false,
+              "subject": "",
+              "tags": [
+                "production"
+              ],
+              "title": "Backup"
+            },
+            {
+              "about": "",
+              "changes": 0,
+              "children": [],
+              "code": "ERROR",
+              "config": "",
+              "contribution": {
+                "by": "dependency",
+                "code": null,
+                "rule": null
+              },
+              "description": "",
+              "entries": {
+                "addressable": false,
+                "items": [
+                  {
+                    "code": null,
+                    "contribution": null,
+                    "data": null,
+                    "form": null,
+                    "grading": null,
+                    "handled": [],
+                    "refused": null,
+                    "running": false,
+                    "slug": "h-2f93c7f748",
+                    "subject": "",
+                    "text": "connect: no route to host"
+                  }
+                ]
+              },
+              "handled": [],
+              "name": "cache",
+              "order": 0,
+              "own": "ERROR",
+              "own_period": {
+                "before": true,
+                "since": "<volatile>"
+              },
+              "path": "/services/cache",
+              "record": null,
+              "report": "",
+              "reported": "ERROR",
+              "run": {
+                "next_at": null,
+                "observed_at": "<volatile>",
+                "wall_seconds": null
+              },
+              "shielded_by": "/network/vpn",
+              "show_when_quiet": null,
+              "stale": false,
+              "subject": "",
+              "tags": [
+                "production"
+              ],
+              "title": ""
+            },
+            {
+              "about": "",
+              "changes": 0,
+              "children": [],
+              "code": "MAINTENANCE",
+              "config": "",
+              "contribution": {
+                "by": "maintenance",
+                "code": null,
+                "rule": "5c1d0a7e3f4b2c18"
+              },
+              "description": "",
+              "entries": {
+                "addressable": false,
+                "items": [
+                  {
+                    "code": null,
+                    "contribution": null,
+                    "data": null,
+                    "form": null,
+                    "grading": null,
+                    "handled": [],
+                    "refused": null,
+                    "running": false,
+                    "slug": "h-6bc9d26a24",
+                    "subject": "",
+                    "text": "connection refused"
+                  }
+                ]
+              },
+              "handled": [
+                {
+                  "counts_as": "nothing",
+                  "created_at": "<volatile>",
+                  "created_by": "lex",
+                  "expires_at": "2027-01-01T00:00:00Z",
+                  "id": "5c1d0a7e3f4b2c18",
+                  "kind": "maintenance",
+                  "note": "waiting on the vendor",
+                  "set_at": "<volatile>",
+                  "set_by": "lex",
+                  "source": "person"
+                }
+              ],
+              "name": "db",
+              "order": 0,
+              "own": "MAINTENANCE",
+              "own_period": {
+                "cause": "pin-set",
+                "since": "<volatile>",
+                "was": "ERROR"
+              },
+              "path": "/services/db",
+              "record": null,
+              "report": "",
+              "reported": "ERROR",
+              "run": {
+                "next_at": null,
+                "observed_at": "<volatile>",
+                "wall_seconds": null
+              },
+              "shielded_by": null,
+              "show_when_quiet": null,
+              "stale": false,
+              "subject": "",
+              "tags": [
+                "production"
+              ],
+              "title": ""
+            },
+            {
+              "about": "",
+              "changes": 1,
+              "children": [],
+              "code": "ERROR",
+              "config": "",
+              "contribution": {
+                "by": "damping",
+                "code": "OK",
+                "rule": null
+              },
+              "description": "",
+              "entries": {
+                "addressable": false,
+                "items": [
+                  {
+                    "code": null,
+                    "contribution": null,
+                    "data": null,
+                    "form": null,
+                    "grading": null,
+                    "handled": [],
+                    "refused": null,
+                    "running": false,
+                    "slug": "h-270aa9a79f",
+                    "subject": "",
+                    "text": "the consumer is behind"
+                  }
+                ]
+              },
+              "handled": [],
+              "name": "queue",
+              "order": 0,
+              "own": "ERROR",
+              "own_period": {
+                "cause": "reading",
+                "since": "<volatile>",
+                "was": "OK"
+              },
+              "path": "/services/queue",
+              "record": null,
+              "report": "",
+              "reported": "ERROR",
+              "run": {
+                "next_at": null,
+                "observed_at": "<volatile>",
+                "wall_seconds": null
+              },
+              "shielded_by": null,
+              "show_when_quiet": null,
+              "stale": false,
+              "subject": "",
+              "tags": [
+                "production"
+              ],
+              "title": ""
+            },
+            {
+              "about": "",
+              "changes": 0,
+              "children": [],
+              "code": "OK",
+              "config": "",
+              "contribution": null,
+              "description": "",
+              "entries": {
+                "addressable": false,
+                "items": []
+              },
+              "handled": [],
+              "name": "web",
+              "order": 0,
+              "own": "OK",
+              "own_period": {
+                "before": true,
+                "since": "<volatile>"
+              },
+              "path": "/services/web",
+              "record": {
+                "response_ms": 412,
+                "status": 200
+              },
+              "report": "",
+              "reported": "OK",
+              "run": {
+                "next_at": null,
+                "observed_at": "<volatile>",
+                "wall_seconds": null
+              },
+              "shielded_by": null,
+              "show_when_quiet": null,
+              "stale": false,
+              "subject": "http://web01.example",
+              "tags": [
+                "production"
+              ],
+              "title": ""
+            }
+          ],
+          "code": "OK",
+          "config": "",
+          "contribution": null,
+          "description": "",
+          "details": [
+            {
+              "by": "deployment",
+              "key": "owner",
+              "text": "Platform team"
+            },
+            {
+              "by": "deployment",
+              "key": "tickets",
+              "text": "[PLAT](https://tickets.example.test/plat)"
+            }
+          ],
+          "entries": {
+            "addressable": false,
+            "items": []
+          },
+          "handled": [],
+          "name": "services",
+          "order": 0,
+          "own": "UNDEFINED",
+          "path": "/services",
+          "period": {
+            "by": "/services/db",
+            "cause": "pin-set",
+            "since": "<volatile>",
+            "was": "ERROR"
+          },
+          "record": null,
+          "report": "",
+          "reported": "UNDEFINED",
+          "shielded_by": null,
+          "show_when_quiet": null,
+          "stale": false,
+          "subject": "",
+          "tags": [
+            "production"
+          ],
+          "title": ""
+        },
+        {
+          "about": "",
+          "changes": 0,
+          "children": [
+            {
+              "about": "",
+              "changes": 0,
+              "children": [],
+              "code": "WARN",
+              "config": "",
+              "contribution": null,
+              "description": "",
+              "entries": {
+                "addressable": false,
+                "items": [
+                  {
+                    "code": null,
+                    "contribution": null,
+                    "data": null,
+                    "form": null,
+                    "grading": null,
+                    "handled": [],
+                    "refused": null,
+                    "running": false,
+                    "slug": "h-c77b9271c5",
+                    "subject": "",
+                    "text": "slow responses"
+                  }
+                ]
+              },
+              "handled": [],
+              "name": "api",
+              "order": 0,
+              "own": "WARN",
+              "own_period": {
+                "before": true,
+                "since": "<volatile>"
+              },
+              "path": "/staging/api",
+              "record": null,
+              "report": "",
+              "reported": "WARN",
+              "run": {
+                "next_at": null,
+                "observed_at": "<volatile>",
+                "wall_seconds": null
+              },
+              "shielded_by": null,
+              "show_when_quiet": null,
+              "stale": false,
+              "subject": "",
+              "title": ""
+            },
+            {
+              "about": "",
+              "changes": 0,
+              "children": [],
+              "code": "ERROR",
+              "config": "",
+              "contribution": {
+                "by": "seen",
+                "code": "OK",
+                "rule": "3a7b9c1d5e2f4a6b"
+              },
+              "description": "",
+              "entries": {
+                "addressable": false,
+                "items": [
+                  {
+                    "code": null,
+                    "contribution": null,
+                    "data": null,
+                    "form": null,
+                    "grading": null,
+                    "handled": [],
+                    "refused": null,
+                    "running": false,
+                    "slug": "h-d5743f08f5",
+                    "subject": "",
+                    "text": "disk 97 % full"
+                  }
+                ]
+              },
+              "handled": [
+                {
+                  "counts_as": {
+                    "ERROR": "OK",
+                    "WARN": "OK"
+                  },
+                  "created_at": "<volatile>",
+                  "created_by": "ada",
+                  "expires_at": null,
+                  "id": "3a7b9c1d5e2f4a6b",
+                  "kind": "seen",
+                  "note": "The disk is on order.",
+                  "occurrence": null,
+                  "set_at": "<volatile>",
+                  "set_by": "ada",
+                  "source": "person",
+                  "status": "ERROR"
+                }
+              ],
+              "name": "disk",
+              "order": 0,
+              "own": "ERROR",
+              "own_period": {
+                "before": true,
+                "since": "<volatile>"
+              },
+              "path": "/staging/disk",
+              "record": null,
+              "report": "",
+              "reported": "ERROR",
+              "run": {
+                "next_at": null,
+                "observed_at": "<volatile>",
+                "wall_seconds": null
+              },
+              "shielded_by": null,
+              "show_when_quiet": null,
+              "stale": false,
+              "subject": "",
+              "title": ""
+            },
+            {
+              "about": "",
+              "changes": 0,
+              "children": [],
+              "code": "OK",
+              "config": "",
+              "contribution": null,
+              "description": "",
+              "entries": {
+                "addressable": true,
+                "items": [
+                  {
+                    "code": "ERROR",
+                    "contribution": {
+                      "by": "seen",
+                      "code": "OK",
+                      "rule": "c4d6e8f0a2b4c6d8"
+                    },
+                    "data": null,
+                    "form": null,
+                    "grading": null,
+                    "handled": [
+                      {
+                        "counts_as": {
+                          "ERROR": "OK",
+                          "WARN": "OK"
+                        },
+                        "created_at": "<volatile>",
+                        "created_by": "ada",
+                        "expires_at": "2027-01-01T00:00:00Z",
+                        "id": "c4d6e8f0a2b4c6d8",
+                        "kind": "seen",
+                        "note": "A flaky runner.",
+                        "occurrence": "7/1",
+                        "set_at": "<volatile>",
+                        "set_by": "ada",
+                        "source": "person",
+                        "status": "ERROR"
+                      }
+                    ],
+                    "refused": null,
+                    "running": false,
+                    "slug": "job-7",
+                    "subject": "",
+                    "text": "job 7 failed"
+                  },
+                  {
+                    "code": "OK",
+                    "contribution": null,
+                    "data": null,
+                    "form": null,
+                    "grading": null,
+                    "handled": [],
+                    "refused": null,
+                    "running": false,
+                    "slug": "job-8",
+                    "subject": "",
+                    "text": "job 8 passed"
+                  }
+                ]
+              },
+              "handled": [],
+              "name": "jobs",
+              "order": 0,
+              "own": "OK",
+              "own_period": {
+                "cause": "line-seen-set",
+                "since": "<volatile>",
+                "was": "ERROR"
+              },
+              "path": "/staging/jobs",
+              "record": null,
+              "report": "",
+              "reported": "ERROR",
+              "run": {
+                "next_at": null,
+                "observed_at": "<volatile>",
+                "wall_seconds": null
+              },
+              "shielded_by": null,
+              "show_when_quiet": null,
+              "stale": false,
+              "subject": "",
+              "title": ""
+            },
+            {
+              "about": "",
+              "changes": 0,
+              "children": [],
+              "code": "OK",
+              "config": "",
+              "contribution": null,
+              "description": "",
+              "entries": {
+                "addressable": true,
+                "items": [
+                  {
+                    "code": "WARN",
+                    "contribution": {
+                      "by": "aggregation",
+                      "code": "OK",
+                      "rule": "runners heal"
+                    },
+                    "data": null,
+                    "form": null,
+                    "grading": null,
+                    "handled": [
+                      {
+                        "counts_as": {
+                          "WARN": "OK"
+                        },
+                        "file": "config/aggregation.yaml",
+                        "id": "runners heal",
+                        "kind": "aggregation",
+                        "level": "lines",
+                        "lines": [
+                          "*"
+                        ],
+                        "note": "A slow runner is the day's weather.",
+                        "since": "<volatile>",
+                        "source": "configuration"
+                      }
+                    ],
+                    "refused": null,
+                    "running": false,
+                    "slug": "runner-1",
+                    "subject": "",
+                    "text": "runner 1 is slow"
+                  },
+                  {
+                    "code": "OK",
+                    "contribution": null,
+                    "data": null,
+                    "form": null,
+                    "grading": null,
+                    "handled": [],
+                    "refused": null,
+                    "running": false,
+                    "slug": "runner-2",
+                    "subject": "",
+                    "text": "runner 2 is idle"
+                  }
+                ]
+              },
+              "handled": [
+                {
+                  "counts_as": {
+                    "WARN": "OK"
+                  },
+                  "file": "config/aggregation.yaml",
+                  "id": "runners heal",
+                  "kind": "aggregation",
+                  "level": "lines",
+                  "lines": [
+                    "*"
+                  ],
+                  "note": "A slow runner is the day's weather.",
+                  "since": "<volatile>",
+                  "source": "configuration"
+                }
+              ],
+              "name": "runners",
+              "order": 0,
+              "own": "OK",
+              "own_period": {
+                "before": true,
+                "since": "<volatile>"
+              },
+              "path": "/staging/runners",
+              "record": null,
+              "report": "",
+              "reported": "WARN",
+              "run": {
+                "next_at": null,
+                "observed_at": "<volatile>",
+                "wall_seconds": null
+              },
+              "shielded_by": null,
+              "show_when_quiet": null,
+              "stale": false,
+              "subject": "",
+              "title": ""
+            }
+          ],
+          "code": "WARN",
+          "config": "",
+          "contribution": {
+            "by": "aggregation",
+            "code": "OK",
+            "rule": "staging advises"
+          },
+          "description": "",
+          "entries": {
+            "addressable": false,
+            "items": []
+          },
+          "handled": [
+            {
+              "counts_as": {
+                "WARN": "OK"
+              },
+              "file": "config/aggregation.yaml",
+              "id": "staging advises",
+              "kind": "aggregation",
+              "level": "node",
+              "note": "Staging is no production.",
+              "since": "<volatile>",
+              "source": "configuration"
+            }
+          ],
+          "name": "staging",
+          "order": 0,
+          "own": "UNDEFINED",
+          "path": "/staging",
+          "period": {
+            "by": "/staging/jobs",
+            "cause": "line-seen-set",
+            "since": "<volatile>",
+            "was": "ERROR"
+          },
+          "record": null,
+          "report": "",
+          "reported": "UNDEFINED",
+          "shielded_by": null,
+          "show_when_quiet": null,
+          "stale": false,
+          "subject": "",
+          "title": ""
+        },
+        {
+          "about": "what this watches",
+          "changes": 0,
+          "children": [
+            {
+              "about": "",
+              "changes": 0,
+              "children": [
+                {
+                  "about": "",
+                  "changes": 0,
+                  "children": [],
+                  "code": "OK",
+                  "config": "",
+                  "contribution": null,
+                  "description": "",
+                  "entries": {
+                    "addressable": false,
+                    "items": []
+                  },
+                  "handled": [],
+                  "name": "acme-api",
+                  "order": 0,
+                  "own": "OK",
+                  "own_period": {
+                    "before": true,
+                    "since": "<volatile>"
+                  },
+                  "path": "/platform/actions/acme-api",
+                  "record": null,
+                  "report": "",
+                  "reported": "OK",
+                  "run": {
+                    "next_at": null,
+                    "observed_at": "<volatile>",
+                    "wall_seconds": null
+                  },
+                  "shielded_by": null,
+                  "show_when_quiet": null,
+                  "stale": false,
+                  "subject": "",
+                  "title": ""
+                }
+              ],
+              "code": "ERROR",
+              "config": "",
+              "contribution": null,
+              "description": "",
+              "entries": {
+                "addressable": true,
+                "items": [
+                  {
+                    "code": "ERROR",
+                    "contribution": null,
+                    "data": {
+                      "at": "2026-09-18T06:12:04Z",
+                      "branch": "main",
+                      "repository": "acme/api",
+                      "run": {
+                        "conclusion": "failure",
+                        "ended": "2026-09-18T06:12:04Z",
+                        "number": 128,
+                        "started": "2026-09-18T06:04:41Z",
+                        "status": "completed"
+                      },
+                      "verdict": "failed",
+                      "workflow": "CI"
+                    },
+                    "form": "actions.verdict",
+                    "grading": null,
+                    "handled": [],
+                    "refused": null,
+                    "running": true,
+                    "slug": "1001-workflow-42-main",
+                    "subject": "1001",
+                    "text": "acme/api (main) / CI: failed (#128)"
+                  },
+                  {
+                    "code": "WARN",
+                    "contribution": {
+                      "by": "maintenance",
+                      "code": null,
+                      "rule": "9e2f4a6b8c0d1e3f"
+                    },
+                    "data": null,
+                    "form": null,
+                    "grading": "actions.disabled_severity_map",
+                    "handled": [
+                      {
+                        "counts_as": "nothing",
+                        "created_at": "<volatile>",
+                        "created_by": "ada",
+                        "expires_at": "2026-12-19T12:30:00Z",
+                        "id": "9e2f4a6b8c0d1e3f",
+                        "kind": "maintenance",
+                        "note": "off until the migration lands",
+                        "set_at": "<volatile>",
+                        "set_by": "ada",
+                        "source": "person"
+                      }
+                    ],
+                    "refused": null,
+                    "running": false,
+                    "slug": "1001-workflow-77",
+                    "subject": "",
+                    "text": "acme/api / nightly: disabled manually"
+                  },
+                  {
+                    "code": "OK",
+                    "contribution": null,
+                    "data": null,
+                    "form": null,
+                    "grading": null,
+                    "handled": [],
+                    "refused": "it is 2,811 bytes and the limit is 2,048",
+                    "running": false,
+                    "slug": "1001-workflow-9-main",
+                    "subject": "1001",
+                    "text": "acme/api (main) / Deploy: passed (#12)"
+                  }
+                ]
+              },
+              "handled": [],
+              "name": "actions",
+              "order": 0,
+              "own": "ERROR",
+              "own_period": {
+                "before": true,
+                "since": "<volatile>"
+              },
+              "path": "/platform/actions",
+              "period": {
+                "before": true,
+                "since": "<volatile>"
+              },
+              "record": null,
+              "report": "",
+              "reported": "ERROR",
+              "run": {
+                "next_at": null,
+                "observed_at": "<volatile>",
+                "wall_seconds": null
+              },
+              "shielded_by": null,
+              "show_when_quiet": true,
+              "stale": false,
+              "subject": "",
+              "title": ""
+            }
+          ],
+          "code": "ERROR",
+          "config": "checks/platform.yaml",
+          "contribution": null,
+          "description": "the platform team's repositories",
+          "entries": {
+            "addressable": false,
+            "items": [
+              {
+                "code": null,
+                "contribution": null,
+                "data": null,
+                "form": null,
+                "grading": null,
+                "handled": [],
+                "refused": null,
+                "running": false,
+                "slug": "h-415dc6ff2b",
+                "subject": "",
+                "text": "one repository is short"
+              }
+            ]
+          },
+          "handled": [],
+          "name": "platform",
+          "order": 3,
+          "own": "WARN",
+          "own_period": {
+            "before": true,
+            "since": "<volatile>"
+          },
+          "path": "/platform",
+          "period": {
+            "by": "/platform/actions",
+            "cause": "reading",
+            "since": "<volatile>",
+            "was": "WARN"
+          },
+          "record": null,
+          "report": "- [api](https://example.test/api)",
+          "reported": "WARN",
+          "run": {
+            "next_at": null,
+            "observed_at": "<volatile>",
+            "wall_seconds": null
+          },
+          "shielded_by": null,
+          "show_when_quiet": false,
+          "stale": false,
+          "subject": "",
+          "title": "Platform"
+        }
+      ],
+      "code": "ERROR",
+      "config": "",
+      "contribution": null,
+      "description": "",
+      "entries": {
+        "addressable": false,
+        "items": []
+      },
+      "handled": [],
+      "name": "overall",
+      "order": 0,
+      "own": "UNDEFINED",
+      "path": "/",
+      "period": {
+        "by": "/services/db",
+        "cause": "reading",
+        "since": "<volatile>",
+        "was": "OK"
+      },
+      "record": null,
+      "report": "",
+      "reported": "UNDEFINED",
+      "shielded_by": null,
+      "show_when_quiet": null,
+      "stale": false,
+      "subject": "",
+      "title": ""
+    }
+  },
+  "schema_version": 3,
+  "volatile": [
+    "generated_at",
+    "observed_at",
+    "next_at",
+    "version",
+    "set_at",
+    "created_at",
+    "since"
+  ]
+}

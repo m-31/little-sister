@@ -33,7 +33,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 # Import the fixtures as a package module whether run as a script or under pytest.
 sys.path.insert(0, str(_REPO_ROOT))
 
-# The app loads the user list at import (ADR-0020); point it at the committed
+# The app loads the user list at import (ADR-0046 decision 3); point it at the committed
 # fixture root — the same path-list tests/conftest.py builds, set here too so this
 # stays runnable as a script (the cwd `config/` has no committed user list —
 # `config/users/` is git-ignored). The import starts nothing (ADR-0091), and each
@@ -66,6 +66,7 @@ from little_sister.app import (  # noqa: E402
 )
 from little_sister.copy_status import format_tree_markdown  # noqa: E402
 from little_sister.first_look import FirstLooks  # noqa: E402
+from little_sister.nodes import NodeMeta  # noqa: E402
 from little_sister.render import render_markdown  # noqa: E402
 from tests.ui_fixtures import FIXTURES, FIXTURES_BY_NAME, Fixture  # noqa: E402
 
@@ -73,7 +74,7 @@ _DEFAULT_OUT = _REPO_ROOT / "var" / "ui-harness"
 _STATIC_SRC = _REPO_ROOT / "src" / "little_sister" / "static"
 
 # The sheet is a static artifact: a fixed stamp keeps re-runs diffable (the
-# live server formats the real time into this slot — ADR-0006), and the same
+# live server formats the real time into this slot — ADR-0120 decision 7), and the same
 # instant in whole seconds rides on the grid for the tab's map.
 _RENDERED_AT = "2026-07-20 12:00:00"
 _RENDERED_S = int(datetime(2026, 7, 20, 12, 0, 0, tzinfo=UTC).timestamp())
@@ -92,22 +93,24 @@ def render_page(fixture: Fixture) -> str:
     :func:`_localize_static` rewrites them per output directory.
     """
     node = fixture.build()
-    # Mirror the view: lift the engine heartbeat into the status strip (ADR-0024) so
+    # Mirror the view: lift the engine heartbeat into the status strip (ADR-0056) so
     # the harness renders the strip exactly as a live request does.
     node, heartbeat = _split_heartbeat(node)
     node_pins, entry_pins, maintenance_ancestors = _maintenance_view(
         node, datetime.now(UTC))
     maintenance_rows = _maintenance_rows(node_pins, entry_pins)
     path = f"/status/{fixture.branch}" if fixture.branch else "/status"
-    # The first look as the route draws it (ADR-0128), from nothing but the
-    # settings — a fixture is a hand-built snapshot no check writes — at the
-    # fixture's line budget; `dense=False` leaves every level nobody spoke for
-    # open, as the chips switch off did.
+    # The first look as the route draws it (ADR-0128), from the fixture's own
+    # `nodes.yaml` and settings — a fixture is a hand-built snapshot no check
+    # writes — at its line budget and with its `chips`, `False` drawing every level
+    # open.
     reason_cap = (fixture.reason_cap if fixture.reason_cap is not None
                   else app_module.config.reason_cap)
-    looks = FirstLooks((), {}, replace(app_module.config, reason_cap=reason_cap),
-                       lambda _path: False)
-    drawn = _first_drawn(node, None, looks, dense=fixture.dense)
+    settings = replace(app_module.config, reason_cap=reason_cap, chips=fixture.chips)
+    looks = FirstLooks((), {path: NodeMeta(look=look)
+                            for path, look in fixture.nodes.items()},
+                       settings, lambda _path: False)
+    drawn = _first_drawn(node, None, looks)
     previous_error = app_module.engine_error
     app_module.engine_error = fixture.engine_error
     # The series the node's facts show come from the engine, as on a live page; a
@@ -124,6 +127,9 @@ def render_page(fixture: Fixture) -> str:
                 template,
                 username="harness",
                 firstname="Harness",
+                # whom the settings menu's first row names: a harness render has
+                # no identity door to ask, so it is passed, as `is_admin` is
+                signed_in_as="harness",
                 node=node,
                 branch=fixture.branch,
                 dependents=fixture.dependents,
@@ -147,7 +153,6 @@ def render_page(fixture: Fixture) -> str:
                 node_meta=_node_meta_map(node) | _node_meta_map(heartbeat),
                 rendered_at=_RENDERED_AT,
                 reason_cap=reason_cap,
-                branch_cap=app_module.config.branch_cap,
                 maintenance_cap=app_module.config.maintenance_cap,
                 maintenance_rows=maintenance_rows,
                 maintenance_ancestors=maintenance_ancestors,
@@ -161,6 +166,9 @@ def render_page(fixture: Fixture) -> str:
                 # period is in the same log (ADR-0123 decision 3): the card's
                 # first line, where it has one, says *from the nodes beneath it*.
                 made_by=None,
+                # Nor a period of what a node above others shows, which the tree
+                # keeps beside its log (ADR-0132 decision 5): none to state.
+                shows=None,
                 focus="",
                 focus_orphan=None,
                 # A hand-built snapshot has no tree above it to hold a pin.
@@ -187,7 +195,7 @@ def render_copy_page() -> str:
         # in the root's band, as the route draws the tree's page (ADR-0115 decision 7)
         return render_template(
             "text.html", username="harness", firstname="Harness",
-            copy_markdown=markdown, copy_html=rich,
+            signed_in_as="harness", copy_markdown=markdown, copy_html=rich,
             copy_html_text=str(rich), copy_kind="tree",
             node=root, branch="", view="copy")
 

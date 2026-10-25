@@ -1,21 +1,21 @@
 # ADR-0086 — A check measures, and then grades what it measured
 
 - **Status:** Accepted
-- **Date:** 2026-10-04 (accepted 2026-09-27)
-- **Related:** [ADR-0085](0085-a-measure-is-read-out-of-a-record.md) (the record
-  this splits in two, and whose decision 2 moves here),
-  [ADR-0040](0040-what-a-failing-check-becomes.md) (what a raising check becomes,
-  which now also produces a reading),
-  [ADR-0051](0051-what-startup-refuses.md) (the epoch a plugin refuses on),
-  [ADR-0049](0049-the-check-authoring-surface.md) (the surface this changes),
-  [ADR-0075](0075-a-check-declares-what-it-costs.md) (the declarations three
-  types can now make exact), [ADR-0007](0007-check-result-branches.md) (the tree
-  a grading still returns), [ADR-0058](0058-transport-policy-vocabulary.md) (the
+- **Date:** 2026-10-25 (accepted 2026-09-27)
+- **Related:** [ADR-0085](0085-a-measure-is-read-out-of-a-record.md) (the record this
+  splits in two, and whose decision 2 moves here),
+  [ADR-0040](0040-what-a-failing-check-becomes.md) (what a raising check becomes, which
+  now also produces a reading), [ADR-0051](0051-what-startup-refuses.md) (the epoch a
+  plugin refuses on), [ADR-0049](0049-the-check-authoring-surface.md) (the surface this
+  changes), [ADR-0075](0075-a-check-declares-what-it-costs.md) (the declarations three
+  types can now make exact), [ADR-0007](0007-check-result-branches.md) (the tree a
+  grading still returns), [ADR-0058](0058-transport-policy-vocabulary.md) (the
   instrument-versus-subject question this makes structural),
   [ADR-0087](0087-a-check-keeps-its-subjects-readings.md) (the series that narrows
-  decision 8 again),
-  [ADR-0106](0106-a-subject-with-a-history-has-a-node-of-its-own.md) (a subject's
-  own node, where a line may name the subject its reading does not)
+  decision 8 again), [ADR-0106](0106-a-subject-with-a-history-has-a-node-of-its-own.md)
+  (a subject's own node, where a line may name the subject its reading does not),
+  [ADR-0082](0082-a-line-carries-what-it-is-about-and-what-it-read.md) (decision 4: the
+  default `record_limit`, which the command types' records are not sized to)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -77,13 +77,13 @@ nothing to do.
 
 The same case showed that decision 8 decides a subject's **grain**. The object of that
 line had been the repository, and a repository with many workflow-branches would have
-been one object many times over, so the object became the workflow on its branch and
-the repository a field in the record that a projection groups by. One measurement per
+been one object many times over, so the object became the workflow on its branch and the
+repository a field in the record that a projection groups by. One measurement per
 repository was the other way out, and it was measured before it was refused: a
-workflow-branch record weighs 291 bytes, so ten of them pass the 2 KB `record_limit`
-before any other aspect is counted. The `github` type's pull requests, alerts and issues
-are measured one measurement per line for the same reason; whether any of them is an
-object with a history is a decision for later, against its own surface.
+workflow-branch record weighs 291 bytes, so ten of them pass the 2 KB `record_limit` of
+the time before any other aspect is counted. The `github` type's pull requests, alerts
+and issues are measured one measurement per line for the same reason; whether any of
+them is an object with a history is a decision for later, against its own surface.
 
 A line on a subject's own node may name that subject where its reading names none
 ([ADR-0106](0106-a-subject-with-a-history-has-a-node-of-its-own.md) decision 2) — a
@@ -178,12 +178,13 @@ construction, and the clock it is **given**. Nothing else: not an attribute
 `measure()` left behind, not the world again, not `datetime.now()` — a grading
 that called the clock itself could not be replayed either.
 
-Two consequences run through every type. **A record is not the check's working
-state**: the raw answer — a 150-finding page, an unshortened log — stays inside
-the check, and what crosses into the record is what is worth keeping, because
-`record_limit` is 2 KB. And **what the line says has to be in the record**, since
-the grading may read nothing else; for the three checks whose line *is* their
-captured output, that is the whole of the design question in decision 7.
+Two consequences run through every type. **A record is not the check's working state**:
+the raw answer — a 150-finding page, an unshortened log — stays inside the check, and
+what crosses into the record is what is worth keeping, because `record_limit` is 3 KB by
+default ([ADR-0082](0082-a-line-carries-what-it-is-about-and-what-it-read.md) decision
+4). And **what the line says has to be in the record**, since the grading may read
+nothing else; for the three checks whose line *is* their captured output, that is the
+whole of the design question in decision 7.
 
 A value the check could not read stands as **`None`** in the record rather than
 being left out (ADR-0085 decision 3): one shape per check, so a curve draws a real
@@ -194,17 +195,26 @@ on every healthy reading would lengthen every record for nothing.
 ### 7. Free text entering a record is clipped once, and in bytes
 
 `command`, `ssh-command` and `ssh-script` read no number; their line's whole text
-is the captured output, so the output has to be in the record. That makes
-`record_limit` the real ceiling on how much a deployment may keep, and `max_chars`
-a request within it.
+is the captured output, so the output has to be in the record. They size their records
+to 2,048 bytes, a number of their own (`OUTPUT_RECORD` in `checks/output.py`), and not
+to the default `record_limit`, 3,072: their records weigh two thirds of the default,
+under the share at which a start says a declared record is close, and a deployment
+that keeps `record_limit` at 2,048 starts them all the same. That number is the real
+ceiling on how much a deployment may keep, and `max_chars` a request within it. An
+over-SSH type spends it on its transport half and its output together, the output's
+budget being what the record leaves after the transport half: at `max_chars: 1000`,
+the template's, `ssh-command` and `ssh-script` declare 2,048 bytes, 1,040 of it output,
+704 with `debug`. Where the transport half came on top of an output that filled the
+record alone, they declared 2,672, and a start refused them at the default of the time,
+2,048.
 
-The bound is in **bytes**, and this is the part that is easy to get wrong. A
-record is weighed as `json.dumps` writes it, which escapes to ASCII. Measured
-against the 2 KB default, 1000 characters of output come to 1014 bytes in ASCII,
-2014 when every one of them is a newline, 6014 in umlauts or CJK, and 12014 in
-emoji, which JSON writes as surrogate pairs. A check clipping by characters alone
-would declare a size it could exceed twelvefold and then be refused at the seam on
-every run — the exact failure a declaration exists to prevent.
+The bound is in **bytes**, and this is the part that is easy to get wrong. A record is
+weighed as `json.dumps` writes it, which escapes to ASCII. Measured against those 2,048
+bytes, 1000 characters of output come to 1014 bytes in ASCII, 2014 when every one of
+them is a newline, 6014 in umlauts or CJK, and 12014 in emoji, which JSON writes as
+surrogate pairs. A check clipping by characters alone would declare a size it could
+exceed twelvefold and then be refused at the seam on every run — the exact failure a
+declaration exists to prevent.
 
 So the text is clipped **once**: to `max_chars` characters and then into whatever
 byte budget is left, off the same end, and that one result is both the record and

@@ -1,29 +1,45 @@
-{#- The settings menu: the user's name opens it, and it
-    holds everything that is about *this browser's* view of the surface — each look
-    of `looks.py`, the theme leading them, the layout after the theme, and the way
-    out. A look's group is the roster's entry, its heading and its values' words, and
-    its value checked is the one in force: this browser's choice, or the deployment's
-    default where it has made none (ADR-0029).
+{#- The settings menu: the user's name opens it. Its first row is the session's —
+    whom this browser is signed in as, and the way out, a button — a thing done to a
+    session and not to how the page looks, so it stands apart, above the rest, and
+    in reach at once however short the window. Beneath it, under the headline *Display*
+    and its line that says where these choices are kept, everything that is about *this
+    browser's* view of the surface — each look of `looks.py`, the theme leading them,
+    the layout after the theme.
+
+    A look's group is the roster's entry, its heading, the line beneath it that says
+    what the group changes — the page's help on its settings, beside the choice
+    (backlog #91) — and its values' words, and its value checked is the one in force:
+    this browser's choice, or the deployment's default where it has made none
+    (ADR-0029). Each group is a radio group its heading names and its line describes, so
+    a screen reader says both as the focus enters it; the groups stand in columns where
+    the window has room for them, and read down each in turn, as the keyboard walks
+    them — two, and three at a desk since the eighth group.
 
     Radio circles rather than check marks, because these are exclusive choices,
     and each one submits immediately — `data-ls-submit`, the same marker the
     dashboard's filter switches carry, wired once by prefs.js. The post
     goes to /preferences, which writes the cookie and sends the viewer back to
     the page they were on; the server then renders the choice onto <body>, so
-    the next page never flashes the wrong scheme (ADR-0029).
-
-    Logout lives in here now — the bar has no room for a red button once it is
-    only brand and user, and a logout is a thing you do to a session, not a
-    piece of navigation. -#}
+    the next page never flashes the wrong scheme (ADR-0029). The menu stays open
+    while the viewer chooses: a click inside it closes it no more
+    (`data-bs-auto-close="outside"`, where Bootstrap's own closes it on every click),
+    and the page a choice reloads opens it again on that choice (prefs.js);
+    Escape or a click outside it closes it.
+ -#}
 {%- macro look_group(look) %}
-            <div class="ls-menu__heading">{{ look.heading }}</div>
-            {% for value in look.values %}
-            <label class="ls-menu__item">
-                <input class="ls-menu__radio" type="radio" name="{{ look.key }}" value="{{ value }}"
-                       {% if look_values[look.key] == value %}checked{% endif %} data-ls-submit>
-                <span>{{ look.label(value) }}</span>
-            </label>
-            {% endfor %}
+            <div class="ls-menu__group" role="radiogroup"
+                 aria-labelledby="ls-menu-heading-{{ look.key }}"
+                 aria-describedby="ls-menu-line-{{ look.key }}">
+                <div class="ls-menu__heading" id="ls-menu-heading-{{ look.key }}">{{ look.heading }}</div>
+                <div class="ls-menu__line" id="ls-menu-line-{{ look.key }}">{{ look.line }}</div>
+                {% for value in look.values %}
+                <label class="ls-menu__item">
+                    <input class="ls-menu__radio" type="radio" name="{{ look.key }}" value="{{ value }}"
+                           {% if look_values[look.key] == value %}checked{% endif %} data-ls-submit>
+                    <span>{{ look.label(value) }}</span>
+                </label>
+                {% endfor %}
+            </div>
 {%- endmacro -%}
 {%- set layout_labels = {
         'rail': 'left rail',
@@ -32,7 +48,7 @@
     } -%}
 <div class="dropdown ls-menu">
     <button class="ls-menu__trigger" type="button" id="ls-settings"
-            data-bs-toggle="dropdown" aria-expanded="false">
+            data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false">
         <img class="ls-menu__avatar" src="{{ user_avatar_url }}" alt=""
              width="28" height="28">
         <span class="ls-accent">{{ firstname }}</span>
@@ -46,32 +62,54 @@
     </button>
     <div class="dropdown-menu dropdown-menu-end ls-menu__panel"
          aria-labelledby="ls-settings">
-        <form method="post" action="{{ url_for('preferences') }}">
+        <div class="ls-menu__who">
+            <span class="ls-menu__who-name">
+                {%- if signed_in_as %}Signed in as {{ signed_in_as }}{% endif -%}
+            </span>
+            <a class="ls-menu__logout" href="/logout">Log out</a>
+        </div>
+        <div class="dropdown-divider"></div>
+        <form method="post" action="{{ url_for('preferences') }}"
+              aria-labelledby="ls-menu-title" aria-describedby="ls-menu-title-line">
             {# come back to the page this was opened from, filters and all #}
             <input type="hidden" name="next" value="{{ request.full_path.rstrip('?') }}">
 
+            <div class="ls-menu__title" id="ls-menu-title">Display</div>
+            <div class="ls-menu__title-line"
+                 id="ls-menu-title-line">Saved in this browser, not in your account.</div>
+
             {#- the theme leads, and the other looks follow the layout -#}
+            <div class="ls-menu__groups">
             {{ look_group(looks | selectattr('key', 'equalto', 'theme') | first) }}
 
-            <div class="dropdown-divider"></div>
-            <div class="ls-menu__heading">Layout</div>
-            {% for value in layouts %}
-            <label class="ls-menu__item">
-                <input class="ls-menu__radio" type="radio" name="layout" value="{{ value }}"
-                       {% if layout == value %}checked{% endif %} data-ls-submit>
-                <span>{{ layout_labels[value] }}</span>
-            </label>
-            {% endfor %}
+            <div class="ls-menu__group" role="radiogroup"
+                 aria-labelledby="ls-menu-heading-layout"
+                 aria-describedby="ls-menu-line-layout">
+                <div class="ls-menu__heading" id="ls-menu-heading-layout">Layout</div>
+                <div class="ls-menu__line" id="ls-menu-line-layout">{{ layout_line }}</div>
+                {% for value in layouts %}
+                <label class="ls-menu__item">
+                    <input class="ls-menu__radio" type="radio" name="layout" value="{{ value }}"
+                           {% if layout == value %}checked{% endif %} data-ls-submit>
+                    <span>{{ layout_labels[value] }}</span>
+                </label>
+                {% endfor %}
+            </div>
 
             {% for look in looks if look.key != 'theme' %}
-            <div class="dropdown-divider"></div>
             {{ look_group(look) }}
             {% endfor %}
 
-            <div class="dropdown-divider"></div>
-            {# Reserved: the per-user overrides of settings.yaml's defaults, which
-               need somewhere to persist that a cookie is not. #}
-            <span class="ls-menu__item is-disabled">settings&hellip;</span>
+            {#- The account of using the wall, at the menu's foot (ADR-0136): the last
+                thing in the groups' flow, so that at a desk it stands at the foot of
+                the last column, in the room the longer columns before it leave, and on
+                a phone at the menu's end — a menu no taller for it. -#}
+            <a class="ls-menu__help" href="{{ url_for('help_page') }}">Using the wall</a>
+            </div>
+
+            {# Reserved, and drawn when there is something to draw: the per-user
+               overrides of settings.yaml's defaults, which need somewhere to persist
+               that a cookie is not, stand after the looks. #}
 
             {# The menu submits on change; without JavaScript this button is the
                way to apply a choice. #}
@@ -81,7 +119,5 @@
                 </div>
             </noscript>
         </form>
-        <div class="dropdown-divider"></div>
-        <a class="ls-menu__item ls-menu__logout" href="/logout">Logout</a>
     </div>
 </div>

@@ -16,8 +16,8 @@
   container becomes subject to it, deliberately),
   [ADR-0019](0019-inspection-popover.md) (where a container's metadata surfaces
   today — the reason the branch head grows rather than a new page),
-  [ADR-0008](0008-json-output-api.md) (the envelope, untouched until the contract
-  round)
+  [ADR-0080](0080-the-envelope-is-the-snapshot-published.md) (the envelope, untouched
+  until the contract round, which publishes the run facts as `run`)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context

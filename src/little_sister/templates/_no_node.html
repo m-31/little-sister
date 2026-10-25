@@ -2,15 +2,20 @@
     whichever view of it was asked for, on the page that answers its address and in
     the part an open Status page's refresh swaps in when its node leaves. It says
     what the event log and the pins know of the path, and where the nearest node
-    above it stands; nothing is kept for it that those two do not already keep.
-    Expects `no_node` (`_NoNode`), `is_admin`, and what a pin's editor prints. -#}
+    above it stands; nothing is kept for it that those two do not already keep —
+    and the notes written for it and beneath it, which outlive the node (ADR-0047
+    decision 7) and are found here, where no Notes view stands (ADR-0140). Expects
+    `no_node` (`_NoNode`), `is_admin`, and what a pin's editor prints. -#}
 {% from '_pin_sections.html' import suspended_pins, suspended_sentence with context %}
+{% from '_notes.html' import note_item with context %}
 <section class="ls-no-node" aria-label="No node at this path">
     <p class="ls-no-node__lead">No node stands at <code>{{ no_node.path }}</code>.</p>
     {%- if no_node.removed %}
     <p>Removed {{ no_node.removed }}: {{ no_node.reason }}. <a href="{{ no_node.events }}">Events</a> lists what was recorded of it.</p>
     {%- elif no_node.events %}
     <p>It is not reported at present. <a href="{{ no_node.events }}">Events</a> lists what was recorded of it.</p>
+    {%- elif no_node.notes %}
+    <p>No check reports a node here, and the event log holds nothing at this path.</p>
     {%- else %}
     <p>Nothing is recorded of it: no check reports a node here, and the event log holds nothing at this path.</p>
     {%- endif %}
@@ -27,6 +32,21 @@
         </div>
     </div>
     {%- endfor %}
+    {#- The notes written for the path and beneath it, newest first, each under the
+        path it was written for where that is not the page's own: kept as they were
+        written, with what the node showed then. Nothing links to a line, and nothing
+        is edited: the node they were on is not here to be shown again. -#}
+    {%- if no_node.notes %}
+    <section class="ls-no-node__notes" aria-label="Notes written for it">
+        <h2 class="h5 mt-3">Notes</h2>
+        <p class="small text-muted">{{ no_node.notes | length }} {{ 'note is' if no_node.notes | length == 1 else 'notes are' }} kept for it{% if no_node.notes | map(attribute='note.path') | reject('equalto', no_node.pin_path) | list %} and beneath it{% endif %}, newest first.</p>
+        <ol class="ls-notes list-unstyled">
+            {%- for shown in no_node.notes %}
+            {{ note_item(shown, '', loop.index, at=shown.note.path if shown.note.path != no_node.pin_path else '') }}
+            {%- endfor %}
+        </ol>
+    </section>
+    {%- endif %}
     {%- if no_node.above %}
     <p>The nearest node above it that stands is <a href="{{ url_for('status', branch=no_node.above) }}">{{ no_node.above }}</a>: <a href="{{ url_for('history', path=no_node.above) }}">History</a>{% if no_node.above_series %}, <a href="{{ url_for('series', path=no_node.above) }}">Series</a>{% endif %}.{% if no_node.removed %} Readings kept of a subject that was removed are listed on its History page.{% endif %}</p>
     {%- elif no_node.first_level %}

@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html>
+<head>
+    {% from '_maintenance_fields.html' import maintenance_fields with context %}
+    {% from '_rule_block.html' import ack_new with context %}
+    {% set page_title = 'Not marked seen' %}
+    {% include '_header.html' %}
+
+    {#- A refused write of a *seen* (ADR-0142), as a pin's refusal is (ADR-0014):
+        **nothing was written**, and the person's own words are still theirs.
+
+        Three refusals land here. **A problem**: an end not to be read, or out of
+        bounds; a part that fails no longer, or is held in maintenance — said as the
+        tree said it — with the words back in a form, where marking is still the
+        point. **A head's parts that changed** since its editor listed them: what
+        fails at and beneath the node now, listed, with a form that marks those, its
+        digest refreshed, so that nothing is marked that was not shown. And **a
+        compare-and-set** that found somebody else's write first: the stored one,
+        named and dated, beside the person's words, the re-submit carrying the
+        refreshed token. -#}
+    <div class="container-fluid mt-3 px-4" style="max-width: 820px">
+        <h1 class="h4 mb-3">Seen — {{ node_path }}{% if slug %} <span class="text-muted">· one line</span>{% endif %}</h1>
+
+        {% if parts %}
+            <div class="alert alert-warning">
+                <p class="mb-0">Nothing was saved. {{ problem }}</p>
+            </div>
+            <div class="card mb-3">
+                <div class="card-body">
+                    <h2 class="h6 text-muted text-uppercase">What fails here now</h2>
+                    {{ ack_new('node', path, '', 'refused', what=('the %d failures here, each its own' % (parts | length)) if (parts | length) > 1 else 'the one failure here', digest=digest, parts=parts, next=back) }}
+                </div>
+            </div>
+            <a class="btn btn-link" href="{{ back }}">Mark nothing</a>
+        {% elif problem %}
+            <div class="alert alert-warning">
+                <p class="mb-0">Nothing was saved. {{ problem }}</p>
+            </div>
+            <div class="card mb-3">
+                <div class="card-body">
+                    <h2 class="h6 text-muted text-uppercase">Your note</h2>
+                    <form method="post" action="{{ url_for('seen') }}">
+                        <input type="hidden" name="path" value="{{ path }}">
+                        {%- if slug %}<input type="hidden" name="slug" value="{{ slug }}">{% endif %}
+                        <input type="hidden" name="action" value="set">
+                        <input type="hidden" name="set_at" value="{{ token }}">
+                        <input type="hidden" name="next" value="{{ back }}">
+                        {{ maintenance_fields(mine, duration, 'refused',
+                                              maintenance_default,
+                                              maintenance_timezone, false,
+                                              expiry_was, ending=true) }}
+                        <button class="btn btn-primary" type="submit">Mark seen</button>
+                    </form>
+                </div>
+            </div>
+            <a class="btn btn-link" href="{{ back }}">Change nothing</a>
+        {% elif stored %}
+            <div class="alert alert-warning">
+                <p class="mb-1">Nothing was saved. <strong>{{ stored.set_by or 'Someone else' }}</strong>
+                    changed this {{ stored.kind }} {{ stored.set_at | localtime }}, after the form
+                    you submitted was drawn.</p>
+                <p class="mb-0 small">Marked {{ stored.kind }} by
+                    <strong>{{ stored.created_by or 'unknown' }}</strong> {{ stored.created_at | localtime }}{% if stored.expires_at %};
+                    it ends {{ stored.expires_at | localtime }} at the latest{% endif %}.</p>
+            </div>
+
+            <div class="card mb-3">
+                <div class="card-body">
+                    <h2 class="h6 text-muted text-uppercase">The stored note</h2>
+                    {% if stored.note %}
+                        <div class="maintenance-explanation md-body">{{ stored.note | markdown(node=node_path) }}</div>
+                    {% else %}
+                        <p class="mb-0 text-muted">No note was written.</p>
+                    {% endif %}
+                </div>
+            </div>
+
+            {% if clearing %}
+                <p>You asked to clear a {{ stored.kind }} that is no longer the one above.
+                    Clear it anyway, or leave it as it stands.</p>
+                <form method="post" action="{{ url_for('seen') }}" class="d-inline">
+                    <input type="hidden" name="path" value="{{ path }}">
+                    {%- if slug %}<input type="hidden" name="slug" value="{{ slug }}">{% endif %}
+                    <input type="hidden" name="action" value="clear">
+                    <input type="hidden" name="set_at" value="{{ stored.token }}">
+                    <input type="hidden" name="next" value="{{ back }}">
+                    <button class="btn btn-outline-secondary" type="submit">Clear it</button>
+                </form>
+                <a class="btn btn-link" href="{{ back }}">Leave it</a>
+            {% else %}
+                <div class="card mb-3">
+                    <div class="card-body">
+                        <h2 class="h6 text-muted text-uppercase">Your note</h2>
+                        <form method="post" action="{{ url_for('seen') }}">
+                            <input type="hidden" name="path" value="{{ path }}">
+                            {%- if slug %}<input type="hidden" name="slug" value="{{ slug }}">{% endif %}
+                            <input type="hidden" name="action" value="set">
+                            <input type="hidden" name="set_at" value="{{ stored.token }}">
+                            <input type="hidden" name="next" value="{{ back }}">
+                            {{ maintenance_fields(mine, duration, 'refused',
+                                                  maintenance_default,
+                                                  maintenance_timezone, false,
+                                                  expiry_was, ending=true) }}
+                            <button class="btn btn-primary" type="submit">Save mine, replacing the stored note</button>
+                        </form>
+                    </div>
+                </div>
+                <a class="btn btn-link" href="{{ back }}">Change nothing</a>
+            {% endif %}
+        {% else %}
+            <div class="alert alert-warning">
+                <p class="mb-0">Nothing was saved. What you were working on is gone —
+                    someone cleared it, or it ended as what it accepted changed.</p>
+            </div>
+            <a class="btn btn-primary" href="{{ back }}">Back</a>
+        {% endif %}
+    </div>
+
+{% include '_page_end.html' %}
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="{{ url_for('static', filename='js/rail.js') }}"></script>
+</body>
+</html>

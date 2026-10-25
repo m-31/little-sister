@@ -2,11 +2,17 @@
 
     Maintenance is the first kind and today the only one: a pin on a node, or on
     one of its lines. The block is the one statement of it wherever it shows — who
-    silenced it, until when and what is left, its note in full, and for an admin
-    *Edit* and *Clear* — and a pin is edited where its block stands. *Edit* is the
-    browser's own disclosure, so every editor works without script and pinned
+    put it in maintenance, until when and what is left, its note in full, and for an
+    admin *Edit* and *Clear* — and a pin is edited where its block stands. *Edit* is
+    the browser's own disclosure, so every editor works without script and pinned
     stays a read state (ADR-0014 decision 16); the stylesheet is what makes the
     open editor stand in for the note and the buttons.
+
+    **On the wall the block is lighter** (ADR-0135 decisions 3 to 5): its mark and
+    its sentence, the note behind a mark of its own that opens it in a card, an
+    admin's *Edit* a pencil and *Clear* in the editor, in words. A node's page and
+    the *Handled* page state it whole. Every block's edge is dashed — nothing else
+    on the wall has one — and only a rule that paints its node fills its block.
 
     **The kind is data** (decision 8): `data-rule` on the block picks its tint in
     the stylesheet, `rule_mark` draws its mark, and a rule an admin set is the one
@@ -14,9 +20,9 @@
     gets the block without them. A second kind is a second value of each and a row
     beside this one, never a second component.
 
-    `path` and `slug` address the pin as `POST /maintenance` reads them (`slug`
-    empty for the node's own), and `prefix` keeps an editor's field ids unique on
-    a page that may carry hundreds of them. Imported `with context`, for the
+    `path` and `slug` address the pin as `POST /pins/maintenance` reads them
+    (`slug` empty for the node's own), and `prefix` keeps an editor's field ids
+    unique on a page that may carry hundreds of them. Imported `with context`, for the
     deployment's default window and its timezone that the fields print.
 
     **A block on the wall or in a branch's head stands in what the refresh swaps**
@@ -25,22 +31,46 @@
     `form.maintenance-editor-form`, which is the shape both macros below write. -#}
 {% from '_maintenance_fields.html' import maintenance_fields with context %}
 
-{#- The kind's mark: maintenance pauses, as the wall's pin control draws it. -#}
+{#- The kind's mark: maintenance pauses, as the wall's pin control draws it, a
+    failure accepted — *seen* — is a ringed check (ADR-0135 decision 2, ADR-0142), and
+    a configured rule is §, which says where a rule is written rather than what it
+    does (ADR-0135 decision 1, ADR-0137), drawn as a path to the cues' height. The
+    bell struck through comes with *silenced*. -#}
 {% macro rule_mark(kind) -%}
-{%- if kind == 'maintenance' -%}
+{%- if kind in ('seen', 'done') -%}
+<svg class="rule-mark" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" focusable="false"><rect x="2.2" y="2.2" width="11.6" height="11.6" rx="2.6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M5 8.3 7.2 10.5 11.2 5.8" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>
+{%- elif kind == 'maintenance' -%}
 <svg class="rule-mark" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" focusable="false"><rect x="4" y="3.5" width="2.7" height="9" rx="0.7" fill="currentColor"/><rect x="9.3" y="3.5" width="2.7" height="9" rx="0.7" fill="currentColor"/></svg>
+{%- elif kind == 'aggregation' -%}
+<svg class="rule-mark" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" focusable="false"><path d="M10.6 4.1C10.2 3 9.2 2.4 8 2.4 6.6 2.4 5.6 3.2 5.6 4.3c0 1.2 1.1 1.7 2.5 2.2 1.5.5 2.6 1.1 2.6 2.4 0 .9-.6 1.6-1.5 1.9M6.9 6.1C6 6.4 5.3 7.1 5.3 8c0 1.3 1.1 1.9 2.6 2.4 1.4.5 2.5 1 2.5 2.2 0 1.1-1 1.9-2.4 1.9-1.2 0-2.2-.6-2.6-1.7" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
 {%- endif -%}
+{%- endmacro %}
+{#- What is handled beneath a closed node, and the index of it (ADR-0135 decisions 6
+    and 8): a ringed diamond, in `currentColor` as the marks are; decorative, its
+    words in the tooltip and the accessible name of what carries it. -#}
+{% macro handled_mark() -%}
+<svg class="handled-mark" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" focusable="false"><path d="M8 1.8 14.2 8 8 14.2 1.8 8Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><circle cx="8" cy="8" r="1.6" fill="currentColor"/></svg>
+{%- endmacro %}
+{#- The marks of a block's own buttons on the wall (ADR-0135 decisions 3 and 4): a
+    speech bubble that opens the note, a pencil that opens the editor. Decorative;
+    each button's words are its title and its hidden text. -#}
+{% macro note_mark() -%}
+<svg class="block-mark" viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><path d="M3 3h10a1.2 1.2 0 0 1 1.2 1.2v6A1.2 1.2 0 0 1 13 11.4H8.2L5 13.9v-2.5H3a1.2 1.2 0 0 1-1.2-1.2v-6A1.2 1.2 0 0 1 3 3Z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M4.9 6.2h6.2M4.9 8.6h4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+{%- endmacro %}
+{% macro pencil_mark() -%}
+<svg class="block-mark" viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><path d="M10.6 2.9a1.5 1.5 0 0 1 2.1 0l.4.4a1.5 1.5 0 0 1 0 2.1l-7.6 7.6-3.1.6.6-3.1Z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M9.3 4.2l2.5 2.5" stroke="currentColor" stroke-width="1.4"/></svg>
 {%- endmacro %}
 {#- The marks of a head's own buttons (ADR-0127 decision 3), drawn from
     `currentColor` as the rule mark is, so they hold on every surface in every
     theme: ↗ for the node's page, the healthy fold's funnel, ▤ for the children
-    as chips, ‖ for an admin's pin still to be set, and ⋯ for the node's actions
-    that did not fit the head's row. Decorative; each button's `aria-label` says
+    as chips, ‖ for an admin's pin still to be set, the ringed check for what fails
+    there to be marked seen (ADR-0142), and ⋯ for the node's actions that did not fit
+    the head's row. Decorative; each button's `aria-label` says
     what it does. A page draws the shapes once, `icon_sprite`, outside the grid the
     refresh swaps, and each mark refers to its shape — three buttons on every open
     head would otherwise carry a kilobyte of paths each in every fragment. -#}
 {% macro icon_sprite() -%}
-<svg class="icon-sprite" width="0" height="0" aria-hidden="true" focusable="false" style="position:absolute"><symbol id="ls-icon-page" viewBox="0 0 16 16"><path d="M6 3H3v10h10v-3M9 3h4v4M13 3 7.5 8.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol><symbol id="ls-icon-funnel" viewBox="0 0 16 16"><path d="M2 3h12l-4.6 5.4v4.1L6.6 14V8.4Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></symbol><symbol id="ls-icon-chips" viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="3.2" rx="1.6" fill="currentColor"/><rect x="2" y="9.8" width="5.2" height="3.2" rx="1.6" fill="currentColor"/><rect x="8.8" y="9.8" width="5.2" height="3.2" rx="1.6" fill="currentColor"/></symbol><symbol id="ls-icon-pin" viewBox="0 0 16 16"><rect x="4" y="3.5" width="2.7" height="9" rx="0.7" fill="none" stroke="currentColor" stroke-width="1.5"/><rect x="9.3" y="3.5" width="2.7" height="9" rx="0.7" fill="none" stroke="currentColor" stroke-width="1.5"/></symbol><symbol id="ls-icon-more" viewBox="0 0 16 16"><circle cx="3.5" cy="8" r="1.6" fill="currentColor"/><circle cx="8" cy="8" r="1.6" fill="currentColor"/><circle cx="12.5" cy="8" r="1.6" fill="currentColor"/></symbol></svg>
+<svg class="icon-sprite" width="0" height="0" aria-hidden="true" focusable="false" style="position:absolute"><symbol id="ls-icon-page" viewBox="0 0 16 16"><path d="M6 3H3v10h10v-3M9 3h4v4M13 3 7.5 8.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol><symbol id="ls-icon-funnel" viewBox="0 0 16 16"><path d="M2 3h12l-4.6 5.4v4.1L6.6 14V8.4Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></symbol><symbol id="ls-icon-chips" viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="3.2" rx="1.6" fill="currentColor"/><rect x="2" y="9.8" width="5.2" height="3.2" rx="1.6" fill="currentColor"/><rect x="8.8" y="9.8" width="5.2" height="3.2" rx="1.6" fill="currentColor"/></symbol><symbol id="ls-icon-pin" viewBox="0 0 16 16"><rect x="4" y="3.5" width="2.7" height="9" rx="0.7" fill="none" stroke="currentColor" stroke-width="1.5"/><rect x="9.3" y="3.5" width="2.7" height="9" rx="0.7" fill="none" stroke="currentColor" stroke-width="1.5"/></symbol><symbol id="ls-icon-ack" viewBox="0 0 16 16"><rect x="2.2" y="2.2" width="11.6" height="11.6" rx="2.6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M5 8.3 7.2 10.5 11.2 5.8" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol><symbol id="ls-icon-more" viewBox="0 0 16 16"><circle cx="3.5" cy="8" r="1.6" fill="currentColor"/><circle cx="8" cy="8" r="1.6" fill="currentColor"/><circle cx="12.5" cy="8" r="1.6" fill="currentColor"/></symbol></svg>
 {%- endmacro %}
 {% macro icon_mark(kind) -%}
 <svg class="icon-mark" aria-hidden="true"><use href="#ls-icon-{{ kind }}"/></svg>
@@ -75,72 +105,106 @@
 {%- endmacro %}
 
 {#- Who pinned it, and who changed it last where that is somebody else's write:
-    the block's sentence names only the last. -#}
+    the block's sentence names only the last. An acknowledgment was marked, in its
+    kind's word (ADR-0142). -#}
 {% macro pin_record(entry) -%}
-Pinned by <strong>{{ entry.created_by or 'unknown' }}</strong> {{ instant(entry.created_at) }}.
+{% if entry.kind == 'maintenance' %}Pinned{% else %}Marked {{ entry.kind }}{% endif %} by <strong>{{ entry.created_by or 'unknown' }}</strong> {{ instant(entry.created_at) }}.
 {%- if entry.set_at != entry.created_at %} Last changed by <strong>{{ entry.set_by or 'unknown' }}</strong> {{ instant(entry.set_at) }}.{% endif %}
 {%- endmacro %}
 
-{#- A pin, stated. `scope` is what it silences — `node` or `line` — and `also`
+{#- A pin, stated. `scope` is what it holds — `node` or `line` — and `also`
     marks a line's pin under its node's: the line stays quiet when the node's pin
     ends, which is the one thing the block has to add there. `tag` is `li` where
     the block is a row of a node's rule list.
 
     Where the block stands says what it covers, so what its sentence opens with is
     the place's to say (`subject`): on a node's own page it is *This node* or *This
-    line*, and on the Maintenance page, where the block stands under a path and
+    line*, and on *Handled*, where the block stands under a path and
     away from its line, *The whole node* or the line itself. There `record` puts
     the pin's authors under the note for everyone — the page has room for the
     whole reading, and a viewer has no editor to find it in — `next` brings a
     saved edit back to the page, and `of` names the node in the buttons' names: a
     page of many blocks is a page of many Edits. A card on the wall is the third
     place: its head names the node already, so the sentence opens with what was
-    done to it (`bare`) — *Silenced by* — and says nothing twice.
+    done to it (`bare`) — *In maintenance by* — and says nothing twice. `wall` is
+    every block the wall draws, a box's and a line's beside a card's: its note
+    waits behind its mark, and its buttons are marks.
 
     The stored placeholder `maintenance` is the absence of a note, not a note
     somebody wrote, so it is neither shown nor offered as the source to edit; a
     blank note on an edit keeps the stored text (ADR-0014 decision 15), so
     leaving it blank writes the placeholder back.
 
-    `source` is the node a pin **above** this one stands on, which silences it with
+    `source` is the node a pin **above** this one stands on, which holds it with
     everything else beneath that node (ADR-0041): the block is stated where it acts
-    as well as where it was set — *This node is silenced from /nexus/qnap* — linked
+    as well as where it was set — *This node is in maintenance from /nexus/qnap* — linked
     to that node's page, and `pins_above_stated` states it without buttons, since a
-    pin is edited where it stands (ADR-0104 decision 2). -#}
+    pin is edited where it stands (ADR-0104 decision 2).
+
+    **An acknowledgment is the same block in its kind's words** (ADR-0142 decision
+    6, ADR-0104 decision 8): `data-rule` its kind, which takes no fill, its mark the
+    ringed check, its sentence `ack_said`, its record *Marked seen by*, and its
+    editor posting to the route its kind is named for, with an end it may be given
+    rather than an expiry.
+    Its note's mark is keyed by its kind beside its part, so that a part's
+    maintenance and its *seen* each open their own. -#}
 {% macro pin_block(entry, scope, path, slug, prefix, editable, also=false, tag='div',
                    subject='', record=false, next='', of='', bare=false,
-                   source='') -%}
-{%- set note = entry.reason if entry.reason != 'maintenance' else '' -%}
+                   source='', wall=false) -%}
+{%- set kept_kind = entry.kind == 'maintenance' -%}
+{%- set note = entry.note if entry.note != 'maintenance' or not kept_kind else '' -%}
 {%- set kept = entry.expires_at | expiry_input -%}
-{%- set named %} this {{ scope }}'s maintenance{% if of %}, {{ of }}{% endif %}{% endset -%}
-<{{ tag }} class="rule-block rule-block--{{ scope }}" data-rule="maintenance">
+{%- set named %} this {{ scope }}'s {{ entry.kind }}{% if of %}, {{ of }}{% endif %}{% endset -%}
+<{{ tag }} class="rule-block rule-block--{{ scope }}{{ ' rule-block--wall' if wall }}" data-rule="{{ entry.kind }}">
     <div class="rule-block__head">
-        <span class="rule-block__what" id="{{ prefix }}-what">{{ rule_mark('maintenance') }}{% if bare %}Silenced{% else %}{% if subject %}{{ subject }}{% else %}<strong>This {{ scope }}</strong>{% endif %} is {% if also %}also silenced on its own{% else %}silenced{% endif %}{% endif %}{% if source %} from <a href="{{ url_for('status', branch=source | url_branch) if source | url_branch else url_for('status') }}"><strong>{{ source }}</strong></a>{% endif %} by <strong>{{ entry.set_by or 'an admin' }}</strong> until {{ instant(entry.expires_at) }} <span class="text-nowrap">· {{ entry.expires_at | time_left }}</span></span>
+        <span class="rule-block__what" id="{{ prefix }}-what">{{ rule_mark(entry.kind) }}{% if not kept_kind %}{{ ack_said(entry, scope, subject, bare, path) }}{% else %}{% if bare %}In maintenance{% else %}{% if subject %}{{ subject }}{% else %}<strong>This {{ scope }}</strong>{% endif %} is {% if also %}also in maintenance on its own{% else %}in maintenance{% endif %}{% endif %}{% if source %} from <a href="{{ url_for('status', branch=source | url_branch) if source | url_branch else url_for('status') }}"><strong>{{ source }}</strong></a>{% endif %} by <strong>{{ entry.set_by or 'an admin' }}</strong> until {{ instant(entry.expires_at) }} <span class="text-nowrap">· {{ entry.expires_at | time_left }}</span>{% endif %}</span>
+        {%- if wall and note %}
+        {#- The note's mark (ADR-0135 decision 3): a link to the page that states the
+            block whole, which `note-card.js` makes the button that opens the note in
+            a card. Its key names the pin; the box it stands in names the rest. -#}
+        {%- set page = url_for('status', branch=path | url_branch, reason=slug) ~ '#pinned-reason' if slug else (url_for('status', branch=path | url_branch) if path | url_branch else url_for('status')) %}
+        <a class="block-button rule-note-mark" href="{{ page }}" title="Note" aria-describedby="{{ prefix }}-what" data-note-key="{{ path }}|{{ slug }}{% if not kept_kind %}|{{ entry.kind }}{% endif %}">{{ note_mark() }}<span class="visually-hidden">Note</span></a>
+        {%- endif %}
         {%- if editable %}
         <details class="maintenance-editor-disclosure rule-block__edit">
+            {%- if wall %}
+            <summary class="block-button" title="Edit" aria-describedby="{{ prefix }}-what">{{ pencil_mark() }}<span class="visually-hidden">Edit{{ named }}</span></summary>
+            {%- else %}
             <summary class="rule-button" aria-describedby="{{ prefix }}-what">Edit<span class="visually-hidden">{{ named }}</span></summary>
-            <form method="post" action="{{ url_for('maintenance') }}"
+            {%- endif %}
+            <form method="post" action="{{ url_for(entry.kind) }}"
                   class="maintenance-editor-form rule-block__editor">
                 <p class="rule-block__record">{{ pin_record(entry) }}</p>
                 <input type="hidden" name="path" value="{{ path }}">
                 {%- if slug %}
                 <input type="hidden" name="slug" value="{{ slug }}">
                 {%- endif %}
+                {%- if not wall %}
                 <input type="hidden" name="action" value="set">
+                {%- endif %}
                 <input type="hidden" name="set_at" value="{{ entry.token }}">
                 {%- if next %}
                 <input type="hidden" name="next" value="{{ next }}">
                 {%- endif %}
                 {{ maintenance_fields(note, kept, prefix, maintenance_default,
-                                      maintenance_timezone, true, kept) }}
+                                      maintenance_timezone, true, kept,
+                                      ending=not kept_kind) }}
                 <div class="maintenance-editor-form__actions">
-                    <button class="btn btn-sm btn-primary" type="submit">Save changes</button>
+                    <button class="btn btn-sm btn-primary" type="submit"{% if wall %} name="action" value="set"{% endif %}>Save changes</button>
                     <button class="btn btn-sm btn-link maintenance-editor-cancel"
                             type="reset">Cancel</button>
+                    {%- if wall %}
+                    {#- On the wall *Clear* stands here, in words (ADR-0135 decision
+                        4): the one act on a block that cannot wait for a second look,
+                        behind the pencil rather than a glyph of its own. The first
+                        submit button is the one Enter presses, so a typed field saves. -#}
+                    <button class="btn btn-sm rule-block__clear-now" type="submit" name="action" value="clear" formnovalidate>Clear<span class="visually-hidden">{{ named }}</span></button>
+                    {%- endif %}
                 </div>
             </form>
         </details>
-        <form method="post" action="{{ url_for('maintenance') }}" class="rule-block__clear">
+        {%- if not wall %}
+        <form method="post" action="{{ url_for(entry.kind) }}" class="rule-block__clear">
             <input type="hidden" name="path" value="{{ path }}">
             {%- if slug %}
             <input type="hidden" name="slug" value="{{ slug }}">
@@ -153,9 +217,14 @@ Pinned by <strong>{{ entry.created_by or 'unknown' }}</strong> {{ instant(entry.
             <button class="rule-button" type="submit" aria-describedby="{{ prefix }}-what">Clear<span class="visually-hidden">{{ named }}</span></button>
         </form>
         {%- endif %}
+        {%- endif %}
     </div>
-    {%- if note %}
-    <div class="rule-block__note maintenance-explanation md-body">{{ note | markdown }}</div>
+    {%- if note and not wall %}
+    <div class="rule-block__note maintenance-explanation md-body">{{ note | markdown(node=path) }}</div>
+    {%- elif note %}
+    {#- On the wall the note waits for its mark, whole, as the card shows it — the
+        note and who set it — so that nothing is fetched to open it. -#}
+    <template class="rule-note-src"><div class="note-card__note md-body">{{ note | markdown(node=path) }}</div><p class="note-card__record">{{ pin_record(entry) }}</p></template>
     {%- endif %}
     {%- if record %}
     <p class="rule-block__record">{{ pin_record(entry) }}</p>
@@ -163,15 +232,66 @@ Pinned by <strong>{{ entry.created_by or 'unknown' }}</strong> {{ instant(entry.
 </{{ tag }}>
 {%- endmacro %}
 
+{#- Where a configured rule is written and since when it stands (ADR-0137): who set
+    it is its file, in its root, and its history the repository's. -#}
+{% macro config_record(rule) -%}
+Configured in <code>{{ rule.file }}</code> since {{ rule.since.isoformat() }}.
+{%- endmacro %}
+
+{#- A configured rule, stated where it acts (ADR-0137, ADR-0104 decision 8): its
+    mark, §, and its sentence — what it makes of its part at `place`, while fewer
+    than its count fail and how many do, by which rule — its note and where it is
+    written. Its kind is data as a pin's is: `data-rule="aggregation"`, no fill of
+    its own, the node's color running through it under the dashed edge (ADR-0135
+    decision 5), and **no buttons**: a configured rule is changed in the
+    configuration, the program never writing `config/`, so the block says where.
+
+    `place` is `node` — what the node passes up — `lines`, `children`, or
+    `counted`, how its parent counts it among its children (`parent` names that
+    node). On the wall (`wall`) the block stands only while its rule changes a
+    count, its note behind its mark as a pin's is, and the sentence names no node,
+    the box's head doing so; on a node's page and in *Handled* it stands always,
+    whole, `this` naming the node, and says *changes nothing now* where its rule
+    does not act. `others` are the rules written for the same place that the first
+    one written decides over (ADR-0137 decision 3). In *Handled* (`index`) the
+    sentence names the part the rule picks by its path, and no one part's count. -#}
+{% macro config_block(at, place, path, prefix, wall=false, this='', tag='div',
+                      parent='', others=(), index=false) -%}
+{%- set said = rule_said(at.rule, place, failing=none if index else at.failing, this=this, path=at.rule.selector if index else '', parent=parent) -%}
+<{{ tag }} class="rule-block rule-block--{{ 'line' if place == 'lines' and not this and not wall else 'node' }}{{ ' rule-block--wall' if wall }}{{ ' rule-block--idle' if not at.changes }}" data-rule="aggregation" data-rule-name="{{ at.rule.name }}">
+    <div class="rule-block__head">
+        <span class="rule-block__what" id="{{ prefix }}-what">{{ rule_mark('aggregation') }}{{ said | markdown_inline(node=path) }}{% if not at.changes %} <span class="text-nowrap">· changes nothing now</span>{% endif %}</span>
+        {%- if wall %}
+        {%- set page = url_for('status', branch=path | url_branch) if path | url_branch else url_for('status') %}
+        <a class="block-button rule-note-mark" href="{{ page }}" title="Note" aria-describedby="{{ prefix }}-what" data-note-key="rule:{{ at.rule.key }}|{{ place }}">{{ note_mark() }}<span class="visually-hidden">Note</span></a>
+        {%- endif %}
+    </div>
+    {%- if wall %}
+    <template class="rule-note-src"><div class="note-card__note md-body">{{ at.rule.note | markdown(node=path) }}</div><p class="note-card__record">{{ config_record(at.rule) }}</p></template>
+    {%- else %}
+    <div class="rule-block__note md-body">{{ at.rule.note | markdown(node=path) }}</div>
+    <p class="rule-block__record">{{ config_record(at.rule) }}{% if others %} Written for this place too, and decided over by it as the first written: {% for other in others %}<strong>{{ other.name }}</strong> in <code>{{ other.file }}</code>{{ ', ' if not loop.last }}{% endfor %}.{% endif %}</p>
+    {%- endif %}
+</{{ tag }}>
+{%- endmacro %}
+
+{#- A configured rule's mark on a line it changes the count of (ADR-0137): the line
+    keeps its true color, and the mark says what it counts as and by which rule, in
+    its title and its hidden text. -#}
+{% macro line_rule_mark(at) -%}
+{%- set said %}counts as {{ at.counts.name.lower() if at.counts else 'nothing' }} by the rule {{ at.rule.name }}{% endset -%}
+<span class="line-rule" title="{{ said[:1] | upper }}{{ said[1:] }}">{{ rule_mark('aggregation') }}<span class="visually-hidden">{{ said }}: </span></span>
+{%- endmacro %}
+
 {#- The pins set on nodes above this one, each a block where it acts: outermost
     first, as the path reads, and without buttons (ADR-0104 decision 2).
     `above` is the view's list of (path, pin); `tag` is `li` where the blocks are
-    rows of a node's rule list, and `bare` is a card's sentence, whose head names the
-    node already. -#}
-{% macro pins_above_stated(above, prefix, tag='div', bare=false) -%}
+    rows of a node's rule list, `bare` is a card's sentence, whose head names the
+    node already, and `wall` the wall's lighter block. -#}
+{% macro pins_above_stated(above, prefix, tag='div', bare=false, wall=false) -%}
 {%- for source, entry in above %}
 {{ pin_block(entry, 'node', source | url_branch, '', prefix ~ loop.index, false,
-             tag=tag, bare=bare, source=source) }}
+             tag=tag, bare=bare, source=source, wall=wall) }}
 {%- endfor %}
 {%- endmacro %}
 
@@ -183,8 +303,10 @@ Pinned by <strong>{{ entry.created_by or 'unknown' }}</strong> {{ instant(entry.
     On a node's own page *this node* is the page's node. A card on the wall is one
     of many, so there the sentence names what it covers outright (`what`): *hemulen
     and everything beneath it*. `next` is the page a set comes back to, where that
-    is not the node's own. -#}
-{% macro pin_new(scope, covers, path, slug, prefix, what='', next='') -%}
+    is not the node's own. `notes` is where a note on what the pin would cover is
+    written instead, a line's Notes view with the line chosen (ADR-0140 decision
+    3), and empty where the editor offers none. -#}
+{% macro pin_new(scope, covers, path, slug, prefix, what='', next='', notes='') -%}
 <div class="rule-block rule-block--{{ scope }} rule-block--new" data-rule="maintenance">
     <p class="rule-block__scope">{{ rule_mark('maintenance') }}<strong>Maintenance for {% if what %}{{ what }}{% else %}this {{ scope }}{% if scope == 'line' %} only{% endif %}{% endif %}.</strong>{% if covers %} {{ covers }}{% endif %}</p>
     <form method="post" action="{{ url_for('maintenance') }}"
@@ -206,5 +328,87 @@ Pinned by <strong>{{ entry.created_by or 'unknown' }}</strong> {{ instant(entry.
                     type="reset">Cancel</button>
         </div>
     </form>
+    {%- if notes %}
+    <p class="rule-block__notes small mt-2 mb-0">Or <a class="link-primary text-decoration-underline" href="{{ notes }}">write a note on this {{ scope }}</a>: it is kept with the node's notes and silences nothing.</p>
+    {%- endif %}
 </div>
+{%- endmacro %}
+
+{#- **What a person accepted** (ADR-0142): today *seen*, a failure accepted as it
+    stands — its part keeping its true color under a ringed check and counting as ok
+    above until it changes. Its block is `pin_block`, in its kind's words; what
+    follows is what it says, its mark on a line, and the ringed check's own editor,
+    which posts to `POST /pins/seen`: the note, and an end it may be given
+    (`maintenance_fields`'s `ending`). -#}
+
+{#- What it says, after its mark: who marked it, at which failure, and what ends it
+    — *until it changes*, and its end and what is left where it was given one. The
+    failure is a status placeholder, drawn as its sign (ADR-0133 decision 5). On the
+    wall (`bare`) the box's head names the node, and the sentence opens with the act;
+    on a page `subject` opens it as the place says it, *This node* or *This line*
+    by default. -#}
+{% macro ack_said(entry, scope, subject='', bare=false, path='') -%}
+{%- if bare %}{{ entry.kind | capitalize }}{% else %}{% if subject %}{{ subject }}{% else %}<strong>This {{ scope }}</strong>{% endif %} is marked {{ entry.kind }}{% endif %} by <strong>{{ entry.set_by or 'an admin' }}</strong>
+{%- if entry.status %} at {{ ('{' ~ entry.status.name.lower() ~ '}') | markdown_inline(node=path) }}{% endif %} <span class="text-nowrap">· until it changes</span>
+{%- if entry.expires_at %} or {{ instant(entry.expires_at) }} <span class="text-nowrap">· {{ entry.expires_at | time_left }}</span>{% endif -%}
+{%- endmacro %}
+
+{#- The ringed check's mark on a line a person accepted, before its words: the line
+    keeps its true color, and the mark says by whom and what ends it, in its title
+    and its hidden text. -#}
+{% macro line_ack_mark(line) -%}
+{%- set entry = line.acknowledgment -%}
+{%- set said %}{{ entry.kind }} by {{ entry.set_by or 'an admin' }}, until it changes{% endset -%}
+<span class="line-ack" title="{{ said[:1] | upper }}{{ said[1:] }}">{{ rule_mark(entry.kind) }}<span class="visually-hidden">{{ said }}: </span></span>
+{%- endmacro %}
+
+{#- The editor of what a ringed check marks seen, standing where its block will
+    (ADR-0142, ADR-0104 decision 3): one part — a node's own failure, or one of its
+    lines (`slug`) — or, from a head, every failure at and beneath its node as it
+    stands, each its own (`digest`, the parts' digest the route compares; `parts`,
+    where the page knows them, listed). `what` names what it marks; the form claims
+    nothing is marked yet, an empty token. -#}
+{% macro ack_new(scope, path, slug, prefix, what='', digest='', parts=(), next='') -%}
+<div class="rule-block rule-block--{{ scope }} rule-block--new" data-rule="seen">
+    <p class="rule-block__scope">{{ rule_mark('seen') }}<strong>Mark seen {% if what %}{{ what }}{% elif scope == 'line' %}this line{% else %}this node's own failure{% endif %}.</strong> {% if digest %}Each keeps its color, counts as ok above and ends by itself as it changes; a failure that comes later alarms.{% else %}It keeps its color and counts as ok above until it recovers, gets worse, fails anew or is no longer reported.{% endif %}</p>
+    {%- if parts %}
+    <ul class="ack-parts small">
+        {%- for part in parts %}
+        <li>{% if part.slug %}{{ part.said | markdown_inline(node=part.path) }} — <a href="{{ url_for('status', branch=part.path | url_branch, reason=part.slug) }}#pinned-reason">{{ part.path }}</a>{% else %}<a href="{{ url_for('status', branch=part.path | url_branch) }}">{{ part.path }}</a>, its own failure{% endif %}</li>
+        {%- endfor %}
+    </ul>
+    {%- endif %}
+    <form method="post" action="{{ url_for('seen') }}"
+          class="maintenance-editor-form rule-block__editor">
+        <input type="hidden" name="path" value="{{ path }}">
+        {%- if slug %}
+        <input type="hidden" name="slug" value="{{ slug }}">
+        {%- endif %}
+        {%- if digest %}
+        <input type="hidden" name="parts" value="{{ digest }}">
+        {%- endif %}
+        <input type="hidden" name="action" value="set">
+        <input type="hidden" name="set_at" value="">
+        {%- if next %}
+        <input type="hidden" name="next" value="{{ next }}">
+        {%- endif %}
+        {{ maintenance_fields('', '', prefix, maintenance_default,
+                              maintenance_timezone, true, ending=true) }}
+        <div class="maintenance-editor-form__actions">
+            <button class="btn btn-sm btn-primary" type="submit">Mark seen</button>
+            <button class="btn btn-sm btn-link maintenance-editor-cancel"
+                    type="reset">Cancel</button>
+        </div>
+    </form>
+</div>
+{%- endmacro %}
+
+{#- The page's one editor of what a head's ringed check marks (ADR-0142), as
+    `pin_editor` is ‖'s: the ringed check in a head's icons clones it into the node's
+    box — `tree.js` fills in the node's path, the digest of the parts its control
+    carries and what they are — and opens it, so that no fragment carries one per
+    head. Drawn by `status.html` outside `#status-grid`, once, for whoever may mark a
+    failure seen, off the kiosk. -#}
+{% macro ack_editor(next) -%}
+<template id="ack-editor"><details class="maintenance-editor-disclosure ack-setter"><summary class="ack-control visually-hidden">Mark seen</summary>{{ ack_new('node', '', '', 'ack-editor', what=('<span class="ack-editor__what">what fails here</span>' | safe), digest='-', next=next) }}</details></template>
 {%- endmacro %}

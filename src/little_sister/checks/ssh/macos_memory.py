@@ -20,6 +20,10 @@ the host node**, beside the host metrics:
   to other checks (e.g. a ``file`` heartbeat), this aspect only watches
   memory.
 
+Each aspect ships what its card says to do and a handbook, a Markdown file in
+``handbook/macos-memory/`` beside this module, that says it at length (ADR-0133); a
+watched process carries its pattern among its details.
+
 The SSH transport is shared with the ``host-metrics`` check
 (:class:`SshScriptCheck`); this check carries no host description, so it sits
 beside the host-metrics leaves on the same host node without overwriting it
@@ -50,6 +54,7 @@ from little_sister.checks.ssh.base import (
     parse_descriptions,
 )
 from little_sister.checks.ssh.metrics import (
+    code_span,
     human_duration,
     human_kb,
     parse_metrics,
@@ -120,10 +125,45 @@ RETIRED_THRESHOLDS = {"swap": ("max_swap", " MiB"),
 
 PRESSURE_LABELS = {1: "normal", 2: "warning", 4: "critical"}
 
-PRESSURE_DESCRIPTION = "Kernel VM memory-pressure level"
-SWAP_DESCRIPTION = "Swap space in use"
-COMPRESSOR_DESCRIPTION = "Memory occupied by the compressor, as % of RAM"
-PROCESSES_DESCRIPTION = "Resident memory of watched processes"
+#: What each node reads, in a sentence (ADR-0133 decision 2). An aspect's is the default
+#: its entry in the ``descriptions:`` block replaces (ADR-0012); a watched process's
+#: leaves its pattern to its details, since a pattern can be longer than a sentence
+#: should be.
+PRESSURE_DESCRIPTION = ("The kernel's memory-pressure level — normal, warning or "
+                        "critical — from `sysctl kern.memorystatus_vm_pressure_level`.")
+SWAP_DESCRIPTION = "The swap space in use, from `sysctl vm.swapusage`."
+COMPRESSOR_DESCRIPTION = ("The share of the Mac's memory the compressor occupies, from "
+                          "`vm_stat`.")
+PROCESSES_DESCRIPTION = ("The resident memory of the processes this check watches, "
+                         "each summed over what its pattern matches.")
+PROCESS_DESCRIPTION = ("The resident memory of what this entry's pattern matches, "
+                       "summed, and how long the oldest has run.")
+
+#: What each aspect's card says to do (ADR-0133 decision 2), leading into the section
+#: of its handbook that says it at length (decision 4); a watched process has its
+#: branch's. Declared, as a type's labels are (ADR-0025): a deployment's ``subnodes:``
+#: block replaces one or places it with ``{default}``.
+ABOUT: dict[str, str] = {
+    "pressure": (
+        "{warn}: quit what the Mac does not need, and restart what has grown. {error}: "
+        "do it now — the Mac is about to stall or end apps. "
+        "[What to do](handbook#when-it-rises)"),
+    "swap": (
+        "{warn} and {error}: find what holds the memory and restart it; the swap "
+        "empties as what wrote it ends. [What to do](handbook#when-it-grows)"),
+    "compressor": (
+        "{warn} and {error}: restart what holds the most memory before the compressor "
+        "fills — on a small Mac a full one ends in a panic. "
+        "[What to do](handbook#when-it-fills)"),
+    "processes": (
+        "{warn} and {error}: restart the process, and tell whoever owns it if it "
+        "climbs again. [What to do](handbook#when-one-grows)"),
+}
+
+#: Each aspect's handbook (ADR-0133 decision 3): a Markdown file this package ships,
+#: named relative to this module's directory.
+HANDBOOK: dict[str, str] = {
+    name: f"handbook/macos-memory/{name}.md" for name in ABOUT}
 
 
 class ProcessSpec(NamedTuple):
@@ -135,6 +175,23 @@ class ProcessSpec(NamedTuple):
     graded: Graded
 
 
+#: How the Mac's levels first look on the wall (ADR-0128): its leaves as chips —
+#: pressure, swap, the compressor and the watched processes' branch — and the watched
+#: processes beneath it as chips too, one a pattern, a failing one opened by the card's
+#: budget. On the host node it shares with ``host-metrics`` its own leaves start as
+#: this says and the node's own look is ``nodes.yaml``'s (decision 5). A proposal: the
+#: deployment's file takes it back, ``chips: false`` at its top level for the leaves
+#: and in ``subnodes: {processes: …}`` for the processes.
+NODE_DEFAULTS: dict[str, object] = {"chips": True}
+SUBNODE_LOOKS: dict[str, dict[str, object]] = {"processes": {"chips": True}}
+
+#: The labels and the looks in the shape the library takes, a name's look beside its
+#: labels.
+SUBNODE_DEFAULTS: dict[str, dict[str, object]] = {
+    name: {"about": text, "handbook": HANDBOOK[name], **SUBNODE_LOOKS.get(name, {})}
+    for name, text in ABOUT.items()}
+
+
 @register("macos-memory")
 class MacosMemoryCheck(SshScriptCheck):
     """macOS memory pressure / swap / compressor / process RSS, reported beside
@@ -144,7 +201,8 @@ class MacosMemoryCheck(SshScriptCheck):
                  processes: tuple[tuple[str, str, Mapping[str, Any]], ...] = (),
                  descriptions: dict[str, str] | None = None,
                  **kwargs: Any) -> None:
-        super().__init__(measure_defaults=MEASURES, gradings=GRADINGS, **kwargs)
+        super().__init__(subnode_defaults=SUBNODE_DEFAULTS, node_defaults=NODE_DEFAULTS,
+                         measure_defaults=MEASURES, gradings=GRADINGS, **kwargs)
         # Each watched process's levels stand in its own entry, the block its
         # resident memory is graded in, read here so that a level that does not fit
         # stops the start naming the entry.
@@ -265,7 +323,15 @@ class MacosMemoryCheck(SshScriptCheck):
             children.append(CheckResult(
                 StatusCode.OK, self._debug_lines(record),
                 name="debug", description="ssh / memory-script diagnostics"))
-        return CheckResult(StatusCode.UNDEFINED, children=tuple(children))
+        return CheckResult(StatusCode.UNDEFINED, children=tuple(children),
+                           details=self._host_details)
+
+    @property
+    def _host_details(self) -> dict[str, str]:
+        """The details of the object the host node stands for (ADR-0133 decision 6):
+        the Mac, as this check reaches it — withheld on the node it shares with
+        ``host-metrics``, as every text one check's run writes there is."""
+        return {"host": code_span(self.host)}
 
     def expected_record(self) -> int:
         """Seven numbers plus three per watched process under its configured
@@ -287,7 +353,7 @@ class MacosMemoryCheck(SshScriptCheck):
         return CheckResult(StatusCode.UNDEFINED, children=tuple(
             CheckResult(code, list(reasons), name=name,
                         description=self._describe(name, defaults[name]))
-            for name in self._aspects()))
+            for name in self._aspects()), details=self._host_details)
 
     # --- aspects ---
 
@@ -350,7 +416,11 @@ class MacosMemoryCheck(SshScriptCheck):
 
     def _process_leaf(self, spec: ProcessSpec,
                       record: Mapping[str, Any]) -> CheckResult:
-        description = f"Resident memory of processes matching `{spec.pattern}`"
+        """A watched process's leaf, named by the configuration: the resident memory
+        of what its pattern matches, and the pattern among its details (ADR-0133
+        decision 6)."""
+        description = PROCESS_DESCRIPTION
+        details = {"pattern": code_span(spec.pattern)}
         config = config_markdown({
             "pattern": spec.pattern,
             "graded": self.grading_summary("processes.max_rss", spec.graded)
@@ -361,16 +431,17 @@ class MacosMemoryCheck(SshScriptCheck):
             sub = {}
         found = sub.get("count")
         if found is None:
-            return unavailable(spec.name, description)
+            return unavailable(spec.name, description, details=details)
         count = int(found)
         if count == 0:
             # Not running is OK here by design: this aspect watches memory
             # growth; liveness is another check's job (e.g. a file heartbeat).
             return CheckResult(StatusCode.OK, ["not running"], name=spec.name,
-                               description=description, config=config)
+                               description=description, config=config,
+                               details=details)
         rss_kb = sub.get("rss_kb")
         if rss_kb is None:
-            return unavailable(spec.name, description)
+            return unavailable(spec.name, description, details=details)
         rss_mb = float(rss_kb) / 1024.0
         verdict = self.verdict("processes.max_rss", value=float(rss_kb) * 1024,
                                graded=spec.graded)
@@ -382,7 +453,8 @@ class MacosMemoryCheck(SshScriptCheck):
         if up is not None:
             reason += f", oldest up {human_duration(float(up))}"
         return CheckResult(verdict.code, [verdict.entry(reason)], name=spec.name,
-                           description=description, config=config)
+                           description=description, config=config,
+                           details=details)
 
 
 def _mib(size: float) -> str:

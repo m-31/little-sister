@@ -24,7 +24,7 @@ Keycloak. Two consequences are the whole point of the move:
   packaged neutral image — which is correct rather than a gap
   (:func:`registered_avatars`).
 
-**Passwords are compared as they are stored: in plain text.** That is ADR-0020's
+**Passwords are compared as they are stored: in plain text.** That is ADR-0046's
 decision and this module does not quietly change it — a hashed list would be a
 better local file and a worse *lie*, because it would look like the answer to a
 question this list is not the answer to.
@@ -100,7 +100,7 @@ class LocalUsers:
         default door is a local form and never the Keycloak install the emergency
         account mostly exists for — under a provider that redirects, ``/login`` is a
         redirect and this template is not rendered at all. There the address stays
-        what it has always been: fixed, on ``/system``, and in the runbook.
+        what it has always been: fixed, on ``/system/installed``, and in the runbook.
         """
         return render_template('login.html', error=None,
                                admin_door=system_admin.usable_route())
@@ -134,7 +134,7 @@ class LocalUsers:
 
 #: The loaded aspect, kept so that re-registering does not re-read the file. The
 #: read itself stays **eager** — a broken user list must fail at startup, the way it
-#: always has (ADR-0020), not at the first login attempt.
+#: always has (ADR-0046 decision 3), not at the first login attempt.
 _config: UsersConfig | None = None
 
 
@@ -158,8 +158,8 @@ def use_local(*, default: bool = True, label: str = LABEL) -> LocalUsers:
     The ``users`` aspect is read **here**, so it is read only by an installation that
     asks for this door: a deployment with an identity provider of its own carries no
     ``users.yaml`` at all, which is the promise that survives the change unaltered.
-    A broken list still fails at startup rather than at the first login (ADR-0020) —
-    the read is eager and this is the eager moment.
+    A broken list still fails at startup rather than at the first login
+    (ADR-0046 decision 3) — the read is eager and this is the eager moment.
 
     ``label`` is what a chooser prints (:data:`LABEL`); ``default=False`` registers
     it as a second door beside somebody else's default,
